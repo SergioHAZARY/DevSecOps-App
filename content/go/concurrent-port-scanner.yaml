@@ -1,0 +1,655 @@
+description:
+  fr: "Écrire un scanner de ports TCP rapide en Go avec les goroutines, les channels, un pool de workers, des timeouts et l'annulation par context."
+  en: "Write a fast TCP port scanner in Go with goroutines, channels, a worker pool, timeouts and context cancellation."
+duration: 40
+
+intro:
+  fr: |
+    Scanner des ports, c'est frapper à chaque porte d'un immeuble pour savoir lesquelles s'ouvrent. Si une
+    seule personne frappe aux 65 535 portes l'une après l'autre en attendant une réponse à chaque fois, la
+    journée y passe. Si cent personnes se répartissent les étages, c'est fini en quelques secondes.
+
+    C'est exactement ce que permet la **concurrence** en Go : une **goroutine** est une tâche légère (quelques
+    kilo-octets de mémoire) que l'on lance avec le simple mot-clé `go`. Les goroutines se parlent grâce à des
+    **channels**, des tuyaux typés dans lesquels on dépose et on retire des valeurs.
+
+    Dans cette leçon, vous écrivez un scanner séquentiel, vous voyez pourquoi « une goroutine par port » est
+    une mauvaise idée, puis vous construisez la version professionnelle : un **pool de workers** avec
+    **timeouts** et **annulation**.
+
+    > **Rappel légal.** Scanner une machine sans autorisation écrite est illégal dans la plupart des pays.
+    > Tous les exemples visent `127.0.0.1` (votre machine) ou `scanme.nmap.org`, le serveur que le projet Nmap
+    > met à disposition pour les tests, à condition de rester raisonnable (quelques scans par jour).
+  en: |
+    Scanning ports is like knocking on every door of a building to find out which ones open. If a single
+    person knocks on all 65,535 doors one after the other, waiting for an answer each time, it takes all
+    day. If a hundred people share the floors, it is over in seconds.
+
+    That is exactly what **concurrency** gives you in Go: a **goroutine** is a lightweight task (a few
+    kilobytes of memory) started with the simple `go` keyword. Goroutines talk to each other through
+    **channels**, typed pipes into which values are put and taken out.
+
+    In this lesson you write a sequential scanner, see why "one goroutine per port" is a bad idea, then
+    build the professional version: a **worker pool** with **timeouts** and **cancellation**.
+
+    > **Legal reminder.** Scanning a machine without written authorisation is illegal in most countries.
+    > Every example targets `127.0.0.1` (your own machine) or `scanme.nmap.org`, the server the Nmap project
+    > provides for testing, as long as you stay reasonable (a few scans a day).
+
+sections:
+  - heading:
+      fr: "Goroutines, channels, WaitGroup et Mutex"
+      en: "Goroutines, channels, WaitGroup and Mutex"
+    body:
+      fr: |
+        | Outil | Rôle | Syntaxe |
+        |---|---|---|
+        | Goroutine | Exécuter une fonction en parallèle du reste | `go scan(port)` |
+        | Channel | Transmettre des valeurs entre goroutines | `ch := make(chan int)` ; `ch <- 22` ; `p := <-ch` |
+        | `close(ch)` | Signaler qu'il n'y aura plus de valeurs | `for p := range ch { ... }` s'arrête à la fermeture |
+        | `sync.WaitGroup` | Attendre la fin d'un groupe de goroutines | `wg.Add(1)` ; `defer wg.Done()` ; `wg.Wait()` |
+        | `sync.Mutex` | Protéger une variable partagée | `mu.Lock()` ; `mu.Unlock()` |
+        | `select` | Attendre sur plusieurs channels à la fois | `select { case v := <-ch: ... case <-ctx.Done(): ... }` |
+
+        Deux règles évitent la plupart des bugs :
+
+        - Quand `main` se termine, **toutes** les goroutines sont tuées. Il faut donc toujours **attendre**
+          leur fin (`WaitGroup` ou lecture d'un channel jusqu'à sa fermeture).
+        - Deux goroutines qui modifient la même variable sans protection créent une *data race* : résultat
+          imprévisible. Utilisez un channel ou un `Mutex`, et testez avec `go run -race .`.
+
+        Depuis Go 1.22, chaque tour de boucle `for` possède sa propre variable : une goroutine lancée dans la
+        boucle peut utiliser `port` sans risque. Depuis Go 1.25, `wg.Go(func() { ... })` remplace le couple
+        `wg.Add(1)` / `defer wg.Done()`.
+      en: |
+        | Tool | Role | Syntax |
+        |---|---|---|
+        | Goroutine | Run a function concurrently with the rest | `go scan(port)` |
+        | Channel | Pass values between goroutines | `ch := make(chan int)`; `ch <- 22`; `p := <-ch` |
+        | `close(ch)` | Signal that no more values will come | `for p := range ch { ... }` stops when closed |
+        | `sync.WaitGroup` | Wait for a group of goroutines to finish | `wg.Add(1)`; `defer wg.Done()`; `wg.Wait()` |
+        | `sync.Mutex` | Protect a shared variable | `mu.Lock()`; `mu.Unlock()` |
+        | `select` | Wait on several channels at once | `select { case v := <-ch: ... case <-ctx.Done(): ... }` |
+
+        Two rules prevent most bugs:
+
+        - When `main` returns, **all** goroutines are killed. You must therefore always **wait** for them
+          (`WaitGroup`, or reading a channel until it is closed).
+        - Two goroutines modifying the same variable without protection create a *data race*: the result is
+          unpredictable. Use a channel or a `Mutex`, and test with `go run -race .`.
+
+        Since Go 1.22, each iteration of a `for` loop has its own variable: a goroutine started inside the
+        loop can safely use `port`. Since Go 1.25, `wg.Go(func() { ... })` replaces the
+        `wg.Add(1)` / `defer wg.Done()` pair.
+  - heading:
+      fr: "Le pool de workers : aller vite sans tout casser"
+      en: "The worker pool: going fast without breaking things"
+    body:
+      fr: |
+        Lancer une goroutine par port semble idéal, mais chaque connexion consomme un **descripteur de
+        fichier**. Linux en autorise souvent 1024 par processus (`ulimit -n`). Au-delà, `Dial` échoue avec
+        `too many open files`, et un scanner naïf interprète cette erreur comme « port fermé » : des
+        **faux négatifs**, le pire défaut pour un outil de sécurité.
+
+        | Approche | Connexions simultanées | Problème |
+        |---|---|---|
+        | Séquentielle | 1 | Très lente dès qu'un pare-feu ignore les paquets |
+        | Une goroutine par port | Jusqu'à 65 535 | Épuise les descripteurs, sature la cible, résultats faux |
+        | **Pool de workers** | N (par exemple 100) | Rapide, prévisible, réglable |
+
+        Le pool de workers fonctionne comme un guichet : un channel `ports` distribue le travail, `N` workers
+        le consomment, un channel `results` récupère les ports ouverts. Le nombre de workers devient un
+        bouton de réglage entre vitesse et discrétion.
+      en: |
+        Starting one goroutine per port sounds ideal, but every connection consumes a **file descriptor**.
+        Linux often allows 1024 per process (`ulimit -n`). Beyond that, `Dial` fails with
+        `too many open files`, and a naive scanner reads that error as "port closed": **false negatives**,
+        the worst flaw a security tool can have.
+
+        | Approach | Simultaneous connections | Problem |
+        |---|---|---|
+        | Sequential | 1 | Very slow as soon as a firewall drops packets |
+        | One goroutine per port | Up to 65,535 | Exhausts descriptors, floods the target, wrong results |
+        | **Worker pool** | N (for example 100) | Fast, predictable, tunable |
+
+        The worker pool works like a service counter: a `ports` channel hands out the work, `N` workers
+        consume it, a `results` channel collects the open ports. The number of workers becomes a dial
+        between speed and discretion.
+  - heading:
+      fr: "Timeouts et context : savoir s'arrêter"
+      en: "Timeouts and context: knowing when to stop"
+    body:
+      fr: |
+        Un port peut être dans trois états :
+
+        | État | Ce que la cible répond | Durée pour le scanner |
+        |---|---|---|
+        | Ouvert | Connexion acceptée | Quelques millisecondes |
+        | Fermé | Refus immédiat (paquet RST) | Quelques millisecondes |
+        | Filtré | **Rien** (un pare-feu jette le paquet) | Jusqu'au **timeout** |
+
+        Sans timeout, chaque port filtré bloque un worker pendant plus d'une minute. `net.DialTimeout("tcp",
+        adresse, 500*time.Millisecond)` borne l'attente d'une connexion.
+
+        Le paquet `context` va plus loin : un `context.Context` transporte un **signal d'annulation** partagé
+        par toutes les goroutines. `context.WithTimeout` fixe une durée maximale pour tout le scan,
+        `signal.NotifyContext` l'annule quand l'utilisateur presse Ctrl+C, et
+        `net.Dialer{}.DialContext(ctx, ...)` interrompt aussitôt les connexions en cours.
+      en: |
+        A port can be in three states:
+
+        | State | What the target answers | Time spent by the scanner |
+        |---|---|---|
+        | Open | Connection accepted | A few milliseconds |
+        | Closed | Immediate refusal (RST packet) | A few milliseconds |
+        | Filtered | **Nothing** (a firewall drops the packet) | Until the **timeout** |
+
+        Without a timeout, every filtered port blocks a worker for more than a minute. `net.DialTimeout("tcp",
+        address, 500*time.Millisecond)` bounds the wait for one connection.
+
+        The `context` package goes further: a `context.Context` carries a **cancellation signal** shared by
+        all goroutines. `context.WithTimeout` sets a maximum duration for the whole scan,
+        `signal.NotifyContext` cancels it when the user presses Ctrl+C, and
+        `net.Dialer{}.DialContext(ctx, ...)` aborts in-flight connections immediately.
+
+examples:
+  - title:
+      fr: "Étape 1 : un scanner séquentiel avec net.DialTimeout"
+      en: "Step 1: a sequential scanner with net.DialTimeout"
+    file: scan_sequential.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import (
+      	"fmt"
+      	"net"
+      	"strconv"
+      	"time"
+      )
+
+      func main() {
+      	// Only scan machines you own or are explicitly authorised to test
+      	const host = "127.0.0.1"
+      	start := time.Now()
+
+      	for port := 1; port <= 1024; port++ {
+      		// JoinHostPort builds "127.0.0.1:22" and also handles IPv6 correctly
+      		address := net.JoinHostPort(host, strconv.Itoa(port))
+
+      		// Give up after 500 ms: a filtered port never answers
+      		conn, err := net.DialTimeout("tcp", address, 500*time.Millisecond)
+      		if err != nil {
+      			continue // closed or filtered
+      		}
+      		conn.Close()
+      		fmt.Printf("%d/tcp open\n", port)
+      	}
+
+      	fmt.Printf("1024 ports scanned in %s\n", time.Since(start).Round(time.Millisecond))
+      }
+    output: |
+      22/tcp open
+      80/tcp open
+      1024 ports scanned in 58ms
+    note:
+      fr: "Sur `127.0.0.1`, les ports fermés refusent immédiatement : le scan est rapide. Contre une machine protégée par un pare-feu, chaque port filtré coûte 500 ms : 1024 ports prennent plus de 8 minutes. Il faut paralléliser."
+      en: "On `127.0.0.1`, closed ports refuse immediately: the scan is fast. Against a machine behind a firewall, each filtered port costs 500 ms: 1024 ports take more than 8 minutes. Time to parallelise."
+
+  - title:
+      fr: "Étape 2 (à ne pas faire) : une goroutine par port, sans limite"
+      en: "Step 2 (do not do this): one goroutine per port, unbounded"
+    file: scan_unbounded.go
+    lang: go
+    kind: vulnerable
+    code: |
+      package main
+
+      import (
+      	"fmt"
+      	"net"
+      	"strconv"
+      	"sync"
+      	"time"
+      )
+
+      func main() {
+      	const host = "127.0.0.1"
+
+      	var (
+      		wg   sync.WaitGroup
+      		mu   sync.Mutex // protects the "open" slice shared by all goroutines
+      		open []int
+      	)
+
+      	for port := 1; port <= 65535; port++ {
+      		wg.Add(1)
+      		// 65535 goroutines => 65535 sockets opened at the same time
+      		go func() {
+      			defer wg.Done()
+      			address := net.JoinHostPort(host, strconv.Itoa(port))
+      			conn, err := net.DialTimeout("tcp", address, time.Second)
+      			if err != nil {
+      				// "socket: too many open files" lands here too,
+      				// and is silently reported as a closed port
+      				return
+      			}
+      			conn.Close()
+
+      			mu.Lock()
+      			open = append(open, port)
+      			mu.Unlock()
+      		}()
+      	}
+
+      	wg.Wait()
+      	fmt.Println("open ports found:", len(open))
+      }
+    note:
+      fr: "Le code est correct du point de vue de la concurrence (`WaitGroup` + `Mutex`), mais il ouvre tout d'un coup. Dès que la limite de descripteurs est atteinte, des ports réellement ouverts sont déclarés fermés, et le nombre affiché change d'une exécution à l'autre. Contre une cible distante, cette rafale ressemble en plus à une attaque par déni de service."
+      en: "The code is correct from a concurrency point of view (`WaitGroup` + `Mutex`), but it opens everything at once. As soon as the descriptor limit is hit, ports that are really open are reported closed, and the printed number changes from run to run. Against a remote target, this burst also looks like a denial-of-service attack."
+
+  - title:
+      fr: "Étape 3 : pool de workers, context et arrêt propre sur Ctrl+C"
+      en: "Step 3: worker pool, context and clean stop on Ctrl+C"
+    file: scan_pool.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"context"
+      	"fmt"
+      	"net"
+      	"os"
+      	"os/signal"
+      	"slices"
+      	"strconv"
+      	"sync"
+      	"time"
+      )
+
+      // scanPort reports whether a TCP port accepts connections
+      func scanPort(ctx context.Context, host string, port int, timeout time.Duration) bool {
+      	dialer := net.Dialer{Timeout: timeout}
+      	// DialContext returns at once when ctx is cancelled (Ctrl+C or deadline)
+      	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+      	if err != nil {
+      		return false
+      	}
+      	conn.Close()
+      	return true
+      }
+
+      func main() {
+      	const (
+      		host      = "127.0.0.1" // scan only hosts you own or are authorised to test
+      		firstPort = 1
+      		lastPort  = 1024
+      		workers   = 100 // maximum number of simultaneous connections
+      		timeout   = 500 * time.Millisecond
+      	)
+
+      	// Cancelled on Ctrl+C, and in any case after 30 seconds
+      	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+      	defer stop()
+      	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+      	defer cancel()
+
+      	start := time.Now()
+      	ports := make(chan int)   // work to do
+      	results := make(chan int) // open ports
+
+      	// Start a fixed number of workers
+      	var wg sync.WaitGroup
+      	for range workers {
+      		wg.Add(1)
+      		go func() {
+      			defer wg.Done()
+      			for port := range ports { // ends when "ports" is closed
+      				if scanPort(ctx, host, port, timeout) {
+      					results <- port
+      				}
+      			}
+      		}()
+      	}
+
+      	// Producer: feed the workers, stop early if the context is cancelled
+      	go func() {
+      		defer close(ports)
+      		for port := firstPort; port <= lastPort; port++ {
+      			select {
+      			case ports <- port:
+      			case <-ctx.Done():
+      				return
+      			}
+      		}
+      	}()
+
+      	// Close "results" once every worker has finished
+      	go func() {
+      		wg.Wait()
+      		close(results)
+      	}()
+
+      	// Collector: the main goroutine is the only one touching "open"
+      	var open []int
+      	for port := range results {
+      		open = append(open, port)
+      	}
+      	slices.Sort(open)
+
+      	for _, port := range open {
+      		fmt.Printf("%d/tcp open\n", port)
+      	}
+      	fmt.Printf("%d ports scanned in %s with %d workers\n",
+      		lastPort-firstPort+1, time.Since(start).Round(time.Millisecond), workers)
+
+      	if ctx.Err() != nil {
+      		fmt.Fprintln(os.Stderr, "scan interrupted:", ctx.Err())
+      		os.Exit(1)
+      	}
+      }
+    output: |
+      22/tcp open
+      80/tcp open
+      1024 ports scanned in 12ms with 100 workers
+    note:
+      fr: "Jamais plus de 100 connexions à la fois, pas de `Mutex` (seule la goroutine principale écrit dans `open`), des résultats triés, et un Ctrl+C arrête tout proprement. Contre une cible filtrée, le temps passe de 8 minutes à environ 5 secondes. `for range workers` (boucle sur un entier) demande Go 1.22 ou plus récent."
+      en: "Never more than 100 connections at once, no `Mutex` (only the main goroutine writes to `open`), sorted results, and Ctrl+C stops everything cleanly. Against a filtered target, the time drops from 8 minutes to about 5 seconds. `for range workers` (looping over an integer) requires Go 1.22 or later."
+
+  - title:
+      fr: "Cas réel : lire la bannière d'un service pour identifier sa version"
+      en: "Real case: reading a service banner to identify its version"
+    file: banner.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import (
+      	"bufio"
+      	"context"
+      	"fmt"
+      	"io"
+      	"net"
+      	"os"
+      	"strings"
+      	"time"
+      )
+
+      // grabBanner connects and returns the first line sent by the service
+      func grabBanner(ctx context.Context, address string) (string, error) {
+      	dialer := net.Dialer{Timeout: 3 * time.Second}
+      	conn, err := dialer.DialContext(ctx, "tcp", address)
+      	if err != nil {
+      		return "", fmt.Errorf("connect %s: %w", address, err)
+      	}
+      	defer conn.Close()
+
+      	// Never wait forever for a server that stays silent
+      	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+      		return "", fmt.Errorf("set deadline: %w", err)
+      	}
+
+      	// Read one line, 256 bytes at most: never trust what the remote side sends
+      	line, err := bufio.NewReader(io.LimitReader(conn, 256)).ReadString('\n')
+      	if err != nil && line == "" {
+      		return "", fmt.Errorf("read banner from %s: %w", address, err)
+      	}
+      	return strings.TrimSpace(line), nil
+      }
+
+      func main() {
+      	// scanme.nmap.org is provided by the Nmap project for this kind of test
+      	const address = "scanme.nmap.org:22"
+
+      	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+      	defer cancel()
+
+      	banner, err := grabBanner(ctx, address)
+      	if err != nil {
+      		fmt.Fprintln(os.Stderr, "error:", err)
+      		os.Exit(1)
+      	}
+      	fmt.Printf("%s -> %s\n", address, banner)
+      }
+    output: |
+      scanme.nmap.org:22 -> SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13
+    note:
+      fr: "Un serveur SSH annonce sa version dès la connexion. C'est ainsi qu'un auditeur (ou un attaquant) relie un port ouvert à une liste de CVE. Côté défense : gardez les services à jour et n'exposez que les ports nécessaires. Notez le `io.LimitReader` : un serveur malveillant ne peut pas saturer la mémoire du scanner."
+      en: "An SSH server announces its version as soon as you connect. This is how an auditor (or an attacker) links an open port to a list of CVEs. On the defence side: keep services patched and expose only the ports you need. Note the `io.LimitReader`: a malicious server cannot exhaust the scanner's memory."
+
+mistake:
+  fr: |
+    **Oublier le timeout, ou confondre « erreur » et « port fermé ».**
+
+    `net.Dial("tcp", adresse)` sans délai peut rester bloqué plus de deux minutes sur un port filtré : avec
+    100 workers et 1000 ports filtrés, le scan ne finit jamais. Utilisez toujours `net.DialTimeout` ou un
+    `net.Dialer` avec `Timeout` et un `context`.
+
+    Deuxième piège : toute erreur de `Dial` n'est pas un port fermé. `too many open files`, une panne DNS ou
+    un context annulé ne disent **rien** sur l'état du port. Un scanner sérieux distingue « fermé »,
+    « filtré » (timeout) et « erreur locale », et signale un scan **incomplet** au lieu d'afficher un rapport
+    rassurant mais faux.
+  en: |
+    **Forgetting the timeout, or confusing "error" with "closed port".**
+
+    `net.Dial("tcp", address)` with no deadline can hang for more than two minutes on a filtered port: with
+    100 workers and 1000 filtered ports, the scan never ends. Always use `net.DialTimeout` or a
+    `net.Dialer` with a `Timeout` and a `context`.
+
+    Second trap: not every `Dial` error means a closed port. `too many open files`, a DNS failure or a
+    cancelled context say **nothing** about the state of the port. A serious scanner tells "closed",
+    "filtered" (timeout) and "local error" apart, and reports an **incomplete** scan instead of printing a
+    reassuring but wrong report.
+
+bestPractice:
+  fr: |
+    - **Scannez uniquement ce que vous êtes autorisé à tester**, avec un accord écrit qui précise les adresses et les horaires.
+    - **Bornez la concurrence** avec un pool de workers ou un sémaphore ; rendez la limite configurable.
+    - **Mettez un timeout partout** : connexion (`Dialer.Timeout`), lecture (`SetReadDeadline`) et scan global (`context.WithTimeout`).
+    - **Propagez le `context`** en premier paramètre de chaque fonction qui fait du réseau.
+    - **Testez avec le détecteur de courses** : `go test -race ./...` et `go run -race .`.
+    - **Limitez ce que vous lisez** depuis le réseau (`io.LimitReader`) : la cible n'est pas digne de confiance.
+    - **Fermez chaque connexion** (`defer conn.Close()`), sinon les descripteurs de fichiers fuient.
+  en: |
+    - **Scan only what you are authorised to test**, with a written agreement stating the addresses and the time window.
+    - **Bound concurrency** with a worker pool or a semaphore; make the limit configurable.
+    - **Put a timeout everywhere**: connection (`Dialer.Timeout`), read (`SetReadDeadline`) and whole scan (`context.WithTimeout`).
+    - **Propagate the `context`** as the first parameter of every function that touches the network.
+    - **Test with the race detector**: `go test -race ./...` and `go run -race .`.
+    - **Limit what you read** from the network (`io.LimitReader`): the target is not trustworthy.
+    - **Close every connection** (`defer conn.Close()`), otherwise file descriptors leak.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez `scan.go`, un scanner qui applique une autre technique de limitation : le **sémaphore**
+      (un channel avec tampon).
+
+      1. Le programme reçoit l'hôte en argument (`os.Args[1]`) et **refuse** tout hôte absent de la liste
+         d'autorisation `127.0.0.1`, `localhost`, `scanme.nmap.org` (code de sortie `2`).
+      2. Écrivez `scanPorts(ctx context.Context, host string, ports []int, limit int) []int` qui lance une
+         goroutine par port, mais jamais plus de `limit` à la fois grâce à `sem := make(chan struct{}, limit)`.
+      3. Protégez le slice de résultats avec un `sync.Mutex` et renvoyez-le trié.
+      4. Dans `main`, scannez les ports `21, 22, 23, 25, 80, 443, 3306, 3389, 5432, 8080` avec une limite de
+         5 connexions et un délai global de 20 secondes.
+    en: |
+      Write `scan.go`, a scanner that uses another limiting technique: the **semaphore**
+      (a buffered channel).
+
+      1. The program takes the host as an argument (`os.Args[1]`) and **refuses** any host missing from the
+         allowlist `127.0.0.1`, `localhost`, `scanme.nmap.org` (exit code `2`).
+      2. Write `scanPorts(ctx context.Context, host string, ports []int, limit int) []int` which starts one
+         goroutine per port, but never more than `limit` at a time thanks to
+         `sem := make(chan struct{}, limit)`.
+      3. Protect the result slice with a `sync.Mutex` and return it sorted.
+      4. In `main`, scan ports `21, 22, 23, 25, 80, 443, 3306, 3389, 5432, 8080` with a limit of
+         5 connections and a global deadline of 20 seconds.
+  solution:
+    file: scan.go
+    lang: go
+    code: |
+      package main
+
+      import (
+      	"context"
+      	"fmt"
+      	"net"
+      	"os"
+      	"slices"
+      	"strconv"
+      	"sync"
+      	"time"
+      )
+
+      // Hosts we are allowed to scan: our own machine and the Nmap test server
+      var authorised = []string{"127.0.0.1", "localhost", "scanme.nmap.org"}
+
+      func scanPorts(ctx context.Context, host string, ports []int, limit int) []int {
+      	var (
+      		wg   sync.WaitGroup
+      		mu   sync.Mutex
+      		open []int
+      	)
+      	sem := make(chan struct{}, limit) // buffered channel used as a semaphore
+      	dialer := net.Dialer{Timeout: time.Second}
+
+      	for _, port := range ports {
+      		sem <- struct{}{} // blocks while "limit" connections are in progress
+      		wg.Add(1)
+      		go func() {
+      			defer wg.Done()
+      			defer func() { <-sem }() // free the slot
+
+      			address := net.JoinHostPort(host, strconv.Itoa(port))
+      			conn, err := dialer.DialContext(ctx, "tcp", address)
+      			if err != nil {
+      				return
+      			}
+      			conn.Close()
+
+      			mu.Lock()
+      			open = append(open, port)
+      			mu.Unlock()
+      		}()
+      	}
+
+      	wg.Wait()
+      	slices.Sort(open)
+      	return open
+      }
+
+      func main() {
+      	// Allowlist check: refuse to scan anything we are not authorised to test
+      	if len(os.Args) != 2 || !slices.Contains(authorised, os.Args[1]) {
+      		fmt.Fprintln(os.Stderr, "usage: scan <host>   authorised hosts:", authorised)
+      		os.Exit(2)
+      	}
+
+      	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+      	defer cancel()
+
+      	ports := []int{21, 22, 23, 25, 80, 443, 3306, 3389, 5432, 8080}
+      	for _, port := range scanPorts(ctx, os.Args[1], ports, 5) {
+      		fmt.Printf("%d/tcp open\n", port)
+      	}
+      }
+    note:
+      fr: "`sem <- struct{}{}` prend un jeton et bloque quand les 5 sont distribués ; `<-sem` le rend. Le sémaphore est plus court à écrire qu'un pool de workers, mais il crée quand même une goroutine par port : préférez le pool pour de très grandes plages."
+      en: "`sem <- struct{}{}` takes a token and blocks once all 5 are handed out; `<-sem` gives it back. A semaphore is shorter to write than a worker pool, but it still creates one goroutine per port: prefer the pool for very large ranges."
+
+quiz:
+  - q:
+      fr: "Que se passe-t-il quand la fonction `main` se termine alors que des goroutines tournent encore ?"
+      en: "What happens when the `main` function returns while goroutines are still running?"
+    options:
+      fr:
+        - "Go attend automatiquement la fin de toutes les goroutines"
+        - "Le programme affiche un avertissement puis attend"
+        - "Le programme s'arrête et les goroutines sont tuées"
+        - "Les goroutines continuent en arrière-plan sur le système"
+      en:
+        - "Go automatically waits for all goroutines to finish"
+        - "The program prints a warning and then waits"
+        - "The program exits and the goroutines are killed"
+        - "The goroutines keep running in the background on the system"
+    answer: 2
+    why:
+      fr: "La fin de `main` termine le processus : il faut attendre explicitement avec un `WaitGroup` ou un channel."
+      en: "Returning from `main` ends the process: you must wait explicitly with a `WaitGroup` or a channel."
+  - q:
+      fr: "Pourquoi « une goroutine par port » donne-t-il des résultats faux sur 65 535 ports ?"
+      en: "Why does \"one goroutine per port\" give wrong results over 65,535 ports?"
+    options:
+      fr:
+        - "Parce que la limite de descripteurs de fichiers est dépassée et les erreurs passent pour des ports fermés"
+        - "Parce que Go ne peut pas créer plus de 1000 goroutines"
+        - "Parce que les goroutines s'exécutent toujours dans l'ordre"
+        - "Parce que `net.DialTimeout` n'accepte qu'un appel à la fois"
+      en:
+        - "Because the file descriptor limit is exceeded and the errors are mistaken for closed ports"
+        - "Because Go cannot create more than 1000 goroutines"
+        - "Because goroutines always run in order"
+        - "Because `net.DialTimeout` only accepts one call at a time"
+    answer: 0
+    why:
+      fr: "Chaque connexion utilise un descripteur ; au-delà de la limite, `Dial` échoue et le scanner naïf conclut à tort « fermé »."
+      en: "Each connection uses a descriptor; past the limit, `Dial` fails and the naive scanner wrongly concludes \"closed\"."
+  - q:
+      fr: "Dans le pool de workers, à quoi sert `close(ports)` ?"
+      en: "In the worker pool, what is `close(ports)` for?"
+    options:
+      fr:
+        - "À fermer les connexions TCP ouvertes"
+        - "À libérer la mémoire du channel immédiatement"
+        - "À annuler le context"
+        - "À signaler aux workers qu'il n'y a plus de travail, ce qui termine leur boucle `range`"
+      en:
+        - "To close the open TCP connections"
+        - "To free the channel's memory immediately"
+        - "To cancel the context"
+        - "To tell the workers there is no more work, which ends their `range` loop"
+    answer: 3
+    why:
+      fr: "Une boucle `for port := range ports` se termine quand le channel est fermé et vidé : les workers s'arrêtent alors d'eux-mêmes."
+      en: "A `for port := range ports` loop ends when the channel is closed and drained: the workers then stop by themselves."
+  - q:
+      fr: "Quel est l'état d'un port quand un pare-feu jette silencieusement les paquets ?"
+      en: "What is the state of a port when a firewall silently drops the packets?"
+    options:
+      fr:
+        - "Ouvert"
+        - "Filtré : le scanner n'obtient une réponse qu'à l'expiration du timeout"
+        - "Fermé : la cible renvoie un refus immédiat"
+        - "Chiffré"
+      en:
+        - "Open"
+        - "Filtered: the scanner only gets an answer when the timeout expires"
+        - "Closed: the target sends an immediate refusal"
+        - "Encrypted"
+    answer: 1
+    why:
+      fr: "Sans réponse du tout, le scanner attend jusqu'au timeout : c'est ce qui rend les timeouts indispensables."
+      en: "With no answer at all, the scanner waits until the timeout: this is what makes timeouts essential."
+  - q:
+      fr: "Quel est le rôle du `context` passé à `DialContext` ?"
+      en: "What is the role of the `context` passed to `DialContext`?"
+    options:
+      fr:
+        - "Chiffrer la connexion TCP"
+        - "Stocker la liste des ports ouverts"
+        - "Permettre d'annuler la connexion en cours (Ctrl+C, délai global dépassé)"
+        - "Augmenter le nombre de descripteurs de fichiers"
+      en:
+        - "Encrypt the TCP connection"
+        - "Store the list of open ports"
+        - "Allow the in-flight connection to be cancelled (Ctrl+C, global deadline exceeded)"
+        - "Increase the number of file descriptors"
+    answer: 2
+    why:
+      fr: "Le context propage un signal d'annulation à toutes les goroutines : chaque `DialContext` s'interrompt dès qu'il est annulé."
+      en: "The context propagates a cancellation signal to all goroutines: each `DialContext` aborts as soon as it is cancelled."

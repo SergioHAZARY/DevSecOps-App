@@ -1,0 +1,456 @@
+description:
+  fr: "Comprendre comment le DNS traduit un nom en adresse IP, interroger les enregistrements avec dig et connaître les attaques et protections DNS."
+  en: "Understand how DNS turns a name into an IP address, query records with dig and know the DNS attacks and protections."
+duration: 20
+
+intro:
+  fr: |
+    Les machines se parlent avec des adresses IP, mais personne ne retient `104.20.23.154`. Le **DNS**
+    (*Domain Name System*, système de noms de domaine) est l'**annuaire d'Internet** : vous lui donnez un nom,
+    `example.com`, il vous rend l'adresse à contacter.
+
+    C'est comme le répertoire de votre téléphone : vous appuyez sur « Maman », le téléphone compose le numéro.
+    Et comme pour un répertoire, celui qui peut **modifier l'annuaire** peut vous faire appeler quelqu'un
+    d'autre sans que vous le remarquiez. C'est pour cela que le DNS est une cible de choix.
+
+    Dans cette leçon, vous allez suivre le trajet d'une question DNS, lire les principaux types
+    d'enregistrements avec la commande `dig`, puis voir comment on attaque le DNS et comment on le protège.
+  en: |
+    Machines talk to each other with IP addresses, but nobody remembers `104.20.23.154`. **DNS** (*Domain
+    Name System*) is the **phone book of the Internet**: you give it a name, `example.com`, and it gives you
+    back the address to contact.
+
+    It works like the contact list on your phone: you tap "Mum", the phone dials the number. And just like a
+    contact list, whoever can **edit the phone book** can make you call someone else without you noticing.
+    That is why DNS is a prime target.
+
+    In this lesson you will follow the journey of a DNS question, read the main record types with the `dig`
+    command, then see how DNS is attacked and how it is protected.
+
+sections:
+  - heading:
+      fr: "Le trajet d'une question DNS"
+      en: "The journey of a DNS question"
+    body:
+      fr: |
+        Quand vous tapez `www.example.com`, voici ce qui se passe, dans l'ordre :
+
+        | Étape | Qui est interrogé | Ce qu'il répond |
+        |---|---|---|
+        | 1 | Le cache de votre machine et le fichier `/etc/hosts` | La réponse, s'il la connaît déjà |
+        | 2 | Le **résolveur** (celui de votre box, de votre entreprise, ou `1.1.1.1`, `8.8.8.8`...) | Il fait les recherches à votre place |
+        | 3 | Un serveur **racine** (`.`) | « Pour `.com`, demande à ces serveurs » |
+        | 4 | Un serveur du domaine de premier niveau (**TLD**, ici `.com`) | « Pour `example.com`, demande à ces serveurs » |
+        | 5 | Le serveur **faisant autorité** pour `example.com` | « `www.example.com` = `104.20.23.154` » |
+
+        Le résolveur garde ensuite la réponse en mémoire pendant la durée indiquée par le **TTL** (*Time To
+        Live*, en secondes). Tant que le TTL n'est pas écoulé, il répond sans reposer la question.
+
+        Sous Linux, le résolveur utilisé est indiqué dans `/etc/resolv.conf`. Par défaut, la question et la
+        réponse voyagent **en clair** sur le port 53, en UDP (et en TCP pour les grosses réponses).
+      en: |
+        When you type `www.example.com`, here is what happens, in order:
+
+        | Step | Who is asked | What it answers |
+        |---|---|---|
+        | 1 | The cache of your machine and the `/etc/hosts` file | The answer, if it already knows it |
+        | 2 | The **resolver** (your home router's, your company's, or `1.1.1.1`, `8.8.8.8`...) | It does the searching for you |
+        | 3 | A **root** server (`.`) | "For `.com`, ask these servers" |
+        | 4 | A top-level domain server (**TLD**, here `.com`) | "For `example.com`, ask these servers" |
+        | 5 | The **authoritative** server for `example.com` | "`www.example.com` = `104.20.23.154`" |
+
+        The resolver then keeps the answer in memory for the time given by the **TTL** (*Time To Live*, in
+        seconds). Until the TTL runs out, it answers without asking again.
+
+        On Linux, the resolver in use is listed in `/etc/resolv.conf`. By default, the question and the
+        answer travel in **clear text** on port 53, over UDP (and TCP for large answers).
+  - heading:
+      fr: "Les types d'enregistrements"
+      en: "Record types"
+    body:
+      fr: |
+        Un domaine contient plusieurs **enregistrements** (*records*), chacun avec un type :
+
+        | Type | Contient | Exemple |
+        |---|---|---|
+        | `A` | Une adresse IPv4 | `example.com → 104.20.23.154` |
+        | `AAAA` | Une adresse IPv6 | `example.com → 2606:4700:10::6814:179a` |
+        | `CNAME` | Un alias vers un autre nom | `www → example.com` |
+        | `MX` | Le serveur qui reçoit les e-mails | `10 mail.example.com` |
+        | `TXT` | Du texte libre : SPF, DMARC, preuves de propriété | `"v=spf1 -all"` |
+        | `NS` | Les serveurs faisant autorité pour le domaine | `hera.ns.cloudflare.com` |
+        | `PTR` | Le nom associé à une adresse IP (recherche inverse) | `1.1.1.1 → one.one.one.one` |
+        | `CAA` | Les autorités autorisées à émettre des certificats TLS | `0 issue "letsencrypt.org"` |
+
+        Les enregistrements `TXT` et `CAA` sont de vrais contrôles de sécurité : **SPF** et **DMARC** disent
+        quels serveurs ont le droit d'envoyer des e-mails au nom du domaine, **CAA** dit qui a le droit de
+        fabriquer un certificat pour lui.
+      en: |
+        A domain contains several **records**, each with a type:
+
+        | Type | Contains | Example |
+        |---|---|---|
+        | `A` | An IPv4 address | `example.com → 104.20.23.154` |
+        | `AAAA` | An IPv6 address | `example.com → 2606:4700:10::6814:179a` |
+        | `CNAME` | An alias to another name | `www → example.com` |
+        | `MX` | The server that receives e-mail | `10 mail.example.com` |
+        | `TXT` | Free text: SPF, DMARC, ownership proofs | `"v=spf1 -all"` |
+        | `NS` | The authoritative servers of the domain | `hera.ns.cloudflare.com` |
+        | `PTR` | The name attached to an IP address (reverse lookup) | `1.1.1.1 → one.one.one.one` |
+        | `CAA` | The authorities allowed to issue TLS certificates | `0 issue "letsencrypt.org"` |
+
+        `TXT` and `CAA` records are real security controls: **SPF** and **DMARC** say which servers may send
+        e-mail on behalf of the domain, **CAA** says who may create a certificate for it.
+  - heading:
+      fr: "Attaques sur le DNS et protections"
+      en: "DNS attacks and protections"
+    body:
+      fr: |
+        | Attaque | Principe | Protection |
+        |---|---|---|
+        | Usurpation / empoisonnement de cache | Une fausse réponse est acceptée : le nom pointe vers le serveur de l'attaquant | **DNSSEC** : les réponses sont signées |
+        | Écoute | Les questions en clair révèlent les sites que vous visitez | **DoT** (DNS sur TLS, port 853) ou **DoH** (DNS sur HTTPS, port 443) |
+        | Prise de contrôle de sous-domaine | Un `CNAME` pointe vers une ressource cloud supprimée, que l'attaquant recrée | Supprimer l'enregistrement **en même temps** que la ressource |
+        | Usurpation d'e-mail | Envoi de messages au nom de votre domaine | **SPF**, **DKIM** et **DMARC** |
+        | Fuite de la zone | Un transfert de zone (`AXFR`) ouvert donne la liste de tous vos serveurs | N'autoriser le transfert qu'aux serveurs secondaires |
+        | Tunnel DNS | Des données volées sortent cachées dans des questions DNS | Surveiller les requêtes anormales, imposer le résolveur interne |
+
+        Attention à ne pas confondre : **DNSSEC** garantit que la réponse est **authentique** (elle n'a pas été
+        modifiée), mais ne la chiffre pas. **DoT** et **DoH** chiffrent l'échange avec le résolveur, mais ne
+        prouvent pas que la réponse est authentique. Les deux se complètent.
+      en: |
+        | Attack | Principle | Protection |
+        |---|---|---|
+        | Spoofing / cache poisoning | A fake answer is accepted: the name points to the attacker's server | **DNSSEC**: answers are signed |
+        | Eavesdropping | Clear-text questions reveal the sites you visit | **DoT** (DNS over TLS, port 853) or **DoH** (DNS over HTTPS, port 443) |
+        | Subdomain takeover | A `CNAME` points to a deleted cloud resource, which the attacker re-creates | Delete the record **at the same time** as the resource |
+        | E-mail spoofing | Messages are sent in the name of your domain | **SPF**, **DKIM** and **DMARC** |
+        | Zone leak | An open zone transfer (`AXFR`) lists all your servers | Allow transfers to secondary servers only |
+        | DNS tunnelling | Stolen data leaves hidden inside DNS questions | Monitor abnormal queries, enforce the internal resolver |
+
+        Do not mix them up: **DNSSEC** guarantees that the answer is **authentic** (it was not modified), but
+        does not encrypt it. **DoT** and **DoH** encrypt the exchange with the resolver, but do not prove the
+        answer is authentic. They complement each other.
+
+examples:
+  - title:
+      fr: "Lire une réponse complète de dig"
+      en: "Reading a full dig answer"
+    file: dig-a.sh
+    lang: bash
+    code: |
+      # dig = the reference tool to query DNS (package "dnsutils" on Debian/Ubuntu, "bind-utils" on RHEL)
+      # Syntax: dig @resolver name TYPE
+      dig @1.1.1.1 example.com A
+    output: |
+      ; <<>> DiG 9.18.30 <<>> @1.1.1.1 example.com A
+      ; (1 server found)
+      ;; global options: +cmd
+      ;; Got answer:
+      ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 41712
+      ;; flags: qr rd ra ad; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 1
+
+      ;; OPT PSEUDOSECTION:
+      ; EDNS: version: 0, flags:; udp: 1232
+      ;; QUESTION SECTION:
+      ;example.com.                   IN      A
+
+      ;; ANSWER SECTION:
+      example.com.            205     IN      A       172.66.147.243
+      example.com.            205     IN      A       104.20.23.154
+
+      ;; Query time: 12 msec
+      ;; SERVER: 1.1.1.1#53(1.1.1.1) (UDP)
+      ;; WHEN: Fri Nov 27 14:29:30 CET 2026
+      ;; MSG SIZE  rcvd: 72
+    note:
+      fr: "Trois endroits à lire : `status: NOERROR` (la question a abouti ; `NXDOMAIN` signifierait que le nom n'existe pas), la section `ANSWER` (nom, TTL en secondes, type, valeur) et le drapeau `ad` (*authenticated data*) : le résolveur a vérifié la signature DNSSEC. Les adresses que vous obtiendrez peuvent être différentes, elles changent avec le temps."
+      en: "Three places to read: `status: NOERROR` (the question succeeded; `NXDOMAIN` would mean the name does not exist), the `ANSWER` section (name, TTL in seconds, type, value) and the `ad` flag (*authenticated data*): the resolver verified the DNSSEC signature. The addresses you get may differ, they change over time."
+
+  - title:
+      fr: "Interroger les autres types d'enregistrements"
+      en: "Querying the other record types"
+    file: dig-records.sh
+    lang: bash
+    code: |
+      # +short prints only the value of the answer
+      dig +short example.com NS
+
+      # MX: who receives e-mail for this domain?
+      dig +short example.com MX
+
+      # TXT: SPF (who may send e-mail) and various verification strings
+      dig +short example.com TXT
+
+      # DMARC lives in a TXT record of the _dmarc subdomain
+      dig +short _dmarc.example.com TXT
+
+      # -x = reverse lookup: from the IP address back to a name (PTR record)
+      dig +short -x 1.1.1.1
+    output: |
+      hera.ns.cloudflare.com.
+      elliott.ns.cloudflare.com.
+      0 .
+      "v=spf1 -all"
+      "_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9"
+      "v=DMARC1;p=reject;sp=reject;adkim=s;aspf=s"
+      one.one.one.one.
+    note:
+      fr: "`example.com` est un bon modèle de domaine qui n'envoie **aucun** e-mail : `MX 0 .` (aucun serveur de réception), SPF `-all` (aucun serveur autorisé à envoyer) et DMARC `p=reject` (rejeter tout message qui échoue). Impossible d'usurper proprement ce domaine dans un e-mail."
+      en: "`example.com` is a good model of a domain that sends **no** e-mail at all: `MX 0 .` (no receiving server), SPF `-all` (no server allowed to send) and DMARC `p=reject` (reject any message that fails). Spoofing this domain cleanly in an e-mail is not possible."
+
+  - title:
+      fr: "Une zone DNS avec trois failles"
+      en: "A DNS zone with three flaws"
+    file: example.com.zone
+    lang: text
+    kind: vulnerable
+    code: |
+      $ORIGIN example.com.
+      $TTL 3600
+
+      @         IN  A      203.0.113.10
+      www       IN  CNAME  example.com.
+      @         IN  MX     10 mail.example.com.
+      mail      IN  A      203.0.113.25
+
+      ; Flaw 1: "+all" authorises EVERY server on the Internet to send mail as example.com
+      @         IN  TXT    "v=spf1 +all"
+
+      ; Flaw 2: this alias points to a cloud resource that was deleted months ago.
+      ; Whoever re-creates "shop-2019" at the provider controls old-shop.example.com
+      old-shop  IN  CNAME  shop-2019.cloud-provider.example.
+
+      ; Flaw 3: no DMARC record and no CAA record
+    note:
+      fr: "Ce fichier de zone fonctionne parfaitement : le site et les e-mails marchent. Pourtant, n'importe qui peut envoyer un e-mail « de la part de » `example.com`, et le sous-domaine `old-shop` peut être repris par un attaquant (*subdomain takeover*)."
+      en: "This zone file works perfectly: the website and e-mail both work. Yet anyone can send an e-mail \"from\" `example.com`, and the `old-shop` subdomain can be taken over by an attacker (*subdomain takeover*)."
+
+  - title:
+      fr: "La même zone, corrigée"
+      en: "The same zone, fixed"
+    file: example.com.zone
+    lang: text
+    kind: secure
+    code: |
+      $ORIGIN example.com.
+      $TTL 3600
+
+      @         IN  A      203.0.113.10
+      www       IN  CNAME  example.com.
+      @         IN  MX     10 mail.example.com.
+      mail      IN  A      203.0.113.25
+
+      ; SPF: only our mail server may send, everything else must be rejected ("-all")
+      @         IN  TXT    "v=spf1 ip4:203.0.113.25 -all"
+
+      ; DMARC: receivers must reject messages that fail SPF/DKIM, and send us reports
+      _dmarc    IN  TXT    "v=DMARC1; p=reject; rua=mailto:dmarc-reports@example.com"
+
+      ; CAA: only Let's Encrypt may issue TLS certificates for this domain
+      @         IN  CAA    0 issue "letsencrypt.org"
+
+      ; The dangling "old-shop" alias was deleted together with the cloud resource
+    note:
+      fr: "Trois lignes ajoutées, une supprimée. Vérifiez ensuite depuis l'extérieur avec `dig +short example.com TXT`, `dig +short _dmarc.example.com TXT` et `dig +short example.com CAA` : un enregistrement de sécurité qui n'est pas publié ne protège personne."
+      en: "Three lines added, one removed. Then check from outside with `dig +short example.com TXT`, `dig +short _dmarc.example.com TXT` and `dig +short example.com CAA`: a security record that is not published protects nobody."
+
+  - title:
+      fr: "Détecter un alias qui pointe dans le vide"
+      en: "Detecting an alias that points to nothing"
+    file: dangling_cname.py
+    lang: python
+    code: |
+      # A tiny copy of our zone: name -> (record type, value)
+      zone = {
+          "example.com": ("A", "203.0.113.10"),
+          "www.example.com": ("CNAME", "example.com"),
+          "blog.example.com": ("CNAME", "myblog.hosting.example"),
+          "old-shop.example.com": ("CNAME", "shop-2019.cloud-provider.example"),
+      }
+
+      # Names that still exist at our external providers
+      external = {"myblog.hosting.example": ("A", "198.51.100.7")}
+
+
+      def resolve(name, depth=0):
+          """Follow CNAME records until an A record is found (like a resolver does)."""
+          record = zone.get(name) or external.get(name)
+          if record is None or depth > 8:  # unknown name, or CNAME loop
+              return None
+          rtype, value = record
+          return value if rtype == "A" else resolve(value, depth + 1)
+
+
+      for name, (rtype, value) in zone.items():
+          ip = resolve(name)
+          if ip:
+              print(f"OK        {name:22} -> {ip}")
+          else:
+              print(f"DANGLING  {name:22} -> {value} does not exist any more")
+    output: |
+      OK        example.com            -> 203.0.113.10
+      OK        www.example.com        -> 203.0.113.10
+      OK        blog.example.com       -> 198.51.100.7
+      DANGLING  old-shop.example.com   -> shop-2019.cloud-provider.example does not exist any more
+    note:
+      fr: "Le script suit les `CNAME` comme le ferait un résolveur. Un alias dont la cible n'existe plus est dit **pendant** (*dangling*) : c'est le point de départ d'une prise de contrôle de sous-domaine. Ce contrôle s'automatise facilement dans un pipeline, sur la liste réelle de vos enregistrements."
+      en: "The script follows `CNAME` records the way a resolver would. An alias whose target no longer exists is called **dangling**: it is the starting point of a subdomain takeover. This check is easy to automate in a pipeline, on your real list of records."
+
+mistake:
+  fr: |
+    **Supprimer une ressource cloud en oubliant son enregistrement DNS.**
+
+    Vous arrêtez un site temporaire hébergé chez un fournisseur cloud, mais le `CNAME`
+    `promo.example.com → promo-2024.fournisseur.example` reste dans la zone. Un attaquant crée chez ce
+    fournisseur une ressource portant le même nom : il contrôle désormais une page servie sous **votre**
+    domaine, parfaite pour du hameçonnage ou du vol de cookies. L'ordre correct : supprimer **d'abord**
+    l'enregistrement DNS, **ensuite** la ressource.
+  en: |
+    **Deleting a cloud resource and forgetting its DNS record.**
+
+    You shut down a temporary site hosted at a cloud provider, but the `CNAME`
+    `promo.example.com → promo-2024.provider.example` stays in the zone. An attacker creates a resource with
+    the same name at that provider: they now control a page served under **your** domain, perfect for
+    phishing or cookie theft. The right order: delete the DNS record **first**, the resource **second**.
+
+bestPractice:
+  fr: |
+    - **Gérez la zone DNS comme du code** : enregistrements versionnés dans Git, modifiés par revue (Terraform, OctoDNS...).
+    - **Publiez SPF, DKIM et DMARC** sur chaque domaine, y compris ceux qui n'envoient pas d'e-mail (`v=spf1 -all`).
+    - **Ajoutez un enregistrement CAA** pour limiter les autorités de certification.
+    - **Activez DNSSEC** chez votre registrar et utilisez un résolveur qui valide.
+    - **Auditez régulièrement** les `CNAME` qui pointent vers l'extérieur et supprimez ceux qui ne servent plus.
+    - **Interdisez les transferts de zone** (`AXFR`) sauf vers vos serveurs secondaires.
+  en: |
+    - **Manage the DNS zone as code**: records versioned in Git, changed through review (Terraform, OctoDNS...).
+    - **Publish SPF, DKIM and DMARC** on every domain, including those that send no e-mail (`v=spf1 -all`).
+    - **Add a CAA record** to restrict certificate authorities.
+    - **Enable DNSSEC** at your registrar and use a validating resolver.
+    - **Audit regularly** the `CNAME` records pointing outside and delete the ones no longer used.
+    - **Forbid zone transfers** (`AXFR`) except to your secondary servers.
+
+exercise:
+  statement:
+    fr: |
+      Vous devez vérifier rapidement si le domaine `example.com` est protégé contre l'usurpation d'e-mail.
+
+      1. Affichez ses serveurs de noms faisant autorité.
+      2. Affichez son enregistrement SPF.
+      3. Affichez sa politique DMARC.
+      4. Concluez : un attaquant peut-il facilement envoyer un e-mail en se faisant passer pour ce domaine ?
+
+      Écrivez les commandes `dig` nécessaires et, en commentaire, ce que vous devez regarder dans chaque réponse.
+    en: |
+      You must quickly check whether the `example.com` domain is protected against e-mail spoofing.
+
+      1. Print its authoritative name servers.
+      2. Print its SPF record.
+      3. Print its DMARC policy.
+      4. Conclude: can an attacker easily send an e-mail pretending to be this domain?
+
+      Write the `dig` commands needed and, as comments, what to look at in each answer.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Authoritative name servers
+      dig +short example.com NS
+
+      # 2. SPF is a TXT record starting with "v=spf1".
+      #    Look at the end: "-all" = reject the others (good), "~all" = soft fail, "+all" = everyone allowed (bad)
+      dig +short example.com TXT | grep 'v=spf1'
+
+      # 3. DMARC is a TXT record on the _dmarc subdomain.
+      #    Look at "p=": none = only observe, quarantine = spam folder, reject = refuse the message
+      dig +short _dmarc.example.com TXT
+
+      # 4. Conclusion for example.com: SPF ends with "-all" and DMARC says "p=reject",
+      #    so a spoofed e-mail is rejected by receivers that check DMARC.
+    note:
+      fr: "Si la commande SPF ne renvoie rien, ou si DMARC est absent ou réglé sur `p=none`, le domaine peut être usurpé : c'est une constatation fréquente lors d'un audit."
+      en: "If the SPF command returns nothing, or if DMARC is missing or set to `p=none`, the domain can be spoofed: this is a frequent audit finding."
+
+quiz:
+  - q:
+      fr: "À quoi sert le DNS ?"
+      en: "What is DNS for?"
+    options:
+      fr:
+        - "À chiffrer les pages web"
+        - "À attribuer une adresse IP à votre ordinateur"
+        - "À bloquer les ports dangereux"
+        - "À traduire un nom de domaine en adresse IP"
+      en:
+        - "Encrypting web pages"
+        - "Giving your computer an IP address"
+        - "Blocking dangerous ports"
+        - "Translating a domain name into an IP address"
+    answer: 3
+    why:
+      fr: "Le DNS est l'annuaire d'Internet : il associe un nom lisible à l'adresse IP à contacter. L'attribution d'adresse est le rôle de DHCP."
+      en: "DNS is the phone book of the Internet: it maps a readable name to the IP address to contact. Giving out addresses is the job of DHCP."
+  - q:
+      fr: "Quel type d'enregistrement contient une adresse IPv4 ?"
+      en: "Which record type holds an IPv4 address?"
+    options:
+      fr: ["A", "MX", "CNAME", "TXT"]
+      en: ["A", "MX", "CNAME", "TXT"]
+    answer: 0
+    why:
+      fr: "L'enregistrement `A` associe un nom à une adresse IPv4 ; `AAAA` fait de même pour IPv6."
+      en: "The `A` record maps a name to an IPv4 address; `AAAA` does the same for IPv6."
+  - q:
+      fr: "Que garantit DNSSEC ?"
+      en: "What does DNSSEC guarantee?"
+    options:
+      fr:
+        - "Que personne ne peut voir vos requêtes DNS"
+        - "Que la réponse DNS est authentique et n'a pas été modifiée"
+        - "Que le site visité utilise HTTPS"
+        - "Que le TTL est toujours respecté"
+      en:
+        - "That nobody can see your DNS queries"
+        - "That the DNS answer is authentic and was not modified"
+        - "That the visited site uses HTTPS"
+        - "That the TTL is always respected"
+    answer: 1
+    why:
+      fr: "DNSSEC signe les enregistrements : il prouve leur authenticité mais ne chiffre rien. La confidentialité vient de DoT ou DoH."
+      en: "DNSSEC signs records: it proves their authenticity but encrypts nothing. Confidentiality comes from DoT or DoH."
+  - q:
+      fr: "Un `CNAME` pointe vers une ressource cloud qui a été supprimée. Quel est le risque ?"
+      en: "A `CNAME` points to a cloud resource that was deleted. What is the risk?"
+    options:
+      fr:
+        - "Aucun, l'enregistrement est simplement ignoré"
+        - "Le domaine entier cesse de fonctionner"
+        - "Un attaquant peut recréer la ressource et contrôler le sous-domaine"
+        - "Le TTL du domaine passe à zéro"
+      en:
+        - "None, the record is simply ignored"
+        - "The whole domain stops working"
+        - "An attacker can re-create the resource and control the subdomain"
+        - "The TTL of the domain drops to zero"
+    answer: 2
+    why:
+      fr: "C'est la prise de contrôle de sous-domaine : l'alias pendant donne à l'attaquant une page servie sous votre nom de domaine."
+      en: "This is a subdomain takeover: the dangling alias gives the attacker a page served under your domain name."
+  - q:
+      fr: "Que signifie `-all` à la fin d'un enregistrement SPF ?"
+      en: "What does `-all` at the end of an SPF record mean?"
+    options:
+      fr:
+        - "Tous les serveurs sont autorisés à envoyer"
+        - "Le domaine n'a pas de serveur DNS"
+        - "Tous les e-mails sont chiffrés"
+        - "Les serveurs non listés doivent être refusés"
+      en:
+        - "Every server is allowed to send"
+        - "The domain has no DNS server"
+        - "All e-mails are encrypted"
+        - "Servers that are not listed must be refused"
+    answer: 3
+    why:
+      fr: "`-all` signifie « échec strict pour tout le reste » : seuls les serveurs listés avant peuvent envoyer. `+all` autoriserait au contraire tout le monde."
+      en: "`-all` means \"hard fail for everything else\": only the servers listed before it may send. `+all` would on the contrary allow everyone."

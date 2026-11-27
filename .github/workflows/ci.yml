@@ -1,0 +1,70 @@
+name: CI
+
+# Validate every push and pull request: the site builds, the lessons are valid,
+# types are sound, and the code is scanned for secrets and known vulnerabilities.
+# This is the project dogfooding its own DevSecOps lessons.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint, typecheck, validate content & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Validate every lesson
+        run: npm run content:check
+      - name: Type check
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Build (static export)
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SITE_URL: https://sergiohazary.github.io/DevSecOps-App
+          NEXT_PUBLIC_BASE_PATH: /DevSecOps-App
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  secrets-scan:
+    name: Secret scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-and-iac-scan:
+    name: Dependencies & IaC (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: "true"
+          exit-code: "0" # report, do not block, while the project stabilises
+          format: table

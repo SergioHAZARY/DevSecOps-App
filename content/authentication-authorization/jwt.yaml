@@ -1,0 +1,761 @@
+description:
+  fr: "Décoder un JWT pas à pas, choisir entre HS256 et RS256/ES256, éviter les pièges (alg none, confusion d'algorithme, exp/aud/iss) et gérer stockage et révocation."
+  en: "Decode a JWT step by step, choose between HS256 and RS256/ES256, avoid the pitfalls (alg none, algorithm confusion, exp/aud/iss) and handle storage and revocation."
+duration: 40
+
+intro:
+  fr: |
+    Un **JWT** (*JSON Web Token*, prononcé « jot ») est un petit document JSON **signé** que le
+    serveur remet au client après la connexion. Le client le renvoie à chaque requête, et l'API vérifie
+    la signature au lieu d'interroger une base de sessions.
+
+    Pensez à un **bracelet de festival** : il est posé à l'entrée après contrôle du billet, il indique
+    vos droits (zone VIP ou non) et sa date de validité, et chaque vigile peut le vérifier d'un coup
+    d'œil sans appeler la billetterie. Deux conséquences : tout le monde peut **lire** ce qui est écrit
+    dessus, et si quelqu'un vous le vole, il entre à votre place jusqu'à la fin de sa validité.
+
+    Dans cette leçon, vous allez fabriquer et décoder un JWT à la main, voir un vérificateur naïf
+    accepter un jeton forgé, le corriger, puis mettre en place ce qui manque aux JWT par nature :
+    l'expiration courte, la rotation des jetons de rafraîchissement et la révocation.
+  en: |
+    A **JWT** (*JSON Web Token*, pronounced "jot") is a small **signed** JSON document that the server
+    hands to the client after login. The client sends it back with every request, and the API verifies
+    the signature instead of querying a session database.
+
+    Think of a **festival wristband**: it is put on at the gate after the ticket check, it states your
+    rights (VIP area or not) and its validity date, and every guard can check it at a glance without
+    calling the ticket office. Two consequences: anyone can **read** what is written on it, and if
+    someone steals it, they get in as you until it expires.
+
+    In this lesson you will build and decode a JWT by hand, watch a naive verifier accept a forged
+    token, fix it, then put in place what JWTs lack by nature: short expiry, refresh token rotation
+    and revocation.
+
+sections:
+  - heading:
+      fr: "Anatomie d'un JWT"
+      en: "Anatomy of a JWT"
+    body:
+      fr: |
+        Un JWT est formé de trois parties séparées par des points : `en-tête.charge.signature`.
+
+        | Partie | Contenu | Exemple décodé |
+        |---|---|---|
+        | En-tête (*header*) | Algorithme de signature, type, identifiant de clé | `{"alg":"HS256","typ":"JWT"}` |
+        | Charge utile (*payload*) | Les *claims* : affirmations sur l'utilisateur et le jeton | `{"sub":"user-42","exp":1767226500}` |
+        | Signature | Preuve que les deux premières parties n'ont pas été modifiées | 32 octets pour HS256 |
+
+        Chaque partie est encodée en **base64url**. C'est un simple **encodage**, pas un chiffrement :
+        n'importe qui peut décoder l'en-tête et la charge utile. On n'y place donc **jamais** de mot de
+        passe, de numéro de carte ou de donnée personnelle sensible.
+
+        Les *claims* standards à connaître :
+
+        | Claim | Signification | Vérification attendue |
+        |---|---|---|
+        | `iss` | Émetteur (*issuer*) | Égal à l'URL de votre serveur d'autorisation |
+        | `aud` | Destinataire (*audience*) | Égal à l'identifiant de **votre** API |
+        | `sub` | Sujet : l'utilisateur | Sert de clé pour retrouver l'utilisateur |
+        | `exp` | Date d'expiration (secondes Unix) | Dans le futur |
+        | `iat` / `nbf` | Émis le / pas valable avant | Dans le passé |
+        | `jti` | Identifiant unique du jeton | Absent de la liste de révocation |
+      en: |
+        A JWT is made of three parts separated by dots: `header.payload.signature`.
+
+        | Part | Content | Decoded example |
+        |---|---|---|
+        | Header | Signature algorithm, type, key identifier | `{"alg":"HS256","typ":"JWT"}` |
+        | Payload | The *claims*: statements about the user and the token | `{"sub":"user-42","exp":1767226500}` |
+        | Signature | Proof that the first two parts were not modified | 32 bytes for HS256 |
+
+        Each part is **base64url**-encoded. This is plain **encoding**, not encryption: anyone can
+        decode the header and the payload. So you **never** put a password, a card number or sensitive
+        personal data in it.
+
+        The standard claims to know:
+
+        | Claim | Meaning | Expected check |
+        |---|---|---|
+        | `iss` | Issuer | Equal to the URL of your authorization server |
+        | `aud` | Audience | Equal to the identifier of **your** API |
+        | `sub` | Subject: the user | Used as the key to find the user |
+        | `exp` | Expiry date (Unix seconds) | In the future |
+        | `iat` / `nbf` | Issued at / not valid before | In the past |
+        | `jti` | Unique token identifier | Absent from the revocation list |
+  - heading:
+      fr: "HS256 ou RS256/ES256 ?"
+      en: "HS256 or RS256/ES256?"
+    body:
+      fr: |
+        | | HS256 | RS256 / ES256 |
+        |---|---|---|
+        | Type | Symétrique (HMAC-SHA256) | Asymétrique (RSA / ECDSA P-256) |
+        | Pour signer | Le secret partagé | La clé **privée** |
+        | Pour vérifier | Le **même** secret | La clé **publique** |
+        | Qui peut fabriquer un jeton ? | Tout service capable de vérifier | Uniquement l'émetteur |
+        | Distribution des clés | Secret à copier dans chaque service | Clés publiques publiées (JWKS) |
+        | Cas d'usage | Une seule application qui émet et vérifie | Microservices, fournisseur d'identité |
+
+        Avec HS256, un secret court ou devinable se casse hors ligne : il doit faire au moins
+        32 octets aléatoires. Dès que plusieurs services vérifient les jetons, préférez RS256 ou
+        ES256 : compromettre un service ne permet plus de forger des jetons.
+
+        Trois attaques classiques visent la **vérification** :
+
+        - **`alg: none`** : l'attaquant remplace l'algorithme par `none` et supprime la signature. Un
+          vérificateur qui fait confiance à l'en-tête accepte le jeton.
+        - **Confusion d'algorithme** : l'API attend du RS256 mais laisse l'en-tête choisir.
+          L'attaquant signe en HS256 en utilisant la **clé publique** (connue de tous) comme secret
+          HMAC ; le serveur vérifie avec cette même clé et valide.
+        - **Claims non vérifiés** : jeton expiré, émis pour une autre API (`aud`) ou par un autre
+          émetteur (`iss`), mais accepté quand même.
+
+        La parade commune : **le serveur impose l'algorithme et la clé**, il ne les lit jamais dans le
+        jeton.
+      en: |
+        | | HS256 | RS256 / ES256 |
+        |---|---|---|
+        | Type | Symmetric (HMAC-SHA256) | Asymmetric (RSA / ECDSA P-256) |
+        | To sign | The shared secret | The **private** key |
+        | To verify | The **same** secret | The **public** key |
+        | Who can mint a token? | Any service able to verify | Only the issuer |
+        | Key distribution | Secret copied into every service | Public keys published (JWKS) |
+        | Use case | A single application that issues and verifies | Microservices, identity provider |
+
+        With HS256, a short or guessable secret is cracked offline: it must be at least 32 random
+        bytes. As soon as several services verify tokens, prefer RS256 or ES256: compromising one
+        service no longer allows forging tokens.
+
+        Three classic attacks target **verification**:
+
+        - **`alg: none`**: the attacker replaces the algorithm with `none` and removes the signature.
+          A verifier that trusts the header accepts the token.
+        - **Algorithm confusion**: the API expects RS256 but lets the header choose. The attacker
+          signs with HS256 using the **public key** (known to everyone) as the HMAC secret; the server
+          verifies with that same key and validates.
+        - **Unchecked claims**: a token that is expired, issued for another API (`aud`) or by another
+          issuer (`iss`), but accepted anyway.
+
+        The common countermeasure: **the server imposes the algorithm and the key**, it never reads
+        them from the token.
+  - heading:
+      fr: "Stockage, durée de vie et révocation"
+      en: "Storage, lifetime and revocation"
+    body:
+      fr: |
+        Un JWT est valable jusqu'à son `exp` : sans mécanisme supplémentaire, impossible de
+        déconnecter un utilisateur ou de bloquer un jeton volé. On combine donc deux jetons :
+
+        | | Jeton d'accès (*access token*) | Jeton de rafraîchissement (*refresh token*) |
+        |---|---|---|
+        | Forme | JWT signé | Chaîne aléatoire opaque |
+        | Durée de vie | 5 à 15 minutes | Jours ou semaines |
+        | Envoyé à | Chaque appel d'API | Uniquement au point `/token/refresh` |
+        | Révocable | Non (ou par liste de `jti`) | Oui : il est stocké côté serveur |
+
+        À chaque rafraîchissement, le serveur **fait tourner** le jeton de rafraîchissement : l'ancien
+        est invalidé et un nouveau est émis. Si un ancien jeton est présenté une seconde fois, c'est
+        qu'il a été copié : toute la « famille » de jetons est révoquée.
+
+        Où garder les jetons dans un navigateur ?
+
+        | Emplacement | Risque principal | Verdict |
+        |---|---|---|
+        | `localStorage` / `sessionStorage` | Lisible par tout script : une XSS vole le jeton | À éviter |
+        | Cookie `HttpOnly; Secure; SameSite` | CSRF, à traiter avec `SameSite` et un jeton anti-CSRF | Recommandé |
+        | Mémoire JavaScript uniquement | Perdu au rechargement de la page | Bien pour le jeton d'accès |
+      en: |
+        A JWT is valid until its `exp`: without an extra mechanism, there is no way to log a user out
+        or block a stolen token. So two tokens are combined:
+
+        | | Access token | Refresh token |
+        |---|---|---|
+        | Form | Signed JWT | Opaque random string |
+        | Lifetime | 5 to 15 minutes | Days or weeks |
+        | Sent to | Every API call | Only the `/token/refresh` endpoint |
+        | Revocable | No (or through a `jti` denylist) | Yes: it is stored on the server |
+
+        At each refresh, the server **rotates** the refresh token: the old one is invalidated and a
+        new one is issued. If an old token is presented a second time, it was copied: the whole token
+        "family" is revoked.
+
+        Where should tokens be kept in a browser?
+
+        | Location | Main risk | Verdict |
+        |---|---|---|
+        | `localStorage` / `sessionStorage` | Readable by any script: an XSS steals the token | Avoid |
+        | `HttpOnly; Secure; SameSite` cookie | CSRF, handled with `SameSite` and an anti-CSRF token | Recommended |
+        | JavaScript memory only | Lost when the page reloads | Fine for the access token |
+
+examples:
+  - title:
+      fr: "Fabriquer puis décoder un JWT pas à pas (bibliothèque standard)"
+      en: "Build then decode a JWT step by step (standard library)"
+    file: jwt_anatomy.py
+    lang: python
+    kind: neutral
+    code: |
+      import base64
+      import hashlib
+      import hmac
+      import json
+
+      SECRET = b"demo-secret-of-at-least-32-bytes-long!"
+
+
+      def b64url(data):
+          # JWT uses base64url WITHOUT the trailing "=" padding
+          return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+      def b64url_decode(text):
+          # Put the padding back before decoding
+          return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+      # Step 1: header and payload are plain JSON
+      header = {"alg": "HS256", "typ": "JWT"}
+      payload = {
+          "iss": "https://auth.example.com",
+          "aud": "orders-api",
+          "sub": "user-42",
+          "role": "user",
+          "iat": 1767225600,  # fixed timestamps so the output is reproducible
+          "exp": 1767226500,  # iat + 15 minutes
+      }
+
+      # Step 2: each part is base64url-encoded (encoded, NOT encrypted)
+      h = b64url(json.dumps(header, separators=(",", ":")).encode())
+      p = b64url(json.dumps(payload, separators=(",", ":")).encode())
+
+      # Step 3: the signature covers "header.payload"
+      signature = hmac.new(SECRET, f"{h}.{p}".encode(), hashlib.sha256).digest()
+      token = f"{h}.{p}.{b64url(signature)}"
+
+      print("Token:")
+      print(token)
+      print()
+
+      # Anyone can read the content without the secret
+      part_h, part_p, part_s = token.split(".")
+      print("Header   :", b64url_decode(part_h).decode())
+      print("Payload  :", b64url_decode(part_p).decode())
+      print("Signature:", len(b64url_decode(part_s)), "bytes (HMAC-SHA256)")
+    output: |
+      Token:
+      eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJhdWQiOiJvcmRlcnMtYXBpIiwic3ViIjoidXNlci00MiIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjY1MDB9.ZDQ27hYnaGxQf19TYQlW9z4rzMnlVYZZItfg-8r5Rcs
+
+      Header   : {"alg":"HS256","typ":"JWT"}
+      Payload  : {"iss":"https://auth.example.com","aud":"orders-api","sub":"user-42","role":"user","iat":1767225600,"exp":1767226500}
+      Signature: 32 bytes (HMAC-SHA256)
+    note:
+      fr: "Un JWT commence presque toujours par `eyJ` : c'est `{\"` encodé en base64url. Les deux premières parties se décodent sans aucun secret ; seule la troisième, la signature, exige la clé pour être recalculée."
+      en: "A JWT almost always starts with `eyJ`: that is `{\"` encoded in base64url. The first two parts decode without any secret; only the third, the signature, requires the key to be recomputed."
+
+  - title:
+      fr: "Vulnérable : un vérificateur qui fait confiance à l'en-tête"
+      en: "Vulnerable: a verifier that trusts the header"
+    file: verify_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import base64
+      import hashlib
+      import hmac
+      import json
+
+      SECRET = b"demo-secret-of-at-least-32-bytes-long!"
+      NOW = 1767229200  # fixed "current time" for the demo (real code uses time.time())
+
+
+      def b64url(data):
+          return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+      def b64url_decode(text):
+          return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+      def make_token(header, payload, secret=SECRET):
+          h = b64url(json.dumps(header, separators=(",", ":")).encode())
+          p = b64url(json.dumps(payload, separators=(",", ":")).encode())
+          if header["alg"] == "none":
+              return f"{h}.{p}."
+          sig = hmac.new(secret, f"{h}.{p}".encode(), hashlib.sha256).digest()
+          return f"{h}.{p}.{b64url(sig)}"
+
+
+      def verify_vulnerable(token):
+          h, p, s = token.split(".")
+          header = json.loads(b64url_decode(h))
+          # VULNERABLE 1: the algorithm is chosen by the token, i.e. by the attacker
+          if header["alg"] == "none":
+              return json.loads(b64url_decode(p))
+          expected = b64url(hmac.new(SECRET, f"{h}.{p}".encode(), hashlib.sha256).digest())
+          # VULNERABLE 2: "!=" is not a constant-time comparison
+          if s != expected:
+              raise ValueError("bad signature")
+          # VULNERABLE 3: exp, aud and iss are never checked
+          return json.loads(b64url_decode(p))
+
+
+      # A legitimate token that expired one hour ago
+      old = make_token(
+          {"alg": "HS256", "typ": "JWT"},
+          {"sub": "user-42", "role": "user", "exp": NOW - 3600},
+      )
+      print("expired token accepted :", verify_vulnerable(old))
+
+      # The attacker writes their own payload and declares "alg": "none": no secret needed
+      forged = make_token(
+          {"alg": "none", "typ": "JWT"},
+          {"sub": "user-42", "role": "admin", "exp": NOW + 3600},
+      )
+      print("forged token accepted  :", verify_vulnerable(forged))
+    output: |
+      expired token accepted : {'sub': 'user-42', 'role': 'user', 'exp': 1767225600}
+      forged token accepted  : {'sub': 'user-42', 'role': 'admin', 'exp': 1767232800}
+    note:
+      fr: "L'attaquant n'a jamais eu le secret : il a écrit `\"role\": \"admin\"`, déclaré `alg: none` et laissé la signature vide. Le vérificateur obéit à l'en-tête, puis oublie de regarder `exp`. À ne tester que sur votre propre laboratoire."
+      en: "The attacker never had the secret: they wrote `\"role\": \"admin\"`, declared `alg: none` and left the signature empty. The verifier obeys the header, then forgets to look at `exp`. Only test this against your own lab."
+
+  - title:
+      fr: "Corrigé : algorithme imposé, signature puis claims vérifiés"
+      en: "Fixed: enforced algorithm, signature then claims verified"
+    file: verify_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import base64
+      import hashlib
+      import hmac
+      import json
+
+      SECRET = b"demo-secret-of-at-least-32-bytes-long!"
+      ISSUER = "https://auth.example.com"
+      AUDIENCE = "orders-api"
+      NOW = 1767229200  # fixed "current time" for the demo (real code uses time.time())
+
+
+      def b64url(data):
+          return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+      def b64url_decode(text):
+          return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+      def make_token(header, payload, secret=SECRET):
+          h = b64url(json.dumps(header, separators=(",", ":")).encode())
+          p = b64url(json.dumps(payload, separators=(",", ":")).encode())
+          if header["alg"] == "none":
+              return f"{h}.{p}."
+          sig = hmac.new(secret, f"{h}.{p}".encode(), hashlib.sha256).digest()
+          return f"{h}.{p}.{b64url(sig)}"
+
+
+      def verify_secure(token, now=NOW):
+          try:
+              h, p, s = token.split(".")
+              header = json.loads(b64url_decode(h))
+              signature = b64url_decode(s)
+          except ValueError:
+              raise ValueError("malformed token")
+          # FIX 1: the server decides the algorithm; the header is only compared to it
+          if header.get("alg") != "HS256":
+              raise ValueError("unexpected algorithm")
+          expected = hmac.new(SECRET, f"{h}.{p}".encode(), hashlib.sha256).digest()
+          # FIX 2: constant-time comparison of the raw signatures
+          if not hmac.compare_digest(signature, expected):
+              raise ValueError("bad signature")
+          claims = json.loads(b64url_decode(p))
+          # FIX 3: claims are trusted only AFTER the signature, and all are required
+          if claims.get("exp", 0) <= now:
+              raise ValueError("token expired")
+          if claims.get("iss") != ISSUER:
+              raise ValueError("wrong issuer")
+          if claims.get("aud") != AUDIENCE:
+              raise ValueError("wrong audience")
+          return claims
+
+
+      def check(label, token):
+          try:
+              print(f"{label:16}: accepted, role = {verify_secure(token)['role']}")
+          except ValueError as error:
+              print(f"{label:16}: REJECTED ({error})")
+
+
+      base = {"iss": ISSUER, "aud": AUDIENCE, "sub": "user-42", "role": "user"}
+      admin = {**base, "role": "admin", "exp": NOW + 900}
+      hs256 = {"alg": "HS256", "typ": "JWT"}
+
+      valid = make_token(hs256, {**base, "exp": NOW + 900})
+      check("valid token", valid)
+
+      check("alg none", make_token({"alg": "none", "typ": "JWT"}, admin))
+
+      # Tampering: swap the payload but keep the old signature
+      h, p, s = valid.split(".")
+      forged_payload = b64url(json.dumps(admin, separators=(",", ":")).encode())
+      check("tampered payload", f"{h}.{forged_payload}.{s}")
+
+      check("expired", make_token(hs256, {**base, "exp": NOW - 3600}))
+      check("other audience", make_token(hs256, {**base, "aud": "billing-api", "exp": NOW + 900}))
+      check("guessed secret", make_token(hs256, admin, secret=b"secret"))
+    output: |
+      valid token     : accepted, role = user
+      alg none        : REJECTED (unexpected algorithm)
+      tampered payload: REJECTED (bad signature)
+      expired         : REJECTED (token expired)
+      other audience  : REJECTED (wrong audience)
+      guessed secret  : REJECTED (bad signature)
+    note:
+      fr: "Cinq attaques, cinq refus. L'ordre compte : l'algorithme est comparé à une valeur fixée par le serveur, la signature est vérifiée à temps constant, et les claims ne sont lus qu'ensuite. Ce code sert à comprendre ; en production, utilisez une bibliothèque éprouvée comme dans l'exemple suivant."
+      en: "Five attacks, five rejections. Order matters: the algorithm is compared with a value fixed by the server, the signature is verified in constant time, and the claims are only read afterwards. This code is for understanding; in production, use a proven library as in the next example."
+
+  - title:
+      fr: "Production : vérifier un jeton RS256 avec PyJWT et un JWKS"
+      en: "Production: verifying an RS256 token with PyJWT and a JWKS"
+    file: auth.py
+    lang: python
+    kind: secure
+    code: |
+      # pip install "pyjwt[crypto]" flask
+      from functools import wraps
+
+      import jwt
+      from flask import Flask, g, jsonify, request
+      from jwt import PyJWKClient
+
+      ISSUER = "https://auth.example.com"
+      AUDIENCE = "orders-api"
+
+      # Public keys published by the issuer; the client caches them and
+      # picks the right one from the "kid" field of the token header.
+      jwks_client = PyJWKClient(f"{ISSUER}/.well-known/jwks.json")
+
+      app = Flask(__name__)
+
+
+      def verify_access_token(token):
+          signing_key = jwks_client.get_signing_key_from_jwt(token)
+          return jwt.decode(
+              token,
+              signing_key.key,
+              algorithms=["RS256"],      # allow-list: blocks "none" and HS256 confusion
+              audience=AUDIENCE,          # the token must have been issued for THIS API
+              issuer=ISSUER,
+              options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+              leeway=30,                  # tolerate 30 seconds of clock drift
+          )
+          # Never do this to "read" a token on the server:
+          #   jwt.decode(token, options={"verify_signature": False})
+
+
+      def require_token(view):
+          @wraps(view)
+          def wrapper(*args, **kwargs):
+              header = request.headers.get("Authorization", "")
+              if not header.startswith("Bearer "):
+                  return jsonify(error="missing bearer token"), 401
+              try:
+                  g.claims = verify_access_token(header.removeprefix("Bearer "))
+              except jwt.ExpiredSignatureError:
+                  return jsonify(error="token expired"), 401
+              except jwt.PyJWTError:
+                  # Same generic answer for every other failure: no hint for the attacker
+                  return jsonify(error="invalid token"), 401
+              return view(*args, **kwargs)
+          return wrapper
+
+
+      @app.get("/orders")
+      @require_token
+      def list_orders():
+          # The identity comes from the verified token, never from a request parameter
+          return jsonify(owner=g.claims["sub"], orders=[])
+    output: |
+      $ curl -s -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1c2VyLTQyIiwicm9sZSI6ImFkbWluIn0." http://localhost:5000/orders
+      {"error":"invalid token"}
+    note:
+      fr: "Tout tient dans l'appel à `jwt.decode` : liste d'algorithmes explicite, `audience`, `issuer` et claims obligatoires. Avec RS256, l'API ne détient que la clé **publique** : même compromise, elle ne peut pas fabriquer de jetons."
+      en: "Everything is in the `jwt.decode` call: explicit algorithm list, `audience`, `issuer` and required claims. With RS256, the API only holds the **public** key: even if compromised, it cannot mint tokens."
+
+  - title:
+      fr: "Rotation des jetons de rafraîchissement avec détection de réutilisation"
+      en: "Refresh token rotation with reuse detection"
+    file: refresh_rotation.py
+    lang: python
+    kind: secure
+    code: |
+      import hashlib
+      import secrets
+
+      # Refresh tokens are opaque random strings; the server stores only their hash.
+      # hash -> {"user", "family", "used"}   (a database table in production)
+      REFRESH_TOKENS = {}
+      REVOKED_FAMILIES = set()
+
+
+      def digest(token):
+          # SHA-256 is fine here: the token has 256 bits of entropy, unlike a password
+          return hashlib.sha256(token.encode()).hexdigest()
+
+
+      def issue(user, family=None):
+          token = secrets.token_urlsafe(32)
+          family = family or secrets.token_hex(8)
+          REFRESH_TOKENS[digest(token)] = {"user": user, "family": family, "used": False}
+          return token
+
+
+      def rotate(token):
+          """Exchange a refresh token for a new one. Each token works exactly once."""
+          record = REFRESH_TOKENS.get(digest(token))
+          if record is None or record["family"] in REVOKED_FAMILIES:
+              raise PermissionError("invalid refresh token")
+          if record["used"]:
+              # Reuse means the token was stolen or replayed: revoke the whole family
+              REVOKED_FAMILIES.add(record["family"])
+              raise PermissionError("reuse detected, session revoked")
+          record["used"] = True
+          # The new token stays in the same family so that theft can be traced
+          return issue(record["user"], record["family"])
+
+
+      def attempt(label, token):
+          try:
+              new_token = rotate(token)
+              print(f"{label:28}: OK, new refresh token issued")
+              return new_token
+          except PermissionError as error:
+              print(f"{label:28}: DENIED ({error})")
+              return None
+
+
+      rt1 = issue("alice")                      # login
+      rt2 = attempt("alice rotates rt1", rt1)   # normal use, 15 minutes later
+      attempt("attacker replays stolen rt1", rt1)
+      attempt("alice uses rt2", rt2)            # family revoked: alice must log in again
+    output: |
+      alice rotates rt1           : OK, new refresh token issued
+      attacker replays stolen rt1 : DENIED (reuse detected, session revoked)
+      alice uses rt2              : DENIED (invalid refresh token)
+    note:
+      fr: "Chaque jeton de rafraîchissement ne sert qu'une fois. Quand le jeton volé `rt1` est rejoué, le serveur ne peut pas savoir qui est le voleur : il révoque toute la famille, et Alice doit se reconnecter. C'est ce mécanisme qui rend la révocation possible malgré des jetons d'accès sans état."
+      en: "Each refresh token works only once. When the stolen `rt1` is replayed, the server cannot tell who the thief is: it revokes the whole family, and Alice must log in again. This mechanism is what makes revocation possible despite stateless access tokens."
+
+mistake:
+  fr: |
+    **Prendre le JWT pour un coffre-fort : y mettre des données sensibles et le croire « chiffré ».**
+
+    La signature garantit que le contenu n'a pas été **modifié**, pas qu'il est **caché**. Coller un
+    jeton dans un décodeur en ligne ou lancer `base64 -d` suffit à lire la charge utile. Erreurs de
+    la même famille : appeler `jwt.decode(...)` sans vérification pour « juste lire l'utilisateur »,
+    signer avec un secret comme `secret` ou `changeme`, ou émettre des jetons valables un an parce
+    que « c'est plus pratique ».
+  en: |
+    **Treating the JWT as a safe: putting sensitive data in it and believing it is "encrypted".**
+
+    The signature guarantees that the content was not **modified**, not that it is **hidden**.
+    Pasting a token into an online decoder or running `base64 -d` is enough to read the payload.
+    Mistakes of the same family: calling `jwt.decode(...)` without verification to "just read the
+    user", signing with a secret such as `secret` or `changeme`, or issuing tokens valid for a year
+    because "it is more convenient".
+
+bestPractice:
+  fr: |
+    - **Imposez l'algorithme côté serveur** (`algorithms=["RS256"]`) : ne le lisez jamais dans le jeton, refusez `none`.
+    - **Vérifiez `exp`, `iss` et `aud`** à chaque requête, et exigez leur présence.
+    - **Jetons d'accès courts** (5 à 15 minutes) + **jetons de rafraîchissement tournants** stockés côté serveur, avec détection de réutilisation.
+    - **RS256 ou ES256** dès que plusieurs services vérifient ; en HS256, un secret d'au moins 32 octets aléatoires, sorti d'un coffre-fort.
+    - **Dans le navigateur, un cookie `HttpOnly; Secure; SameSite`** plutôt que `localStorage`.
+    - **Aucune donnée sensible dans la charge utile**, et jamais de jeton dans une URL ou un journal.
+    - **Dans le pipeline** : une règle SAST (Semgrep, CodeQL) détecte `verify_signature: False` et les secrets JWT en dur ; la détection de secrets (Gitleaks) repère les jetons et clés privées commités ; l'analyse SCA suit les CVE de votre bibliothèque JWT.
+  en: |
+    - **Enforce the algorithm on the server** (`algorithms=["RS256"]`): never read it from the token, reject `none`.
+    - **Verify `exp`, `iss` and `aud`** on every request, and require their presence.
+    - **Short access tokens** (5 to 15 minutes) + **rotating refresh tokens** stored on the server, with reuse detection.
+    - **RS256 or ES256** as soon as several services verify; with HS256, a secret of at least 32 random bytes, taken from a vault.
+    - **In the browser, an `HttpOnly; Secure; SameSite` cookie** rather than `localStorage`.
+    - **No sensitive data in the payload**, and never a token in a URL or a log.
+    - **In the pipeline**: a SAST rule (Semgrep, CodeQL) detects `verify_signature: False` and hard-coded JWT secrets; secret detection (Gitleaks) spots committed tokens and private keys; SCA tracks the CVEs of your JWT library.
+
+exercise:
+  statement:
+    fr: |
+      Ce module Node.js (bibliothèque `jsonwebtoken`) contient **cinq** défauts vus dans la leçon.
+
+      ```javascript
+      const jwt = require("jsonwebtoken");
+
+      function issueToken(user) {
+        return jwt.sign(
+          { sub: user.id, role: user.role, password: user.password },
+          "secret"
+        );
+      }
+
+      function readToken(token) {
+        return jwt.decode(token);
+      }
+      ```
+
+      1. Listez les cinq défauts.
+      2. Réécrivez le module : signature RS256 avec une clé privée lue depuis l'environnement, durée
+         de vie de 15 minutes, émetteur `https://auth.example.com`, audience `orders-api`, et une
+         fonction de vérification qui impose l'algorithme.
+    en: |
+      This Node.js module (`jsonwebtoken` library) contains **five** defects seen in the lesson.
+
+      ```javascript
+      const jwt = require("jsonwebtoken");
+
+      function issueToken(user) {
+        return jwt.sign(
+          { sub: user.id, role: user.role, password: user.password },
+          "secret"
+        );
+      }
+
+      function readToken(token) {
+        return jwt.decode(token);
+      }
+      ```
+
+      1. List the five defects.
+      2. Rewrite the module: RS256 signature with a private key read from the environment, a
+         15-minute lifetime, issuer `https://auth.example.com`, audience `orders-api`, and a
+         verification function that enforces the algorithm.
+  solution:
+    file: tokens.js
+    lang: javascript
+    code: |
+      const jwt = require("jsonwebtoken");
+
+      // Keys come from the environment (injected by the vault), never from the code.
+      // Only the issuer holds the private key; the APIs get the public key.
+      const PRIVATE_KEY = process.env.JWT_PRIVATE_KEY;
+      const PUBLIC_KEY = process.env.JWT_PUBLIC_KEY;
+
+      const ISSUER = "https://auth.example.com";
+      const AUDIENCE = "orders-api";
+
+      function issueToken(user) {
+        // Only non-sensitive claims: the payload is readable by anyone
+        return jwt.sign({ role: user.role }, PRIVATE_KEY, {
+          algorithm: "RS256",
+          subject: String(user.id),
+          issuer: ISSUER,
+          audience: AUDIENCE,
+          expiresIn: "15m", // short-lived access token
+        });
+      }
+
+      function verifyToken(token) {
+        // verify() checks the signature AND exp; decode() checks nothing.
+        // The algorithms allow-list blocks "none" and RS256 -> HS256 confusion.
+        return jwt.verify(token, PUBLIC_KEY, {
+          algorithms: ["RS256"],
+          issuer: ISSUER,
+          audience: AUDIENCE,
+        });
+      }
+
+      module.exports = { issueToken, verifyToken };
+    note:
+      fr: "Les cinq défauts : mot de passe dans la charge utile, secret faible et en dur (`secret`), aucune expiration, `jwt.decode` qui ne vérifie pas la signature, et aucun contrôle de l'algorithme, de l'émetteur ni de l'audience."
+      en: "The five defects: password in the payload, weak hard-coded secret (`secret`), no expiry, `jwt.decode` which does not verify the signature, and no check of the algorithm, issuer or audience."
+
+quiz:
+  - q:
+      fr: "Que garantit la signature d'un JWT ?"
+      en: "What does the signature of a JWT guarantee?"
+    options:
+      fr:
+        - "Que la charge utile est illisible sans la clé"
+        - "Que le jeton ne peut pas être volé"
+        - "Que l'en-tête et la charge utile n'ont pas été modifiés"
+        - "Que le jeton expire au bout de 15 minutes"
+      en:
+        - "That the payload is unreadable without the key"
+        - "That the token cannot be stolen"
+        - "That the header and the payload were not modified"
+        - "That the token expires after 15 minutes"
+    answer: 2
+    why:
+      fr: "La signature assure l'intégrité et l'origine, pas la confidentialité : le contenu reste lisible par simple décodage base64url."
+      en: "The signature ensures integrity and origin, not confidentiality: the content remains readable by a simple base64url decoding."
+  - q:
+      fr: "Comment bloquer l'attaque `alg: none` ?"
+      en: "How do you block the `alg: none` attack?"
+    options:
+      fr:
+        - "En imposant côté serveur la liste des algorithmes acceptés"
+        - "En allongeant la durée de vie du jeton"
+        - "En encodant le jeton deux fois en base64"
+        - "En stockant le jeton dans localStorage"
+      en:
+        - "By enforcing on the server the list of accepted algorithms"
+        - "By extending the lifetime of the token"
+        - "By encoding the token twice in base64"
+        - "By storing the token in localStorage"
+    answer: 0
+    why:
+      fr: "L'en-tête est écrit par celui qui présente le jeton. Le serveur doit comparer `alg` à sa propre liste (`algorithms=[\"RS256\"]`) et refuser tout le reste."
+      en: "The header is written by whoever presents the token. The server must compare `alg` with its own list (`algorithms=[\"RS256\"]`) and reject everything else."
+  - q:
+      fr: "Dans une attaque par confusion d'algorithme RS256 vers HS256, que sert de secret HMAC à l'attaquant ?"
+      en: "In an RS256 to HS256 algorithm confusion attack, what does the attacker use as the HMAC secret?"
+    options:
+      fr:
+        - "La clé privée du serveur"
+        - "Le mot de passe de l'administrateur"
+        - "Une chaîne vide"
+        - "La clé publique du serveur"
+      en:
+        - "The server's private key"
+        - "The administrator's password"
+        - "An empty string"
+        - "The server's public key"
+    answer: 3
+    why:
+      fr: "La clé publique est connue de tous. Si le serveur laisse l'en-tête choisir HS256 et vérifie avec « sa clé », il calcule un HMAC avec la clé publique, exactement comme l'attaquant."
+      en: "The public key is known to everyone. If the server lets the header choose HS256 and verifies with \"its key\", it computes an HMAC with the public key, exactly as the attacker did."
+  - q:
+      fr: "Pourquoi associer un jeton d'accès court à un jeton de rafraîchissement ?"
+      en: "Why pair a short access token with a refresh token?"
+    options:
+      fr:
+        - "Pour chiffrer la charge utile du jeton d'accès"
+        - "Pour limiter la durée d'exploitation d'un jeton volé tout en gardant une session révocable"
+        - "Pour éviter d'utiliser HTTPS"
+        - "Pour que le client puisse signer lui-même ses jetons"
+      en:
+        - "To encrypt the payload of the access token"
+        - "To limit how long a stolen token is useful while keeping a revocable session"
+        - "To avoid using HTTPS"
+        - "So that the client can sign its own tokens"
+    answer: 1
+    why:
+      fr: "Un jeton d'accès sans état ne se révoque pas facilement : on le rend donc éphémère. Le jeton de rafraîchissement, stocké côté serveur, peut être tourné et révoqué."
+      en: "A stateless access token is not easily revoked, so it is made short-lived. The refresh token, stored on the server, can be rotated and revoked."
+  - q:
+      fr: "Une API reçoit un jeton valide dont le claim `aud` vaut `billing-api`, alors qu'elle s'appelle `orders-api`. Que doit-elle faire ?"
+      en: "An API receives a valid token whose `aud` claim is `billing-api`, while the API is called `orders-api`. What must it do?"
+    options:
+      fr:
+        - "L'accepter : la signature est valide"
+        - "L'accepter si le rôle est admin"
+        - "Le refuser : il n'a pas été émis pour elle"
+        - "Le renvoyer à billing-api pour vérification"
+      en:
+        - "Accept it: the signature is valid"
+        - "Accept it if the role is admin"
+        - "Reject it: it was not issued for this API"
+        - "Forward it to billing-api for verification"
+    answer: 2
+    why:
+      fr: "Sans contrôle de l'audience, un jeton obtenu pour un service peu sensible ouvrirait tous les autres services qui font confiance au même émetteur."
+      en: "Without an audience check, a token obtained for a low-sensitivity service would open every other service that trusts the same issuer."

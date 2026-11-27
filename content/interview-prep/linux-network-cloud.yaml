@@ -1,0 +1,725 @@
+description:
+  fr: "Questions d'entretien 21 à 40 : Linux, durcissement SSH, réseau, TLS et sécurité cloud, avec les scripts et configurations que l'on vous demande d'écrire en direct."
+  en: "Interview questions 21 to 40: Linux, SSH hardening, networking, TLS and cloud security, with the scripts and configurations you are asked to write live."
+duration: 50
+
+intro:
+  fr: |
+    Après les fondamentaux, le recruteur descend d'un étage : **le système, le réseau et le cloud**. Un
+    ingénieur DevSecOps qui ne sait pas lire des permissions Linux, expliquer une poignée de main TLS
+    (Transport Layer Security) ou rédiger une politique IAM (Identity and Access Management) minimale
+    ressemble à un électricien qui ne sait pas lire un schéma : il peut poser des prises, mais pas
+    diagnostiquer une panne.
+
+    Cette leçon couvre les **questions 21 à 40**. Vous y trouverez des questions de connaissance
+    (« à quoi sert le bit SUID ? ») et des questions de mise en situation (« ce serveur est peut-être
+    compromis, que faites-vous ? »).
+
+    Les exemples sont les grands classiques des entretiens techniques : écrire un script qui trouve les
+    échecs de connexion SSH (Secure Shell), corriger un `sshd_config` dangereux, écrire une politique IAM
+    au moindre privilège.
+  en: |
+    After the fundamentals, the interviewer goes one floor down: **the system, the network and the
+    cloud**. A DevSecOps engineer who cannot read Linux permissions, explain a TLS (Transport Layer
+    Security) handshake or write a minimal IAM (Identity and Access Management) policy is like an
+    electrician who cannot read a wiring diagram: able to fit sockets, unable to diagnose a fault.
+
+    This lesson covers **questions 21 to 40**. You will find knowledge questions ("what is the SUID bit
+    for?") and scenario questions ("this server may be compromised, what do you do?").
+
+    The examples are the great classics of technical interviews: write a script that finds failed SSH
+    (Secure Shell) logins, fix a dangerous `sshd_config`, write a least-privilege IAM policy.
+
+sections:
+  - heading:
+      fr: "Questions 21 à 25 : Linux au quotidien"
+      en: "Questions 21 to 25: everyday Linux"
+    body:
+      fr: |
+        **Q21. Que signifie `chmod 750 script.sh` ?** *(junior)*
+
+        Chaque chiffre est la somme de lecture (4), écriture (2) et exécution (1). `7` = le propriétaire
+        peut tout faire, `5` = le groupe peut lire et exécuter, `0` = les autres n'ont aucun droit. En
+        notation symbolique : `rwxr-x---`. Pour un secret (clé privée SSH), on attend `600`.
+
+        **Q22. À quoi sert le bit SUID et pourquoi est-il dangereux ?** *(confirmé)*
+
+        Un exécutable **SUID** s'exécute avec les droits de son **propriétaire** et non de l'utilisateur
+        qui le lance ; c'est ce qui permet à `passwd` de modifier `/etc/shadow`. Si un binaire SUID root
+        contient une faille ou permet de lancer un shell, c'est une élévation de privilèges directe. Je les
+        recense avec `find / -perm -4000 -type f 2>/dev/null` et je retire ceux qui ne sont pas nécessaires.
+
+        **Q23. Comment voir quels services écoutent sur le réseau ?** *(junior)*
+
+        `ss -tulpn` : sockets TCP (`-t`) et UDP (`-u`) en écoute (`-l`), avec le processus (`-p`) et sans
+        résolution de noms (`-n`). Je vérifie surtout l'adresse d'écoute : `127.0.0.1` n'est joignable que
+        localement, `0.0.0.0` l'est depuis toutes les interfaces. Tout port inattendu doit être expliqué
+        ou fermé.
+
+        **Q24. Différence entre `su` et `sudo` ?** *(junior)*
+
+        `su` ouvre une session sous un autre compte et demande **son** mot de passe (souvent celui de
+        root, donc partagé). `sudo` exécute une commande avec des privilèges élevés en demandant le mot de
+        passe **de l'utilisateur**, selon des règles fines définies dans `/etc/sudoers`, et chaque
+        commande est journalisée. On préfère `sudo` : pas de mot de passe root partagé, traçabilité,
+        moindre privilège.
+
+        **Q25. Où cherchez-vous les traces d'authentification sur un serveur Linux ?** *(junior)*
+
+        Sur Debian/Ubuntu dans `/var/log/auth.log`, sur la famille Red Hat dans `/var/log/secure`, et dans
+        le journal systemd avec `journalctl -u ssh` (ou `-u sshd`). `last` montre les connexions réussies,
+        `lastb` les échecs. En production, ces journaux sont envoyés vers un système central (SIEM), car un
+        attaquant root peut effacer les fichiers locaux.
+      en: |
+        **Q21. What does `chmod 750 script.sh` mean?** *(junior)*
+
+        Each digit is the sum of read (4), write (2) and execute (1). `7` = the owner can do everything,
+        `5` = the group can read and execute, `0` = others have no rights. In symbolic notation:
+        `rwxr-x---`. For a secret (an SSH private key), `600` is expected.
+
+        **Q22. What is the SUID bit for and why is it dangerous?** *(mid)*
+
+        A **SUID** executable runs with the rights of its **owner**, not of the user who starts it; this
+        is what lets `passwd` modify `/etc/shadow`. If a root-owned SUID binary has a flaw or can spawn a
+        shell, it is a direct privilege escalation. I list them with
+        `find / -perm -4000 -type f 2>/dev/null` and remove those that are not needed.
+
+        **Q23. How do you see which services listen on the network?** *(junior)*
+
+        `ss -tulpn`: TCP (`-t`) and UDP (`-u`) listening (`-l`) sockets, with the process (`-p`) and
+        without name resolution (`-n`). I mostly check the listening address: `127.0.0.1` is reachable
+        only locally, `0.0.0.0` from every interface. Any unexpected port must be explained or closed.
+
+        **Q24. Difference between `su` and `sudo`?** *(junior)*
+
+        `su` opens a session as another account and asks for **that account's** password (often root's,
+        hence shared). `sudo` runs one command with elevated privileges, asking for the **user's own**
+        password, following fine-grained rules in `/etc/sudoers`, and every command is logged. `sudo` is
+        preferred: no shared root password, traceability, least privilege.
+
+        **Q25. Where do you look for authentication traces on a Linux server?** *(junior)*
+
+        On Debian/Ubuntu in `/var/log/auth.log`, on the Red Hat family in `/var/log/secure`, and in the
+        systemd journal with `journalctl -u ssh` (or `-u sshd`). `last` shows successful logins, `lastb`
+        the failed ones. In production these logs are shipped to a central system (SIEM), because a root
+        attacker can wipe local files.
+  - heading:
+      fr: "Questions 26 à 30 : durcissement et réponse sur un serveur"
+      en: "Questions 26 to 30: hardening and response on a server"
+    body:
+      fr: |
+        **Q26. Comment durcissez-vous l'accès SSH d'un serveur ?** *(confirmé)*
+
+        Authentification par **clé** uniquement (`PasswordAuthentication no`), pas de connexion directe en
+        root (`PermitRootLogin no`), liste d'utilisateurs ou de groupes autorisés (`AllowUsers`,
+        `AllowGroups`), `MaxAuthTries` réduit. Côté réseau : port 22 jamais ouvert à `0.0.0.0/0`, accès par
+        bastion, VPN ou gestionnaire de sessions du cloud. J'ajoute fail2ban, des clés Ed25519 et, à
+        l'échelle, des certificats SSH à courte durée de vie.
+
+        **Q27. Comment fonctionne fail2ban ?** *(junior)*
+
+        Il lit les journaux (par exemple ceux de sshd), compte les échecs par adresse IP grâce à des
+        expressions régulières (les *filters*) et, au-delà de `maxretry` échecs pendant `findtime`,
+        il ajoute une règle de pare-feu qui bannit l'adresse pendant `bantime`. C'est une réduction du
+        bruit, pas un substitut à l'authentification par clé.
+
+        **Q28. À quoi servent SELinux et AppArmor ?** *(confirmé)*
+
+        Ce sont des mécanismes de **contrôle d'accès obligatoire** (MAC) : même root, ou un processus
+        compromis, ne peut faire que ce que la politique autorise (fichiers, ports, capacités). SELinux
+        (famille Red Hat) fonctionne par étiquettes, AppArmor (Ubuntu, Debian) par profils basés sur les
+        chemins. La mauvaise réponse est « je le désactive » : on passe en mode permissif pour
+        diagnostiquer, puis on corrige la politique.
+
+        **Q29. Comment gérez-vous les correctifs de sécurité d'un parc de serveurs ?** *(confirmé)*
+
+        Mises à jour de sécurité automatiques pour le système (`unattended-upgrades`, `dnf-automatic`),
+        déploiement progressif (préproduction, puis un lot de production, puis le reste) et redémarrages
+        planifiés. Je suis les CVE avec un scanner et un délai de correction par gravité. Dans une
+        infrastructure immuable, on ne corrige pas en place : on reconstruit l'image de base et on
+        remplace les instances.
+
+        **Q30. Vous soupçonnez qu'un serveur est compromis. Que faites-vous ?** *(senior)*
+
+        Je suis le plan de réponse aux incidents. **Contenir** sans détruire les preuves : isoler la
+        machine du réseau (groupe de sécurité de quarantaine) plutôt que l'éteindre, pour préserver la
+        mémoire. **Préserver** : instantané du disque, copie de la mémoire et des journaux. **Analyser**
+        sur la copie : processus, connexions, comptes, tâches planifiées, clés SSH ajoutées. Puis
+        révoquer les secrets présents sur la machine, **reconstruire** depuis une source saine au lieu de
+        « nettoyer », et rédiger le post-mortem.
+      en: |
+        **Q26. How do you harden SSH access to a server?** *(mid)*
+
+        **Key**-only authentication (`PasswordAuthentication no`), no direct root login
+        (`PermitRootLogin no`), an allow-list of users or groups (`AllowUsers`, `AllowGroups`), a reduced
+        `MaxAuthTries`. On the network side: port 22 never open to `0.0.0.0/0`, access through a bastion,
+        a VPN or the cloud provider's session manager. I add fail2ban, Ed25519 keys and, at scale,
+        short-lived SSH certificates.
+
+        **Q27. How does fail2ban work?** *(junior)*
+
+        It reads logs (sshd's, for example), counts failures per IP address using regular expressions
+        (the *filters*) and, beyond `maxretry` failures within `findtime`, adds a firewall rule that bans
+        the address for `bantime`. It reduces noise; it does not replace key-based authentication.
+
+        **Q28. What are SELinux and AppArmor for?** *(mid)*
+
+        They are **mandatory access control** (MAC) mechanisms: even root, or a compromised process, can
+        only do what the policy allows (files, ports, capabilities). SELinux (Red Hat family) works with
+        labels, AppArmor (Ubuntu, Debian) with path-based profiles. The wrong answer is "I disable it":
+        you switch to permissive mode to diagnose, then fix the policy.
+
+        **Q29. How do you handle security patching for a fleet of servers?** *(mid)*
+
+        Automatic security updates for the OS (`unattended-upgrades`, `dnf-automatic`), progressive
+        rollout (pre-production, then one production batch, then the rest) and scheduled reboots. I track
+        CVEs with a scanner and a remediation deadline per severity. In an immutable infrastructure you do
+        not patch in place: you rebuild the base image and replace the instances.
+
+        **Q30. You suspect a server is compromised. What do you do?** *(senior)*
+
+        I follow the incident response plan. **Contain** without destroying evidence: isolate the machine
+        from the network (quarantine security group) rather than powering it off, to preserve memory.
+        **Preserve**: disk snapshot, copy of memory and logs. **Analyse** on the copy: processes,
+        connections, accounts, scheduled tasks, added SSH keys. Then revoke the secrets that were on the
+        machine, **rebuild** from a known-good source instead of "cleaning", and write the post-mortem.
+  - heading:
+      fr: "Questions 31 à 35 : réseau et TLS"
+      en: "Questions 31 to 35: networking and TLS"
+    body:
+      fr: |
+        **Q31. Différence entre TCP et UDP ?** *(junior)*
+
+        | | TCP | UDP |
+        |---|---|---|
+        | Connexion | Oui (poignée de main en trois temps SYN, SYN-ACK, ACK) | Non |
+        | Fiabilité | Livraison garantie et ordonnée | Aucune garantie |
+        | Usages | HTTP/1.1 et HTTP/2, SSH, bases de données | DNS, VoIP, QUIC (HTTP/3) |
+
+        **Q32. Que se passe-t-il quand vous tapez `https://example.com` dans un navigateur ?** *(confirmé)*
+
+        Résolution **DNS** du nom en adresse IP, connexion **TCP** sur le port 443, **poignée de main TLS**
+        (le serveur présente son certificat, le client le valide, une clé de session est négociée), puis
+        requête **HTTP** chiffrée et réponse. Entre les deux peuvent se trouver un CDN, un répartiteur de
+        charge et un pare-feu applicatif (WAF). Citer ce qui peut mal tourner à chaque étape (DNS
+        usurpé, certificat expiré) fait la différence.
+
+        **Q33. Que vérifie le client pendant la poignée de main TLS ?** *(confirmé)*
+
+        Que le certificat est signé par une **autorité de confiance** (chaîne complète), qu'il n'est ni
+        expiré ni révoqué, et que le **nom** du site figure dans le champ *Subject Alternative Name*.
+        Ensuite un échange de clés éphémère (ECDHE) produit la clé de session, ce qui apporte la
+        confidentialité persistante (*forward secrecy*). On exige TLS 1.2 au minimum, idéalement TLS 1.3,
+        et l'on désactive SSLv3, TLS 1.0 et 1.1.
+
+        **Q34. Pare-feu avec état ou sans état ? Groupe de sécurité ou NACL sur AWS ?** *(confirmé)*
+
+        Un pare-feu **avec état** (stateful) suit les connexions : la réponse à un flux autorisé passe
+        automatiquement. **Sans état**, chaque paquet est évalué seul et il faut autoriser les deux sens.
+        Sur AWS, un **groupe de sécurité** est stateful, attaché à l'interface de l'instance, et ne
+        contient que des règles d'autorisation ; une **NACL** est stateless, attachée au sous-réseau, avec
+        des règles numérotées d'autorisation et de refus.
+
+        **Q35. Combien d'adresses contient un `/24` ? Et que signifie `0.0.0.0/0` ?** *(junior)*
+
+        Un `/24` laisse 8 bits pour les hôtes : 2^8 = **256 adresses**, dont 254 utilisables sur un réseau
+        classique (AWS en réserve 5 par sous-réseau). `0.0.0.0/0` désigne **toutes** les adresses IPv4,
+        c'est-à-dire Internet : l'utiliser comme source sur un port d'administration (22, 3389) ou de base
+        de données est une faute de sécurité.
+      en: |
+        **Q31. Difference between TCP and UDP?** *(junior)*
+
+        | | TCP | UDP |
+        |---|---|---|
+        | Connection | Yes (three-way handshake SYN, SYN-ACK, ACK) | No |
+        | Reliability | Guaranteed, ordered delivery | No guarantee |
+        | Uses | HTTP/1.1 and HTTP/2, SSH, databases | DNS, VoIP, QUIC (HTTP/3) |
+
+        **Q32. What happens when you type `https://example.com` in a browser?** *(mid)*
+
+        **DNS** resolution of the name into an IP address, **TCP** connection on port 443, **TLS
+        handshake** (the server presents its certificate, the client validates it, a session key is
+        negotiated), then the encrypted **HTTP** request and response. In between there may be a CDN, a
+        load balancer and a web application firewall (WAF). Naming what can go wrong at each step (spoofed
+        DNS, expired certificate) makes the difference.
+
+        **Q33. What does the client verify during the TLS handshake?** *(mid)*
+
+        That the certificate is signed by a **trusted authority** (full chain), that it is neither expired
+        nor revoked, and that the site **name** appears in the *Subject Alternative Name* field. Then an
+        ephemeral key exchange (ECDHE) produces the session key, which provides forward secrecy. You
+        require TLS 1.2 at least, ideally TLS 1.3, and disable SSLv3, TLS 1.0 and 1.1.
+
+        **Q34. Stateful or stateless firewall? Security group or NACL on AWS?** *(mid)*
+
+        A **stateful** firewall tracks connections: the reply to an allowed flow passes automatically.
+        **Stateless**, every packet is evaluated alone and both directions must be allowed. On AWS, a
+        **security group** is stateful, attached to the instance's network interface, and only holds allow
+        rules; a **NACL** is stateless, attached to the subnet, with numbered allow and deny rules.
+
+        **Q35. How many addresses are in a `/24`? And what does `0.0.0.0/0` mean?** *(junior)*
+
+        A `/24` leaves 8 bits for hosts: 2^8 = **256 addresses**, 254 of them usable on a classic network
+        (AWS reserves 5 per subnet). `0.0.0.0/0` means **every** IPv4 address, in other words the
+        Internet: using it as a source on an administration port (22, 3389) or a database port is a
+        security fault.
+  - heading:
+      fr: "Questions 36 à 40 : sécurité cloud"
+      en: "Questions 36 to 40: cloud security"
+    body:
+      fr: |
+        **Q36. Qu'est-ce que le modèle de responsabilité partagée ?** *(junior)*
+
+        Le fournisseur est responsable de la sécurité **du** cloud (centres de données, matériel,
+        hyperviseur, services managés) ; le client est responsable de la sécurité **dans** le cloud :
+        identités et droits, configuration réseau, chiffrement, données, système des machines virtuelles.
+        La limite se déplace selon le modèle (IaaS, PaaS, SaaS), mais les **données et les accès** restent
+        toujours à la charge du client.
+
+        **Q37. Utilisateur IAM ou rôle IAM ?** *(confirmé)*
+
+        Un **utilisateur** possède des identifiants de longue durée (mot de passe, clés d'accès). Un
+        **rôle** n'a pas d'identifiants propres : il est *endossé* par une personne, un service ou une
+        charge de travail, qui reçoit des identifiants **temporaires** via STS. Bonne pratique : les
+        humains passent par une fédération (SSO) et endossent des rôles, les charges de travail utilisent
+        des rôles (profil d'instance, OIDC), et il n'existe presque plus de clés longue durée.
+
+        **Q38. Comment empêchez-vous qu'un bucket S3 soit exposé publiquement ?** *(confirmé)*
+
+        Prévention : **Block Public Access** activé au niveau du compte et de l'organisation, politiques
+        de bucket restrictives, accès par rôles IAM, chiffrement par défaut. Détection : AWS Config ou un
+        outil de posture (CSPM) qui alerte sur tout bucket public. En amont : scan de l'IaC dans le
+        pipeline (Checkov, Trivy) pour refuser la configuration avant qu'elle n'existe.
+
+        **Q39. Comment concevez-vous un réseau cloud sécurisé pour une application web ?** *(senior)*
+
+        Seul le répartiteur de charge vit dans un **sous-réseau public** ; les serveurs applicatifs et la
+        base de données sont dans des **sous-réseaux privés** sans adresse IP publique, sur plusieurs
+        zones de disponibilité. Les sorties passent par une passerelle NAT ou des points de terminaison
+        privés. Les groupes de sécurité se référencent entre eux (la base n'accepte que le groupe de
+        l'application). L'administration passe par un gestionnaire de sessions plutôt que par SSH ouvert,
+        et les journaux de flux sont activés.
+
+        **Q40. Quels services activez-vous en premier sur un nouveau compte AWS ?** *(senior)*
+
+        La journalisation d'abord : **CloudTrail** sur toutes les régions, vers un bucket d'un compte
+        d'audit séparé. Puis la détection (**GuardDuty**, Security Hub), la protection du compte racine
+        (MFA, aucune clé d'accès), le SSO, des garde-fous d'organisation (SCP), Block Public Access et des
+        alertes de budget. Les équivalents existent ailleurs : journal d'activité et Defender for Cloud sur
+        Azure, Cloud Audit Logs et Security Command Center sur Google Cloud.
+      en: |
+        **Q36. What is the shared responsibility model?** *(junior)*
+
+        The provider is responsible for the security **of** the cloud (data centres, hardware,
+        hypervisor, managed services); the customer is responsible for security **in** the cloud:
+        identities and permissions, network configuration, encryption, data, the OS of virtual machines.
+        The boundary moves with the model (IaaS, PaaS, SaaS), but **data and access** always remain the
+        customer's job.
+
+        **Q37. IAM user or IAM role?** *(mid)*
+
+        A **user** owns long-lived credentials (password, access keys). A **role** has no credentials of
+        its own: it is *assumed* by a person, a service or a workload, which receives **temporary**
+        credentials through STS. Good practice: humans go through federation (SSO) and assume roles,
+        workloads use roles (instance profile, OIDC), and almost no long-lived keys exist any more.
+
+        **Q38. How do you prevent an S3 bucket from being publicly exposed?** *(mid)*
+
+        Prevention: **Block Public Access** enabled at account and organisation level, restrictive bucket
+        policies, access through IAM roles, default encryption. Detection: AWS Config or a posture tool
+        (CSPM) alerting on any public bucket. Upstream: IaC scanning in the pipeline (Checkov, Trivy) to
+        reject the configuration before it exists.
+
+        **Q39. How do you design a secure cloud network for a web application?** *(senior)*
+
+        Only the load balancer lives in a **public subnet**; application servers and the database sit in
+        **private subnets** with no public IP address, across several availability zones. Outbound traffic
+        goes through a NAT gateway or private endpoints. Security groups reference each other (the
+        database only accepts the application's group). Administration goes through a session manager
+        rather than open SSH, and flow logs are enabled.
+
+        **Q40. Which services do you enable first on a new AWS account?** *(senior)*
+
+        Logging first: **CloudTrail** on all regions, delivered to a bucket in a separate audit account.
+        Then detection (**GuardDuty**, Security Hub), root account protection (MFA, no access keys), SSO,
+        organisation guardrails (SCPs), Block Public Access and budget alerts. Equivalents exist
+        elsewhere: activity log and Defender for Cloud on Azure, Cloud Audit Logs and Security Command
+        Center on Google Cloud.
+
+examples:
+  - title:
+      fr: "Question en direct : « Écrivez un script qui trouve les échecs de connexion SSH »"
+      en: "Live question: \"Write a script that finds failed SSH logins\""
+    file: failed_ssh.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Top 5 source IPs with failed SSH password attempts.
+      set -euo pipefail
+
+      # Debian/Ubuntu: /var/log/auth.log - RHEL family: /var/log/secure
+      LOG="${1:-/var/log/auth.log}"
+
+      grep "Failed password" "$LOG" \
+        | grep -oE "from ([0-9]{1,3}\.){3}[0-9]{1,3}" \
+        | awk '{print $2}' \
+        | sort \
+        | uniq -c \
+        | sort -rn \
+        | head -n 5
+
+      # Same idea on a systemd-only host (no auth.log file):
+      #   journalctl -u ssh --since "24 hours ago" | grep "Failed password"
+    output: |
+      $ sudo ./failed_ssh.sh
+          412 203.0.113.45
+           97 198.51.100.23
+           12 203.0.113.7
+            3 192.0.2.10
+    note:
+      fr: "Expliquez chaque étape du pipeline : filtrer, extraire l'IP, compter (`sort | uniq -c`), trier par nombre décroissant. Mentionnez que le chemin du journal dépend de la distribution : c'est le détail qui montre l'expérience."
+      en: "Explain each stage of the pipeline: filter, extract the IP, count (`sort | uniq -c`), sort by descending count. Mention that the log path depends on the distribution: that detail shows experience."
+
+  - title:
+      fr: "La même question en Python, avec un seuil d'alerte"
+      en: "The same question in Python, with an alert threshold"
+    file: failed_ssh.py
+    lang: python
+    kind: neutral
+    code: |
+      import re
+      from collections import Counter
+
+      # Sample lines in the real sshd format (documentation IP ranges)
+      LOG = """\
+      Mar 10 06:25:01 web01 sshd[1201]: Failed password for root from 203.0.113.45 port 51122 ssh2
+      Mar 10 06:25:03 web01 sshd[1201]: Failed password for root from 203.0.113.45 port 51124 ssh2
+      Mar 10 06:25:05 web01 sshd[1203]: Failed password for invalid user admin from 203.0.113.45 port 51130 ssh2
+      Mar 10 06:26:10 web01 sshd[1210]: Accepted publickey for deploy from 198.51.100.23 port 40022 ssh2
+      Mar 10 06:27:44 web01 sshd[1215]: Failed password for invalid user test from 192.0.2.10 port 33900 ssh2
+      Mar 10 06:28:02 web01 sshd[1220]: Failed password for root from 203.0.113.45 port 51140 ssh2
+      """
+
+      PATTERN = re.compile(r"Failed password for (?:invalid user )?(\S+) from (\d{1,3}(?:\.\d{1,3}){3})")
+      THRESHOLD = 3  # failures before we call it a brute-force attempt
+
+      by_ip = Counter()
+      users = Counter()
+      for line in LOG.splitlines():
+          match = PATTERN.search(line)
+          if match:
+              users[match.group(1)] += 1
+              by_ip[match.group(2)] += 1
+
+      for ip, count in by_ip.most_common():
+          flag = "BRUTE FORCE" if count >= THRESHOLD else "ok"
+          print(f"{ip:<15} {count} failures  {flag}")
+      print("Most targeted account:", users.most_common(1)[0][0])
+    output: |
+      203.0.113.45    4 failures  BRUTE FORCE
+      192.0.2.10      1 failures  ok
+      Most targeted account: root
+    note:
+      fr: "L'expression régulière gère les deux formats de sshd (`for root` et `for invalid user admin`). La ligne `Accepted publickey` est ignorée. Un bon candidat ajoute : « en production, cette détection vit dans le SIEM, pas dans un script sur le serveur »."
+      en: "The regular expression handles both sshd formats (`for root` and `for invalid user admin`). The `Accepted publickey` line is ignored. A strong candidate adds: \"in production this detection lives in the SIEM, not in a script on the server\"."
+
+  - title:
+      fr: "Question en direct : « Qu'est-ce qui ne va pas dans ce sshd_config ? »"
+      en: "Live question: \"What is wrong with this sshd_config?\""
+    file: /etc/ssh/sshd_config
+    lang: ini
+    kind: vulnerable
+    code: |
+      # Problem 1: direct root login -> no individual accountability, prime brute-force target
+      PermitRootLogin yes
+
+      # Problem 2: passwords can be guessed or reused from a leak
+      PasswordAuthentication yes
+
+      # Problem 3: accounts with an empty password can log in
+      PermitEmptyPasswords yes
+
+      # Problem 4: many guesses allowed per connection
+      MaxAuthTries 10
+
+      # Problem 5: forwarding features nobody uses widen the attack surface
+      X11Forwarding yes
+      AllowAgentForwarding yes
+    note:
+      fr: "Cinq problèmes à citer. Le plus grave est la combinaison root + mot de passe : c'est exactement ce que testent les robots qui balayent Internet en permanence."
+      en: "Five problems to name. The worst is the root + password combination: this is exactly what the bots scanning the Internet around the clock try."
+
+  - title:
+      fr: "La version durcie"
+      en: "The hardened version"
+    file: /etc/ssh/sshd_config
+    lang: ini
+    kind: secure
+    code: |
+      # No direct root login: connect with a personal account, then use sudo
+      PermitRootLogin no
+
+      # Keys only: nothing to brute-force
+      PubkeyAuthentication yes
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitEmptyPasswords no
+
+      # Only members of this group may connect
+      AllowGroups ssh-users
+
+      # Fewer guesses, shorter window to authenticate
+      MaxAuthTries 3
+      LoginGraceTime 30
+
+      # Disable what is not needed
+      X11Forwarding no
+      AllowAgentForwarding no
+
+      # Drop dead sessions after about 10 minutes of silence
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+      # Log the key fingerprint used for each login
+      LogLevel VERBOSE
+    output: |
+      $ sudo sshd -t && sudo systemctl reload ssh
+      $ ssh -o PubkeyAuthentication=no deploy@server.example.com
+      deploy@server.example.com: Permission denied (publickey).
+    note:
+      fr: "Validez toujours avec `sshd -t` avant de recharger, et gardez une session ouverte pendant le test pour ne pas vous enfermer dehors. Le service s'appelle `ssh` sur Debian/Ubuntu et `sshd` sur la famille Red Hat."
+      en: "Always validate with `sshd -t` before reloading, and keep one session open while testing so you do not lock yourself out. The service is called `ssh` on Debian/Ubuntu and `sshd` on the Red Hat family."
+
+  - title:
+      fr: "Question en direct : « Écrivez une politique IAM au moindre privilège »"
+      en: "Live question: \"Write a least-privilege IAM policy\""
+    file: read-exports-policy.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "ReadObjectsUnderOnePrefix",
+            "Effect": "Allow",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::example-app-reports/exports/*"
+          },
+          {
+            "Sid": "ListOnlyThatPrefix",
+            "Effect": "Allow",
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::example-app-reports",
+            "Condition": {
+              "StringLike": { "s3:prefix": ["exports/*"] }
+            }
+          },
+          {
+            "Sid": "DenyRequestsWithoutTLS",
+            "Effect": "Deny",
+            "Action": "s3:*",
+            "Resource": [
+              "arn:aws:s3:::example-app-reports",
+              "arn:aws:s3:::example-app-reports/*"
+            ],
+            "Condition": {
+              "Bool": { "aws:SecureTransport": "false" }
+            }
+          }
+        ]
+      }
+    note:
+      fr: "La version dangereuse tient en deux lignes : `\"Action\": \"*\"` et `\"Resource\": \"*\"`. Ici, l'application ne peut que **lire** un préfixe d'**un** bucket. Notez que `ListBucket` vise le bucket et `GetObject` vise les objets (`/*`) : l'erreur est très fréquente."
+      en: "The dangerous version fits in two lines: `\"Action\": \"*\"` and `\"Resource\": \"*\"`. Here the application can only **read** one prefix of **one** bucket. Note that `ListBucket` targets the bucket and `GetObject` targets the objects (`/*`): this mistake is very common."
+
+mistake:
+  fr: |
+    **Répondre par une commande sans expliquer ce que l'on cherche.**
+
+    À la question « comment enquêtez-vous sur ce serveur ? », enchaîner `top`, `ps aux`, `netstat` ne
+    montre aucune méthode. Le recruteur évalue votre **raisonnement** : quelle hypothèse testez-vous, que
+    vous attendez-vous à voir, que concluez-vous si ce n'est pas le cas ?
+
+    L'autre piège est le réflexe destructeur : « je redémarre », « je supprime l'instance », « je
+    désactive SELinux ». En sécurité, on préserve d'abord les preuves et l'on comprend avant d'agir.
+  en: |
+    **Answering with a command without explaining what you are looking for.**
+
+    To the question "how do you investigate this server?", chaining `top`, `ps aux`, `netstat` shows no
+    method. The interviewer assesses your **reasoning**: which hypothesis are you testing, what do you
+    expect to see, what do you conclude if you do not?
+
+    The other trap is the destructive reflex: "I reboot", "I delete the instance", "I disable SELinux".
+    In security you preserve evidence first and understand before acting.
+
+bestPractice:
+  fr: |
+    - **Partez du modèle en couches** pour toute question réseau : DNS, TCP, TLS, HTTP. Cela structure la
+      réponse et le diagnostic.
+    - **Citez la commande et ce que vous regardez dans sa sortie** (`ss -tulpn` : l'adresse d'écoute).
+    - **Ramenez tout au moindre privilège** : permissions de fichiers, sudoers, IAM, groupes de sécurité.
+    - **Montrez que vous connaissez plus d'un environnement** : chemins de journaux Debian et Red Hat,
+      équivalents AWS, Azure et Google Cloud.
+    - **Entraînez-vous sur un vrai lab** : une machine virtuelle, un compte cloud en offre gratuite avec
+      une alerte de budget. On ne retient que ce que l'on a tapé soi-même.
+  en: |
+    - **Start from the layered model** for any network question: DNS, TCP, TLS, HTTP. It structures both
+      the answer and the diagnosis.
+    - **Name the command and what you look at in its output** (`ss -tulpn`: the listening address).
+    - **Bring everything back to least privilege**: file permissions, sudoers, IAM, security groups.
+    - **Show that you know more than one environment**: Debian and Red Hat log paths, AWS, Azure and
+      Google Cloud equivalents.
+    - **Practise on a real lab**: a virtual machine, a free-tier cloud account with a budget alert. You
+      only remember what you typed yourself.
+
+exercise:
+  statement:
+    fr: |
+      Question posée en entretien : « Écrivez une fonction qui vérifie si une règle de pare-feu est
+      dangereuse. »
+
+      Une règle est décrite par un port et un CIDR source. Écrivez en Python `audit_rule(port, source)`
+      qui renvoie :
+
+      - `CRITICAL` si la source est `0.0.0.0/0` et que le port est un port d'administration ou de base de
+        données (22, 3389, 3306, 5432) ;
+      - `WARNING` si la source est publique (non privée) et contient plus de 256 adresses ;
+      - `OK` sinon.
+
+      Utilisez le module standard `ipaddress` et testez avec `(22, "0.0.0.0/0")`, `(443, "0.0.0.0/0")`,
+      `(22, "10.0.0.0/8")` et `(5432, "203.0.113.10/32")`.
+    en: |
+      An interview question: "Write a function that checks whether a firewall rule is dangerous."
+
+      A rule is described by a port and a source CIDR. Write `audit_rule(port, source)` in Python,
+      returning:
+
+      - `CRITICAL` if the source is `0.0.0.0/0` and the port is an administration or database port (22,
+        3389, 3306, 5432);
+      - `WARNING` if the source is public (not private) and contains more than 256 addresses;
+      - `OK` otherwise.
+
+      Use the standard `ipaddress` module and test with `(22, "0.0.0.0/0")`, `(443, "0.0.0.0/0")`,
+      `(22, "10.0.0.0/8")` and `(5432, "203.0.113.10/32")`.
+  solution:
+    file: audit_rule.py
+    lang: python
+    code: |
+      import ipaddress
+
+      SENSITIVE_PORTS = {22, 3389, 3306, 5432}  # SSH, RDP, MySQL, PostgreSQL
+
+
+      def audit_rule(port, source):
+          network = ipaddress.ip_network(source)  # raises ValueError on an invalid CIDR
+          open_to_world = network.prefixlen == 0
+          if open_to_world and port in SENSITIVE_PORTS:
+              return "CRITICAL"
+          # A wide public range is suspicious even on a web port
+          if not network.is_private and network.num_addresses > 256:
+              return "WARNING"
+          return "OK"
+
+
+      rules = [(22, "0.0.0.0/0"), (443, "0.0.0.0/0"), (22, "10.0.0.0/8"), (5432, "203.0.113.10/32")]
+      for port, source in rules:
+          print(f"{port:<5} {source:<18} {audit_rule(port, source)}")
+    note:
+      fr: "Résultat : CRITICAL, WARNING, OK, OK. Le port 443 ouvert au monde est normal pour un site public : dites-le, cela montre que vous distinguez l'exposition voulue de l'exposition accidentelle."
+      en: "Result: CRITICAL, WARNING, OK, OK. Port 443 open to the world is normal for a public website: say so, it shows you can tell intended exposure from accidental exposure."
+
+quiz:
+  - q:
+      fr: "Quels droits donne `chmod 640 fichier` ?"
+      en: "Which permissions does `chmod 640 file` give?"
+    options:
+      fr:
+        - "Propriétaire : lecture/écriture ; groupe : lecture ; autres : rien"
+        - "Propriétaire : tout ; groupe : lecture/exécution ; autres : rien"
+        - "Propriétaire : lecture ; groupe : écriture ; autres : exécution"
+        - "Tout le monde : lecture et écriture"
+      en:
+        - "Owner: read/write; group: read; others: nothing"
+        - "Owner: everything; group: read/execute; others: nothing"
+        - "Owner: read; group: write; others: execute"
+        - "Everyone: read and write"
+    answer: 0
+    why:
+      fr: "6 = 4 + 2 (lecture, écriture), 4 = lecture, 0 = aucun droit."
+      en: "6 = 4 + 2 (read, write), 4 = read, 0 = no rights."
+  - q:
+      fr: "Quelle directive `sshd_config` interdit l'authentification par mot de passe ?"
+      en: "Which `sshd_config` directive forbids password authentication?"
+    options:
+      fr:
+        - "PermitRootLogin no"
+        - "MaxAuthTries 3"
+        - "AllowGroups ssh-users"
+        - "PasswordAuthentication no"
+      en:
+        - "PermitRootLogin no"
+        - "MaxAuthTries 3"
+        - "AllowGroups ssh-users"
+        - "PasswordAuthentication no"
+    answer: 3
+    why:
+      fr: "`PasswordAuthentication no` impose l'authentification par clé ; `PermitRootLogin no` interdit seulement la connexion directe de root."
+      en: "`PasswordAuthentication no` enforces key-based authentication; `PermitRootLogin no` only forbids direct root login."
+  - q:
+      fr: "Sur AWS, quelle affirmation sur les groupes de sécurité est correcte ?"
+      en: "On AWS, which statement about security groups is correct?"
+    options:
+      fr:
+        - "Ils sont sans état et attachés au sous-réseau"
+        - "Ils sont avec état et ne contiennent que des règles d'autorisation"
+        - "Ils contiennent des règles de refus numérotées"
+        - "Ils remplacent IAM pour les accès aux API"
+      en:
+        - "They are stateless and attached to the subnet"
+        - "They are stateful and only contain allow rules"
+        - "They contain numbered deny rules"
+        - "They replace IAM for API access"
+    answer: 1
+    why:
+      fr: "Un groupe de sécurité est stateful et ne connaît que des règles d'autorisation ; les règles de refus numérotées et le mode stateless sont propres aux NACL."
+      en: "A security group is stateful and only has allow rules; numbered deny rules and stateless behaviour belong to NACLs."
+  - q:
+      fr: "Dans le modèle de responsabilité partagée, qu'est-ce qui reste toujours à la charge du client ?"
+      en: "In the shared responsibility model, what always remains the customer's job?"
+    options:
+      fr:
+        - "La sécurité physique des centres de données"
+        - "Les correctifs de l'hyperviseur"
+        - "Les données et la gestion des accès"
+        - "Le remplacement du matériel défaillant"
+      en:
+        - "Physical security of the data centres"
+        - "Patching the hypervisor"
+        - "Data and access management"
+        - "Replacing failed hardware"
+    answer: 2
+    why:
+      fr: "Quel que soit le modèle (IaaS, PaaS, SaaS), le client reste responsable de ses données et de qui y accède."
+      en: "Whatever the model (IaaS, PaaS, SaaS), the customer stays responsible for its data and for who can access it."
+  - q:
+      fr: "Un serveur est probablement compromis. Quelle est la meilleure première action ?"
+      en: "A server is probably compromised. What is the best first action?"
+    options:
+      fr:
+        - "L'éteindre immédiatement"
+        - "Supprimer les fichiers suspects"
+        - "L'isoler du réseau tout en préservant mémoire et disque"
+        - "Réinstaller le système tout de suite"
+      en:
+        - "Power it off immediately"
+        - "Delete the suspicious files"
+        - "Isolate it from the network while preserving memory and disk"
+        - "Reinstall the system right away"
+    answer: 2
+    why:
+      fr: "Isoler contient l'attaque sans détruire les preuves ; éteindre efface la mémoire, supprimer ou réinstaller détruit ce qui permet de comprendre l'incident."
+      en: "Isolation contains the attack without destroying evidence; powering off wipes memory, deleting or reinstalling destroys what explains the incident."
+
+widgets: [cidr-calculator, permission-calculator]

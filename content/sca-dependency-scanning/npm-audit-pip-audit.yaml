@@ -1,0 +1,550 @@
+description:
+  fr: "Auditer les dépendances JavaScript et Python avec npm audit et pip-audit : niveaux de gravité, corrections, overrides, npm ci, lockfiles et hachages."
+  en: "Audit JavaScript and Python dependencies with npm audit and pip-audit: severity levels, fixes, overrides, npm ci, lockfiles and hashes."
+duration: 25
+
+intro:
+  fr: |
+    Avant d'installer un outil spécialisé, regardez ce que vous avez déjà : **npm** embarque la commande
+    `npm audit`, et l'écosystème Python propose **pip-audit**, maintenu par la PyPA (*Python Packaging
+    Authority*, le groupe qui maintient pip). Les deux font du SCA : ils comparent vos dépendances à une
+    base de failles connues, gratuitement et en quelques secondes.
+
+    Imaginez la réception des marchandises dans un entrepôt. Le **bon de livraison** liste précisément
+    chaque carton attendu : c'est le *lockfile*. Le **scellé** sur chaque carton prouve que personne ne l'a
+    ouvert en route : c'est le *hachage*. Enfin, le magasinier compare les références reçues à la **liste
+    des rappels** du fabricant : c'est l'audit. Sans bon de livraison, on accepte n'importe quoi ; sans
+    scellé, on ne voit pas la substitution ; sans liste des rappels, on stocke des produits dangereux.
+
+    Dans cette leçon, vous allez lancer ces deux outils, lire leur rapport, corriger une faille directe puis
+    une faille transitive, et écrire le script qui fait échouer le pipeline au bon seuil.
+  en: |
+    Before installing a specialised tool, look at what you already have: **npm** ships the `npm audit`
+    command, and the Python ecosystem offers **pip-audit**, maintained by the PyPA (*Python Packaging
+    Authority*, the group that maintains pip). Both do SCA: they compare your dependencies with a database
+    of known flaws, for free and in a few seconds.
+
+    Picture goods arriving at a warehouse. The **delivery note** lists precisely every box expected: that
+    is the *lockfile*. The **seal** on each box proves nobody opened it on the way: that is the *hash*.
+    Finally, the storekeeper compares the references received with the manufacturer's **recall list**: that
+    is the audit. Without a delivery note you accept anything; without a seal you do not see a swap;
+    without the recall list you store dangerous products.
+
+    In this lesson you will run both tools, read their report, fix a direct flaw and then a transitive one,
+    and write the script that fails the pipeline at the right threshold.
+
+sections:
+  - heading:
+      fr: "Lockfile et installation reproductible : npm ci"
+      en: "Lockfile and reproducible install: npm ci"
+    body:
+      fr: |
+        `package.json` contient des **plages** de versions (`^4.17.15` signifie « 4.17.15 ou toute version
+        4.x plus récente »). `package-lock.json` enregistre la version **exacte** réellement installée pour
+        chaque paquet, transitif compris, avec son empreinte (`integrity`, un SHA-512). C'est ce fichier
+        que `npm audit` analyse : il doit être versionné dans Git.
+
+        | | `npm install` | `npm ci` |
+        |---|---|---|
+        | Source de vérité | `package.json` (le lockfile est mis à jour si besoin) | `package-lock.json` uniquement |
+        | Modifie le lockfile | Oui, possible | Jamais |
+        | Si les deux fichiers se contredisent | Réécrit le lockfile | **Échoue** avec une erreur |
+        | `node_modules` existant | Mis à jour sur place | Supprimé puis recréé |
+        | Vérifie l'empreinte de chaque archive | Oui | Oui |
+        | Usage | Poste du développeur, ajout d'une dépendance | CI, construction d'images Docker |
+
+        En CI, utilisez **toujours** `npm ci` : deux builds du même commit installent exactement les mêmes
+        octets. Ajoutez `--ignore-scripts` pour ne pas exécuter les scripts `postinstall` des dépendances,
+        point d'entrée habituel des paquets piégés.
+      en: |
+        `package.json` contains version **ranges** (`^4.17.15` means "4.17.15 or any newer 4.x version").
+        `package-lock.json` records the **exact** version really installed for every package, transitive
+        ones included, with its fingerprint (`integrity`, a SHA-512). This is the file `npm audit`
+        analyses: it must be committed to Git.
+
+        | | `npm install` | `npm ci` |
+        |---|---|---|
+        | Source of truth | `package.json` (the lockfile is updated if needed) | `package-lock.json` only |
+        | Modifies the lockfile | Yes, possibly | Never |
+        | If the two files disagree | Rewrites the lockfile | **Fails** with an error |
+        | Existing `node_modules` | Updated in place | Deleted then recreated |
+        | Checks the fingerprint of every archive | Yes | Yes |
+        | Use | Developer workstation, adding a dependency | CI, Docker image builds |
+
+        In CI, **always** use `npm ci`: two builds of the same commit install exactly the same bytes. Add
+        `--ignore-scripts` so that the `postinstall` scripts of dependencies do not run: they are the usual
+        entry point of booby-trapped packages.
+  - heading:
+      fr: "npm audit : niveaux, corrections et overrides"
+      en: "npm audit: levels, fixes and overrides"
+    body:
+      fr: |
+        `npm audit` envoie la liste de vos paquets au registre, qui répond avec les avis de sécurité de la
+        GitHub Advisory Database. npm utilise quatre niveaux de gravité : `low`, `moderate` (l'équivalent
+        de « medium »), `high` et `critical`.
+
+        | Commande | Effet |
+        |---|---|
+        | `npm audit` | Affiche le rapport ; code de sortie 1 dès qu'une faille existe |
+        | `npm audit --audit-level=high` | Code de sortie 1 seulement pour `high` et `critical` (le rapport affiche toujours tout) |
+        | `npm audit --omit=dev` | Ignore les `devDependencies`, absentes de la production |
+        | `npm audit --json` | Rapport lisible par une machine (artefact de CI) |
+        | `npm audit fix` | Met à jour les paquets vulnérables **dans les plages** autorisées par `package.json` et réécrit le lockfile |
+        | `npm audit fix --force` | Autorise aussi les montées de version **majeures** : peut casser l'application |
+        | `npm audit signatures` | Vérifie les signatures du registre et les attestations de provenance des paquets installés |
+
+        Quand la faille est dans une dépendance **transitive** et que le paquet parent n'a pas encore publié
+        de correctif, le champ **`overrides`** de `package.json` (npm 8.3 et plus) force la version
+        installée, quel que soit ce que demande le parent.
+
+        Pour auditer sans rien installer sur votre machine, utilisez l'image officielle Node.js :
+
+        ```bash
+        docker run --rm -v "$PWD:/app" -w /app node:22-alpine npm audit --audit-level=high
+        ```
+      en: |
+        `npm audit` sends the list of your packages to the registry, which answers with the security
+        advisories of the GitHub Advisory Database. npm uses four severity levels: `low`, `moderate` (the
+        equivalent of "medium"), `high` and `critical`.
+
+        | Command | Effect |
+        |---|---|
+        | `npm audit` | Prints the report; exit code 1 as soon as one flaw exists |
+        | `npm audit --audit-level=high` | Exit code 1 only for `high` and `critical` (the report still shows everything) |
+        | `npm audit --omit=dev` | Ignores `devDependencies`, which are absent from production |
+        | `npm audit --json` | Machine-readable report (CI artifact) |
+        | `npm audit fix` | Updates vulnerable packages **within the ranges** allowed by `package.json` and rewrites the lockfile |
+        | `npm audit fix --force` | Also allows **major** version bumps: may break the application |
+        | `npm audit signatures` | Verifies the registry signatures and provenance attestations of installed packages |
+
+        When the flaw sits in a **transitive** dependency and the parent package has not released a fix
+        yet, the **`overrides`** field of `package.json` (npm 8.3 and later) forces the installed version,
+        whatever the parent asks for.
+
+        To audit without installing anything on your machine, use the official Node.js image:
+
+        ```bash
+        docker run --rm -v "$PWD:/app" -w /app node:22-alpine npm audit --audit-level=high
+        ```
+  - heading:
+      fr: "pip-audit : requirements, --fix et hachages"
+      en: "pip-audit: requirements, --fix and hashes"
+    body:
+      fr: |
+        pip n'a pas de commande d'audit intégrée. **pip-audit** comble ce manque : il interroge la base de
+        PyPI (ou OSV avec `-s osv`) et renvoie le code de sortie 1 dès qu'une faille connue est trouvée.
+
+        | Commande | Effet |
+        |---|---|
+        | `pip-audit` | Audite les paquets de l'environnement Python courant |
+        | `pip-audit -r requirements.txt` | Audite un fichier de dépendances (résolution dans un environnement isolé) |
+        | `--no-deps --disable-pip` | Aucune résolution : audite exactement les lignes du fichier, qui doit être entièrement épinglé (`==`) |
+        | `--require-hashes` | Exige un hachage sur chaque ligne du fichier |
+        | `--fix` | Remplace les versions vulnérables par la version corrigée (avec `-r`, le fichier est réécrit) |
+        | `--fix --dry-run` | Montre ce que `--fix` ferait, sans rien modifier |
+        | `-f json -o rapport.json` | Rapport JSON (formats : `columns`, `json`, `cyclonedx-json`, `markdown`) |
+        | `--ignore-vuln ID` | Ignore une faille précise (à justifier) |
+
+        pip-audit n'a **pas de seuil de gravité** : beaucoup d'avis Python n'ont pas de score. Toute faille
+        connue fait donc échouer la commande, et les exceptions se gèrent une par une avec `--ignore-vuln`.
+
+        Python n'a pas de lockfile unique, mais un `requirements.txt` **entièrement épinglé avec hachages**
+        joue ce rôle. On le génère depuis un fichier court `requirements.in` :
+
+        ```bash
+        python -m pip install pip-tools
+        pip-compile --generate-hashes --output-file requirements.txt requirements.in
+        python -m pip install --require-hashes -r requirements.txt
+        ```
+
+        Avec `--require-hashes`, pip refuse toute archive dont le SHA-256 n'est pas dans le fichier : une
+        version remplacée sur le registre, ou une dépendance transitive oubliée, bloque l'installation.
+      en: |
+        pip has no built-in audit command. **pip-audit** fills the gap: it queries the PyPI database (or
+        OSV with `-s osv`) and returns exit code 1 as soon as a known flaw is found.
+
+        | Command | Effect |
+        |---|---|
+        | `pip-audit` | Audits the packages of the current Python environment |
+        | `pip-audit -r requirements.txt` | Audits a requirements file (resolved in an isolated environment) |
+        | `--no-deps --disable-pip` | No resolution: audits exactly the lines of the file, which must be fully pinned (`==`) |
+        | `--require-hashes` | Requires a hash on every line of the file |
+        | `--fix` | Replaces vulnerable versions with the fixed one (with `-r`, the file is rewritten) |
+        | `--fix --dry-run` | Shows what `--fix` would do, without changing anything |
+        | `-f json -o report.json` | JSON report (formats: `columns`, `json`, `cyclonedx-json`, `markdown`) |
+        | `--ignore-vuln ID` | Ignores one specific flaw (must be justified) |
+
+        pip-audit has **no severity threshold**: many Python advisories carry no score. Any known flaw
+        therefore fails the command, and exceptions are handled one by one with `--ignore-vuln`.
+
+        Python has no single lockfile, but a `requirements.txt` that is **fully pinned with hashes** plays
+        that role. It is generated from a short `requirements.in` file:
+
+        ```bash
+        python -m pip install pip-tools
+        pip-compile --generate-hashes --output-file requirements.txt requirements.in
+        python -m pip install --require-hashes -r requirements.txt
+        ```
+
+        With `--require-hashes`, pip refuses any archive whose SHA-256 is not in the file: a version
+        replaced on the registry, or a forgotten transitive dependency, blocks the installation.
+
+examples:
+  - title:
+      fr: "Première session npm audit : lire le rapport, comprendre le code de sortie, corriger"
+      en: "First npm audit session: read the report, understand the exit code, fix"
+    file: npm-audit-lab.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Lab: a small project whose lockfile pins an old lodash
+      mkdir audit-lab && cd audit-lab
+      npm init -y > /dev/null
+      npm install lodash@4.17.15 > /dev/null   # package.json gets "^4.17.15", the lockfile 4.17.15
+
+      # 1. Compare every installed package with the advisory database
+      npm audit
+
+      # 2. The report is for humans, the exit code is for the pipeline
+      npm audit --audit-level=high > /dev/null;     echo "exit code with --audit-level=high: $?"
+      npm audit --audit-level=critical > /dev/null; echo "exit code with --audit-level=critical: $?"
+
+      # 3. Upgrade inside the range allowed by package.json, then audit again
+      npm audit fix > /dev/null
+      npm audit
+    output: |
+      # npm audit report
+
+      lodash  <=4.17.20
+      Severity: high
+      Regular Expression Denial of Service (ReDoS) in lodash - https://github.com/advisories/GHSA-29mw-wpgm-hmr9
+      Prototype Pollution in lodash - https://github.com/advisories/GHSA-p6mc-m468-83gw
+      Command Injection in lodash - https://github.com/advisories/GHSA-35jh-r3h4-6jhm
+      fix available via `npm audit fix`
+      node_modules/lodash
+
+      1 high severity vulnerability
+
+      To address all issues, run:
+        npm audit fix
+      exit code with --audit-level=high: 1
+      exit code with --audit-level=critical: 0
+      found 0 vulnerabilities
+    note:
+      fr: "Le rapport donne le paquet, la plage de versions touchée, la gravité la plus haute et un lien par avis. Avec `--audit-level=critical`, le rapport est identique mais le code de sortie passe à 0 : c'est ce code qui décide si le pipeline échoue. La liste exacte dépend du jour où vous lancez la commande : de nouveaux avis sont publiés en continu."
+      en: "The report gives the package, the affected version range, the highest severity and one link per advisory. With `--audit-level=critical` the report is identical but the exit code becomes 0: that code is what decides whether the pipeline fails. The exact list depends on the day you run the command: new advisories are published continuously."
+
+  - title:
+      fr: "Un script de CI qui ne protège de rien"
+      en: "A CI script that protects nothing"
+    file: ci/install.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+
+      # Re-resolves the ranges of package.json: the build may pick a release
+      # published five minutes ago, and runs every postinstall script
+      npm install
+
+      # The result of the audit is thrown away: the job is always green
+      npm audit || true
+
+      # Blind major upgrades, applied by the pipeline itself and never reviewed
+      npm audit fix --force
+
+      # Unpinned Python dependencies, no hash check, no audit at all
+      pip install -r requirements.txt
+    note:
+      fr: "Quatre défauts : `npm install` rend le build non reproductible, `|| true` neutralise l'audit, `npm audit fix --force` peut installer une version majeure incompatible sans relecture, et côté Python rien n'est épinglé ni vérifié."
+      en: "Four defects: `npm install` makes the build non-reproducible, `|| true` neutralises the audit, `npm audit fix --force` may install an incompatible major version without review, and on the Python side nothing is pinned or checked."
+
+  - title:
+      fr: "Le même script, reproductible et bloquant"
+      en: "The same script, reproducible and blocking"
+    file: ci/install.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      mkdir -p reports
+
+      # --- Node.js ---------------------------------------------------------
+      # Exact install from the lockfile; fails if package.json and the lockfile
+      # disagree; dependency install scripts are not executed
+      npm ci --ignore-scripts
+
+      # Registry signatures and provenance attestations of what was installed
+      npm audit signatures
+
+      # Full report kept as a build artifact, whatever the result
+      npm audit --json > reports/npm-audit.json || true
+      jq '.metadata.vulnerabilities' reports/npm-audit.json
+
+      # The gate: production dependencies only, fail on high and critical
+      npm audit --omit=dev --audit-level=high
+
+      # --- Python ----------------------------------------------------------
+      # Every archive must match a SHA-256 recorded in requirements.txt
+      python -m pip install --require-hashes -r requirements.txt
+
+      # Audit the same pinned and hashed file, without resolving anything again
+      python -m pip install --quiet pip-audit
+      pip-audit -r requirements.txt --require-hashes --disable-pip
+    note:
+      fr: "`set -e` arrête le script à la première commande en échec : un audit rouge bloque donc le build. Le rapport JSON complet est produit avant la porte (avec `|| true` uniquement sur cette ligne) pour rester disponible même quand le job échoue."
+      en: "`set -e` stops the script at the first failing command, so a red audit blocks the build. The full JSON report is produced before the gate (with `|| true` on that line only) so that it stays available even when the job fails."
+
+  - title:
+      fr: "Corriger une faille transitive avec overrides"
+      en: "Fixing a transitive flaw with overrides"
+    file: package.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "name": "shop-api",
+        "version": "1.4.2",
+        "private": true,
+        "scripts": {
+          "audit:prod": "npm audit --omit=dev --audit-level=high",
+          "audit:signatures": "npm audit signatures"
+        },
+        "dependencies": {
+          "express": "5.1.0",
+          "mkdirp": "0.5.1"
+        },
+        "overrides": {
+          "mkdirp": {
+            "minimist": "1.2.8"
+          }
+        }
+      }
+    note:
+      fr: "`mkdirp@0.5.1` exige `minimist@0.0.8`, touché par une pollution de prototype critique. Le bloc `overrides` dit à npm : « sous `mkdirp`, installe `minimist` 1.2.8 ». Lancez `npm install` pour régénérer le lockfile, puis `npm ls minimist` pour vérifier. Un override est une rustine : ici, mettre à jour `mkdirp` lui-même serait la vraie correction ; gardez-le pour les cas où le parent n'a pas encore de version corrigée, et retirez-le ensuite."
+      en: "`mkdirp@0.5.1` requires `minimist@0.0.8`, affected by a critical prototype pollution. The `overrides` block tells npm: \"under `mkdirp`, install `minimist` 1.2.8\". Run `npm install` to regenerate the lockfile, then `npm ls minimist` to check. An override is a patch: here, upgrading `mkdirp` itself would be the real fix; keep it for cases where the parent has no fixed release yet, and remove it afterwards."
+
+  - title:
+      fr: "pip-audit sur un fichier requirements épinglé"
+      en: "pip-audit on a pinned requirements file"
+    file: pip-audit-lab.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Lab: a fully pinned requirements file with one old package
+      printf 'pyyaml==5.3.1\nsix==1.17.0\n' > requirements.txt
+
+      python -m pip install --quiet pip-audit
+
+      # The file is fully pinned, so nothing needs to be resolved or installed:
+      # --no-deps --disable-pip audits exactly these two lines
+      pip-audit -r requirements.txt --no-deps --disable-pip
+      echo "exit code: $?"
+
+      # Let pip-audit rewrite the vulnerable pin, then audit again
+      pip-audit -r requirements.txt --no-deps --disable-pip --fix > /dev/null 2>&1
+      pip-audit -r requirements.txt --no-deps --disable-pip
+      echo "exit code: $?"
+    output: |
+      Found 1 known vulnerability in 1 package
+      Name   Version ID             Fix Versions
+      ------ ------- -------------- ------------
+      pyyaml 5.3.1   PYSEC-2021-142 5.4
+      exit code: 1
+      No known vulnerabilities found
+      exit code: 0
+    note:
+      fr: "`PYSEC-2021-142` est l'identifiant PyPI de CVE-2020-14343 : exécution de code arbitraire lors du chargement d'un fichier YAML non fiable. La colonne *Fix Versions* donne la version à viser ; `--fix` a réécrit la ligne `pyyaml==5.3.1` du fichier. Relisez toujours ce changement dans une pull request, et régénérez les hachages ensuite."
+      en: "`PYSEC-2021-142` is the PyPI identifier of CVE-2020-14343: arbitrary code execution when loading an untrusted YAML file. The *Fix Versions* column gives the version to aim for; `--fix` rewrote the `pyyaml==5.3.1` line of the file. Always review that change in a pull request, and regenerate the hashes afterwards."
+
+mistake:
+  fr: |
+    **Rendre l'audit « non bloquant » avec `|| true`, ou tout « réparer » avec `npm audit fix --force`.**
+
+    Le premier réflexe transforme l'audit en décoration : le rapport s'affiche, personne ne le lit, la
+    faille part en production. Le second laisse npm installer des versions **majeures** incompatibles,
+    parfois même une version plus ancienne du paquet parent, sans aucune relecture. La bonne approche :
+    un seuil réaliste (`--audit-level=high` sur les dépendances de production), des corrections faites
+    dans une pull request relue et testée, et des exceptions rares, écrites et datées.
+  en: |
+    **Making the audit "non-blocking" with `|| true`, or "repairing" everything with `npm audit fix --force`.**
+
+    The first reflex turns the audit into decoration: the report is printed, nobody reads it, the flaw
+    ships to production. The second lets npm install incompatible **major** versions, sometimes even an
+    older version of the parent package, without any review. The right approach: a realistic threshold
+    (`--audit-level=high` on production dependencies), fixes made in a reviewed and tested pull request,
+    and rare, written, dated exceptions.
+
+bestPractice:
+  fr: |
+    - **Versionnez le lockfile** et utilisez `npm ci --ignore-scripts` en CI, jamais `npm install`.
+    - **Séparez rapport et porte** : un rapport JSON complet archivé, puis une commande bloquante avec un seuil clair.
+    - **Auditez la production d'abord** (`--omit=dev`) pour le seuil bloquant ; surveillez le reste sans bloquer.
+    - **Côté Python, épinglez tout avec hachages** (`pip-compile --generate-hashes`) et installez avec `--require-hashes`.
+    - **Documentez chaque exception** : un `--ignore-vuln` ou un `overrides` s'accompagne d'un commentaire, d'un ticket et d'une date de revue.
+    - **Relancez l'audit chaque nuit** sur la branche principale : les avis arrivent même quand le code ne change pas.
+  en: |
+    - **Commit the lockfile** and use `npm ci --ignore-scripts` in CI, never `npm install`.
+    - **Separate report and gate**: a full archived JSON report, then one blocking command with a clear threshold.
+    - **Audit production first** (`--omit=dev`) for the blocking threshold; monitor the rest without blocking.
+    - **On the Python side, pin everything with hashes** (`pip-compile --generate-hashes`) and install with `--require-hashes`.
+    - **Document every exception**: an `--ignore-vuln` or an `overrides` entry comes with a comment, a ticket and a review date.
+    - **Rerun the audit every night** on the main branch: advisories arrive even when the code does not change.
+
+exercise:
+  statement:
+    fr: |
+      Un dépôt contient deux applications : `web/` (Node.js, avec `package-lock.json`) et `api/` (Python,
+      avec un `requirements.txt` épinglé avec hachages).
+
+      Écrivez le script `ci/audit.sh` qui :
+
+      1. installe les dépendances Node.js de façon reproductible, sans exécuter les scripts d'installation ;
+      2. enregistre un rapport JSON pour chaque écosystème dans `reports/`, même si des failles existent ;
+      3. échoue si une faille `high` ou `critical` touche les dépendances de **production** de `web/` ;
+      4. échoue si `api/` contient une faille connue, **sauf** `PYSEC-2022-42969` (un déni de service
+         contesté dans le paquet `py`, sans correctif), ignorée avec un commentaire justificatif ;
+      5. exécute **les deux** audits même si le premier échoue, puis renvoie un code de sortie global.
+    en: |
+      A repository contains two applications: `web/` (Node.js, with a `package-lock.json`) and `api/`
+      (Python, with a `requirements.txt` pinned with hashes).
+
+      Write the `ci/audit.sh` script that:
+
+      1. installs the Node.js dependencies reproducibly, without running install scripts;
+      2. saves a JSON report for each ecosystem in `reports/`, even when flaws exist;
+      3. fails if a `high` or `critical` flaw affects the **production** dependencies of `web/`;
+      4. fails if `api/` contains a known flaw, **except** `PYSEC-2022-42969` (a disputed denial of
+         service in the `py` package, with no fix), ignored with a justifying comment;
+      5. runs **both** audits even if the first one fails, then returns a global exit code.
+  solution:
+    file: ci/audit.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -uo pipefail          # no "-e": we want to run both audits, then decide
+      mkdir -p reports
+      status=0
+
+      # --- web/ (Node.js) --------------------------------------------------
+      # 1. Reproducible install, dependency scripts disabled
+      (cd web && npm ci --ignore-scripts) || exit 1
+
+      # 2. Full report for the artifact; its exit code is deliberately ignored
+      (cd web && npm audit --json) > reports/npm-audit.json || true
+
+      # 3. Gate: production dependencies, high and critical only
+      (cd web && npm audit --omit=dev --audit-level=high) || status=1
+
+      # --- api/ (Python) ---------------------------------------------------
+      python -m pip install --quiet pip-audit || exit 1
+
+      # Exception: PYSEC-2022-42969 (py, disputed ReDoS, no fixed version).
+      # Accepted by the security team, to be reviewed every quarter.
+      PIP_AUDIT_ARGS=(-r api/requirements.txt --require-hashes --disable-pip
+                      --ignore-vuln PYSEC-2022-42969)
+
+      # 2. Full report for the artifact
+      pip-audit "${PIP_AUDIT_ARGS[@]}" -f json -o reports/pip-audit.json || true
+
+      # 4. Gate: pip-audit has no severity threshold, any known flaw fails
+      pip-audit "${PIP_AUDIT_ARGS[@]}" || status=1
+
+      # 5. One global verdict for the pipeline
+      exit "$status"
+    note:
+      fr: "Sans `set -e`, chaque porte met `status` à 1 au lieu d'arrêter le script : le développeur voit tous les problèmes en un seul passage. L'exception est écrite dans le script, donc versionnée et relue comme du code."
+      en: "Without `set -e`, each gate sets `status` to 1 instead of stopping the script: the developer sees every problem in a single run. The exception is written in the script, so it is versioned and reviewed like code."
+
+quiz:
+  - q:
+      fr: "Quelle commande faut-il utiliser en CI pour installer exactement ce que décrit package-lock.json ?"
+      en: "Which command should be used in CI to install exactly what package-lock.json describes?"
+    options:
+      fr:
+        - "npm install"
+        - "npm update"
+        - "npm ci"
+        - "npm audit fix"
+      en:
+        - "npm install"
+        - "npm update"
+        - "npm ci"
+        - "npm audit fix"
+    answer: 2
+    why:
+      fr: "`npm ci` installe strictement le contenu du lockfile, ne le modifie jamais et échoue si `package.json` et le lockfile se contredisent."
+      en: "`npm ci` installs strictly what the lockfile contains, never modifies it and fails if `package.json` and the lockfile disagree."
+  - q:
+      fr: "Que change l'option --audit-level=high de npm audit ?"
+      en: "What does the --audit-level=high option of npm audit change?"
+    options:
+      fr:
+        - "Le code de sortie : il n'est non nul que pour les failles high et critical"
+        - "Le rapport : il n'affiche plus que les failles high et critical"
+        - "La base de données : seules les failles high sont téléchargées"
+        - "La correction : seules les failles high sont corrigées automatiquement"
+      en:
+        - "The exit code: it is non-zero only for high and critical flaws"
+        - "The report: it only shows high and critical flaws"
+        - "The database: only high flaws are downloaded"
+        - "The fix: only high flaws are fixed automatically"
+    answer: 0
+    why:
+      fr: "`--audit-level` ne filtre pas l'affichage, il fixe le seuil à partir duquel la commande échoue, donc à partir duquel le pipeline se bloque."
+      en: "`--audit-level` does not filter the display, it sets the threshold from which the command fails, and therefore from which the pipeline blocks."
+  - q:
+      fr: "À quoi sert le champ overrides de package.json ?"
+      en: "What is the overrides field of package.json for?"
+    options:
+      fr:
+        - "À désactiver npm audit pour certains paquets"
+        - "À déclarer les dépendances de développement"
+        - "À remplacer le registre npm par un registre privé"
+        - "À forcer la version d'une dépendance transitive"
+      en:
+        - "To disable npm audit for some packages"
+        - "To declare development dependencies"
+        - "To replace the npm registry with a private one"
+        - "To force the version of a transitive dependency"
+    answer: 3
+    why:
+      fr: "`overrides` impose la version installée d'un paquet, même si le paquet parent en demande une autre : utile quand le parent n'a pas encore publié de correctif."
+      en: "`overrides` imposes the installed version of a package even if the parent asks for another one: useful when the parent has not released a fix yet."
+  - q:
+      fr: "Contre quoi protège pip install --require-hashes ?"
+      en: "What does pip install --require-hashes protect against?"
+    options:
+      fr:
+        - "Contre les failles connues des paquets installés"
+        - "Contre une archive modifiée ou remplacée par rapport à celle qui a été épinglée"
+        - "Contre les licences incompatibles"
+        - "Contre les paquets trop volumineux"
+      en:
+        - "Against known flaws in the installed packages"
+        - "Against an archive modified or replaced compared with the one that was pinned"
+        - "Against incompatible licences"
+        - "Against packages that are too large"
+    answer: 1
+    why:
+      fr: "Le hachage garantit l'intégrité : pip refuse toute archive dont le SHA-256 ne figure pas dans le fichier. Les failles connues, elles, sont trouvées par pip-audit."
+      en: "The hash guarantees integrity: pip refuses any archive whose SHA-256 is not in the file. Known flaws, on the other hand, are found by pip-audit."
+  - q:
+      fr: "Comment pip-audit gère-t-il le seuil de gravité ?"
+      en: "How does pip-audit handle the severity threshold?"
+    options:
+      fr:
+        - "Avec l'option --audit-level, comme npm"
+        - "Il n'échoue que pour les failles critiques"
+        - "Il n'a pas de seuil : toute faille connue fait échouer la commande, sauf celles ignorées avec --ignore-vuln"
+        - "Il n'échoue jamais, il affiche seulement un rapport"
+      en:
+        - "With the --audit-level option, like npm"
+        - "It only fails for critical flaws"
+        - "It has no threshold: any known flaw fails the command, except those ignored with --ignore-vuln"
+        - "It never fails, it only prints a report"
+    answer: 2
+    why:
+      fr: "Beaucoup d'avis Python n'ont pas de score de gravité : pip-audit renvoie 1 dès qu'une faille connue existe, et les exceptions se déclarent une par une."
+      en: "Many Python advisories have no severity score: pip-audit returns 1 as soon as one known flaw exists, and exceptions are declared one by one."

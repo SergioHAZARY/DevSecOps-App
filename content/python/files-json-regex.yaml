@@ -1,0 +1,640 @@
+description:
+  fr: "Lire des fichiers, analyser des journaux avec les expressions régulières et exploiter des rapports JSON : les trois compétences de base de tout script de sécurité."
+  en: "Read files, parse logs with regular expressions and process JSON reports: the three core skills behind every security script."
+duration: 35
+
+intro:
+  fr: |
+    Presque tout le travail d'un script DevSecOps consiste à **lire du texte** produit par une autre
+    machine : un journal d'authentification, le rapport d'un scanner, la réponse d'une API. Deux formats
+    dominent : les **logs** (du texte libre, une ligne par événement) et le **JSON** (*JavaScript Object
+    Notation*, des données structurées).
+
+    Imaginez que vous cherchez dans un annuaire papier tous les numéros commençant par 06. Vous ne lisez pas
+    chaque page en entier : vous repérez un **motif**. Une **expression régulière** (*regex*) est exactement
+    cela : la description d'un motif que Python recherche pour vous dans des milliers de lignes.
+
+    Dans cette leçon, vous allez détecter une attaque par force brute dans un journal SSH, extraire les
+    vulnérabilités graves d'un rapport Trivy, et découvrir pourquoi une regex mal écrite laisse passer une
+    injection de commande. Les journaux d'exemple sont placés dans le script lui-même pour que tout
+    s'exécute dans la page.
+  en: |
+    Almost all the work of a DevSecOps script consists of **reading text** produced by another machine: an
+    authentication log, a scanner report, an API response. Two formats dominate: **logs** (free text, one
+    line per event) and **JSON** (*JavaScript Object Notation*, structured data).
+
+    Imagine looking through a paper phone book for every number starting with 555. You do not read each
+    page in full: you spot a **pattern**. A **regular expression** (*regex*) is exactly that: the
+    description of a pattern that Python searches for you across thousands of lines.
+
+    In this lesson you will detect a brute-force attack in an SSH log, extract the serious vulnerabilities
+    from a Trivy report, and discover why a badly written regex lets a command injection through. The
+    sample logs are placed inside the script itself so that everything runs in the page.
+
+sections:
+  - heading:
+      fr: "Lire et écrire des fichiers"
+      en: "Reading and writing files"
+    body:
+      fr: |
+        On ouvre un fichier avec `open()` à l'intérieur d'un bloc `with`, qui **referme le fichier
+        automatiquement**, même si une erreur survient :
+
+        ```python
+        with open("/var/log/auth.log", encoding="utf-8", errors="replace") as log_file:
+            for line in log_file:          # one line at a time: works on multi-gigabyte files
+                print(line.rstrip())
+        ```
+
+        | Mode | Signification | Si le fichier existe |
+        |---|---|---|
+        | `"r"` (défaut) | lecture | il est lu |
+        | `"w"` | écriture | **il est écrasé** |
+        | `"a"` | ajout en fin de fichier | il est complété |
+        | `"x"` | création exclusive | erreur `FileExistsError` |
+
+        - Précisez toujours `encoding="utf-8"` : sinon l'encodage dépend du système et le script se comporte
+          différemment sous Windows et sous Linux.
+        - Parcourez le fichier **ligne par ligne** plutôt que `read()` en entier : un journal peut peser
+          plusieurs gigaoctets.
+        - Le module `pathlib` manipule les chemins proprement :
+          `Path("/var/log") / "auth.log"`, `path.exists()`, `path.read_text(encoding="utf-8")`.
+
+        Dans les exemples, `io.StringIO(texte)` crée un « faux fichier » en mémoire qui se comporte comme
+        un fichier ouvert : le code de lecture est identique.
+      en: |
+        You open a file with `open()` inside a `with` block, which **closes the file automatically**, even
+        if an error occurs:
+
+        ```python
+        with open("/var/log/auth.log", encoding="utf-8", errors="replace") as log_file:
+            for line in log_file:          # one line at a time: works on multi-gigabyte files
+                print(line.rstrip())
+        ```
+
+        | Mode | Meaning | If the file exists |
+        |---|---|---|
+        | `"r"` (default) | read | it is read |
+        | `"w"` | write | **it is overwritten** |
+        | `"a"` | append at the end | it is extended |
+        | `"x"` | exclusive creation | `FileExistsError` |
+
+        - Always pass `encoding="utf-8"`: otherwise the encoding depends on the system and the script
+          behaves differently on Windows and Linux.
+        - Walk through the file **line by line** rather than calling `read()` on the whole thing: a log can
+          weigh several gigabytes.
+        - The `pathlib` module handles paths cleanly: `Path("/var/log") / "auth.log"`, `path.exists()`,
+          `path.read_text(encoding="utf-8")`.
+
+        In the examples, `io.StringIO(text)` creates an in-memory "fake file" that behaves like an opened
+        file: the reading code is identical.
+  - heading:
+      fr: "JSON : le format des outils de sécurité"
+      en: "JSON: the format of security tools"
+    body:
+      fr: |
+        Trivy, Bandit, Semgrep, l'AWS CLI, `kubectl` : tous savent produire du JSON. Le module `json`
+        convertit dans les deux sens :
+
+        | Fonction | Sens | Source / destination |
+        |---|---|---|
+        | `json.loads(texte)` | JSON vers Python | une chaîne de caractères |
+        | `json.load(fichier)` | JSON vers Python | un fichier ouvert |
+        | `json.dumps(objet, indent=2)` | Python vers JSON | une chaîne de caractères |
+        | `json.dump(objet, fichier)` | Python vers JSON | un fichier ouvert |
+
+        Un objet JSON `{...}` devient un `dict`, un tableau `[...]` devient une `list`, `true` / `false` /
+        `null` deviennent `True` / `False` / `None`. Vous retrouvez donc les listes de dictionnaires de la
+        leçon précédente.
+
+        Un rapport réel est rarement complet : un champ peut manquer quand il n'y a rien à signaler.
+        Utilisez `.get("cle", valeur_par_defaut)` pour ne pas planter sur un cas imprévu. `json.loads()` est
+        **sûr** sur des données non fiables : il ne fait que construire des données, il n'exécute jamais de
+        code (contrairement à `pickle` ou `eval`, étudiés en fin de cours).
+      en: |
+        Trivy, Bandit, Semgrep, the AWS CLI, `kubectl`: they can all output JSON. The `json` module converts
+        in both directions:
+
+        | Function | Direction | Source / destination |
+        |---|---|---|
+        | `json.loads(text)` | JSON to Python | a string |
+        | `json.load(file)` | JSON to Python | an opened file |
+        | `json.dumps(obj, indent=2)` | Python to JSON | a string |
+        | `json.dump(obj, file)` | Python to JSON | an opened file |
+
+        A JSON object `{...}` becomes a `dict`, an array `[...]` becomes a `list`, `true` / `false` / `null`
+        become `True` / `False` / `None`. So you are back to the lists of dictionaries from the previous
+        lesson.
+
+        A real report is rarely complete: a field may be absent when there is nothing to report. Use
+        `.get("key", default_value)` so you do not crash on an unexpected case. `json.loads()` is **safe**
+        on untrusted data: it only builds data, it never executes code (unlike `pickle` or `eval`, studied
+        at the end of the course).
+  - heading:
+      fr: "Les expressions régulières avec le module re"
+      en: "Regular expressions with the re module"
+    body:
+      fr: |
+        | Motif | Signification | Exemple |
+        |---|---|---|
+        | `\d` `\w` `\s` | un chiffre, un caractère de mot, un blanc | `\d+` : un ou plusieurs chiffres |
+        | `\S` | tout sauf un blanc | `\S+` : un « mot » |
+        | `.` | n'importe quel caractère | `a.c` : abc, a-c |
+        | `+` `*` `?` | un ou plus, zéro ou plus, zéro ou un | `https?` : http ou https |
+        | `{1,3}` | entre 1 et 3 répétitions | `\d{1,3}` |
+        | `[a-z0-9-]` | un caractère parmi ceux listés | |
+        | `( )` et `(?P<nom> )` | groupe capturé, groupe nommé | `(?P<ip>\S+)` |
+        | `(?: )` | groupe non capturé | `(?:invalid user )?` |
+
+        Écrivez toujours vos motifs dans une **chaîne brute** `r"..."`, pour que `\d` ne soit pas interprété
+        par Python.
+
+        | Fonction | Ce qu'elle vérifie |
+        |---|---|
+        | `re.search(p, s)` | le motif apparaît **quelque part** dans `s` |
+        | `re.match(p, s)` | le motif apparaît **au début** de `s` |
+        | `re.fullmatch(p, s)` | **toute** la chaîne `s` correspond au motif |
+        | `re.findall(p, s)` | renvoie toutes les occurrences |
+        | `re.sub(p, r, s)` | remplace les occurrences par `r` |
+
+        Pour **extraire** une information d'une ligne de log, utilisez `search`. Pour **valider** une saisie,
+        utilisez `fullmatch` : c'est la seule qui garantit qu'il n'y a rien d'autre autour.
+      en: |
+        | Pattern | Meaning | Example |
+        |---|---|---|
+        | `\d` `\w` `\s` | a digit, a word character, a whitespace | `\d+`: one or more digits |
+        | `\S` | anything but whitespace | `\S+`: a "word" |
+        | `.` | any character | `a.c`: abc, a-c |
+        | `+` `*` `?` | one or more, zero or more, zero or one | `https?`: http or https |
+        | `{1,3}` | between 1 and 3 repetitions | `\d{1,3}` |
+        | `[a-z0-9-]` | one character among those listed | |
+        | `( )` and `(?P<name> )` | captured group, named group | `(?P<ip>\S+)` |
+        | `(?: )` | non-capturing group | `(?:invalid user )?` |
+
+        Always write your patterns in a **raw string** `r"..."`, so that `\d` is not interpreted by Python.
+
+        | Function | What it checks |
+        |---|---|
+        | `re.search(p, s)` | the pattern appears **somewhere** in `s` |
+        | `re.match(p, s)` | the pattern appears **at the beginning** of `s` |
+        | `re.fullmatch(p, s)` | the **whole** string `s` matches the pattern |
+        | `re.findall(p, s)` | returns every occurrence |
+        | `re.sub(p, r, s)` | replaces occurrences with `r` |
+
+        To **extract** information from a log line, use `search`. To **validate** an input, use
+        `fullmatch`: it is the only one that guarantees there is nothing else around.
+
+examples:
+  - title:
+      fr: "Lire un journal ligne par ligne"
+      en: "Reading a log line by line"
+    file: read_log.py
+    lang: python
+    code: |
+      import io
+
+      # Sample of /var/log/auth.log (OpenSSH server). The backslash avoids an empty first line.
+      LOG = """\
+      Nov 12 03:14:07 web-01 sshd[2101]: Failed password for invalid user admin from 203.0.113.50 port 51234 ssh2
+      Nov 12 03:14:09 web-01 sshd[2101]: Failed password for root from 203.0.113.50 port 51236 ssh2
+      Nov 12 03:14:12 web-01 sshd[2103]: Failed password for root from 203.0.113.50 port 51240 ssh2
+      Nov 12 08:30:41 web-01 sshd[2188]: Accepted publickey for deploy from 198.51.100.7 port 40022 ssh2
+      Nov 12 09:02:10 web-01 sshd[2250]: Failed password for alice from 198.51.100.23 port 39900 ssh2
+      Nov 12 09:02:31 web-01 sshd[2250]: Accepted password for alice from 198.51.100.23 port 39900 ssh2
+      """
+
+      # io.StringIO behaves like an opened text file. With a real file you would write:
+      #   with open("/var/log/auth.log", encoding="utf-8", errors="replace") as log_file:
+      with io.StringIO(LOG) as log_file:
+          total = 0
+          failed = 0
+          for line in log_file:                 # the file is read one line at a time
+              line = line.strip()               # remove the trailing newline
+              if not line:
+                  continue
+              total += 1
+              if "Failed password" in line:
+                  failed += 1
+                  words = line.split()          # cut the line on whitespace
+                  ip = words[words.index("from") + 1]
+                  print(f"{words[2]} FAILED from {ip}")
+
+      print(f"{failed} failed logins out of {total} lines")
+    output: |
+      03:14:07 FAILED from 203.0.113.50
+      03:14:09 FAILED from 203.0.113.50
+      03:14:12 FAILED from 203.0.113.50
+      09:02:10 FAILED from 198.51.100.23
+      4 failed logins out of 6 lines
+    note:
+      fr: "Les méthodes de chaînes (`strip`, `split`, `in`) suffisent pour un premier tri. Mais le découpage par position est fragile : la ligne « invalid user admin » contient deux mots de plus. C'est là que les regex deviennent utiles."
+      en: "String methods (`strip`, `split`, `in`) are enough for a first pass. But cutting by position is fragile: the \"invalid user admin\" line contains two more words. This is where regexes become useful."
+
+  - title:
+      fr: "Regex : détecter une attaque par force brute SSH"
+      en: "Regex: detecting an SSH brute-force attack"
+    file: bruteforce_detector.py
+    lang: python
+    kind: secure
+    code: |
+      import re
+      from collections import Counter
+
+      LOG = """\
+      Nov 12 03:14:07 web-01 sshd[2101]: Failed password for invalid user admin from 203.0.113.50 port 51234 ssh2
+      Nov 12 03:14:09 web-01 sshd[2101]: Failed password for root from 203.0.113.50 port 51236 ssh2
+      Nov 12 03:14:12 web-01 sshd[2103]: Failed password for root from 203.0.113.50 port 51240 ssh2
+      Nov 12 08:30:41 web-01 sshd[2188]: Accepted publickey for deploy from 198.51.100.7 port 40022 ssh2
+      Nov 12 09:02:10 web-01 sshd[2250]: Failed password for alice from 198.51.100.23 port 39900 ssh2
+      Nov 12 09:02:31 web-01 sshd[2250]: Accepted password for alice from 198.51.100.23 port 39900 ssh2
+      """
+
+      # Compiled once, reused for every line. Named groups make the code self-documenting.
+      FAILED = re.compile(
+          r"Failed password for (?:invalid user )?(?P<user>\S+) "
+          r"from (?P<ip>\d{1,3}(?:\.\d{1,3}){3}) port \d+"
+      )
+      THRESHOLD = 3          # failures from one address before raising an alert
+
+      failures = Counter()   # a dict specialised in counting
+      targets: dict[str, set[str]] = {}
+
+      for line in LOG.splitlines():
+          match = FAILED.search(line)
+          if match is None:              # the line is not a failed login
+              continue
+          ip = match["ip"]
+          failures[ip] += 1
+          targets.setdefault(ip, set()).add(match["user"])
+
+      for ip, count in failures.most_common():
+          status = "BRUTE FORCE" if count >= THRESHOLD else "ok"
+          print(f"{ip:15} {count} failure(s)  users={sorted(targets[ip])}  {status}")
+    output: |
+      203.0.113.50    3 failure(s)  users=['admin', 'root']  BRUTE FORCE
+      198.51.100.23   1 failure(s)  users=['alice']  ok
+    note:
+      fr: "`(?:invalid user )?` rend ces deux mots facultatifs : une seule regex couvre les deux formes de ligne. `Counter.most_common()` trie les adresses de la plus active à la moins active. C'est, en 25 lignes, le principe de fail2ban."
+      en: "`(?:invalid user )?` makes those two words optional: a single regex covers both line shapes. `Counter.most_common()` sorts addresses from most to least active. In 25 lines, this is the principle behind fail2ban."
+
+  - title:
+      fr: "JSON : extraire les vulnérabilités graves d'un rapport Trivy"
+      en: "JSON: extracting the serious vulnerabilities from a Trivy report"
+    file: trivy_gate.py
+    lang: python
+    kind: secure
+    code: |
+      import json
+
+      # Shortened output of: trivy image --format json shop-api:1.4.2
+      REPORT = """
+      {
+        "SchemaVersion": 2,
+        "ArtifactName": "shop-api:1.4.2",
+        "Results": [
+          {
+            "Target": "shop-api:1.4.2 (debian 12.1)",
+            "Vulnerabilities": [
+              {"VulnerabilityID": "CVE-2023-38545", "PkgName": "curl", "InstalledVersion": "7.88.1-10+deb12u1", "FixedVersion": "7.88.1-10+deb12u4", "Severity": "CRITICAL"},
+              {"VulnerabilityID": "CVE-2023-4911", "PkgName": "libc6", "InstalledVersion": "2.36-9+deb12u1", "FixedVersion": "2.36-9+deb12u3", "Severity": "HIGH"},
+              {"VulnerabilityID": "CVE-2011-3374", "PkgName": "apt", "InstalledVersion": "2.6.1", "Severity": "LOW"}
+            ]
+          },
+          {
+            "Target": "requirements.txt",
+            "Vulnerabilities": [
+              {"VulnerabilityID": "CVE-2023-30861", "PkgName": "flask", "InstalledVersion": "2.2.2", "FixedVersion": "2.3.2, 2.2.5", "Severity": "HIGH"}
+            ]
+          },
+          {"Target": "package-lock.json"}
+        ]
+      }
+      """
+
+      BLOCKING = {"HIGH", "CRITICAL"}
+
+      report = json.loads(REPORT)          # JSON text -> Python dicts and lists
+      blocking = []
+
+      for result in report["Results"]:
+          # Trivy omits the "Vulnerabilities" key when a target is clean: use .get()
+          for vuln in result.get("Vulnerabilities", []):
+              if vuln["Severity"] in BLOCKING:
+                  blocking.append({
+                      "id": vuln["VulnerabilityID"],
+                      "package": vuln["PkgName"],
+                      "severity": vuln["Severity"],
+                      "fix": vuln.get("FixedVersion", "no fix yet"),
+                  })
+
+      summary = {
+          "image": report["ArtifactName"],
+          "blocking": len(blocking),
+          "findings": blocking,
+      }
+      print(json.dumps(summary, indent=2))     # Python -> JSON text
+      print("Pipeline:", "FAILED" if blocking else "PASSED")
+    output: |
+      {
+        "image": "shop-api:1.4.2",
+        "blocking": 3,
+        "findings": [
+          {
+            "id": "CVE-2023-38545",
+            "package": "curl",
+            "severity": "CRITICAL",
+            "fix": "7.88.1-10+deb12u4"
+          },
+          {
+            "id": "CVE-2023-4911",
+            "package": "libc6",
+            "severity": "HIGH",
+            "fix": "2.36-9+deb12u3"
+          },
+          {
+            "id": "CVE-2023-30861",
+            "package": "flask",
+            "severity": "HIGH",
+            "fix": "2.3.2, 2.2.5"
+          }
+        ]
+      }
+      Pipeline: FAILED
+    note:
+      fr: "La structure `Results[].Vulnerabilities[]` est celle du vrai format JSON de Trivy. Le troisième résultat n'a pas de clé `Vulnerabilities` : avec `result[\"Vulnerabilities\"]`, le script planterait sur une image saine. Dans un pipeline, on terminerait par `sys.exit(1)` pour bloquer le déploiement."
+      en: "The `Results[].Vulnerabilities[]` structure is that of Trivy's real JSON format. The third result has no `Vulnerabilities` key: with `result[\"Vulnerabilities\"]` the script would crash on a clean image. In a pipeline you would end with `sys.exit(1)` to block the deployment."
+
+  - title:
+      fr: "Validation dangereuse : re.match ne vérifie que le début"
+      en: "Dangerous validation: re.match only checks the beginning"
+    file: validate_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import re
+
+      HOSTNAME = re.compile(r"[a-z0-9-]+")
+
+
+      def is_valid_hostname(value):
+          # match() succeeds as soon as the BEGINNING of the text fits the pattern
+          return HOSTNAME.match(value) is not None
+
+
+      for candidate in ["web-01", "web-01; cat /etc/shadow", "db-01\n"]:
+          print(f"{candidate!r:28} valid={is_valid_hostname(candidate)}")
+
+      # Adding ^ and $ is not enough: $ also matches just before a final newline
+      print(re.match(r"^[a-z0-9-]+$", "db-01\n") is not None)
+    output: |
+      'web-01'                     valid=True
+      'web-01; cat /etc/shadow'    valid=True
+      'db-01\n'                    valid=True
+      True
+    note:
+      fr: "La valeur `web-01; cat /etc/shadow` est déclarée valide parce que ses six premiers caractères le sont. Si elle sert ensuite à construire une commande `ping`, c'est une injection de commande. Même `^...$` laisse passer un saut de ligne final."
+      en: "The value `web-01; cat /etc/shadow` is declared valid because its first six characters are. If it is later used to build a `ping` command, that is a command injection. Even `^...$` lets a trailing newline through."
+
+  - title:
+      fr: "Validation sûre : re.fullmatch et longueur bornée"
+      en: "Safe validation: re.fullmatch and a bounded length"
+    file: validate_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import re
+
+      # A DNS label: letters, digits and hyphens, 1 to 63 characters,
+      # never starting or ending with a hyphen
+      HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+      def is_valid_hostname(value: str) -> bool:
+          # fullmatch() requires the WHOLE string to fit the pattern
+          return HOSTNAME.fullmatch(value) is not None
+
+
+      for candidate in ["web-01", "web-01; cat /etc/shadow", "db-01\n", "-bad", "a" * 64]:
+          shown = candidate if len(candidate) < 30 else candidate[:10] + "..."
+          print(f"{shown!r:28} valid={is_valid_hostname(candidate)}")
+    output: |
+      'web-01'                     valid=True
+      'web-01; cat /etc/shadow'    valid=False
+      'db-01\n'                    valid=False
+      '-bad'                       valid=False
+      'aaaaaaaaaa...'              valid=False
+    note:
+      fr: "`fullmatch` impose que la chaîne entière corresponde, sans rien avant ni après. La longueur est bornée (63 caractères) : une validation qui accepte une taille illimitée ouvre la porte aux dénis de service."
+      en: "`fullmatch` requires the entire string to match, with nothing before or after. The length is bounded (63 characters): a validation that accepts unlimited size opens the door to denial of service."
+
+mistake:
+  fr: |
+    **Valider une entrée avec `re.match()` ou `re.search()`.**
+
+    Ces deux fonctions répondent « oui » dès qu'une **partie** de la chaîne correspond. Pour une validation,
+    il faut `re.fullmatch()`.
+
+    Deuxième piège : les regex « gourmandes » imbriquées comme `(a+)+$` ou `(\w+\s?)*$`. Sur une entrée
+    malveillante de quelques dizaines de caractères, le moteur explore des millions de combinaisons et
+    bloque le processeur pendant des minutes : c'est le **ReDoS** (*Regular expression Denial of Service*).
+    Évitez les quantificateurs imbriqués et limitez toujours la longueur de l'entrée **avant** d'appliquer
+    la regex.
+
+    Troisième piège : ouvrir un fichier avec `open(path, "w")` pour « ajouter une ligne ». Le mode `"w"`
+    efface le contenu ; pour un journal d'audit, c'est `"a"` qu'il faut.
+  en: |
+    **Validating an input with `re.match()` or `re.search()`.**
+
+    Both functions answer "yes" as soon as a **part** of the string matches. For validation you need
+    `re.fullmatch()`.
+
+    Second trap: nested "greedy" regexes such as `(a+)+$` or `(\w+\s?)*$`. On a malicious input of a few
+    dozen characters, the engine explores millions of combinations and pins the CPU for minutes: this is
+    **ReDoS** (*Regular expression Denial of Service*). Avoid nested quantifiers and always limit the
+    length of the input **before** applying the regex.
+
+    Third trap: opening a file with `open(path, "w")` to "add a line". The `"w"` mode erases the content;
+    for an audit log, `"a"` is what you need.
+
+bestPractice:
+  fr: |
+    - **`with open(..., encoding="utf-8")`** systématiquement : fermeture garantie, comportement identique
+      sur tous les systèmes.
+    - **Extraire avec `search`, valider avec `fullmatch`**, et compiler les motifs réutilisés avec
+      `re.compile()`.
+    - **Ne faites pas confiance au contenu des logs** : un attaquant choisit son nom d'utilisateur et son
+      `User-Agent`. N'exécutez jamais une valeur extraite d'un journal et échappez-la avant de l'afficher
+      dans une page web.
+    - **Masquez les secrets avant de partager un journal** (`re.sub` sur les jetons, mots de passe, clés).
+    - **Préférez les sorties JSON des outils** (`--format json`) à l'analyse de leur affichage texte : le
+      format texte change d'une version à l'autre, le JSON est un contrat.
+    - **Lisez les gros fichiers en flux**, ligne par ligne, sans tout charger en mémoire.
+  en: |
+    - **`with open(..., encoding="utf-8")`** every time: guaranteed closing, identical behaviour on every
+      system.
+    - **Extract with `search`, validate with `fullmatch`**, and compile reused patterns with
+      `re.compile()`.
+    - **Do not trust the content of logs**: an attacker chooses their user name and their `User-Agent`.
+      Never execute a value extracted from a log and escape it before displaying it in a web page.
+    - **Mask secrets before sharing a log** (`re.sub` on tokens, passwords, keys).
+    - **Prefer the JSON output of tools** (`--format json`) over parsing their text display: the text
+      format changes from one version to the next, JSON is a contract.
+    - **Read large files as a stream**, line by line, without loading everything into memory.
+
+exercise:
+  statement:
+    fr: |
+      Avant d'envoyer un journal applicatif à un prestataire, vous devez en retirer les secrets.
+
+      ```python
+      LOG = """\
+      2026-03-02T10:15:02Z INFO  login user=alice ip=198.51.100.7
+      2026-03-02T10:15:03Z DEBUG auth header: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.abc123
+      2026-03-02T10:15:04Z ERROR db connect failed password=changeme-in-vault host=db-01
+      2026-03-02T10:15:09Z INFO  aws key AKIAIOSFODNN7EXAMPLE used by deploy
+      """
+      ```
+
+      Écrivez un script qui :
+
+      1. remplace par `[REDACTED]` les jetons `Bearer`, les valeurs de `password=` et les identifiants de
+         clé AWS (`AKIA` suivi de 16 lettres majuscules ou chiffres) ;
+      2. affiche le journal nettoyé ;
+      3. affiche un résumé JSON : nombre de lignes et nombre de secrets masqués.
+    en: |
+      Before sending an application log to a contractor, you must remove the secrets from it.
+
+      ```python
+      LOG = """\
+      2026-03-02T10:15:02Z INFO  login user=alice ip=198.51.100.7
+      2026-03-02T10:15:03Z DEBUG auth header: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.abc123
+      2026-03-02T10:15:04Z ERROR db connect failed password=changeme-in-vault host=db-01
+      2026-03-02T10:15:09Z INFO  aws key AKIAIOSFODNN7EXAMPLE used by deploy
+      """
+      ```
+
+      Write a script that:
+
+      1. replaces with `[REDACTED]` the `Bearer` tokens, the values of `password=` and AWS access key IDs
+         (`AKIA` followed by 16 capital letters or digits);
+      2. prints the cleaned log;
+      3. prints a JSON summary: number of lines and number of masked secrets.
+  solution:
+    file: redact.py
+    lang: python
+    code: |
+      import json
+      import re
+
+      LOG = """\
+      2026-03-02T10:15:02Z INFO  login user=alice ip=198.51.100.7
+      2026-03-02T10:15:03Z DEBUG auth header: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.abc123
+      2026-03-02T10:15:04Z ERROR db connect failed password=changeme-in-vault host=db-01
+      2026-03-02T10:15:09Z INFO  aws key AKIAIOSFODNN7EXAMPLE used by deploy
+      """
+
+      # (pattern, replacement): \1 re-inserts the first captured group (the label we keep)
+      RULES = [
+          (re.compile(r"(Bearer )[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
+          (re.compile(r"(password=)\S+"), r"\1[REDACTED]"),
+          (re.compile(r"\bAKIA[A-Z0-9]{16}\b"), "[REDACTED]"),
+      ]
+
+      lines = 0
+      masked = 0
+      for line in LOG.splitlines():
+          lines += 1
+          for pattern, replacement in RULES:
+              # subn() returns the new text AND the number of replacements made
+              line, count = pattern.subn(replacement, line)
+              masked += count
+          print(line)
+
+      print(json.dumps({"lines": lines, "secrets_masked": masked}))
+    note:
+      fr: "Le script masque 3 secrets sur 4 lignes et termine par `{\"lines\": 4, \"secrets_masked\": 3}`. `subn()` renvoie aussi le nombre de remplacements, ce qui évite de compter à part."
+      en: "The script masks 3 secrets over 4 lines and ends with `{\"lines\": 4, \"secrets_masked\": 3}`. `subn()` also returns the number of replacements, which avoids counting separately."
+
+quiz:
+  - q:
+      fr: "Pourquoi ouvrir un fichier dans un bloc `with` ?"
+      en: "Why open a file inside a `with` block?"
+    options:
+      fr:
+        - "Le fichier est fermé automatiquement, même en cas d'erreur"
+        - "Le fichier est lu plus vite"
+        - "Le fichier est chiffré pendant la lecture"
+        - "C'est obligatoire pour lire du JSON"
+      en:
+        - "The file is closed automatically, even if an error occurs"
+        - "The file is read faster"
+        - "The file is encrypted while being read"
+        - "It is mandatory to read JSON"
+    answer: 0
+    why:
+      fr: "Le bloc `with` garantit la fermeture du fichier à la sortie du bloc, qu'elle soit normale ou causée par une exception."
+      en: "The `with` block guarantees the file is closed when the block exits, whether normally or because of an exception."
+  - q:
+      fr: "Quelle fonction utiliser pour VALIDER qu'une saisie entière respecte un motif ?"
+      en: "Which function should you use to VALIDATE that a whole input fits a pattern?"
+    options:
+      fr: ["re.search", "re.match", "re.findall", "re.fullmatch"]
+      en: ["re.search", "re.match", "re.findall", "re.fullmatch"]
+    answer: 3
+    why:
+      fr: "`fullmatch` exige que toute la chaîne corresponde. `match` ne regarde que le début et `search` n'importe quel endroit : du texte malveillant peut suivre."
+      en: "`fullmatch` requires the whole string to match. `match` only looks at the beginning and `search` anywhere: malicious text may follow."
+  - q:
+      fr: "Dans le rapport Trivy, pourquoi écrire `result.get(\"Vulnerabilities\", [])` ?"
+      en: "In the Trivy report, why write `result.get(\"Vulnerabilities\", [])`?"
+    options:
+      fr:
+        - "Pour trier les vulnérabilités"
+        - "Parce que la clé est absente quand une cible n'a aucune vulnérabilité"
+        - "Parce que `get` est plus rapide que les crochets"
+        - "Pour convertir le JSON en liste"
+      en:
+        - "To sort the vulnerabilities"
+        - "Because the key is absent when a target has no vulnerability"
+        - "Because `get` is faster than square brackets"
+        - "To convert JSON into a list"
+    answer: 1
+    why:
+      fr: "Sans valeur par défaut, `result[\"Vulnerabilities\"]` lèverait `KeyError` sur une cible saine et ferait planter le contrôle."
+      en: "Without a default value, `result[\"Vulnerabilities\"]` would raise `KeyError` on a clean target and crash the check."
+  - q:
+      fr: "Qu'est-ce qu'une attaque ReDoS ?"
+      en: "What is a ReDoS attack?"
+    options:
+      fr:
+        - "Le vol d'un fichier de log"
+        - "Une injection SQL dans une regex"
+        - "Une entrée conçue pour faire exploser le temps de calcul d'une regex"
+        - "La suppression d'un fichier ouvert en mode w"
+      en:
+        - "The theft of a log file"
+        - "A SQL injection inside a regex"
+        - "An input crafted to blow up the computation time of a regex"
+        - "The deletion of a file opened in w mode"
+    answer: 2
+    why:
+      fr: "Certaines regex à quantificateurs imbriqués ont un temps d'exécution exponentiel sur des entrées choisies : le service est bloqué."
+      en: "Some regexes with nested quantifiers have exponential running time on chosen inputs: the service is stalled."
+  - q:
+      fr: "Que fait `open(\"audit.log\", \"w\")` si le fichier existe déjà ?"
+      en: "What does `open(\"audit.log\", \"w\")` do if the file already exists?"
+    options:
+      fr:
+        - "Il ajoute à la fin du fichier"
+        - "Il lève FileExistsError"
+        - "Il efface le contenu existant"
+        - "Il ouvre le fichier en lecture seule"
+      en:
+        - "It appends at the end of the file"
+        - "It raises FileExistsError"
+        - "It erases the existing content"
+        - "It opens the file read-only"
+    answer: 2
+    why:
+      fr: "Le mode `w` tronque le fichier. Pour compléter un journal on utilise `a` ; pour refuser d'écraser, `x`."
+      en: "The `w` mode truncates the file. To extend a log use `a`; to refuse overwriting, use `x`."

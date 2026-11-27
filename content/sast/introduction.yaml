@@ -1,0 +1,565 @@
+description:
+  fr: "Comprendre le SAST : comment un outil lit le code source sans l'exécuter, ce qu'il trouve, ce qu'il rate et comment il se compare au DAST, au SCA et à l'IAST."
+  en: "Understand SAST: how a tool reads source code without running it, what it finds, what it misses and how it compares with DAST, SCA and IAST."
+duration: 20
+
+intro:
+  fr: |
+    **SAST** signifie *Static Application Security Testing*, en français **test statique de sécurité des
+    applications**. « Statique » veut dire que le programme n'est **jamais exécuté** : l'outil lit le code
+    source comme un relecteur lit un texte, et signale les passages dangereux.
+
+    Pensez à un chef qui relit une recette avant de cuisiner. Sans allumer le four, il peut repérer
+    « ajouter 500 g de sel » ou « servir le poulet cru ». En revanche, il ne peut pas goûter le plat : certains
+    défauts n'apparaissent qu'à la dégustation. Le SAST est ce relecteur de recettes ; le DAST, que vous verrez
+    dans le cours suivant, est celui qui goûte.
+
+    Dans cette leçon, vous allez écrire un mini-scanner SAST de 40 lignes pour comprendre le principe, suivre
+    une donnée dangereuse de sa **source** à son **sink**, puis lancer un vrai outil (Bandit) sur un code
+    vulnérable et sur sa version corrigée.
+  en: |
+    **SAST** stands for *Static Application Security Testing*. "Static" means that the program is **never
+    executed**: the tool reads the source code the way a proofreader reads a text, and flags the dangerous
+    passages.
+
+    Think of a chef who proofreads a recipe before cooking. Without turning the oven on, they can spot
+    "add 500 g of salt" or "serve the chicken raw". However, they cannot taste the dish: some defects only
+    show up at tasting time. SAST is that recipe proofreader; DAST, which you will meet in the next course,
+    is the one who tastes.
+
+    In this lesson you will write a 40-line mini SAST scanner to understand the principle, follow a dangerous
+    value from its **source** to its **sink**, then run a real tool (Bandit) on vulnerable code and on its
+    fixed version.
+
+sections:
+  - heading:
+      fr: "SAST, DAST, SCA, IAST : qui fait quoi ?"
+      en: "SAST, DAST, SCA, IAST: who does what?"
+    body:
+      fr: |
+        Quatre familles d'outils testent la sécurité d'une application. Elles ne se remplacent pas : chacune
+        regarde l'application sous un angle différent.
+
+        | | SAST | DAST | SCA | IAST |
+        |---|---|---|---|---|
+        | Nom complet | Static Application Security Testing | Dynamic Application Security Testing | Software Composition Analysis | Interactive Application Security Testing |
+        | Ce qui est analysé | **Votre** code source | L'application **en fonctionnement** | Les **dépendances** (bibliothèques tierces) | L'application en fonctionnement, instrumentée par un agent |
+        | A besoin de | Le dépôt Git | Une URL de test | Les fichiers de dépendances (`package-lock.json`, `requirements.txt`) | Un agent dans le runtime + des tests fonctionnels |
+        | Trouve typiquement | Injections, secrets en dur, cryptographie faible | En-têtes manquants, erreurs de configuration, injections exploitables | CVE connues dans les bibliothèques | Injections réellement atteintes pendant les tests |
+        | Indique la ligne fautive | Oui | Non (une URL et un paramètre) | Non (un paquet et une version) | Oui |
+        | Moment dans le pipeline | Dès le commit | Après un déploiement de test | Dès le commit | Pendant les tests d'intégration |
+        | Faux positifs | Nombreux | Peu | Peu (mais beaucoup de bruit) | Peu |
+
+        Le SAST est le contrôle le plus **précoce** (« shift left ») : il tourne sur le poste du développeur
+        et dans la pull request, avant même que l'application soit construite. C'est aussi le seul qui pointe
+        directement le fichier et la ligne à corriger.
+      en: |
+        Four families of tools test the security of an application. They do not replace each other: each
+        one looks at the application from a different angle.
+
+        | | SAST | DAST | SCA | IAST |
+        |---|---|---|---|---|
+        | Full name | Static Application Security Testing | Dynamic Application Security Testing | Software Composition Analysis | Interactive Application Security Testing |
+        | What is analysed | **Your** source code | The **running** application | The **dependencies** (third-party libraries) | The running application, instrumented by an agent |
+        | Needs | The Git repository | A test URL | The dependency files (`package-lock.json`, `requirements.txt`) | An agent in the runtime + functional tests |
+        | Typically finds | Injections, hard-coded secrets, weak cryptography | Missing headers, misconfigurations, exploitable injections | Known CVEs in libraries | Injections actually reached during the tests |
+        | Points to the faulty line | Yes | No (a URL and a parameter) | No (a package and a version) | Yes |
+        | Place in the pipeline | From the commit | After a test deployment | From the commit | During integration tests |
+        | False positives | Many | Few | Few (but a lot of noise) | Few |
+
+        SAST is the **earliest** check ("shift left"): it runs on the developer's machine and in the pull
+        request, before the application is even built. It is also the only one that points straight at the
+        file and line to fix.
+  - heading:
+      fr: "Comment un outil SAST lit le code : de l'AST à l'analyse de teinte"
+      en: "How a SAST tool reads code: from the AST to taint analysis"
+    body:
+      fr: |
+        Un outil SAST ne cherche pas du texte comme le ferait `grep`. Il travaille en trois étapes :
+
+        1. **Analyse syntaxique** : le code est transformé en **AST** (*Abstract Syntax Tree*, arbre
+           syntaxique abstrait), une représentation où `os.system("ls")` est un « appel de fonction » avec un
+           « argument de type chaîne », quels que soient les espaces ou les retours à la ligne.
+        2. **Recherche de motifs** : des règles décrivent les constructions dangereuses (« un appel à `eval`
+           dont l'argument n'est pas une constante »).
+        3. **Analyse de flux de données**, dont la plus importante est l'**analyse de teinte**
+           (*taint analysis*).
+
+        L'analyse de teinte suit une donnée non fiable à travers le programme :
+
+        | Notion | Rôle | Exemples |
+        |---|---|---|
+        | **Source** | Point d'entrée d'une donnée contrôlée par l'utilisateur | `request.args.get("id")`, `req.query`, `request.getParameter()` |
+        | **Propagation** | La teinte se transmet par affectation, concaténation, appel | `cmd = "ping " + host` |
+        | **Sanitizer** | Fonction qui rend la donnée inoffensive : la teinte s'arrête | `shlex.quote()`, requête paramétrée, liste blanche |
+        | **Sink** | Fonction dangereuse si elle reçoit une donnée teintée | `os.system()`, `cursor.execute()`, `eval()`, `innerHTML` |
+
+        Une vulnérabilité est signalée quand il existe un chemin **source → sink sans sanitizer**. C'est ce
+        qui distingue une vraie injection d'un simple appel à une fonction « sensible ».
+      en: |
+        A SAST tool does not search for text the way `grep` would. It works in three steps:
+
+        1. **Parsing**: the code is turned into an **AST** (*Abstract Syntax Tree*), a representation in
+           which `os.system("ls")` is a "function call" with a "string argument", whatever the spacing or
+           line breaks.
+        2. **Pattern matching**: rules describe dangerous constructs ("a call to `eval` whose argument is
+           not a constant").
+        3. **Data-flow analysis**, the most important kind being **taint analysis**.
+
+        Taint analysis follows untrusted data through the program:
+
+        | Notion | Role | Examples |
+        |---|---|---|
+        | **Source** | Entry point of user-controlled data | `request.args.get("id")`, `req.query`, `request.getParameter()` |
+        | **Propagation** | Taint spreads through assignment, concatenation, calls | `cmd = "ping " + host` |
+        | **Sanitizer** | Function that makes the data harmless: the taint stops | `shlex.quote()`, parameterized query, allow-list |
+        | **Sink** | Function that is dangerous when it receives tainted data | `os.system()`, `cursor.execute()`, `eval()`, `innerHTML` |
+
+        A vulnerability is reported when there is a **source → sink path with no sanitizer**. This is what
+        separates a real injection from a mere call to a "sensitive" function.
+  - heading:
+      fr: "Faux positifs et faux négatifs"
+      en: "False positives and false negatives"
+    body:
+      fr: |
+        Un outil SAST raisonne sur du code qu'il n'exécute pas : il se trompe donc dans les deux sens.
+
+        | | Le code est réellement vulnérable | Le code est sûr |
+        |---|---|---|
+        | **L'outil alerte** | Vrai positif : à corriger | **Faux positif** : du temps perdu, puis des alertes ignorées |
+        | **L'outil se tait** | **Faux négatif** : la faille part en production | Vrai négatif |
+
+        - Un **faux positif** apparaît quand l'outil ne comprend pas une protection (validation par
+          expression régulière, framework qui échappe automatiquement) ou quand le code n'est pas atteignable.
+        - Un **faux négatif** apparaît quand le flux passe par ce que l'outil ne sait pas suivre : réflexion,
+          alias de fonction, appel entre services, logique métier (« l'utilisateur A lit la facture de B »).
+
+        Le réglage est un compromis : des règles très larges trouvent plus de failles mais noient l'équipe
+        sous le bruit. **Un SAST sans alerte ne prouve pas que le code est sûr** ; il prouve seulement
+        qu'aucune règle n'a trouvé de correspondance.
+      en: |
+        A SAST tool reasons about code that it does not execute, so it is wrong in both directions.
+
+        | | The code is really vulnerable | The code is safe |
+        |---|---|---|
+        | **The tool alerts** | True positive: fix it | **False positive**: wasted time, then ignored alerts |
+        | **The tool stays silent** | **False negative**: the flaw ships to production | True negative |
+
+        - A **false positive** appears when the tool does not understand a protection (validation with a
+          regular expression, a framework that escapes automatically) or when the code is unreachable.
+        - A **false negative** appears when the flow goes through something the tool cannot follow:
+          reflection, function aliases, calls between services, business logic ("user A reads the invoice
+          of user B").
+
+        Tuning is a trade-off: very broad rules find more flaws but drown the team in noise. **A SAST run
+        with no alert does not prove the code is safe**; it only proves that no rule matched.
+  - heading:
+      fr: "Les outils que vous allez utiliser"
+      en: "The tools you are going to use"
+    body:
+      fr: |
+        | Outil | Langages | Approche | Leçon |
+        |---|---|---|---|
+        | **Bandit** | Python | Règles sur l'AST, très rapide | Cette leçon |
+        | **Semgrep** | Plus de 30 langages | Motifs écrits « comme du code » + mode teinte, règles YAML personnalisées | Leçon 2 |
+        | **SonarQube** | Plus de 20 langages | Plateforme : qualité + sécurité, Quality Gate, historique | Leçon 3 |
+        | **CodeQL** | Une dizaine de langages (Java, JS/TS, Python, Go, C/C++, C#...) | Le code devient une base de données interrogée par des requêtes | Leçon 4 |
+
+        D'autres outils spécialisés existent et suivent le même principe : `gosec` (Go), Brakeman (Ruby on
+        Rails), SpotBugs avec Find Security Bugs (Java), `eslint-plugin-security` (JavaScript). On combine
+        souvent un outil rapide dans la pull request et un outil plus profond en analyse planifiée.
+      en: |
+        | Tool | Languages | Approach | Lesson |
+        |---|---|---|---|
+        | **Bandit** | Python | Rules on the AST, very fast | This lesson |
+        | **Semgrep** | More than 30 languages | Patterns written "like code" + taint mode, custom YAML rules | Lesson 2 |
+        | **SonarQube** | More than 20 languages | Platform: quality + security, Quality Gate, history | Lesson 3 |
+        | **CodeQL** | About ten languages (Java, JS/TS, Python, Go, C/C++, C#...) | The code becomes a database queried with queries | Lesson 4 |
+
+        Other specialised tools exist and follow the same principle: `gosec` (Go), Brakeman (Ruby on Rails),
+        SpotBugs with Find Security Bugs (Java), `eslint-plugin-security` (JavaScript). Teams often combine
+        a fast tool in the pull request with a deeper tool in a scheduled analysis.
+
+examples:
+  - title:
+      fr: "Un mini-scanner SAST en 40 lignes (avec un faux positif et un faux négatif)"
+      en: "A mini SAST scanner in 40 lines (with one false positive and one false negative)"
+    file: mini_sast.py
+    lang: python
+    kind: neutral
+    code: |
+      import ast
+
+      # The code to analyse is only READ as text: it is never executed
+      SOURCE = '''
+      import os
+
+      def ping(host):
+          os.system("ping -c 1 " + host)      # line 5: real flaw
+
+      def uptime():
+          os.system("uptime")                 # line 8: constant, safe
+
+      def answer():
+          expr = "6 * 7"
+          return eval(expr)                   # line 12: safe, but hard to prove
+
+      def restart(service):
+          run = os.system
+          run("systemctl restart " + service) # line 16: real flaw, hidden by an alias
+      '''
+
+      DANGEROUS = {
+          "os.system": "CWE-78 OS command injection",
+          "eval": "CWE-95 code injection",
+      }
+
+
+      def call_name(node):
+          """Return 'eval' or 'os.system' for a call node, '' otherwise."""
+          func = node.func
+          if isinstance(func, ast.Name):
+              return func.id
+          if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+              return func.value.id + "." + func.attr
+          return ""
+
+
+      findings = []
+      for node in ast.walk(ast.parse(SOURCE)):
+          if isinstance(node, ast.Call) and call_name(node) in DANGEROUS:
+              # A literal argument cannot be controlled by an attacker: skip it
+              if isinstance(node.args[0], ast.Constant):
+                  continue
+              findings.append((node.lineno, call_name(node), DANGEROUS[call_name(node)]))
+
+      for line, name, cwe in sorted(findings):
+          print(f"line {line:>2}: {name}() called with a dynamic argument -> {cwe}")
+      print(f"{len(findings)} finding(s)")
+    output: |
+      line  5: os.system() called with a dynamic argument -> CWE-78 OS command injection
+      line 12: eval() called with a dynamic argument -> CWE-95 code injection
+      2 finding(s)
+    note:
+      fr: "Cliquez sur Run. Ligne 5 : **vrai positif**. Ligne 8 : correctement ignorée (constante). Ligne 12 : **faux positif**, car `expr` vaut toujours `\"6 * 7\"` mais notre scanner ne suit pas les variables. Ligne 16 : **faux négatif**, l'alias `run` cache `os.system`. Les vrais outils corrigent ces deux défauts grâce à l'analyse de flux de données."
+      en: "Press Run. Line 5: **true positive**. Line 8: correctly skipped (constant). Line 12: **false positive**, because `expr` is always `\"6 * 7\"` but our scanner does not follow variables. Line 16: **false negative**, the alias `run` hides `os.system`. Real tools fix both defects with data-flow analysis."
+
+  - title:
+      fr: "Code vulnérable : une donnée va de la source au sink"
+      en: "Vulnerable code: data flows from the source to the sink"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import subprocess
+
+      from flask import Flask, request
+
+      app = Flask(__name__)
+
+
+      @app.route("/lookup")
+      def lookup():
+          # SOURCE: data controlled by the user enters the program here
+          host = request.args.get("host", "")
+          # SINK: the tainted value reaches a shell without any sanitisation
+          # ?host=example.com;cat /etc/passwd runs a second command
+          output = subprocess.check_output("nslookup " + host, shell=True)
+          return output.decode()
+
+
+      if __name__ == "__main__":
+          # The Werkzeug debugger gives a Python console to anyone who triggers an error
+          app.run(host="0.0.0.0", debug=True)
+    note:
+      fr: "Suivez la variable `host` : elle naît dans `request.args` (source), est concaténée dans une chaîne (propagation) et finit dans un shell (sink). Aucun sanitizer sur le chemin : c'est une injection de commande (CWE-78). Le mode debug exposé sur `0.0.0.0` est un second problème."
+      en: "Follow the `host` variable: it is born in `request.args` (source), concatenated into a string (propagation) and ends up in a shell (sink). No sanitizer on the path: this is a command injection (CWE-78). Debug mode exposed on `0.0.0.0` is a second problem."
+
+  - title:
+      fr: "Code corrigé : un sanitizer et un sink sans shell"
+      en: "Fixed code: a sanitizer and a sink without a shell"
+    file: app_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import re
+      import subprocess
+
+      from flask import Flask, abort, request
+
+      app = Flask(__name__)
+
+      # Allow-list: letters, digits, dots and dashes only (a valid host name)
+      HOSTNAME = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+
+
+      @app.route("/lookup")
+      def lookup():
+          host = request.args.get("host", "")
+          # SANITISER: reject anything that is not a plain host name
+          if not HOSTNAME.fullmatch(host):
+              abort(400, "invalid host name")
+          # No shell: the arguments are passed as a list, ';' or '|' have no special meaning
+          # "--" tells nslookup that what follows is never an option
+          result = subprocess.run(
+              ["nslookup", "--", host], capture_output=True, text=True, timeout=5, check=False
+          )
+          return result.stdout
+
+
+      if __name__ == "__main__":
+          # Debug mode off, listening on localhost only
+          app.run(host="127.0.0.1", debug=False)
+    note:
+      fr: "Deux défenses superposées : la liste blanche refuse `;`, `|` et les espaces, et l'absence de `shell=True` fait que, même si un caractère passait, il ne serait pas interprété. C'est le principe de défense en profondeur."
+      en: "Two layered defences: the allow-list rejects `;`, `|` and spaces, and without `shell=True` a character that slipped through would not be interpreted anyway. This is defence in depth."
+
+  - title:
+      fr: "Lancer un vrai outil SAST : Bandit"
+      en: "Running a real SAST tool: Bandit"
+    file: terminal.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Bandit is the reference open-source SAST tool for Python
+      python -m pip install bandit
+
+      # Scan the vulnerable file; report MEDIUM and HIGH severity only
+      bandit app_vulnerable.py --severity-level medium
+
+      # A CI pipeline only looks at the exit code: 1 = at least one issue reported
+      echo "exit code: $?"
+
+      # Same scan on the fixed file: nothing above the threshold, exit code 0
+      bandit app_secure.py --severity-level medium
+      echo "exit code: $?"
+    output: |
+      Test results:
+      >> Issue: [B602:subprocess_popen_with_shell_equals_true] subprocess call with shell=True identified, security issue.
+         Severity: High   Confidence: High
+         CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+         More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b602_subprocess_popen_with_shell_equals_true.html
+         Location: ./app_vulnerable.py:14:13
+      13      # ?host=example.com;cat /etc/passwd runs a second command
+      14      output = subprocess.check_output("nslookup " + host, shell=True)
+      15      return output.decode()
+
+      --------------------------------------------------
+      >> Issue: [B201:flask_debug_true] A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code.
+         Severity: High   Confidence: Medium
+         CWE: CWE-94 (https://cwe.mitre.org/data/definitions/94.html)
+         More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b201_flask_debug_true.html
+         Location: ./app_vulnerable.py:20:4
+      19      # The Werkzeug debugger gives a Python console to anyone who triggers an error
+      20      app.run(host="0.0.0.0", debug=True)
+
+      --------------------------------------------------
+      >> Issue: [B104:hardcoded_bind_all_interfaces] Possible binding to all interfaces.
+         Severity: Medium   Confidence: Medium
+         CWE: CWE-605 (https://cwe.mitre.org/data/definitions/605.html)
+         More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html
+         Location: ./app_vulnerable.py:20:17
+
+      --------------------------------------------------
+      exit code: 1
+
+      Test results:
+              No issues identified.
+      exit code: 0
+    note:
+      fr: "Chaque alerte donne l'identifiant de la règle (`B602`), la **sévérité**, la **confiance** de l'outil, la référence CWE et la ligne exacte. Sur le fichier corrigé, Bandit garde trois remarques de sévérité *Low* (utilisation de `subprocess`) : elles sont sous le seuil `medium`, donc le pipeline passe."
+      en: "Each alert gives the rule identifier (`B602`), the **severity**, the tool's **confidence**, the CWE reference and the exact line. On the fixed file Bandit still has three *Low* severity remarks (use of `subprocess`): they are below the `medium` threshold, so the pipeline passes."
+
+mistake:
+  fr: |
+    **Croire qu'un rapport SAST vide signifie « application sécurisée ».**
+
+    Le SAST ne voit que ce que ses règles décrivent, dans le code qu'il sait analyser. Il ne voit ni les
+    failles de logique métier (contrôle d'accès oublié), ni les erreurs de configuration du serveur, ni les
+    vulnérabilités des dépendances. L'erreur inverse est tout aussi fréquente : activer toutes les règles
+    d'un coup, obtenir 3 000 alertes, et voir l'équipe désactiver l'outil au bout d'une semaine.
+  en: |
+    **Believing that an empty SAST report means "secure application".**
+
+    SAST only sees what its rules describe, in the code it knows how to analyse. It sees neither business
+    logic flaws (a forgotten access check), nor server misconfigurations, nor vulnerabilities in the
+    dependencies. The opposite mistake is just as common: enabling every rule at once, getting 3,000
+    alerts, and watching the team switch the tool off after a week.
+
+bestPractice:
+  fr: |
+    - **Lancez le SAST le plus tôt possible** : extension dans l'éditeur, hook `pre-commit`, puis pull request.
+    - **Commencez par un petit jeu de règles à forte confiance** (injections, secrets, cryptographie) et
+      élargissez ensuite.
+    - **Combinez les familles** : SAST pour votre code, SCA pour les dépendances, DAST pour l'application
+      déployée. Aucune ne suffit seule.
+    - **Corrigez la cause** (requête paramétrée, liste d'arguments, liste blanche) plutôt que de masquer
+      l'alerte.
+    - **Faites échouer le pipeline** uniquement sur les sévérités hautes au départ ; un pipeline rouge en
+      permanence n'apprend rien à personne.
+  en: |
+    - **Run SAST as early as possible**: editor extension, `pre-commit` hook, then pull request.
+    - **Start with a small, high-confidence rule set** (injections, secrets, cryptography) and widen it
+      later.
+    - **Combine the families**: SAST for your code, SCA for dependencies, DAST for the deployed
+      application. None is enough on its own.
+    - **Fix the root cause** (parameterized query, argument list, allow-list) rather than hiding the alert.
+    - **Fail the pipeline** on high severities only at first; a permanently red pipeline teaches nobody
+      anything.
+
+exercise:
+  statement:
+    fr: |
+      Voici une fonction Python qui lit un fichier demandé par l'utilisateur :
+
+      ```python
+      import os
+      from flask import Flask, request
+
+      app = Flask(__name__)
+
+      @app.route("/logs")
+      def logs():
+          name = request.args.get("name", "")
+          return os.popen("cat /var/log/app/" + name).read()
+      ```
+
+      1. Identifiez la **source**, le **sink** et dites s'il existe un **sanitizer**.
+      2. Quelle valeur de `name` permettrait d'exécuter la commande `id` ?
+      3. Réécrivez la fonction pour qu'un outil SAST ne trouve plus de chemin source → sink dangereux.
+    en: |
+      Here is a Python function that reads a file requested by the user:
+
+      ```python
+      import os
+      from flask import Flask, request
+
+      app = Flask(__name__)
+
+      @app.route("/logs")
+      def logs():
+          name = request.args.get("name", "")
+          return os.popen("cat /var/log/app/" + name).read()
+      ```
+
+      1. Identify the **source**, the **sink** and say whether there is a **sanitizer**.
+      2. Which value of `name` would run the `id` command?
+      3. Rewrite the function so that a SAST tool no longer finds a dangerous source → sink path.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import re
+      from pathlib import Path
+
+      from flask import Flask, abort, request
+
+      app = Flask(__name__)
+
+      LOG_DIR = Path("/var/log/app")
+      # Allow-list: a simple file name such as "access.log" (no slash, no "..")
+      LOG_NAME = re.compile(r"^[a-z0-9_-]{1,40}\.log$")
+
+
+      @app.route("/logs")
+      def logs():
+          name = request.args.get("name", "")      # source (unchanged)
+          if not LOG_NAME.fullmatch(name):         # sanitizer: strict allow-list
+              abort(400, "invalid log name")
+          # No shell command at all: the sink os.popen() has disappeared
+          return (LOG_DIR / name).read_text(encoding="utf-8", errors="replace")
+    note:
+      fr: "1. Source : `request.args.get(\"name\")`. Sink : `os.popen()`. Aucun sanitizer. 2. `name=x;id` (ou `x$(id)`) : le shell exécute `cat /var/log/app/x` puis `id`. 3. La meilleure correction supprime le sink : on lit le fichier en Python, après une liste blanche qui bloque aussi `../` (traversée de répertoires)."
+      en: "1. Source: `request.args.get(\"name\")`. Sink: `os.popen()`. No sanitizer. 2. `name=x;id` (or `x$(id)`): the shell runs `cat /var/log/app/x` then `id`. 3. The best fix removes the sink: the file is read in Python, after an allow-list that also blocks `../` (path traversal)."
+
+quiz:
+  - q:
+      fr: "Que signifie « statique » dans SAST ?"
+      en: "What does \"static\" mean in SAST?"
+    options:
+      fr:
+        - "L'outil ne peut analyser que des sites web statiques"
+        - "Le code est analysé sans être exécuté"
+        - "Les règles de l'outil ne changent jamais"
+        - "L'analyse est faite une seule fois par an"
+      en:
+        - "The tool can only analyse static websites"
+        - "The code is analysed without being executed"
+        - "The tool's rules never change"
+        - "The analysis is done only once a year"
+    answer: 1
+    why:
+      fr: "Le SAST lit le code source (ou le bytecode) et raisonne dessus sans jamais lancer le programme, contrairement au DAST."
+      en: "SAST reads the source code (or bytecode) and reasons about it without ever running the program, unlike DAST."
+  - q:
+      fr: "En analyse de teinte, qu'est-ce qu'un « sink » ?"
+      en: "In taint analysis, what is a \"sink\"?"
+    options:
+      fr:
+        - "Le point d'entrée d'une donnée utilisateur"
+        - "Une fonction qui nettoie la donnée"
+        - "Un fichier exclu de l'analyse"
+        - "Une fonction dangereuse si elle reçoit une donnée non fiable"
+      en:
+        - "The entry point of user data"
+        - "A function that cleans the data"
+        - "A file excluded from the analysis"
+        - "A function that is dangerous when it receives untrusted data"
+    answer: 3
+    why:
+      fr: "Le sink est la destination dangereuse (`os.system`, `execute`, `eval`). Le point d'entrée est la source, la fonction de nettoyage est le sanitizer."
+      en: "The sink is the dangerous destination (`os.system`, `execute`, `eval`). The entry point is the source, the cleaning function is the sanitizer."
+  - q:
+      fr: "L'outil signale une injection SQL, mais la valeur est une constante définie deux lignes plus haut. Comment appelle-t-on ce résultat ?"
+      en: "The tool reports a SQL injection, but the value is a constant defined two lines above. What is this result called?"
+    options:
+      fr:
+        - "Un faux positif"
+        - "Un faux négatif"
+        - "Un vrai positif"
+        - "Un vrai négatif"
+      en:
+        - "A false positive"
+        - "A false negative"
+        - "A true positive"
+        - "A true negative"
+    answer: 0
+    why:
+      fr: "L'outil alerte alors que le code est sûr : c'est un faux positif. Un faux négatif serait une vraie faille non signalée."
+      en: "The tool alerts although the code is safe: that is a false positive. A false negative would be a real flaw that goes unreported."
+  - q:
+      fr: "Quelle famille d'outils détecte une CVE connue dans une bibliothèque tierce listée dans `package-lock.json` ?"
+      en: "Which family of tools detects a known CVE in a third-party library listed in `package-lock.json`?"
+    options:
+      fr:
+        - "SAST"
+        - "DAST"
+        - "SCA"
+        - "IAST"
+      en:
+        - "SAST"
+        - "DAST"
+        - "SCA"
+        - "IAST"
+    answer: 2
+    why:
+      fr: "Le SCA (Software Composition Analysis) compare les dépendances et leurs versions à des bases de vulnérabilités. Le SAST analyse le code que vous avez écrit."
+      en: "SCA (Software Composition Analysis) compares dependencies and their versions against vulnerability databases. SAST analyses the code you wrote."
+  - q:
+      fr: "Pourquoi le mini-scanner de la leçon rate-t-il la faille de la ligne 16 (`run = os.system` puis `run(...)`) ?"
+      en: "Why does the lesson's mini scanner miss the flaw on line 16 (`run = os.system` then `run(...)`)?"
+    options:
+      fr:
+        - "Parce que `os.system` n'est pas dangereux sous Linux"
+        - "Parce qu'il compare seulement le nom de la fonction appelée et ne suit pas les alias"
+        - "Parce que la ligne 16 contient un commentaire"
+        - "Parce que Python interdit les alias de fonctions"
+      en:
+        - "Because `os.system` is not dangerous on Linux"
+        - "Because it only compares the name of the called function and does not follow aliases"
+        - "Because line 16 contains a comment"
+        - "Because Python forbids function aliases"
+    answer: 1
+    why:
+      fr: "Le scanner voit un appel à `run`, qui n'est pas dans sa liste. Sans analyse de flux de données, il ne sait pas que `run` désigne `os.system` : c'est un faux négatif."
+      en: "The scanner sees a call to `run`, which is not in its list. Without data-flow analysis it does not know that `run` refers to `os.system`: that is a false negative."

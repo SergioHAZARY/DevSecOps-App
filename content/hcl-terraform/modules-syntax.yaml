@@ -1,0 +1,573 @@
+description:
+  fr: "Écrire un module Terraform (variables, ressources, outputs) et l'appeler avec un bloc `module`, en le rendant sûr par défaut."
+  en: "Write a Terraform module (variables, resources, outputs) and call it with a `module` block, making it secure by default."
+duration: 25
+
+intro:
+  fr: |
+    Quand la même combinaison de ressources revient pour la troisième fois, le copier-coller devient
+    dangereux : on corrige une faille dans une copie, on oublie les deux autres. La réponse de HCL est le
+    **module** : un dossier de fichiers `.tf` que l'on **appelle** comme une fonction.
+
+    L'analogie est celle d'une **prise électrique normalisée**. Derrière le mur, il y a des fils, un
+    disjoncteur, une mise à la terre : vous n'y touchez pas. Vous ne voyez que l'interface, deux trous
+    et une broche. Un bon module fait pareil : il cache la complexité, n'expose que quelques réglages,
+    et rend l'installation dangereuse **impossible**.
+
+    Dans cette leçon vous allez écrire un module de file d'attente chiffrée, l'appeler plusieurs fois
+    avec `for_each`, et voir pourquoi l'interface d'un module (ses variables) est une décision de sécurité.
+    La recherche de modules publics et la gestion de leurs versions sont traitées dans le cours
+    « Terraform complet ».
+  en: |
+    When the same combination of resources shows up for the third time, copy-paste becomes dangerous:
+    you fix a flaw in one copy and forget the two others. HCL's answer is the **module**: a directory of
+    `.tf` files that you **call** like a function.
+
+    The analogy is a **standard power socket**. Behind the wall there are wires, a circuit breaker, an
+    earth connection: you do not touch them. You only see the interface, two holes and a pin. A good
+    module does the same: it hides complexity, exposes only a few settings, and makes the dangerous
+    installation **impossible**.
+
+    In this lesson you will write an encrypted queue module, call it several times with `for_each`, and
+    see why the interface of a module (its variables) is a security decision. Finding public modules and
+    managing their versions are covered in the "Complete Terraform" course.
+
+sections:
+  - heading:
+      fr: "Un module, c'est une fonction"
+      en: "A module is a function"
+    body:
+      fr: |
+        Tout dossier contenant des fichiers `.tf` est un module. Celui où vous lancez `terraform apply`
+        est le **module racine** (*root module*) ; ceux qu'il appelle sont des **modules enfants**.
+
+        | Notion de programmation | Dans un module | Fichier habituel |
+        |---|---|---|
+        | Paramètres | blocs `variable` | `variables.tf` |
+        | Corps de la fonction | blocs `resource`, `data`, `locals` | `main.tf` |
+        | Valeur de retour | blocs `output` | `outputs.tf` |
+        | Dépendances | bloc `terraform { required_providers { } }` | `versions.tf` |
+
+        Un module est **étanche** : il ne voit ni les variables ni les ressources de celui qui l'appelle,
+        seulement ce qu'on lui passe en arguments. Dans l'autre sens, l'appelant ne peut lire que les
+        `output` du module, jamais ses ressources internes. Cette étanchéité est une qualité : elle oblige
+        à définir une interface claire.
+
+        Un module enfant déclare les providers dont il a besoin (`required_providers`) mais ne contient
+        **pas** de bloc `provider` : la configuration (région, identifiants) vient du module racine.
+      en: |
+        Any directory holding `.tf` files is a module. The one where you run `terraform apply` is the
+        **root module**; the ones it calls are **child modules**.
+
+        | Programming notion | In a module | Usual file |
+        |---|---|---|
+        | Parameters | `variable` blocks | `variables.tf` |
+        | Function body | `resource`, `data`, `locals` blocks | `main.tf` |
+        | Return value | `output` blocks | `outputs.tf` |
+        | Dependencies | `terraform { required_providers { } }` block | `versions.tf` |
+
+        A module is **sealed**: it sees neither the variables nor the resources of its caller, only what
+        is passed as arguments. The other way round, the caller can only read the module's `output`
+        values, never its internal resources. This isolation is a quality: it forces a clear interface.
+
+        A child module declares the providers it needs (`required_providers`) but contains **no**
+        `provider` block: the configuration (region, credentials) comes from the root module.
+  - heading:
+      fr: "Le bloc `module` : appeler et récupérer les résultats"
+      en: "The `module` block: calling and getting the results"
+    body:
+      fr: |
+        ```hcl
+        module "orders_queue" {
+          source = "./modules/private-queue"   # where the code lives
+          name   = "orders"                    # value for variable "name"
+        }
+        ```
+
+        - `source` est obligatoire : un chemin local (`./` ou `../`), une adresse de registre ou une URL Git.
+          C'est une chaîne **littérale** : pas de variable ni d'expression.
+        - Tous les autres arguments sont les **variables** du module.
+        - On lit un résultat avec `module.<nom>.<output>`, par exemple `module.orders_queue.queue_arn`.
+        - Les méta-arguments `count`, `for_each`, `depends_on` et `providers` fonctionnent comme sur une
+          ressource. Avec `for_each`, la référence devient `module.queue["orders"].queue_arn`.
+
+        Après avoir ajouté ou modifié un bloc `module`, il faut relancer `terraform init` pour que
+        Terraform installe le module. Dans le module, `path.module` désigne son propre dossier : utile
+        pour lire un fichier livré avec lui (`file("${path.module}/policy.json")`).
+      en: |
+        ```hcl
+        module "orders_queue" {
+          source = "./modules/private-queue"   # where the code lives
+          name   = "orders"                    # value for variable "name"
+        }
+        ```
+
+        - `source` is required: a local path (`./` or `../`), a registry address or a Git URL. It is a
+          **literal** string: no variable, no expression.
+        - All the other arguments are the module's **variables**.
+        - A result is read with `module.<name>.<output>`, for example `module.orders_queue.queue_arn`.
+        - The meta-arguments `count`, `for_each`, `depends_on` and `providers` work as on a resource.
+          With `for_each`, the reference becomes `module.queue["orders"].queue_arn`.
+
+        After adding or changing a `module` block, run `terraform init` again so that Terraform installs
+        the module. Inside the module, `path.module` is its own directory: handy to read a file shipped
+        with it (`file("${path.module}/policy.json")`).
+  - heading:
+      fr: "L'interface d'un module est une décision de sécurité"
+      en: "A module's interface is a security decision"
+    body:
+      fr: |
+        Chaque variable que vous exposez est un réglage que **quelqu'un** finira par mal utiliser.
+        Un module destiné à d'autres équipes devrait suivre trois règles :
+
+        1. **Sûr par défaut** : sans aucun argument facultatif, le résultat est chiffré, privé, journalisé.
+        2. **Pas d'interrupteur pour la sécurité** : pas de variable `enable_encryption`. Si le chiffrement
+           n'est pas négociable, il est écrit en dur dans le module.
+        3. **Peu de variables, bien typées** : ce qui change vraiment d'un appel à l'autre (un nom, une
+           durée), rien de plus.
+
+        C'est ainsi qu'une équipe plateforme transforme une règle écrite (« toutes les files doivent être
+        chiffrées ») en une règle **appliquée** : les équipes utilisent le module, et le module ne sait
+        pas créer autre chose.
+      en: |
+        Every variable you expose is a setting that **someone** will eventually misuse. A module meant
+        for other teams should follow three rules:
+
+        1. **Secure by default**: with no optional argument at all, the result is encrypted, private, logged.
+        2. **No switch for security**: no `enable_encryption` variable. If encryption is not negotiable, it
+           is hard-coded in the module.
+        3. **Few, well-typed variables**: what really changes from one call to the next (a name, a
+           duration), nothing more.
+
+        This is how a platform team turns a written rule ("all queues must be encrypted") into an
+        **enforced** rule: teams use the module, and the module cannot create anything else.
+
+examples:
+  - title:
+      fr: "Vulnérable : une interface qui laisse désactiver la sécurité"
+      en: "Vulnerable: an interface that lets callers turn security off"
+    file: modules/queue/variables.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      variable "name" {
+        # No type, no description: the caller has to read the module code
+      }
+
+      variable "enable_encryption" {
+        type = bool
+        # Insecure default: a caller who sets nothing gets an unencrypted queue
+        default = false
+      }
+
+      variable "allowed_principals" {
+        type = list(string)
+        # "*" means every AWS account in the world may send messages
+        default = ["*"]
+      }
+
+      variable "settings" {
+        # "any" accepts everything: typos are discovered in production
+        type    = any
+        default = {}
+      }
+    note:
+      fr: "Ce module fonctionne, et c'est le problème : l'appel le plus simple (`name = \"orders\"`) produit une file non chiffrée et ouverte à tous. Les utilisateurs pressés prendront toujours les valeurs par défaut."
+      en: "This module works, and that is the problem: the simplest call (`name = \"orders\"`) yields an unencrypted queue open to everyone. Users in a hurry will always take the defaults."
+
+  - title:
+      fr: "Sécurisé : l'interface du module `private-queue`"
+      en: "Secure: the interface of the `private-queue` module"
+    file: modules/private-queue/variables.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "name" {
+        type        = string
+        description = "Short name of the queue, for example \"orders\""
+      }
+
+      variable "environment" {
+        type        = string
+        description = "Deployment environment, used as a name prefix"
+      }
+
+      variable "retention_days" {
+        type        = number
+        description = "How long an unread message is kept (1 to 14 days)"
+        default     = 4
+      }
+
+      variable "max_receive_count" {
+        type        = number
+        description = "Deliveries attempted before a message goes to the dead-letter queue"
+        default     = 5
+      }
+
+      variable "tags" {
+        type        = map(string)
+        description = "Extra tags added to every resource of the module"
+        default     = {}
+      }
+
+      # Deliberately absent: no variable to disable encryption or to open the queue.
+    note:
+      fr: "Cinq variables typées et documentées, deux seulement sont obligatoires. Ce que l'interface **ne propose pas** est aussi important : il n'existe aucun moyen de demander une file non chiffrée."
+      en: "Five typed and documented variables, only two of them required. What the interface **does not offer** matters just as much: there is no way to ask for an unencrypted queue."
+
+  - title:
+      fr: "Sécurisé : le corps du module"
+      en: "Secure: the body of the module"
+    file: modules/private-queue/main.tf
+    lang: hcl
+    kind: secure
+    code: |
+      terraform {
+        required_version = ">= 1.10"
+
+        # The module declares WHICH provider it needs, never HOW to configure it
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = ">= 6.0"
+          }
+        }
+      }
+
+      locals {
+        queue_name = "${var.environment}-${var.name}"
+        tags       = merge(var.tags, { Module = "private-queue", Environment = var.environment })
+      }
+
+      # Messages that keep failing land here instead of being lost or retried forever
+      resource "aws_sqs_queue" "dead_letter" {
+        name                      = "${local.queue_name}-dlq"
+        message_retention_seconds = 14 * 24 * 3600
+        sqs_managed_sse_enabled   = true
+        tags                      = local.tags
+      }
+
+      resource "aws_sqs_queue" "this" {
+        name                      = local.queue_name
+        message_retention_seconds = var.retention_days * 24 * 3600
+
+        # Not configurable: encryption at rest is always on
+        sqs_managed_sse_enabled = true
+
+        redrive_policy = jsonencode({
+          deadLetterTargetArn = aws_sqs_queue.dead_letter.arn
+          maxReceiveCount     = var.max_receive_count
+        })
+
+        tags = local.tags
+      }
+
+      # Not configurable either: plain HTTP requests are refused
+      data "aws_iam_policy_document" "tls_only" {
+        statement {
+          sid       = "DenyInsecureTransport"
+          effect    = "Deny"
+          actions   = ["sqs:*"]
+          resources = [aws_sqs_queue.this.arn]
+
+          principals {
+            type        = "*"
+            identifiers = ["*"]
+          }
+
+          condition {
+            test     = "Bool"
+            variable = "aws:SecureTransport"
+            values   = ["false"]
+          }
+        }
+      }
+
+      resource "aws_sqs_queue_policy" "this" {
+        queue_url = aws_sqs_queue.this.id
+        policy    = data.aws_iam_policy_document.tls_only.json
+      }
+    note:
+      fr: "Dans un module, une ressource unique est souvent nommée `this`. Le module contient un bloc `required_providers` mais aucun bloc `provider` : c'est le module racine qui choisit la région et les identifiants."
+      en: "Inside a module, a single resource is often named `this`. The module holds a `required_providers` block but no `provider` block: the root module chooses the region and the credentials."
+
+  - title:
+      fr: "Les outputs : ce que le module accepte de montrer"
+      en: "Outputs: what the module agrees to show"
+    file: modules/private-queue/outputs.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      output "queue_arn" {
+        description = "ARN of the queue, to reference it in IAM policies"
+        value       = aws_sqs_queue.this.arn
+      }
+
+      output "queue_url" {
+        description = "URL used by applications to send and receive messages"
+        value       = aws_sqs_queue.this.url
+      }
+
+      output "dead_letter_queue_arn" {
+        description = "ARN of the dead-letter queue, to plug an alarm on it"
+        value       = aws_sqs_queue.dead_letter.arn
+      }
+    note:
+      fr: "L'appelant ne peut pas écrire `module.x.aws_sqs_queue.this.arn` : seuls les outputs traversent la frontière du module. Exposez les identifiants dont les autres ont besoin (ARN, URL), jamais de secret."
+      en: "The caller cannot write `module.x.aws_sqs_queue.this.arn`: only outputs cross the module boundary. Expose the identifiers others need (ARN, URL), never a secret."
+
+  - title:
+      fr: "Appeler le module, une fois par file, depuis le module racine"
+      en: "Calling the module, once per queue, from the root module"
+    file: main.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      provider "aws" {
+        region = "eu-west-3"
+      }
+
+      locals {
+        queues = {
+          orders   = { retention_days = 7 }
+          invoices = { retention_days = 14 }
+        }
+      }
+
+      module "queue" {
+        source   = "./modules/private-queue"
+        for_each = local.queues
+
+        # Inputs = the variables declared in the module
+        name           = each.key
+        environment    = "prod"
+        retention_days = each.value.retention_days
+        tags           = { Team = "payments" }
+      }
+
+      # Outputs of a for_each module are read with a key
+      output "orders_queue_url" {
+        value = module.queue["orders"].queue_url
+      }
+
+      output "all_queue_arns" {
+        value = { for name, queue in module.queue : name => queue.queue_arn }
+      }
+    output: |
+      $ terraform init
+      Initializing modules...
+      - queue in modules/private-queue
+
+      $ terraform plan
+        # module.queue["invoices"].aws_sqs_queue.dead_letter will be created
+        # module.queue["invoices"].aws_sqs_queue.this will be created
+        # module.queue["invoices"].aws_sqs_queue_policy.this will be created
+        # module.queue["orders"].aws_sqs_queue.dead_letter will be created
+        # module.queue["orders"].aws_sqs_queue.this will be created
+        # module.queue["orders"].aws_sqs_queue_policy.this will be created
+
+      Plan: 6 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "Douze lignes d'appel créent six ressources conformes. L'adresse complète d'une ressource dans un module est `module.<nom>[\"clé\"].<type>.<nom>` : c'est elle que vous verrez dans les plans et dans le state. (Sortie abrégée.)"
+      en: "Twelve lines of call create six compliant resources. The full address of a resource inside a module is `module.<name>[\"key\"].<type>.<name>`: this is what you will see in plans and in the state. (Abridged output.)"
+
+mistake:
+  fr: |
+    **Exposer une variable pour chaque argument de chaque ressource.**
+
+    Un module dont l'interface recopie les 40 arguments de la ressource sous-jacente n'apporte rien : il
+    est aussi difficile à utiliser que la ressource elle-même, et il laisse l'appelant refaire toutes les
+    erreurs possibles (y compris désactiver le chiffrement). C'est un simple « emballage ».
+
+    Autres erreurs courantes :
+
+    - mettre un bloc `provider` dans un module enfant : cela empêche de l'utiliser avec `for_each` ou
+      `count` et de le supprimer proprement ;
+    - oublier `terraform init` après avoir ajouté un bloc `module` (erreur *Module not installed*) ;
+    - lire un fichier avec un chemin relatif simple (`file("policy.json")`) au lieu de
+      `file("${path.module}/policy.json")` : le chemin serait résolu depuis le dossier où la commande est lancée.
+  en: |
+    **Exposing one variable for every argument of every resource.**
+
+    A module whose interface copies the 40 arguments of the underlying resource adds nothing: it is as
+    hard to use as the resource itself, and it lets the caller repeat every possible mistake (including
+    turning encryption off). It is a mere "wrapper".
+
+    Other common mistakes:
+
+    - putting a `provider` block in a child module: it prevents using it with `for_each` or `count` and
+      removing it cleanly;
+    - forgetting `terraform init` after adding a `module` block (*Module not installed* error);
+    - reading a file with a bare relative path (`file("policy.json")`) instead of
+      `file("${path.module}/policy.json")`: the path would be resolved from the directory where the
+      command is run.
+
+bestPractice:
+  fr: |
+    - **Sûr par défaut, sans interrupteur** : chiffrement, accès privé et TLS sont écrits en dur.
+    - **`type` et `description` partout**, sur les variables comme sur les outputs : c'est la
+      documentation du module.
+    - **Un module = une responsabilité** (« une file privée », « un réseau »), pas « toute l'application ».
+    - **Structure standard** : `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `README.md`.
+    - **`required_providers` dans chaque module**, avec une version minimale (`>= 6.0`) plutôt qu'une
+      version exacte, pour ne pas bloquer le module racine.
+    - **Pas d'imbrication profonde** : un module qui appelle un module qui appelle un module devient
+      impossible à auditer.
+  en: |
+    - **Secure by default, no switch**: encryption, private access and TLS are hard-coded.
+    - **`type` and `description` everywhere**, on variables and on outputs alike: this is the module's
+      documentation.
+    - **One module = one responsibility** ("a private queue", "a network"), not "the whole application".
+    - **Standard layout**: `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `README.md`.
+    - **`required_providers` in every module**, with a minimum version (`>= 6.0`) rather than an exact
+      one, so as not to lock the root module.
+    - **No deep nesting**: a module calling a module calling a module becomes impossible to audit.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un petit module `modules/audit-log-group` puis appelez-le.
+
+      1. Le module reçoit `name` (chaîne, obligatoire) et `retention_days` (nombre, 365 par défaut).
+      2. Il crée un `aws_cloudwatch_log_group` nommé `/audit/<name>`, protégé contre la destruction.
+      3. Il expose un output `arn`.
+      4. Dans le module racine, appelez-le deux fois avec `for_each` pour les services `api` et `billing`,
+         et exposez une map `audit_log_arns` (nom du service vers ARN).
+    en: |
+      Write a small `modules/audit-log-group` module, then call it.
+
+      1. The module takes `name` (string, required) and `retention_days` (number, default 365).
+      2. It creates an `aws_cloudwatch_log_group` named `/audit/<name>`, protected against destruction.
+      3. It exposes an `arn` output.
+      4. In the root module, call it twice with `for_each` for the `api` and `billing` services, and
+         expose an `audit_log_arns` map (service name to ARN).
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      # ---------- modules/audit-log-group/variables.tf ----------
+      variable "name" {
+        type        = string
+        description = "Name of the audited service"
+      }
+
+      variable "retention_days" {
+        type        = number
+        description = "Retention of audit logs, in days"
+        default     = 365 # safe default: one year of audit trail
+      }
+
+      # ---------- modules/audit-log-group/main.tf ----------
+      resource "aws_cloudwatch_log_group" "this" {
+        name              = "/audit/${var.name}"
+        retention_in_days = var.retention_days
+
+        lifecycle {
+          prevent_destroy = true # audit logs are evidence: never deleted by a plan
+        }
+      }
+
+      # ---------- modules/audit-log-group/outputs.tf ----------
+      output "arn" {
+        description = "ARN of the audit log group"
+        value       = aws_cloudwatch_log_group.this.arn
+      }
+
+      # ---------- main.tf (root module) ----------
+      module "audit_logs" {
+        source   = "./modules/audit-log-group"
+        for_each = toset(["api", "billing"])
+
+        name = each.key
+      }
+
+      output "audit_log_arns" {
+        value = { for service, logs in module.audit_logs : service => logs.arn }
+      }
+    note:
+      fr: "Les quatre parties vont dans quatre fichiers distincts (indiqués en commentaire). `toset([...])` convertit la liste en ensemble, comme l'exige `for_each`. `retention_days` n'est pas passé : la valeur par défaut du module s'applique."
+      en: "The four parts go into four separate files (shown as comments). `toset([...])` converts the list into a set, as `for_each` requires. `retention_days` is not passed: the module's default applies."
+
+quiz:
+  - q:
+      fr: "Comment le module racine lit-il l'output `queue_arn` du module appelé `orders_queue` ?"
+      en: "How does the root module read the `queue_arn` output of the module called `orders_queue`?"
+    options:
+      fr:
+        - "`var.orders_queue.queue_arn`"
+        - "`orders_queue.output.queue_arn`"
+        - "`module.orders_queue.queue_arn`"
+        - "`aws_sqs_queue.orders_queue.arn`"
+      en:
+        - "`var.orders_queue.queue_arn`"
+        - "`orders_queue.output.queue_arn`"
+        - "`module.orders_queue.queue_arn`"
+        - "`aws_sqs_queue.orders_queue.arn`"
+    answer: 2
+    why:
+      fr: "La syntaxe est `module.<nom du bloc module>.<nom de l'output>`. Les ressources internes du module ne sont pas accessibles directement."
+      en: "The syntax is `module.<module block name>.<output name>`. The module's internal resources are not directly accessible."
+  - q:
+      fr: "Quel argument est obligatoire dans tout bloc `module` ?"
+      en: "Which argument is required in every `module` block?"
+    options:
+      fr: ["`source`", "`version`", "`providers`", "`name`"]
+      en: ["`source`", "`version`", "`providers`", "`name`"]
+    answer: 0
+    why:
+      fr: "`source` indique où se trouve le code du module (chemin local, registre, Git). `version` ne s'applique qu'aux modules de registre."
+      en: "`source` tells where the module code lives (local path, registry, Git). `version` only applies to registry modules."
+  - q:
+      fr: "Pourquoi ne pas exposer une variable `enable_encryption` dans un module partagé ?"
+      en: "Why not expose an `enable_encryption` variable in a shared module?"
+    options:
+      fr:
+        - "Parce que les booléens ne sont pas autorisés dans les modules"
+        - "Parce que cela ralentit le plan"
+        - "Parce que `for_each` deviendrait impossible"
+        - "Parce que quelqu'un finira par la mettre à `false` : mieux vaut un chiffrement non négociable"
+      en:
+        - "Because booleans are not allowed in modules"
+        - "Because it slows the plan down"
+        - "Because `for_each` would become impossible"
+        - "Because someone will eventually set it to `false`: non-negotiable encryption is better"
+    answer: 3
+    why:
+      fr: "Un module sûr par défaut ne propose pas d'interrupteur pour les protections essentielles : la règle est appliquée par construction."
+      en: "A secure-by-default module offers no switch for essential protections: the rule is enforced by design."
+  - q:
+      fr: "Que doit contenir un module enfant à propos des providers ?"
+      en: "What should a child module contain regarding providers?"
+    options:
+      fr:
+        - "Un bloc `provider` avec la région et les identifiants"
+        - "Un bloc `required_providers`, sans bloc `provider`"
+        - "Rien du tout"
+        - "Un fichier `terraform.tfstate`"
+      en:
+        - "A `provider` block with the region and the credentials"
+        - "A `required_providers` block, without any `provider` block"
+        - "Nothing at all"
+        - "A `terraform.tfstate` file"
+    answer: 1
+    why:
+      fr: "Le module déclare ses besoins (source et version minimale du provider) ; la configuration effective est héritée du module racine."
+      en: "The module declares its needs (provider source and minimum version); the actual configuration is inherited from the root module."
+  - q:
+      fr: "Quelle est l'adresse d'une file créée par `module \"queue\"` avec `for_each`, pour la clé `orders` ?"
+      en: "What is the address of a queue created by `module \"queue\"` with `for_each`, for the `orders` key?"
+    options:
+      fr:
+        - "`aws_sqs_queue.orders`"
+        - "`module.queue.orders.aws_sqs_queue`"
+        - "`module.queue[\"orders\"].aws_sqs_queue.this`"
+        - "`queue[\"orders\"].this`"
+      en:
+        - "`aws_sqs_queue.orders`"
+        - "`module.queue.orders.aws_sqs_queue`"
+        - "`module.queue[\"orders\"].aws_sqs_queue.this`"
+        - "`queue[\"orders\"].this`"
+    answer: 2
+    why:
+      fr: "L'adresse complète enchaîne le module, sa clé d'instance, puis le type et le nom de la ressource à l'intérieur du module."
+      en: "The full address chains the module, its instance key, then the type and name of the resource inside the module."

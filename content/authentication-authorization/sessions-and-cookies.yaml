@@ -1,0 +1,641 @@
+description:
+  fr: "Comprendre les sessions web, protéger le cookie de session (HttpOnly, Secure, SameSite, préfixe __Host-) et empêcher la fixation de session."
+  en: "Understand web sessions, protect the session cookie (HttpOnly, Secure, SameSite, __Host- prefix) and prevent session fixation."
+duration: 30
+
+intro:
+  fr: |
+    HTTP est un protocole **sans mémoire** : chaque requête arrive seule, sans lien avec la précédente.
+    Pour qu'un site « se souvienne » que vous êtes connecté, le serveur crée une **session** et confie
+    à votre navigateur un **cookie** qui contient son identifiant. À chaque requête, le navigateur
+    renvoie ce cookie, et le serveur retrouve qui vous êtes.
+
+    Pensez au vestiaire d'un théâtre : vous déposez votre manteau (vos données restent côté serveur) et
+    on vous remet un **ticket numéroté** (l'identifiant de session). Quiconque présente ce ticket repart
+    avec le manteau. Voler ou deviner le ticket, c'est donc voler le compte, sans jamais connaître le
+    mot de passe.
+
+    Dans cette leçon, vous allez voir une gestion de session vulnérable, la corriger attribut par
+    attribut, reproduire une **fixation de session** dans un petit laboratoire Python, puis vérifier
+    automatiquement vos cookies dans un pipeline.
+  en: |
+    HTTP is a **stateless** protocol: every request arrives alone, with no link to the previous one.
+    For a site to "remember" that you are logged in, the server creates a **session** and hands your
+    browser a **cookie** holding its identifier. On every request the browser sends that cookie back,
+    and the server finds out who you are.
+
+    Think of a theatre cloakroom: you leave your coat (your data stays on the server) and you receive a
+    **numbered ticket** (the session identifier). Whoever shows that ticket leaves with the coat.
+    Stealing or guessing the ticket therefore means stealing the account, without ever knowing the
+    password.
+
+    In this lesson you will look at a vulnerable session setup, fix it attribute by attribute,
+    reproduce a **session fixation** in a small Python lab, then check your cookies automatically in a
+    pipeline.
+
+sections:
+  - heading:
+      fr: "Les attributs qui protègent un cookie"
+      en: "The attributes that protect a cookie"
+    body:
+      fr: |
+        Un cookie de session se définit avec l'en-tête de réponse `Set-Cookie`. Ses attributs décident
+        **qui peut le lire** et **quand il est envoyé** :
+
+        | Attribut | Effet | Attaque freinée |
+        |---|---|---|
+        | `HttpOnly` | Invisible pour JavaScript (`document.cookie`) | Vol du cookie par XSS |
+        | `Secure` | Envoyé uniquement en HTTPS | Écoute du réseau (Wi-Fi public) |
+        | `SameSite=Lax` ou `Strict` | Non envoyé sur les requêtes venant d'un autre site | CSRF |
+        | `Path=/` sans `Domain` | Cookie lié à cet hôte précis | Cookie posé ou lu par un sous-domaine |
+        | `Max-Age` | Durée de vie limitée | Session volée utilisable indéfiniment |
+
+        Le préfixe **`__Host-`** dans le nom du cookie est une garantie imposée par le navigateur : un
+        cookie `__Host-sid` est **refusé** s'il n'a pas `Secure`, s'il n'a pas `Path=/` ou s'il porte
+        un attribut `Domain`. Un sous-domaine compromis (`blog.example.com`) ne peut donc pas écraser
+        le cookie de `app.example.com`.
+
+        `SameSite=Lax` est un bon défaut : le cookie accompagne la navigation normale (un clic sur un
+        lien) mais pas un formulaire `POST` envoyé depuis un autre site. `Strict` est plus sûr mais
+        déconnecte visuellement l'utilisateur qui arrive depuis un lien externe.
+      en: |
+        A session cookie is defined with the `Set-Cookie` response header. Its attributes decide **who
+        can read it** and **when it is sent**:
+
+        | Attribute | Effect | Attack it slows down |
+        |---|---|---|
+        | `HttpOnly` | Invisible to JavaScript (`document.cookie`) | Cookie theft through XSS |
+        | `Secure` | Sent over HTTPS only | Network sniffing (public Wi-Fi) |
+        | `SameSite=Lax` or `Strict` | Not sent on requests coming from another site | CSRF |
+        | `Path=/` without `Domain` | Cookie bound to this exact host | Cookie set or read by a subdomain |
+        | `Max-Age` | Limited lifetime | Stolen session usable forever |
+
+        The **`__Host-`** prefix in the cookie name is a guarantee enforced by the browser: a
+        `__Host-sid` cookie is **rejected** if it lacks `Secure`, lacks `Path=/` or carries a `Domain`
+        attribute. A compromised subdomain (`blog.example.com`) therefore cannot overwrite the cookie
+        of `app.example.com`.
+
+        `SameSite=Lax` is a good default: the cookie follows normal navigation (a click on a link) but
+        not a `POST` form submitted from another site. `Strict` is safer but makes a user arriving
+        from an external link look logged out.
+  - heading:
+      fr: "Fixation de session et régénération de l'identifiant"
+      en: "Session fixation and identifier regeneration"
+    body:
+      fr: |
+        Dans une **fixation de session**, l'attaquant ne vole pas l'identifiant : il le **choisit**.
+
+        1. Il obtient un identifiant de session valide (il visite simplement le site).
+        2. Il le fait accepter par le navigateur de la victime : lien piégé, faille XSS, ou cookie posé
+           depuis un sous-domaine.
+        3. La victime se connecte. Si le serveur **garde le même identifiant** après la connexion, la
+           session connue de l'attaquant devient une session authentifiée.
+
+        La défense tient en une règle : **changer d'identifiant à chaque changement de privilège**
+        (connexion, passage en mode administrateur, changement de mot de passe) et détruire la session
+        côté serveur à la déconnexion. Selon l'outil : `req.session.regenerate()` avec express-session,
+        `session_regenerate_id(true)` en PHP, `request.changeSessionId()` en Java,
+        `session.clear()` avec les sessions Flask.
+
+        Un bon identifiant est produit par un générateur aléatoire cryptographique avec au moins
+        128 bits d'entropie (`secrets.token_urlsafe(32)` en Python, `crypto.randomBytes(32)` en
+        Node.js). Il ne doit jamais apparaître dans une URL : il finirait dans l'historique, les
+        journaux du serveur et l'en-tête `Referer`.
+      en: |
+        In a **session fixation**, the attacker does not steal the identifier: they **choose** it.
+
+        1. They obtain a valid session identifier (simply by visiting the site).
+        2. They get the victim's browser to accept it: a crafted link, an XSS flaw, or a cookie set
+           from a subdomain.
+        3. The victim logs in. If the server **keeps the same identifier** after login, the session
+           known to the attacker becomes an authenticated session.
+
+        The defence is a single rule: **change the identifier at every privilege change** (login,
+        switching to admin mode, password change) and destroy the session on the server at logout.
+        Depending on the tool: `req.session.regenerate()` with express-session,
+        `session_regenerate_id(true)` in PHP, `request.changeSessionId()` in Java, `session.clear()`
+        with Flask sessions.
+
+        A good identifier comes from a cryptographic random generator with at least 128 bits of
+        entropy (`secrets.token_urlsafe(32)` in Python, `crypto.randomBytes(32)` in Node.js). It must
+        never appear in a URL: it would end up in the history, the server logs and the `Referer`
+        header.
+  - heading:
+      fr: "Où vivent les données de session ?"
+      en: "Where does session data live?"
+    body:
+      fr: |
+        | | Session côté serveur | Session côté client (cookie signé) |
+        |---|---|---|
+        | Contenu du cookie | Un identifiant aléatoire | Les données elles-mêmes + une signature |
+        | Stockage | Redis, base de données | Le navigateur |
+        | Révocation immédiate | Oui : on supprime l'entrée | Non, sauf liste de blocage |
+        | Données lisibles par l'utilisateur | Non | Oui si le cookie est seulement signé |
+        | Exemples | express-session + Redis, Spring Session, PHP | Session Flask par défaut, JWT en cookie |
+
+        Le stockage en mémoire du processus (le `MemoryStore` par défaut d'express-session) est réservé
+        au développement : les sessions disparaissent au redémarrage et ne sont pas partagées entre
+        plusieurs instances.
+
+        Deux délais d'expiration se complètent : le délai d'**inactivité** (15 à 30 minutes pour une
+        application sensible) et le délai **absolu** (par exemple 8 heures), qui force une nouvelle
+        connexion même si la session est utilisée en continu.
+      en: |
+        | | Server-side session | Client-side session (signed cookie) |
+        |---|---|---|
+        | Cookie content | A random identifier | The data itself + a signature |
+        | Storage | Redis, database | The browser |
+        | Immediate revocation | Yes: delete the entry | No, unless you keep a denylist |
+        | Data readable by the user | No | Yes if the cookie is only signed |
+        | Examples | express-session + Redis, Spring Session, PHP | Default Flask session, JWT in a cookie |
+
+        In-process memory storage (the default `MemoryStore` of express-session) is for development
+        only: sessions vanish on restart and are not shared between several instances.
+
+        Two timeouts work together: the **idle** timeout (15 to 30 minutes for a sensitive
+        application) and the **absolute** timeout (for example 8 hours), which forces a new login even
+        if the session is used continuously.
+
+examples:
+  - title:
+      fr: "Vulnérable : une session Express mal configurée"
+      en: "Vulnerable: a badly configured Express session"
+    file: server_vulnerable.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      const express = require("express");
+      const session = require("express-session");
+      const { verifyUser } = require("./users"); // checks the password hash (next lesson)
+
+      const app = express();
+      app.use(express.urlencoded({ extended: false }));
+
+      app.use(session({
+        // VULNERABLE: signing secret copied from a tutorial and committed to Git
+        secret: "keyboard cat",
+        resave: false,
+        // VULNERABLE: a session is created for every anonymous visitor,
+        // which hands attackers a valid id to "fix" on a victim
+        saveUninitialized: true,
+        // VULNERABLE: readable by JavaScript, sent over plain HTTP, no SameSite
+        cookie: { httpOnly: false, secure: false },
+        // No "store" option: sessions live in process memory (MemoryStore)
+      }));
+
+      app.post("/login", async (req, res) => {
+        const user = await verifyUser(req.body.username, req.body.password);
+        if (!user) return res.status(401).send("Invalid username or password");
+        // VULNERABLE: the session id is the same before and after login (fixation)
+        req.session.userId = user.id;
+        res.redirect("/account");
+      });
+
+      app.post("/logout", (req, res) => {
+        // VULNERABLE: the session still exists on the server and the cookie still works
+        req.session.userId = null;
+        res.redirect("/");
+      });
+
+      app.listen(3000);
+    output: |
+      HTTP/1.1 302 Found
+      Location: /account
+      Set-Cookie: connect.sid=s%3AZk1vQ0hSb1FqT2F5; Path=/
+    note:
+      fr: "Regardez l'en-tête `Set-Cookie` : ni `HttpOnly`, ni `Secure`, ni `SameSite`. Une seule faille XSS suffit à lire `document.cookie`, et l'identifiant reste le même avant et après la connexion."
+      en: "Look at the `Set-Cookie` header: no `HttpOnly`, no `Secure`, no `SameSite`. A single XSS flaw is enough to read `document.cookie`, and the identifier stays the same before and after login."
+
+  - title:
+      fr: "Corrigé : cookie durci, Redis et régénération à la connexion"
+      en: "Fixed: hardened cookie, Redis and regeneration at login"
+    file: server_secure.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const session = require("express-session");
+      const { RedisStore } = require("connect-redis");
+      const { createClient } = require("redis");
+      const { verifyUser } = require("./users"); // checks the password hash (next lesson)
+
+      const redisClient = createClient({ url: process.env.REDIS_URL });
+      redisClient.connect().catch(console.error);
+
+      const app = express();
+      app.set("trust proxy", 1); // TLS ends at the reverse proxy: needed for secure cookies
+      app.use(express.urlencoded({ extended: false }));
+
+      const cookieOptions = {
+        httpOnly: true,   // not readable by document.cookie
+        secure: true,     // HTTPS only
+        sameSite: "lax",  // not sent on cross-site POST requests
+        path: "/",        // required by the __Host- prefix (and no "domain" option)
+      };
+
+      app.use(session({
+        name: "__Host-sid",
+        secret: process.env.SESSION_SECRET,  // injected by the vault or the CI
+        store: new RedisStore({ client: redisClient, prefix: "sess:" }),
+        resave: false,
+        saveUninitialized: false,            // no session before something is stored in it
+        rolling: true,                       // idle timeout: maxAge restarts on each response
+        cookie: { ...cookieOptions, maxAge: 30 * 60 * 1000 },
+      }));
+
+      app.post("/login", async (req, res, next) => {
+        const user = await verifyUser(req.body.username, req.body.password);
+        if (!user) return res.status(401).send("Invalid username or password");
+        // New session id at login: an id planted before authentication becomes useless
+        req.session.regenerate((err) => {
+          if (err) return next(err);
+          req.session.userId = user.id;
+          req.session.createdAt = Date.now(); // used for the absolute timeout
+          req.session.save((err) => (err ? next(err) : res.redirect("/account")));
+        });
+      });
+
+      app.post("/logout", (req, res, next) => {
+        // Delete the session in Redis, then ask the browser to drop the cookie
+        req.session.destroy((err) => {
+          if (err) return next(err);
+          res.clearCookie("__Host-sid", cookieOptions);
+          res.redirect("/");
+        });
+      });
+
+      app.listen(3000);
+    output: |
+      HTTP/1.1 302 Found
+      Location: /account
+      Set-Cookie: __Host-sid=s%3A9fK2xT0mQbY7; Path=/; Expires=Fri, 27 Nov 2026 14:30:00 GMT; HttpOnly; Secure; SameSite=Lax
+    note:
+      fr: "Quatre changements : un cookie `__Host-` avec tous ses attributs, un secret hors du code, un magasin Redis partagé et révocable, et surtout `regenerate()` à la connexion puis `destroy()` à la déconnexion."
+      en: "Four changes: a `__Host-` cookie with all its attributes, a secret kept out of the code, a shared and revocable Redis store, and above all `regenerate()` at login then `destroy()` at logout."
+
+  - title:
+      fr: "Laboratoire : reproduire une fixation de session, puis la bloquer"
+      en: "Lab: reproduce a session fixation, then block it"
+    file: session_fixation_lab.py
+    lang: python
+    kind: secure
+    code: |
+      import secrets
+
+      # Server-side session store: session id -> data (Redis in production)
+      SESSIONS = {}
+
+
+      def new_session_id():
+          # 32 random bytes from the OS CSPRNG: impossible to guess
+          return secrets.token_urlsafe(32)
+
+
+      def login_vulnerable(cookie_sid, user):
+          # VULNERABLE: keeps the id that the browser sent, even one chosen by an attacker
+          sid = cookie_sid or new_session_id()
+          SESSIONS.setdefault(sid, {})["user"] = user
+          return sid
+
+
+      def login_secure(cookie_sid, user):
+          # FIXED: the pre-login session is destroyed and a brand new id is issued
+          SESSIONS.pop(cookie_sid, None)
+          sid = new_session_id()
+          SESSIONS[sid] = {"user": user}
+          return sid
+
+
+      def whoami(sid):
+          return SESSIONS.get(sid, {}).get("user", "anonymous")
+
+
+      # The attacker plants a session id in the victim's browser (link, XSS, subdomain cookie)
+      attacker_sid = "attacker-chosen-id"
+
+      print("--- Vulnerable login ---")
+      SESSIONS[attacker_sid] = {}
+      victim_sid = login_vulnerable(attacker_sid, "alice")
+      print("id changed after login :", victim_sid != attacker_sid)
+      print("attacker is now        :", whoami(attacker_sid))
+
+      print("--- Secure login ---")
+      SESSIONS.clear()
+      SESSIONS[attacker_sid] = {}
+      victim_sid = login_secure(attacker_sid, "alice")
+      print("id changed after login :", victim_sid != attacker_sid)
+      print("attacker is now        :", whoami(attacker_sid))
+      print("victim is              :", whoami(victim_sid))
+    output: |
+      --- Vulnerable login ---
+      id changed after login : False
+      attacker is now        : alice
+      --- Secure login ---
+      id changed after login : True
+      attacker is now        : anonymous
+      victim is              : alice
+    note:
+      fr: "Appuyez sur Run : avec la connexion vulnérable, l'attaquant qui a imposé son identifiant devient `alice` sans connaître son mot de passe. Avec la régénération, son identifiant ne mène plus à rien."
+      en: "Press Run: with the vulnerable login, the attacker who imposed their identifier becomes `alice` without knowing her password. With regeneration, their identifier leads nowhere."
+
+  - title:
+      fr: "Flask : configuration sûre du cookie de session et double expiration"
+      en: "Flask: safe session cookie configuration and double timeout"
+    file: app.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+      import time
+      from datetime import timedelta
+
+      from flask import Flask, abort, redirect, request, session
+
+      app = Flask(__name__)
+      app.config.update(
+          # Signing key from the environment (vault / CI secret), never from the code
+          SECRET_KEY=os.environ["SECRET_KEY"],
+          # __Host- : the browser only accepts it with Secure, Path=/ and no Domain
+          SESSION_COOKIE_NAME="__Host-session",
+          SESSION_COOKIE_SECURE=True,      # HTTPS only
+          SESSION_COOKIE_HTTPONLY=True,    # invisible to document.cookie (XSS)
+          SESSION_COOKIE_SAMESITE="Lax",   # not sent on cross-site POST (CSRF)
+          PERMANENT_SESSION_LIFETIME=timedelta(minutes=30),  # idle timeout
+      )
+
+      ABSOLUTE_TIMEOUT = 8 * 3600  # force a new login after 8 hours, even if active
+
+
+      @app.before_request
+      def enforce_absolute_timeout():
+          created = session.get("created_at")
+          if created is not None and time.time() - created > ABSOLUTE_TIMEOUT:
+              session.clear()
+
+
+      @app.post("/login")
+      def login():
+          # Lab shortcut: the password check is the topic of the next lesson
+          if request.form.get("username") != "alice":
+              abort(401)
+          # Drop everything that existed before authentication (anti-fixation)
+          session.clear()
+          session["user_id"] = "alice"
+          session["created_at"] = int(time.time())
+          session.permanent = True  # apply PERMANENT_SESSION_LIFETIME
+          return redirect("/account", code=303)
+
+
+      @app.post("/logout")
+      def logout():
+          session.clear()  # the response deletes the cookie
+          return redirect("/", code=303)
+
+
+      @app.get("/account")
+      def account():
+          if "user_id" not in session:
+              abort(401)
+          return {"user": session["user_id"]}
+    output: |
+      POST /login  -> 303
+      Set-Cookie: __Host-session=eyJfcGVybWFuZW50Ijp0cnVlLCJjcmVhdGVkX2F0IjoxNzk1Nzg2MjI2LCJ1c2VyX2lkIjoiYWxpY2UifQ.awmF8g.kvjeabUo1XIq652jCrXGlGZfMk0; Expires=Fri, 27 Nov 2026 14:00:26 GMT; Secure; HttpOnly; Path=/; SameSite=Lax
+
+      POST /logout -> 303
+      Set-Cookie: __Host-session=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Secure; HttpOnly; Path=/; SameSite=Lax
+    note:
+      fr: "La session Flask par défaut est un cookie **signé, pas chiffré** : la première partie de la valeur est du JSON encodé en Base64 que l'utilisateur peut lire. N'y mettez aucun secret, et passez à un magasin côté serveur (extension Flask-Session avec Redis) si vous devez révoquer une session à distance."
+      en: "The default Flask session is a **signed, not encrypted** cookie: the first part of the value is Base64-encoded JSON that the user can read. Never put a secret in it, and switch to a server-side store (the Flask-Session extension with Redis) if you need to revoke a session remotely."
+
+  - title:
+      fr: "DevSecOps : contrôler les attributs des cookies à la main et dans le pipeline"
+      en: "DevSecOps: checking cookie attributes by hand and in the pipeline"
+    file: check_cookies.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Only test applications you own or are authorised to test.
+      TARGET="${1:-https://localhost:8443}"
+
+      # 1. Manual check: show the Set-Cookie header returned by the login endpoint
+      #    (-k accepts the self-signed certificate of the local lab)
+      curl -sk -o /dev/null -D - -X POST -d "username=alice" "$TARGET/login" \
+        | grep -i '^set-cookie'
+
+      # 2. Automated check: the OWASP ZAP baseline scan browses the site passively
+      #    and reports cookies without HttpOnly, Secure or SameSite.
+      #    Exit code 2 means "at least one warning": the CI job fails.
+      docker run --rm -t ghcr.io/zaproxy/zaproxy:stable \
+        zap-baseline.py -t "$TARGET"
+    output: |
+      set-cookie: connect.sid=s%3AZk1vQ0hSb1FqT2F5; Path=/
+      WARN-NEW: Cookie No HttpOnly Flag [10010] x 1
+      WARN-NEW: Cookie Without Secure Flag [10011] x 1
+      WARN-NEW: Cookie without SameSite Attribute [10054] x 1
+    note:
+      fr: "Ce contrôle relève du **DAST** (analyse dynamique) : l'outil observe les vraies réponses HTTP de l'application déployée en environnement de test. Les règles 10010, 10011 et 10054 de ZAP correspondent exactement aux trois attributs manquants de l'exemple vulnérable."
+      en: "This check is **DAST** (dynamic analysis): the tool observes the real HTTP responses of the application deployed in a test environment. ZAP rules 10010, 10011 and 10054 match exactly the three attributes missing from the vulnerable example."
+
+mistake:
+  fr: |
+    **Croire que `HttpOnly` et `Secure` suffisent, et garder le même identifiant après la connexion.**
+
+    Les attributs du cookie empêchent de **voler** l'identifiant ; ils n'empêchent pas un attaquant de
+    l'**imposer** avant la connexion. Sans régénération au moment du login, la fixation de session
+    reste possible. L'erreur jumelle se produit à la déconnexion : effacer le cookie dans le navigateur
+    sans détruire la session côté serveur laisse l'ancien identifiant utilisable par quiconque l'a
+    copié.
+  en: |
+    **Believing that `HttpOnly` and `Secure` are enough, and keeping the same identifier after login.**
+
+    Cookie attributes stop an attacker from **stealing** the identifier; they do not stop them from
+    **imposing** one before login. Without regeneration at login time, session fixation remains
+    possible. The twin mistake happens at logout: deleting the cookie in the browser without
+    destroying the session on the server leaves the old identifier usable by anyone who copied it.
+
+bestPractice:
+  fr: |
+    - **Nommez le cookie `__Host-...`** avec `Secure`, `HttpOnly`, `SameSite=Lax` (ou `Strict`) et `Path=/`, sans `Domain`.
+    - **Régénérez l'identifiant** à la connexion et à chaque élévation de privilège ; **détruisez** la session côté serveur à la déconnexion.
+    - **Stockez les sessions côté serveur** (Redis, base de données) pour pouvoir les révoquer ; jamais dans la mémoire du processus en production.
+    - **Appliquez deux délais** : inactivité (15 à 30 minutes) et durée absolue (quelques heures).
+    - **Sortez le secret de signature du code** (coffre-fort, variable injectée par la CI) et faites-le tourner.
+    - **Automatisez le contrôle** : un scan DAST (ZAP baseline) dans le pipeline échoue dès qu'un cookie perd un attribut.
+  en: |
+    - **Name the cookie `__Host-...`** with `Secure`, `HttpOnly`, `SameSite=Lax` (or `Strict`) and `Path=/`, without `Domain`.
+    - **Regenerate the identifier** at login and at every privilege elevation; **destroy** the session on the server at logout.
+    - **Store sessions on the server** (Redis, database) so they can be revoked; never in process memory in production.
+    - **Apply two timeouts**: idle (15 to 30 minutes) and absolute (a few hours).
+    - **Keep the signing secret out of the code** (vault, variable injected by the CI) and rotate it.
+    - **Automate the check**: a DAST scan (ZAP baseline) in the pipeline fails as soon as a cookie loses an attribute.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe veut un garde-fou dans la CI : un script qui lit des en-têtes `Set-Cookie` et
+      signale les cookies de session mal protégés.
+
+      Écrivez une fonction Python `audit_set_cookie(header)` qui renvoie la liste des problèmes :
+
+      1. attribut `HttpOnly` absent ;
+      2. attribut `Secure` absent ;
+      3. `SameSite` absent ou différent de `Lax` / `Strict` ;
+      4. nom sans préfixe `__Host-`, ou préfixe présent mais règles non respectées
+         (`Secure`, `Path=/`, pas de `Domain`).
+
+      Testez-la sur ces deux en-têtes :
+
+      ```text
+      sid=abc123; Path=/; Domain=example.com
+      __Host-sid=q9Zt0cXw; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=1800
+      ```
+    en: |
+      Your team wants a guard rail in CI: a script that reads `Set-Cookie` headers and reports badly
+      protected session cookies.
+
+      Write a Python function `audit_set_cookie(header)` that returns the list of problems:
+
+      1. `HttpOnly` attribute missing;
+      2. `Secure` attribute missing;
+      3. `SameSite` missing or different from `Lax` / `Strict`;
+      4. name without the `__Host-` prefix, or prefix present but its rules broken
+         (`Secure`, `Path=/`, no `Domain`).
+
+      Test it on these two headers:
+
+      ```text
+      sid=abc123; Path=/; Domain=example.com
+      __Host-sid=q9Zt0cXw; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=1800
+      ```
+  solution:
+    file: audit_cookies.py
+    lang: python
+    code: |
+      def audit_set_cookie(header):
+          """Return the list of security problems found in one Set-Cookie header."""
+          parts = [p.strip() for p in header.split(";")]
+          name = parts[0].split("=", 1)[0]
+          # Attribute names are case-insensitive
+          attrs = {}
+          for part in parts[1:]:
+              key, _, value = part.partition("=")
+              attrs[key.strip().lower()] = value.strip()
+
+          problems = []
+          if "httponly" not in attrs:
+              problems.append("missing HttpOnly (JavaScript can read the cookie)")
+          if "secure" not in attrs:
+              problems.append("missing Secure (sent over plain HTTP)")
+          if attrs.get("samesite", "").lower() not in ("lax", "strict"):
+              problems.append("SameSite must be Lax or Strict")
+          if name.startswith("__Host-"):
+              # Browsers reject a __Host- cookie that breaks one of these rules
+              if "secure" not in attrs or attrs.get("path") != "/" or "domain" in attrs:
+                  problems.append("__Host- requires Secure, Path=/ and no Domain")
+          else:
+              problems.append("name should use the __Host- prefix")
+          return problems
+
+
+      headers = [
+          "sid=abc123; Path=/; Domain=example.com",
+          "__Host-sid=q9Zt0cXw; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=1800",
+      ]
+
+      for header in headers:
+          print(header)
+          problems = audit_set_cookie(header)
+          if not problems:
+              print("  OK")
+          for problem in problems:
+              print("  -", problem)
+    note:
+      fr: "Le premier en-tête cumule quatre problèmes, le second n'en a aucun. Dans une CI, il suffit de terminer le script par `sys.exit(1)` quand la liste n'est pas vide pour bloquer la livraison."
+      en: "The first header has four problems, the second has none. In CI, ending the script with `sys.exit(1)` when the list is not empty is enough to block the release."
+
+quiz:
+  - q:
+      fr: "Quel attribut empêche JavaScript de lire le cookie de session ?"
+      en: "Which attribute prevents JavaScript from reading the session cookie?"
+    options:
+      fr: ["Secure", "HttpOnly", "SameSite=Strict", "Max-Age"]
+      en: ["Secure", "HttpOnly", "SameSite=Strict", "Max-Age"]
+    answer: 1
+    why:
+      fr: "`HttpOnly` retire le cookie de `document.cookie` : un script injecté par XSS ne peut plus l'exfiltrer. `Secure` ne concerne que le transport HTTPS."
+      en: "`HttpOnly` removes the cookie from `document.cookie`: a script injected through XSS can no longer exfiltrate it. `Secure` only concerns HTTPS transport."
+  - q:
+      fr: "Que garantit le préfixe `__Host-` dans le nom d'un cookie ?"
+      en: "What does the `__Host-` prefix in a cookie name guarantee?"
+    options:
+      fr:
+        - "Le cookie est chiffré par le navigateur"
+        - "Le cookie expire à la fermeture du navigateur"
+        - "Le cookie est partagé avec tous les sous-domaines"
+        - "Le navigateur le refuse sans Secure, Path=/ ou avec un attribut Domain"
+      en:
+        - "The cookie is encrypted by the browser"
+        - "The cookie expires when the browser closes"
+        - "The cookie is shared with all subdomains"
+        - "The browser rejects it without Secure, Path=/ or with a Domain attribute"
+    answer: 3
+    why:
+      fr: "Le préfixe est une règle appliquée par le navigateur : le cookie est lié à un seul hôte, en HTTPS, et un sous-domaine ne peut pas l'écraser."
+      en: "The prefix is a rule enforced by the browser: the cookie is bound to a single host, over HTTPS, and a subdomain cannot overwrite it."
+  - q:
+      fr: "Dans une fixation de session, que fait l'attaquant ?"
+      en: "In a session fixation, what does the attacker do?"
+    options:
+      fr:
+        - "Il impose à la victime un identifiant de session qu'il connaît déjà, avant qu'elle se connecte"
+        - "Il devine le mot de passe de la victime par force brute"
+        - "Il déchiffre le cookie grâce à une faille TLS"
+        - "Il supprime la session de la victime pour la déconnecter"
+      en:
+        - "They impose on the victim a session identifier they already know, before the victim logs in"
+        - "They guess the victim's password by brute force"
+        - "They decrypt the cookie thanks to a TLS flaw"
+        - "They delete the victim's session to log them out"
+    answer: 0
+    why:
+      fr: "L'identifiant est choisi par l'attaquant puis « authentifié » par la victime. Régénérer l'identifiant à la connexion rend l'identifiant imposé inutile."
+      en: "The identifier is chosen by the attacker and then \"authenticated\" by the victim. Regenerating the identifier at login makes the imposed one useless."
+  - q:
+      fr: "Pourquoi le `MemoryStore` par défaut d'express-session est-il déconseillé en production ?"
+      en: "Why is the default `MemoryStore` of express-session discouraged in production?"
+    options:
+      fr:
+        - "Il envoie les sessions en clair sur le réseau"
+        - "Il désactive l'attribut HttpOnly"
+        - "Les sessions sont perdues au redémarrage et ne sont pas partagées entre instances"
+        - "Il stocke les mots de passe des utilisateurs"
+      en:
+        - "It sends sessions in clear text over the network"
+        - "It disables the HttpOnly attribute"
+        - "Sessions are lost on restart and are not shared between instances"
+        - "It stores user passwords"
+    answer: 2
+    why:
+      fr: "Les sessions restent dans la mémoire d'un seul processus : elles disparaissent au redémarrage et un second serveur ne les connaît pas. Un magasin comme Redis règle les deux problèmes et permet la révocation."
+      en: "Sessions stay in the memory of a single process: they vanish on restart and a second server does not know them. A store such as Redis solves both problems and allows revocation."
+  - q:
+      fr: "Que contient le cookie de session par défaut de Flask ?"
+      en: "What does the default Flask session cookie contain?"
+    options:
+      fr:
+        - "Un identifiant aléatoire pointant vers Redis"
+        - "Les données de session signées, lisibles par l'utilisateur mais non modifiables"
+        - "Les données de session chiffrées en AES"
+        - "Le mot de passe haché de l'utilisateur"
+      en:
+        - "A random identifier pointing to Redis"
+        - "The signed session data, readable by the user but not modifiable"
+        - "The session data encrypted with AES"
+        - "The user's hashed password"
+    answer: 1
+    why:
+      fr: "Flask sérialise la session dans le cookie et la signe avec `SECRET_KEY`. La signature empêche la modification, pas la lecture : aucun secret ne doit s'y trouver."
+      en: "Flask serialises the session into the cookie and signs it with `SECRET_KEY`. The signature prevents modification, not reading: no secret should be stored there."

@@ -1,0 +1,602 @@
+description:
+  fr: "Durcir un serveur Linux : paramètres du noyau avec sysctl, désactivation des services inutiles, politique de mots de passe et bac à sable systemd."
+  en: "Harden a Linux server: kernel parameters with sysctl, disabling unneeded services, password policy and systemd sandboxing."
+duration: 30
+
+intro:
+  fr: |
+    Un serveur Linux se durcit à trois étages : le **noyau** (comment la machine traite les paquets réseau
+    et la mémoire), les **services** (ce qui tourne en permanence) et les **comptes** (qui peut se connecter
+    et avec quels droits).
+
+    Imaginez un immeuble : le noyau, ce sont les fondations et les murs porteurs ; les services, ce sont les
+    commerces du rez-de-chaussée, ouverts sur la rue ; les comptes, ce sont les badges d'accès distribués
+    aux habitants. Un immeuble sûr a des murs solides, peu de vitrines et aucun badge oublié.
+
+    Dans cette leçon, vous allez écrire un fichier `sysctl` durci, désactiver les services inutiles, imposer
+    une politique de mots de passe avec **PAM** (*Pluggable Authentication Modules*, le système
+    d'authentification modulaire de Linux) et enfermer un service dans un bac à sable systemd.
+  en: |
+    A Linux server is hardened on three floors: the **kernel** (how the machine handles network packets and
+    memory), the **services** (what runs permanently) and the **accounts** (who can log in and with which
+    rights).
+
+    Picture a building: the kernel is the foundations and load-bearing walls; services are the ground-floor
+    shops opening onto the street; accounts are the access badges handed out to residents. A safe building
+    has solid walls, few shop windows and no forgotten badge.
+
+    In this lesson you will write a hardened `sysctl` file, disable unneeded services, enforce a password
+    policy with **PAM** (*Pluggable Authentication Modules*, the modular authentication system of Linux)
+    and lock a service inside a systemd sandbox.
+
+sections:
+  - heading:
+      fr: "Le noyau : sysctl"
+      en: "The kernel: sysctl"
+    body:
+      fr: |
+        Le noyau expose des centaines de réglages dans `/proc/sys`, modifiables avec la commande `sysctl`.
+        Une modification faite avec `sysctl -w` disparaît au redémarrage : pour la rendre permanente, on écrit
+        un fichier dans `/etc/sysctl.d/` puis on recharge avec `sudo sysctl --system`.
+
+        | Clé | Valeur durcie | Ce qu'elle bloque |
+        |---|---|---|
+        | `net.ipv4.conf.all.rp_filter` | `1` | Paquets dont l'adresse source est usurpée (*IP spoofing*) |
+        | `net.ipv4.tcp_syncookies` | `1` | Saturation de la file de connexions par *SYN flood* |
+        | `net.ipv4.conf.all.accept_redirects` | `0` | Redirections ICMP qui détournent le trafic (homme du milieu) |
+        | `net.ipv4.conf.all.accept_source_route` | `0` | Paquets qui imposent leur propre chemin réseau |
+        | `net.ipv4.conf.all.log_martians` | `1` | Rien : journalise les paquets aux adresses impossibles |
+        | `kernel.randomize_va_space` | `2` | Exploits mémoire : adresses aléatoires (ASLR complet) |
+        | `kernel.kptr_restrict` | `2` | Fuite d'adresses du noyau utiles aux exploits |
+        | `kernel.dmesg_restrict` | `1` | Lecture du journal noyau par un utilisateur ordinaire |
+        | `kernel.yama.ptrace_scope` | `1` | Un processus qui en espionne un autre (vol de secrets en mémoire) |
+        | `fs.suid_dumpable` | `0` | Vidages mémoire (*core dumps*) de programmes privilégiés |
+
+        Les clés `conf.all` s'appliquent aux interfaces existantes, `conf.default` aux interfaces créées plus
+        tard : on règle toujours les deux.
+      en: |
+        The kernel exposes hundreds of settings under `/proc/sys`, changed with the `sysctl` command.
+        A change made with `sysctl -w` is lost at reboot: to make it permanent, write a file in
+        `/etc/sysctl.d/` then reload with `sudo sysctl --system`.
+
+        | Key | Hardened value | What it blocks |
+        |---|---|---|
+        | `net.ipv4.conf.all.rp_filter` | `1` | Packets with a forged source address (IP spoofing) |
+        | `net.ipv4.tcp_syncookies` | `1` | Connection queue exhaustion by SYN flood |
+        | `net.ipv4.conf.all.accept_redirects` | `0` | ICMP redirects that divert traffic (man in the middle) |
+        | `net.ipv4.conf.all.accept_source_route` | `0` | Packets that dictate their own network path |
+        | `net.ipv4.conf.all.log_martians` | `1` | Nothing: it logs packets with impossible addresses |
+        | `kernel.randomize_va_space` | `2` | Memory exploits: randomised addresses (full ASLR) |
+        | `kernel.kptr_restrict` | `2` | Leaks of kernel addresses useful to exploits |
+        | `kernel.dmesg_restrict` | `1` | Reading the kernel log as an ordinary user |
+        | `kernel.yama.ptrace_scope` | `1` | A process spying on another one (stealing secrets from memory) |
+        | `fs.suid_dumpable` | `0` | Core dumps of privileged programs |
+
+        `conf.all` keys apply to existing interfaces, `conf.default` to interfaces created later: always
+        set both.
+  - heading:
+      fr: "Les services : ne garder que le nécessaire"
+      en: "Services: keep only what is needed"
+    body:
+      fr: |
+        Chaque service actif est du code qui tourne en permanence, souvent avec des privilèges, parfois en
+        écoute sur le réseau. La règle : **si vous ne savez pas à quoi sert un service, renseignez-vous ; s'il
+        ne sert à rien, retirez-le.**
+
+        | Action | Commande | Effet |
+        |---|---|---|
+        | Arrêter et désactiver | `systemctl disable --now cups` | Ne démarre plus au boot |
+        | Masquer | `systemctl mask cups` | Impossible à démarrer, même par dépendance |
+        | Désinstaller | `apt purge cups` / `dnf remove cups` | Le code n'est plus sur le disque |
+
+        Désinstaller est toujours préférable : un paquet absent n'a pas de vulnérabilité à corriger.
+        Candidats habituels sur un serveur : `avahi-daemon` (découverte réseau), `cups` (impression),
+        `rpcbind` (NFS), `bluetooth`, `ModemManager`, et tous les services en clair hérités
+        (`telnet`, `rsh`, `tftp`, `vsftpd` sans TLS).
+      en: |
+        Every active service is code running permanently, often with privileges, sometimes listening on the
+        network. The rule: **if you do not know what a service is for, find out; if it serves no purpose,
+        remove it.**
+
+        | Action | Command | Effect |
+        |---|---|---|
+        | Stop and disable | `systemctl disable --now cups` | No longer starts at boot |
+        | Mask | `systemctl mask cups` | Cannot be started, even as a dependency |
+        | Uninstall | `apt purge cups` / `dnf remove cups` | The code is no longer on disk |
+
+        Uninstalling is always better: an absent package has no vulnerability to patch.
+        Usual candidates on a server: `avahi-daemon` (network discovery), `cups` (printing), `rpcbind`
+        (NFS), `bluetooth`, `ModemManager`, and every legacy clear-text service (`telnet`, `rsh`, `tftp`,
+        `vsftpd` without TLS).
+  - heading:
+      fr: "Les comptes : mots de passe, verrouillage et sudo"
+      en: "Accounts: passwords, lockout and sudo"
+    body:
+      fr: |
+        Trois fichiers portent la politique des comptes locaux :
+
+        - `/etc/security/pwquality.conf` : qualité exigée à la création d'un mot de passe (module `pam_pwquality`) ;
+        - `/etc/security/faillock.conf` : verrouillage après plusieurs échecs (module `pam_faillock`) ;
+        - `/etc/login.defs` : durée de vie des mots de passe et valeurs par défaut des nouveaux comptes.
+
+        ```text
+        # /etc/login.defs (excerpt)
+        PASS_MAX_DAYS   365
+        PASS_MIN_DAYS   1
+        PASS_WARN_AGE   7
+        UMASK           027
+        ENCRYPT_METHOD  YESCRYPT
+        ```
+
+        ```text
+        # /etc/security/faillock.conf
+        deny = 5
+        fail_interval = 900
+        unlock_time = 900
+        ```
+
+        `login.defs` ne s'applique qu'aux comptes créés **après** la modification : pour un compte existant,
+        utilisez `sudo chage --maxdays 365 --mindays 1 --warndays 7 alice`. Sur RHEL, le verrouillage s'active
+        avec `sudo authselect enable-feature with-faillock`.
+
+        Les recommandations récentes (NIST SP 800-63B) privilégient la **longueur** et le refus des mots de
+        passe connus plutôt que le changement forcé tous les 90 jours, qui pousse à choisir `Printemps2026!`.
+        Enfin, personne ne se connecte en `root` : chaque administrateur a son compte et passe par `sudo`,
+        ce qui laisse une trace nominative.
+      en: |
+        Three files carry the policy for local accounts:
+
+        - `/etc/security/pwquality.conf`: quality required when a password is set (`pam_pwquality` module);
+        - `/etc/security/faillock.conf`: lockout after several failures (`pam_faillock` module);
+        - `/etc/login.defs`: password lifetime and defaults for new accounts.
+
+        ```text
+        # /etc/login.defs (excerpt)
+        PASS_MAX_DAYS   365
+        PASS_MIN_DAYS   1
+        PASS_WARN_AGE   7
+        UMASK           027
+        ENCRYPT_METHOD  YESCRYPT
+        ```
+
+        ```text
+        # /etc/security/faillock.conf
+        deny = 5
+        fail_interval = 900
+        unlock_time = 900
+        ```
+
+        `login.defs` only applies to accounts created **after** the change: for an existing account use
+        `sudo chage --maxdays 365 --mindays 1 --warndays 7 alice`. On RHEL, lockout is switched on with
+        `sudo authselect enable-feature with-faillock`.
+
+        Recent guidance (NIST SP 800-63B) favours **length** and rejecting known passwords over forced
+        rotation every 90 days, which pushes people to pick `Spring2026!`. Finally, nobody logs in as
+        `root`: each administrator has a personal account and goes through `sudo`, which leaves a named
+        trace.
+
+examples:
+  - title:
+      fr: "Les réglages réseau du noyau laissés par défaut"
+      en: "Kernel network settings left at their defaults"
+    file: check-defaults.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # Values shipped by the kernel itself. Your distribution may already
+      # override some of them: always check instead of assuming.
+      sysctl net.ipv4.conf.all.accept_redirects \
+             net.ipv4.conf.all.send_redirects \
+             net.ipv4.conf.all.log_martians \
+             net.ipv4.conf.all.rp_filter \
+             kernel.kptr_restrict \
+             kernel.yama.ptrace_scope
+    output: |
+      net.ipv4.conf.all.accept_redirects = 1
+      net.ipv4.conf.all.send_redirects = 1
+      net.ipv4.conf.all.log_martians = 0
+      net.ipv4.conf.all.rp_filter = 0
+      kernel.kptr_restrict = 0
+      kernel.yama.ptrace_scope = 0
+    note:
+      fr: "Avec ces valeurs, la machine accepte les redirections ICMP (détournement de trafic), ne vérifie pas l'adresse source des paquets, ne journalise rien d'anormal et laisse un processus en déboguer un autre du même utilisateur."
+      en: "With these values the machine accepts ICMP redirects (traffic hijacking), does not check the source address of packets, logs nothing abnormal and lets a process debug another one owned by the same user."
+
+  - title:
+      fr: "Un fichier sysctl durci"
+      en: "A hardened sysctl file"
+    file: /etc/sysctl.d/99-hardening.conf
+    lang: ini
+    kind: secure
+    code: |
+      # Apply with: sudo sysctl --system
+      # The 99- prefix makes this file win over the distribution defaults.
+
+      # --- Network: anti-spoofing and anti-redirection -------------------
+      # Drop packets whose source address could not be reached through
+      # the interface they arrived on (strict reverse path filtering)
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+
+      # Survive SYN floods without filling the connection queue
+      net.ipv4.tcp_syncookies = 1
+
+      # A server is not a router: never accept or send ICMP redirects
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv4.conf.all.secure_redirects = 0
+      net.ipv4.conf.default.secure_redirects = 0
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.default.send_redirects = 0
+      net.ipv6.conf.all.accept_redirects = 0
+      net.ipv6.conf.default.accept_redirects = 0
+
+      # Refuse packets that carry their own route
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv4.conf.default.accept_source_route = 0
+      net.ipv6.conf.all.accept_source_route = 0
+
+      # Log packets with impossible source addresses, ignore broadcast pings
+      net.ipv4.conf.all.log_martians = 1
+      net.ipv4.conf.default.log_martians = 1
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      net.ipv4.icmp_ignore_bogus_error_responses = 1
+
+      # No routing between interfaces.
+      # Leave this line out on Docker / Kubernetes hosts: they need forwarding.
+      net.ipv4.ip_forward = 0
+
+      # --- Kernel: make memory exploits harder ---------------------------
+      # Full address space layout randomisation (stack, heap, libraries)
+      kernel.randomize_va_space = 2
+      # Hide kernel pointers and the kernel log from unprivileged users
+      kernel.kptr_restrict = 2
+      kernel.dmesg_restrict = 1
+      # A process may only ptrace its own children
+      kernel.yama.ptrace_scope = 1
+      # Unprivileged users cannot load eBPF programs
+      kernel.unprivileged_bpf_disabled = 1
+
+      # --- Filesystem ----------------------------------------------------
+      # No core dump for setuid programs (they may contain secrets)
+      fs.suid_dumpable = 0
+      # Block classic /tmp link attacks
+      fs.protected_hardlinks = 1
+      fs.protected_symlinks = 1
+    note:
+      fr: "Chaque clé a une raison de sécurité en commentaire : dans six mois, vous (ou un collègue) saurez pourquoi elle est là. Après `sudo sysctl --system`, vérifiez une valeur avec `sysctl kernel.kptr_restrict`."
+      en: "Every key has its security reason as a comment: in six months you (or a colleague) will know why it is there. After `sudo sysctl --system`, check a value with `sysctl kernel.kptr_restrict`."
+
+  - title:
+      fr: "Désactiver et retirer les services inutiles"
+      en: "Disabling and removing unneeded services"
+    file: disable-services.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Debian / Ubuntu example. On RHEL replace "apt-get purge" with "dnf remove".
+      set -euo pipefail
+
+      # 1. Review what starts at boot and what listens on the network
+      systemctl list-unit-files --type=service --state=enabled --no-legend
+      sudo ss -tulpn
+
+      # 2. Stop + disable + mask services this server does not need.
+      #    mask links the unit to /dev/null: nothing can start it again.
+      for svc in avahi-daemon cups rpcbind bluetooth ModemManager; do
+        if systemctl list-unit-files "${svc}.service" --no-legend | grep -q .; then
+          sudo systemctl disable --now "${svc}.service"
+          sudo systemctl mask "${svc}.service"
+        fi
+      done
+
+      # 3. Remove the packages: absent code has no vulnerability
+      sudo apt-get purge -y telnetd avahi-daemon cups rpcbind
+      sudo apt-get autoremove -y
+
+      # 4. Forbid loading kernel modules for filesystems nobody uses here
+      printf 'install cramfs /bin/false\ninstall udf /bin/false\n' |
+        sudo tee /etc/modprobe.d/hardening.conf >/dev/null
+
+      # 5. Verify: only the expected sockets remain
+      sudo ss -tulpn
+    output: |
+      Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+      tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*     users:(("sshd",pid=801,fd=3))
+      tcp   LISTEN 0      511          0.0.0.0:443       0.0.0.0:*     users:(("nginx",pid=1042,fd=6))
+    note:
+      fr: "On vérifie toujours le résultat avec `ss -tulpn` : après nettoyage, il ne reste que SSH et le serveur web. La boucle teste l'existence de l'unité pour que le script soit rejouable sans erreur."
+      en: "Always verify the result with `ss -tulpn`: after the clean-up only SSH and the web server remain. The loop tests that the unit exists so the script can be replayed without error."
+
+  - title:
+      fr: "Politique de qualité des mots de passe avec pam_pwquality"
+      en: "Password quality policy with pam_pwquality"
+    file: /etc/security/pwquality.conf
+    lang: ini
+    kind: secure
+    code: |
+      # Read by pam_pwquality every time a password is set or changed.
+      # Debian/Ubuntu: sudo apt install libpam-pwquality   (RHEL: installed by default)
+
+      # Length is the strongest factor: 14 characters minimum
+      minlen = 14
+
+      # At least 3 character classes among lower, upper, digit, other
+      minclass = 3
+
+      # Refuse aaaa or 1111, and sequences such as abcd or 4321
+      maxrepeat = 3
+      maxsequence = 3
+
+      # Refuse words found in the cracklib dictionary
+      dictcheck = 1
+
+      # Refuse a password that contains the user name
+      usercheck = 1
+
+      # At least 5 characters must differ from the previous password
+      difok = 5
+
+      # Three attempts before passwd gives up
+      retry = 3
+
+      # root is not exempt from the policy
+      enforce_for_root
+    note:
+      fr: "Testez immédiatement : `passwd` doit refuser `Password123`. Cette politique ne concerne que les mots de passe **locaux** ; pour SSH, la leçon suivante supprime carrément l'authentification par mot de passe."
+      en: "Test it right away: `passwd` must refuse `Password123`. This policy only covers **local** passwords; for SSH, the next lesson removes password authentication altogether."
+
+  - title:
+      fr: "Enfermer un service dans un bac à sable systemd"
+      en: "Locking a service inside a systemd sandbox"
+    file: /etc/systemd/system/myapi.service
+    lang: ini
+    kind: secure
+    code: |
+      [Unit]
+      Description=My API (sandboxed)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      ExecStart=/opt/myapi/bin/myapi --port 8080
+      Restart=on-failure
+
+      # Dedicated unprivileged account instead of root
+      User=myapi
+      Group=myapi
+
+      # The process and its children can never gain new privileges (no setuid)
+      NoNewPrivileges=true
+      # No Linux capability at all: binding to port 8080 does not need any
+      CapabilityBoundingSet=
+      AmbientCapabilities=
+
+      # The whole filesystem is read-only, except the state directory below
+      ProtectSystem=strict
+      StateDirectory=myapi
+      # /home, /root and /run/user are invisible
+      ProtectHome=true
+      # Private /tmp and no access to physical devices
+      PrivateTmp=true
+      PrivateDevices=true
+
+      # The service cannot touch kernel settings, modules or cgroups
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      ProtectControlGroups=true
+
+      # Only IPv4, IPv6 and Unix sockets; common system calls only
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+      SystemCallFilter=@system-service
+      SystemCallArchitectures=native
+      RestrictNamespaces=true
+      LockPersonality=true
+
+      [Install]
+      WantedBy=multi-user.target
+    note:
+      fr: "Lancez `systemd-analyze security myapi.service` : systemd note l'exposition du service de 0 (isolé) à 10 (dangereux). Une unité sans aucune de ces options est classée `UNSAFE` ; si l'application est compromise, l'attaquant reste enfermé dans ce bac à sable."
+      en: "Run `systemd-analyze security myapi.service`: systemd rates the exposure of the service from 0 (isolated) to 10 (dangerous). A unit with none of these options is rated `UNSAFE`; if the application is compromised, the attacker stays locked in this sandbox."
+
+mistake:
+  fr: |
+    **Modifier un réglage avec `sysctl -w` ou `systemctl stop` et croire que c'est terminé.**
+
+    `sysctl -w` ne survit pas au redémarrage, et `systemctl stop` n'empêche pas le service de revenir au
+    prochain boot (ou d'être relancé par un autre service). Résultat : le serveur est durci jusqu'à la
+    prochaine mise à jour du noyau, puis redevient vulnérable sans que personne ne le voie. Écrivez toujours
+    la configuration dans un fichier (`/etc/sysctl.d/`, `systemctl disable --now` puis `mask`), redémarrez
+    une fois pour vérifier, et contrôlez régulièrement avec un script ou Lynis.
+
+    Autre piège : copier un fichier sysctl « complet » trouvé en ligne. `net.ipv4.ip_forward = 0` coupe le
+    réseau de tous les conteneurs d'un hôte Docker ou Kubernetes.
+  en: |
+    **Changing a setting with `sysctl -w` or `systemctl stop` and thinking the job is done.**
+
+    `sysctl -w` does not survive a reboot, and `systemctl stop` does not prevent the service from coming
+    back at next boot (or being started by another service). Result: the server is hardened until the next
+    kernel update, then becomes vulnerable again without anyone noticing. Always write the configuration
+    to a file (`/etc/sysctl.d/`, `systemctl disable --now` then `mask`), reboot once to verify, and check
+    regularly with a script or Lynis.
+
+    Another trap: copying a "complete" sysctl file found online. `net.ipv4.ip_forward = 0` cuts the
+    network of every container on a Docker or Kubernetes host.
+
+bestPractice:
+  fr: |
+    - **Un fichier par sujet** dans `/etc/sysctl.d/`, commenté, déployé par Ansible : jamais d'édition directe de `/etc/sysctl.conf`.
+    - **Désinstallez plutôt que désactiver** ; ce qui doit rester mais ne doit pas tourner est **masqué**.
+    - **Un compte par personne**, `sudo` pour l'administration, compte `root` sans mot de passe utilisable (`sudo passwd -l root`).
+    - **Comptes de service sans shell** : `usermod -s /usr/sbin/nologin myapi`.
+    - **Recherchez les anomalies** : `awk -F: '($3 == 0) {print $1}' /etc/passwd` ne doit afficher que `root`.
+    - **Séparez `/tmp`, `/var/tmp` et `/dev/shm`** avec les options `nodev,nosuid,noexec` dans `/etc/fstab`.
+    - **Isolez chaque service** avec les options de bac à sable systemd et vérifiez avec `systemd-analyze security`.
+  en: |
+    - **One file per topic** in `/etc/sysctl.d/`, commented, deployed by Ansible: never edit `/etc/sysctl.conf` directly.
+    - **Uninstall rather than disable**; what must stay but must not run is **masked**.
+    - **One account per person**, `sudo` for administration, `root` account with no usable password (`sudo passwd -l root`).
+    - **Service accounts without a shell**: `usermod -s /usr/sbin/nologin myapi`.
+    - **Look for anomalies**: `awk -F: '($3 == 0) {print $1}' /etc/passwd` must print `root` only.
+    - **Separate `/tmp`, `/var/tmp` and `/dev/shm`** with the `nodev,nosuid,noexec` options in `/etc/fstab`.
+    - **Isolate every service** with the systemd sandboxing options and verify with `systemd-analyze security`.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un script Bash `check-sysctl.sh` qui vérifie que les cinq clés suivantes ont la valeur
+      attendue sur la machine :
+
+      | Clé | Valeur attendue |
+      |---|---|
+      | `net.ipv4.tcp_syncookies` | `1` |
+      | `net.ipv4.conf.all.rp_filter` | `1` |
+      | `net.ipv4.conf.all.accept_redirects` | `0` |
+      | `kernel.randomize_va_space` | `2` |
+      | `kernel.kptr_restrict` | `2` |
+
+      Le script affiche `PASS` ou `FAIL` pour chaque clé (avec la valeur réelle en cas d'échec) et se termine
+      avec le code `1` si au moins une clé est non conforme.
+    en: |
+      Write a Bash script `check-sysctl.sh` that verifies that the five keys below have the expected value
+      on the machine:
+
+      | Key | Expected value |
+      |---|---|
+      | `net.ipv4.tcp_syncookies` | `1` |
+      | `net.ipv4.conf.all.rp_filter` | `1` |
+      | `net.ipv4.conf.all.accept_redirects` | `0` |
+      | `kernel.randomize_va_space` | `2` |
+      | `kernel.kptr_restrict` | `2` |
+
+      The script prints `PASS` or `FAIL` for each key (with the actual value on failure) and exits with
+      code `1` if at least one key is not compliant.
+  solution:
+    file: check-sysctl.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      # Compares live kernel parameters with the hardened baseline.
+      set -uo pipefail
+
+      # key=expected pairs: the baseline lives in one place
+      BASELINE="
+      net.ipv4.tcp_syncookies=1
+      net.ipv4.conf.all.rp_filter=1
+      net.ipv4.conf.all.accept_redirects=0
+      kernel.randomize_va_space=2
+      kernel.kptr_restrict=2
+      "
+
+      failed=0
+      for pair in $BASELINE; do
+        key="${pair%%=*}"
+        expected="${pair##*=}"
+        # -n prints the value only; a missing key is reported, not ignored
+        actual="$(sysctl -n "$key" 2>/dev/null || echo "missing")"
+
+        if [ "$actual" = "$expected" ]; then
+          echo "PASS $key = $actual"
+        else
+          echo "FAIL $key = $actual (expected $expected)"
+          failed=1
+        fi
+      done
+
+      exit "$failed"
+    note:
+      fr: "Ce script lit l'état **réel** du noyau, pas le fichier de configuration : il détecte donc aussi un fichier correct qui n'a jamais été rechargé. Planifiez-le ou branchez-le dans votre supervision."
+      en: "This script reads the **live** kernel state, not the configuration file: it therefore also catches a correct file that was never reloaded. Schedule it or plug it into your monitoring."
+
+quiz:
+  - q:
+      fr: "Comment rendre un réglage sysctl permanent ?"
+      en: "How do you make a sysctl setting permanent?"
+    options:
+      fr:
+        - "Avec `sysctl -w clé=valeur`"
+        - "En redémarrant le serveur deux fois"
+        - "En l'écrivant dans un fichier de `/etc/sysctl.d/` puis en lançant `sysctl --system`"
+        - "En modifiant directement `/proc/sys`"
+      en:
+        - "With `sysctl -w key=value`"
+        - "By rebooting the server twice"
+        - "By writing it to a file in `/etc/sysctl.d/` then running `sysctl --system`"
+        - "By editing `/proc/sys` directly"
+    answer: 2
+    why:
+      fr: "`sysctl -w` et l'écriture dans `/proc/sys` ne modifient que l'état en mémoire. Seuls les fichiers de `/etc/sysctl.d/` sont relus à chaque démarrage."
+      en: "`sysctl -w` and writing to `/proc/sys` only change the in-memory state. Only the files in `/etc/sysctl.d/` are read again at every boot."
+  - q:
+      fr: "À quoi sert `net.ipv4.tcp_syncookies = 1` ?"
+      en: "What is `net.ipv4.tcp_syncookies = 1` for?"
+    options:
+      fr:
+        - "À résister aux attaques par inondation de paquets SYN"
+        - "À chiffrer les connexions TCP"
+        - "À stocker les cookies HTTP dans le noyau"
+        - "À désactiver IPv6"
+      en:
+        - "To withstand SYN flood attacks"
+        - "To encrypt TCP connections"
+        - "To store HTTP cookies in the kernel"
+        - "To disable IPv6"
+    answer: 0
+    why:
+      fr: "Avec les SYN cookies, le noyau n'alloue pas de mémoire pour chaque demande de connexion inachevée : la file d'attente ne peut plus être saturée."
+      en: "With SYN cookies the kernel does not allocate memory for each half-open connection request: the queue can no longer be exhausted."
+  - q:
+      fr: "Quelle est la différence entre `systemctl disable` et `systemctl mask` ?"
+      en: "What is the difference between `systemctl disable` and `systemctl mask`?"
+    options:
+      fr:
+        - "Aucune, ce sont deux alias"
+        - "`disable` supprime le paquet, `mask` le conserve"
+        - "`mask` ne fonctionne que pour les sockets"
+        - "`disable` empêche le démarrage automatique ; `mask` rend tout démarrage impossible, même manuel ou par dépendance"
+      en:
+        - "None, they are two aliases"
+        - "`disable` removes the package, `mask` keeps it"
+        - "`mask` only works for sockets"
+        - "`disable` prevents automatic start; `mask` makes any start impossible, even manual or as a dependency"
+    answer: 3
+    why:
+      fr: "Un service désactivé peut encore être démarré par un autre service ou par un administrateur. Masqué, son unité pointe vers `/dev/null`."
+      en: "A disabled service can still be started by another service or by an administrator. Once masked, its unit points to `/dev/null`."
+  - q:
+      fr: "Pourquoi `kernel.randomize_va_space = 2` complique-t-il l'exploitation d'une faille mémoire ?"
+      en: "Why does `kernel.randomize_va_space = 2` make memory flaws harder to exploit?"
+    options:
+      fr:
+        - "Il chiffre la mémoire vive"
+        - "Il place la pile, le tas et les bibliothèques à des adresses aléatoires à chaque exécution"
+        - "Il interdit l'exécution de tout programme compilé"
+        - "Il double la quantité de mémoire disponible"
+      en:
+        - "It encrypts the RAM"
+        - "It places the stack, heap and libraries at random addresses on every run"
+        - "It forbids running any compiled program"
+        - "It doubles the amount of available memory"
+    answer: 1
+    why:
+      fr: "C'est l'ASLR (*Address Space Layout Randomization*) : l'attaquant ne peut plus prévoir l'adresse du code ou des données qu'il veut détourner."
+      en: "This is ASLR (*Address Space Layout Randomization*): the attacker can no longer predict the address of the code or data they want to hijack."
+  - q:
+      fr: "Vous modifiez `PASS_MAX_DAYS` dans `/etc/login.defs`. Quels comptes sont concernés ?"
+      en: "You change `PASS_MAX_DAYS` in `/etc/login.defs`. Which accounts are affected?"
+    options:
+      fr:
+        - "Tous les comptes, immédiatement"
+        - "Uniquement le compte root"
+        - "Uniquement les comptes créés après la modification ; les comptes existants se règlent avec `chage`"
+        - "Aucun, ce fichier n'est plus lu"
+      en:
+        - "All accounts, immediately"
+        - "Only the root account"
+        - "Only accounts created after the change; existing accounts are adjusted with `chage`"
+        - "None, that file is no longer read"
+    answer: 2
+    why:
+      fr: "`login.defs` fournit les valeurs par défaut utilisées par `useradd`. Les comptes déjà créés gardent leurs valeurs dans `/etc/shadow` jusqu'à ce que `chage` les modifie."
+      en: "`login.defs` provides the defaults used by `useradd`. Existing accounts keep their values in `/etc/shadow` until `chage` changes them."

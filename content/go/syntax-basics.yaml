@@ -1,0 +1,573 @@
+description:
+  fr: "Découvrir Go à partir de zéro : installation, variables, types, boucles, slices, maps et fonctions, avec des exemples orientés sécurité."
+  en: "Discover Go from scratch: installation, variables, types, loops, slices, maps and functions, with security-oriented examples."
+duration: 30
+
+intro:
+  fr: |
+    **Go** (ou *Golang*) est un langage créé par Google en 2009. Il est **compilé** : votre code est transformé
+    en un seul fichier exécutable, rapide, sans dépendance à installer sur la machine cible. C'est pour cela
+    que la plupart des outils que vous utiliserez en DevSecOps sont écrits en Go : **Docker**, **Kubernetes**,
+    **Terraform**, **Trivy**, **Gitleaks**, **Cosign**...
+
+    Pensez à un couteau suisse : un seul objet, solide, que l'on glisse dans sa poche et qui fonctionne partout.
+    Un programme Python ressemble plutôt à une caisse à outils : très pratique, mais il faut transporter la
+    caisse (l'interpréteur et les bibliothèques) avec soi.
+
+    Dans cette leçon, vous partez de zéro : vous installez Go, écrivez votre premier programme, puis vous
+    apprenez les variables, les boucles, les *slices*, les *maps* et les fonctions en analysant des ports
+    ouverts et un journal d'authentification.
+  en: |
+    **Go** (or *Golang*) is a language created by Google in 2009. It is **compiled**: your code is turned into
+    a single, fast executable file with no dependency to install on the target machine. That is why most of
+    the tools you will use in DevSecOps are written in Go: **Docker**, **Kubernetes**, **Terraform**,
+    **Trivy**, **Gitleaks**, **Cosign**...
+
+    Think of a Swiss army knife: one solid object that fits in your pocket and works everywhere. A Python
+    program is more like a toolbox: very handy, but you must carry the box (the interpreter and the
+    libraries) around with you.
+
+    In this lesson you start from zero: you install Go, write your first program, then learn variables,
+    loops, *slices*, *maps* and functions while analysing open ports and an authentication log.
+
+sections:
+  - heading:
+      fr: "Pourquoi Go en DevSecOps, et comment le lancer"
+      en: "Why Go for DevSecOps, and how to run it"
+    body:
+      fr: |
+        | | Bash | Python | Go |
+        |---|---|---|---|
+        | Exécution | Interprété | Interprété | Compilé en binaire natif |
+        | Déploiement | Script + outils système | Interpréteur + paquets `pip` | **Un seul fichier** |
+        | Typage | Aucun | Dynamique | **Statique** (erreurs vues à la compilation) |
+        | Concurrence | Limitée | Limitée par le GIL | **Goroutines** natives |
+        | Usage typique | Colle entre commandes | Scripts, API, automatisation | Outils CLI, scanners, microservices |
+
+        Installez Go depuis [go.dev/dl](https://go.dev/dl/), puis créez un projet :
+
+        ```bash
+        mkdir hello && cd hello
+        go mod init example.com/hello   # creates go.mod (the project file)
+        go run .                        # compile and run in one step
+        go build -o hello .             # produce the executable
+        gofmt -w .                      # format the code the standard way
+        ```
+
+        Tout programme exécutable commence par `package main` et contient une fonction `func main()`.
+        Les bibliothèques s'importent avec `import`. Go est strict : un import ou une variable **non utilisé**
+        est une **erreur de compilation**. C'est voulu : moins de code mort, moins de surprises.
+      en: |
+        | | Bash | Python | Go |
+        |---|---|---|---|
+        | Execution | Interpreted | Interpreted | Compiled to a native binary |
+        | Deployment | Script + system tools | Interpreter + `pip` packages | **One single file** |
+        | Typing | None | Dynamic | **Static** (errors caught at compile time) |
+        | Concurrency | Limited | Limited by the GIL | Native **goroutines** |
+        | Typical use | Glue between commands | Scripts, APIs, automation | CLI tools, scanners, microservices |
+
+        Install Go from [go.dev/dl](https://go.dev/dl/), then create a project:
+
+        ```bash
+        mkdir hello && cd hello
+        go mod init example.com/hello   # creates go.mod (the project file)
+        go run .                        # compile and run in one step
+        go build -o hello .             # produce the executable
+        gofmt -w .                      # format the code the standard way
+        ```
+
+        Every executable program starts with `package main` and contains a `func main()` function.
+        Libraries are imported with `import`. Go is strict: an **unused** import or variable is a
+        **compile error**. This is deliberate: less dead code, fewer surprises.
+  - heading:
+      fr: "Variables, types et valeurs zéro"
+      en: "Variables, types and zero values"
+    body:
+      fr: |
+        | Type | Exemple | Valeur zéro |
+        |---|---|---|
+        | `string` | `"nginx"` | `""` |
+        | `int`, `int64`, `uint16` | `443` | `0` |
+        | `float64` | `9.8` | `0` |
+        | `bool` | `true` | `false` |
+        | `[]string` (slice) | `[]string{"a", "b"}` | `nil` (liste vide) |
+        | `map[string]int` | `map[string]int{"ssh": 22}` | `nil` |
+
+        - `name := "value"` déclare **et** initialise (uniquement à l'intérieur d'une fonction).
+        - `var count int` déclare sans valeur : Go met la **valeur zéro**. Il n'existe pas de variable
+          « non initialisée » contenant des données aléatoires, ce qui supprime toute une famille de bugs.
+        - `const maxRetries = 3` crée une constante.
+        - Le type ne change jamais : `port := 443` puis `port = "https"` ne compile pas.
+
+        Les conversions sont **explicites** : `float64(count)`, `strconv.Itoa(port)`,
+        `strconv.Atoi("443")`. Go ne transforme jamais silencieusement un texte en nombre.
+      en: |
+        | Type | Example | Zero value |
+        |---|---|---|
+        | `string` | `"nginx"` | `""` |
+        | `int`, `int64`, `uint16` | `443` | `0` |
+        | `float64` | `9.8` | `0` |
+        | `bool` | `true` | `false` |
+        | `[]string` (slice) | `[]string{"a", "b"}` | `nil` (empty list) |
+        | `map[string]int` | `map[string]int{"ssh": 22}` | `nil` |
+
+        - `name := "value"` declares **and** initialises (only inside a function).
+        - `var count int` declares without a value: Go sets the **zero value**. There is no such thing as an
+          "uninitialised" variable holding random data, which removes a whole family of bugs.
+        - `const maxRetries = 3` creates a constant.
+        - The type never changes: `port := 443` then `port = "https"` does not compile.
+
+        Conversions are **explicit**: `float64(count)`, `strconv.Itoa(port)`, `strconv.Atoi("443")`.
+        Go never silently turns text into a number.
+  - heading:
+      fr: "Conditions, boucles, slices, maps et fonctions"
+      en: "Conditions, loops, slices, maps and functions"
+    body:
+      fr: |
+        - **`if`** : pas de parenthèses, accolades obligatoires : `if port < 1024 { ... } else { ... }`.
+        - **`for`** est la **seule** boucle de Go : `for i := 0; i < 3; i++ {}`, `for condition {}` (équivalent
+          de `while`) et `for i, v := range liste {}` pour parcourir une collection.
+        - **`switch`** : pas de `break` à écrire, un `case` peut lister plusieurs valeurs.
+        - **Slice** : liste dynamique. `append(s, x)` ajoute, `len(s)` donne la taille, `s[0]` lit un élément.
+        - **Map** : dictionnaire clé/valeur. `m["ssh"] = 22` écrit, `v, ok := m["ftp"]` lit et indique si la
+          clé existe. L'ordre de parcours d'une map est **aléatoire** : triez les clés pour un rapport stable.
+        - **Fonction** : `func nom(param type) typeRetour`. Une fonction peut renvoyer **plusieurs valeurs**,
+          et par convention la dernière est une `error` : `valeur, err := faireQuelqueChose()`.
+
+        Le caractère `_` (*blank identifier*) sert à ignorer une valeur dont on n'a pas besoin, par exemple
+        l'indice dans `for _, v := range liste`.
+      en: |
+        - **`if`**: no parentheses, braces are mandatory: `if port < 1024 { ... } else { ... }`.
+        - **`for`** is the **only** loop in Go: `for i := 0; i < 3; i++ {}`, `for condition {}` (the
+          equivalent of `while`) and `for i, v := range list {}` to walk through a collection.
+        - **`switch`**: no `break` to write, a `case` can list several values.
+        - **Slice**: a dynamic list. `append(s, x)` adds, `len(s)` gives the size, `s[0]` reads an element.
+        - **Map**: a key/value dictionary. `m["ssh"] = 22` writes, `v, ok := m["ftp"]` reads and tells you
+          whether the key exists. Map iteration order is **random**: sort the keys for a stable report.
+        - **Function**: `func name(param type) returnType`. A function can return **several values**, and by
+          convention the last one is an `error`: `value, err := doSomething()`.
+
+        The `_` character (*blank identifier*) discards a value you do not need, for example the index in
+        `for _, v := range list`.
+
+examples:
+  - title:
+      fr: "Premier programme : variables, constantes et affichage"
+      en: "First program: variables, constants and printing"
+    file: main.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import "fmt"
+
+      func main() {
+      	// := declares and initialises a variable; the type is inferred
+      	tool := "trivy"
+      	findings := 3
+      	critical := true
+
+      	// var declares a variable with its zero value (0 for an int)
+      	var scanned int
+
+      	// A constant can never be modified afterwards
+      	const maxFindings = 10
+
+      	scanned = 42
+      	fmt.Println("Hello, DevSecOps!")
+      	// %s = string, %d = integer, %t = boolean
+      	fmt.Printf("%s scanned %d images and found %d issues\n", tool, scanned, findings)
+      	fmt.Printf("critical=%t, budget left=%d\n", critical, maxFindings-findings)
+      }
+    output: |
+      Hello, DevSecOps!
+      trivy scanned 42 images and found 3 issues
+      critical=true, budget left=7
+    note:
+      fr: "Enregistrez ce fichier sous `main.go` dans un dossier contenant un `go.mod`, puis lancez `go run .`. Essayez de supprimer la ligne qui utilise `critical` : le compilateur refuse la variable inutilisée."
+      en: "Save this file as `main.go` in a folder containing a `go.mod`, then run `go run .`. Try removing the line that uses `critical`: the compiler rejects the unused variable."
+
+  - title:
+      fr: "Slices, maps, boucle for et switch : classer des ports ouverts"
+      en: "Slices, maps, for loop and switch: classifying open ports"
+    file: ports.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import (
+      	"fmt"
+      	"slices"
+      	"strings"
+      )
+
+      // riskLevel classifies a TCP port. No "break" needed: Go never falls through.
+      func riskLevel(port int) string {
+      	switch port {
+      	case 21, 23:
+      		return "HIGH (clear-text protocol)"
+      	case 3389, 5900:
+      		return "MEDIUM (remote desktop)"
+      	case 22, 443:
+      		return "LOW (encrypted)"
+      	default:
+      		return "UNKNOWN"
+      	}
+      }
+
+      func main() {
+      	// A slice is a growable list
+      	openPorts := []int{443, 23, 22, 3389}
+      	openPorts = append(openPorts, 21)
+
+      	// Sort so that the report always comes out in the same order
+      	slices.Sort(openPorts)
+
+      	// A map stores key -> value pairs
+      	services := map[int]string{21: "ftp", 22: "ssh", 23: "telnet", 443: "https", 3389: "rdp"}
+
+      	high := 0
+      	// range returns the index and the value; _ discards the index
+      	for _, port := range openPorts {
+      		level := riskLevel(port)
+      		if strings.HasPrefix(level, "HIGH") {
+      			high++
+      		}
+      		fmt.Printf("%-5d %-7s %s\n", port, services[port], level)
+      	}
+      	fmt.Printf("%d high-risk port(s) out of %d\n", high, len(openPorts))
+      }
+    output: |
+      21    ftp     HIGH (clear-text protocol)
+      22    ssh     LOW (encrypted)
+      23    telnet  HIGH (clear-text protocol)
+      443   https   LOW (encrypted)
+      3389  rdp     MEDIUM (remote desktop)
+      2 high-risk port(s) out of 5
+    note:
+      fr: "`slices.Sort` trie la liste, `map[int]string` associe un port à son service, et `%-5d` aligne les colonnes. FTP (21) et Telnet (23) transmettent les mots de passe en clair : ce sont les deux ports à fermer en priorité."
+      en: "`slices.Sort` sorts the list, `map[int]string` maps a port to its service, and `%-5d` aligns the columns. FTP (21) and Telnet (23) send passwords in clear text: these are the two ports to close first."
+
+  - title:
+      fr: "Fonctions à plusieurs valeurs de retour : vérifier une politique de mot de passe"
+      en: "Functions with several return values: checking a password policy"
+    file: password.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"errors"
+      	"fmt"
+      	"unicode"
+      )
+
+      // checkPassword returns a score AND an error: the caller must handle both
+      func checkPassword(pw string) (int, error) {
+      	if len(pw) < 12 {
+      		return 0, errors.New("password must be at least 12 characters")
+      	}
+
+      	var hasUpper, hasLower, hasDigit, hasSymbol bool
+      	// Ranging over a string yields its characters (runes)
+      	for _, r := range pw {
+      		switch {
+      		case unicode.IsUpper(r):
+      			hasUpper = true
+      		case unicode.IsLower(r):
+      			hasLower = true
+      		case unicode.IsDigit(r):
+      			hasDigit = true
+      		default:
+      			hasSymbol = true
+      		}
+      	}
+
+      	score := 0
+      	for _, ok := range []bool{hasUpper, hasLower, hasDigit, hasSymbol} {
+      		if ok {
+      			score++
+      		}
+      	}
+      	if score < 3 {
+      		return score, errors.New("password needs 3 of: upper, lower, digit, symbol")
+      	}
+      	return score, nil // nil means "no error"
+      }
+
+      func main() {
+      	candidates := []string{"admin", "correcthorsebattery", "Tr0ub4dor&3-Vault!"}
+      	for _, pw := range candidates {
+      		score, err := checkPassword(pw)
+      		if err != nil {
+      			fmt.Printf("REJECTED %q: %v\n", pw, err)
+      			continue
+      		}
+      		fmt.Printf("ACCEPTED %q: score %d/4\n", pw, score)
+      	}
+      }
+    output: |
+      REJECTED "admin": password must be at least 12 characters
+      REJECTED "correcthorsebattery": password needs 3 of: upper, lower, digit, symbol
+      ACCEPTED "Tr0ub4dor&3-Vault!": score 4/4
+    note:
+      fr: "Le motif `valeur, err := f()` suivi de `if err != nil` est le cœur de Go : une erreur est une valeur ordinaire que l'on **doit** traiter. `%q` affiche la chaîne entre guillemets, pratique pour voir les espaces cachés."
+      en: "The `value, err := f()` pattern followed by `if err != nil` is the heart of Go: an error is an ordinary value that you **must** handle. `%q` prints the string in quotes, handy to reveal hidden spaces."
+
+  - title:
+      fr: "Cas réel : repérer une attaque par force brute dans un journal SSH"
+      en: "Real case: spotting a brute-force attack in an SSH log"
+    file: authlog.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import (
+      	"fmt"
+      	"slices"
+      	"strings"
+      )
+
+      // Sample of /var/log/auth.log. A raw string (backticks) keeps the line breaks.
+      const authLog = `Nov 27 10:01:12 web1 sshd[811]: Failed password for root from 203.0.113.7 port 51122 ssh2
+      Nov 27 10:01:15 web1 sshd[811]: Failed password for admin from 203.0.113.7 port 51124 ssh2
+      Nov 27 10:02:03 web1 sshd[902]: Accepted publickey for deploy from 198.51.100.4 port 40022 ssh2
+      Nov 27 10:02:41 web1 sshd[811]: Failed password for root from 203.0.113.7 port 51130 ssh2
+      Nov 27 10:03:09 web1 sshd[950]: Failed password for git from 192.0.2.55 port 33871 ssh2`
+
+      func main() {
+      	failures := map[string]int{} // IP address -> number of failed logins
+
+      	for _, line := range strings.Split(authLog, "\n") {
+      		if !strings.Contains(line, "Failed password") {
+      			continue
+      		}
+      		fields := strings.Fields(line) // split on spaces
+      		// The IP address is the word that follows "from"
+      		for i, word := range fields {
+      			if word == "from" && i+1 < len(fields) {
+      				failures[fields[i+1]]++
+      			}
+      		}
+      	}
+
+      	// Map order is random in Go: sort the keys to get a stable report
+      	ips := make([]string, 0, len(failures))
+      	for ip := range failures {
+      		ips = append(ips, ip)
+      	}
+      	slices.Sort(ips)
+
+      	const threshold = 3
+      	for _, ip := range ips {
+      		status := "ok"
+      		if failures[ip] >= threshold {
+      			status = "BLOCK (brute force suspected)"
+      		}
+      		fmt.Printf("%-14s %d failed login(s)  %s\n", ip, failures[ip], status)
+      	}
+      }
+    output: |
+      192.0.2.55     1 failed login(s)  ok
+      203.0.113.7    3 failed login(s)  BLOCK (brute force suspected)
+    note:
+      fr: "C'est le principe de **fail2ban**, en 40 lignes : compter les échecs par adresse IP et signaler celles qui dépassent un seuil. Le test `i+1 < len(fields)` évite de lire en dehors du slice, ce qui provoquerait un arrêt brutal (`panic`)."
+      en: "This is the principle behind **fail2ban**, in 40 lines: count failures per IP address and flag those above a threshold. The `i+1 < len(fields)` test avoids reading outside the slice, which would crash the program (`panic`)."
+
+mistake:
+  fr: |
+    **Ignorer une erreur avec `_`.**
+
+    ```go
+    port, _ := strconv.Atoi(userInput) // if userInput is "abc", port is silently 0
+    ```
+
+    Si la conversion échoue, `port` vaut `0` (la valeur zéro) et le programme continue avec une donnée fausse.
+    Dans un outil de sécurité, c'est ainsi qu'un contrôle est « passé » alors qu'il n'a jamais eu lieu.
+    Écrivez toujours `port, err := strconv.Atoi(userInput)` suivi de `if err != nil { ... }`.
+
+    Deuxième piège classique : `:=` à l'intérieur d'un bloc `if` ou `for` crée une **nouvelle** variable qui
+    masque celle de l'extérieur (*shadowing*). Pour modifier une variable existante, utilisez `=`.
+  en: |
+    **Discarding an error with `_`.**
+
+    ```go
+    port, _ := strconv.Atoi(userInput) // if userInput is "abc", port is silently 0
+    ```
+
+    If the conversion fails, `port` is `0` (the zero value) and the program carries on with wrong data.
+    In a security tool, this is how a check gets "passed" although it never ran. Always write
+    `port, err := strconv.Atoi(userInput)` followed by `if err != nil { ... }`.
+
+    Second classic trap: `:=` inside an `if` or `for` block creates a **new** variable that hides the outer
+    one (*shadowing*). To modify an existing variable, use `=`.
+
+bestPractice:
+  fr: |
+    - **Formatez avec `gofmt`** (ou `go fmt ./...`) : tout le code Go du monde a la même présentation, les revues de code se concentrent sur le fond.
+    - **Lancez `go vet ./...`** avant chaque commit : il détecte les erreurs de `Printf`, les copies de verrous, le code inatteignable.
+    - **Traitez chaque `err`** immédiatement après l'appel, et ajoutez du contexte au message.
+    - **Vérifiez les bornes** (`len(s)`) avant d'indexer un slice construit à partir d'une entrée externe.
+    - **Triez les clés d'une map** avant d'afficher un rapport : un résultat stable se compare et se teste.
+    - **Versionnez `go.mod` et `go.sum`** : `go.sum` contient les empreintes des dépendances et protège contre leur altération.
+  en: |
+    - **Format with `gofmt`** (or `go fmt ./...`): all the Go code in the world looks the same, so code reviews focus on substance.
+    - **Run `go vet ./...`** before every commit: it catches `Printf` mistakes, copied locks and unreachable code.
+    - **Handle every `err`** right after the call, and add context to the message.
+    - **Check bounds** (`len(s)`) before indexing a slice built from external input.
+    - **Sort map keys** before printing a report: a stable result can be compared and tested.
+    - **Commit `go.mod` and `go.sum`**: `go.sum` holds the checksums of your dependencies and protects against tampering.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un programme `accounts.go` qui audite une liste de comptes utilisateurs.
+
+      1. Déclarez le slice `users := []string{"alice", "Admin", "bob", "ROOT", "guest", "carol", "test"}`.
+      2. Écrivez une fonction `isDefaultAccount(name string) bool` qui renvoie `true` si le nom, **sans tenir
+         compte de la casse**, est `admin`, `root`, `guest` ou `test` (indice : `strings.ToLower` et une map).
+      3. Dans `main`, affichez une ligne `DEFAULT <nom>` pour chaque compte par défaut, puis le total :
+         `4 default account(s) out of 7`.
+    en: |
+      Write a program `accounts.go` that audits a list of user accounts.
+
+      1. Declare the slice `users := []string{"alice", "Admin", "bob", "ROOT", "guest", "carol", "test"}`.
+      2. Write a function `isDefaultAccount(name string) bool` that returns `true` when the name,
+         **ignoring case**, is `admin`, `root`, `guest` or `test` (hint: `strings.ToLower` and a map).
+      3. In `main`, print a `DEFAULT <name>` line for every default account, then the total:
+         `4 default account(s) out of 7`.
+  solution:
+    file: accounts.go
+    lang: go
+    code: |
+      package main
+
+      import (
+      	"fmt"
+      	"strings"
+      )
+
+      // A map used as a set: the key exists or it does not
+      var defaultAccounts = map[string]bool{
+      	"admin": true,
+      	"root":  true,
+      	"guest": true,
+      	"test":  true,
+      }
+
+      // isDefaultAccount compares in lower case so that "ROOT" and "Admin" are caught too
+      func isDefaultAccount(name string) bool {
+      	return defaultAccounts[strings.ToLower(name)]
+      }
+
+      func main() {
+      	users := []string{"alice", "Admin", "bob", "ROOT", "guest", "carol", "test"}
+
+      	count := 0
+      	for _, user := range users {
+      		if isDefaultAccount(user) {
+      			count++
+      			fmt.Println("DEFAULT", user)
+      		}
+      	}
+      	fmt.Printf("%d default account(s) out of %d\n", count, len(users))
+      }
+    note:
+      fr: "Lire une clé absente d'une `map[string]bool` renvoie la valeur zéro `false` : pas besoin de `if`. Le programme affiche Admin, ROOT, guest et test, puis `4 default account(s) out of 7`."
+      en: "Reading a missing key from a `map[string]bool` returns the zero value `false`: no `if` needed. The program prints Admin, ROOT, guest and test, then `4 default account(s) out of 7`."
+
+quiz:
+  - q:
+      fr: "Que produit la commande `go build` ?"
+      en: "What does the `go build` command produce?"
+    options:
+      fr:
+        - "Un fichier de bytecode à lancer avec une machine virtuelle"
+        - "Un exécutable natif autonome"
+        - "Une archive ZIP contenant le code source"
+        - "Un conteneur Docker"
+      en:
+        - "A bytecode file to run with a virtual machine"
+        - "A standalone native executable"
+        - "A ZIP archive containing the source code"
+        - "A Docker container"
+    answer: 1
+    why:
+      fr: "Go compile le code en un binaire natif unique, qui s'exécute sans interpréteur ni bibliothèque à installer."
+      en: "Go compiles the code into a single native binary that runs without any interpreter or library to install."
+  - q:
+      fr: "Que vaut `count` après `var count int` ?"
+      en: "What is the value of `count` after `var count int`?"
+    options:
+      fr:
+        - "Une valeur aléatoire présente en mémoire"
+        - "`nil`"
+        - "Le programme ne compile pas"
+        - "`0`, la valeur zéro du type `int`"
+      en:
+        - "A random value found in memory"
+        - "`nil`"
+        - "The program does not compile"
+        - "`0`, the zero value of the `int` type"
+    answer: 3
+    why:
+      fr: "Toute variable Go est initialisée à la valeur zéro de son type : `0`, `\"\"`, `false` ou `nil`."
+      en: "Every Go variable is initialised to the zero value of its type: `0`, `\"\"`, `false` or `nil`."
+  - q:
+      fr: "Que se passe-t-il si vous importez un paquet sans l'utiliser ?"
+      en: "What happens if you import a package without using it?"
+    options:
+      fr:
+        - "La compilation échoue"
+        - "Un simple avertissement s'affiche"
+        - "Le paquet est ignoré silencieusement"
+        - "Le programme plante au démarrage"
+      en:
+        - "Compilation fails"
+        - "A simple warning is displayed"
+        - "The package is silently ignored"
+        - "The program crashes at startup"
+    answer: 0
+    why:
+      fr: "Un import ou une variable locale inutilisé est une erreur de compilation en Go, pour garder le code propre."
+      en: "An unused import or local variable is a compile error in Go, to keep the code clean."
+  - q:
+      fr: "Pourquoi trier les clés d'une map avant d'afficher un rapport ?"
+      en: "Why sort the keys of a map before printing a report?"
+    options:
+      fr:
+        - "Parce qu'une map non triée perd des éléments"
+        - "Parce que le tri chiffre les données"
+        - "Parce que l'ordre de parcours d'une map est aléatoire"
+        - "Parce que `range` ne fonctionne pas sur une map"
+      en:
+        - "Because an unsorted map loses elements"
+        - "Because sorting encrypts the data"
+        - "Because map iteration order is random"
+        - "Because `range` does not work on a map"
+    answer: 2
+    why:
+      fr: "Go rend volontairement aléatoire l'ordre de parcours des maps : sans tri, deux exécutions donnent deux rapports différents."
+      en: "Go deliberately randomises map iteration order: without sorting, two runs produce two different reports."
+  - q:
+      fr: "Pourquoi `port, _ := strconv.Atoi(input)` est-il dangereux ?"
+      en: "Why is `port, _ := strconv.Atoi(input)` dangerous?"
+    options:
+      fr:
+        - "Parce que `_` ralentit le programme"
+        - "Parce que l'erreur est ignorée et `port` vaut 0 si l'entrée est invalide"
+        - "Parce que `Atoi` exécute le texte reçu comme du code"
+        - "Parce que `:=` est interdit avec deux variables"
+      en:
+        - "Because `_` slows the program down"
+        - "Because the error is discarded and `port` is 0 when the input is invalid"
+        - "Because `Atoi` executes the received text as code"
+        - "Because `:=` is forbidden with two variables"
+    answer: 1
+    why:
+      fr: "En ignorant l'erreur, le programme continue avec la valeur zéro au lieu de rejeter l'entrée invalide."
+      en: "By discarding the error, the program continues with the zero value instead of rejecting the invalid input."

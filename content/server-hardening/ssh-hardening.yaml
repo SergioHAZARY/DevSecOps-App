@@ -1,0 +1,584 @@
+description:
+  fr: "Durcir le service SSH : clés à la place des mots de passe, sshd_config restrictif, algorithmes modernes et validation avant rechargement."
+  en: "Harden the SSH service: keys instead of passwords, a restrictive sshd_config, modern algorithms and validation before reload."
+duration: 25
+
+intro:
+  fr: |
+    **SSH** (*Secure Shell*) est la porte d'administration de presque tous les serveurs Linux. C'est aussi
+    le service le plus attaqué d'Internet : un serveur exposé sur le port 22 reçoit des milliers de
+    tentatives de connexion par jour, lancées par des robots qui essaient `root/123456`, `admin/admin`...
+
+    Voyez SSH comme la porte d'entrée d'une banque. Par défaut, elle accepte quiconque connaît un code à
+    quatre chiffres et laisse un nombre illimité d'essais. La durcir, c'est remplacer le code par une clé
+    physique impossible à deviner, n'ouvrir qu'aux employés d'une liste, et refuser le directeur (`root`)
+    s'il ne passe pas d'abord par l'accueil.
+
+    Dans cette leçon, vous allez générer une clé Ed25519, écrire un `sshd_config` durci, le valider avec
+    `sshd -t` avant de le recharger (pour ne jamais vous enfermer dehors) et configurer un rebond par bastion.
+  en: |
+    **SSH** (*Secure Shell*) is the administration door of almost every Linux server. It is also the most
+    attacked service on the Internet: a server exposed on port 22 receives thousands of login attempts per
+    day, launched by bots trying `root/123456`, `admin/admin`...
+
+    Think of SSH as the front door of a bank. By default it lets in anyone who knows a four-digit code and
+    allows unlimited attempts. Hardening it means replacing the code with a physical key that cannot be
+    guessed, opening only to employees on a list, and refusing the director (`root`) unless they go
+    through reception first.
+
+    In this lesson you will generate an Ed25519 key, write a hardened `sshd_config`, validate it with
+    `sshd -t` before reloading (so you never lock yourself out) and configure a jump through a bastion.
+
+sections:
+  - heading:
+      fr: "Clés plutôt que mots de passe"
+      en: "Keys rather than passwords"
+    body:
+      fr: |
+        Un mot de passe se devine, se réutilise et se vole par hameçonnage. Une **paire de clés** fonctionne
+        autrement : la clé **privée** reste sur votre poste (protégée par une phrase de passe), la clé
+        **publique** est déposée sur le serveur dans `~/.ssh/authorized_keys`. Le serveur vérifie que vous
+        possédez la clé privée sans qu'elle ne circule jamais sur le réseau.
+
+        | | Mot de passe | Clé Ed25519 | Clé matérielle FIDO2 (`ed25519-sk`) |
+        |---|---|---|---|
+        | Force brute en ligne | Possible | Irréaliste | Irréaliste |
+        | Vol par hameçonnage | Oui | Non | Non |
+        | Vol si le poste est compromis | Oui | Oui (fichier copiable) | Non (clé non extractible) |
+        | Recommandation | À désactiver | Standard | Comptes à privilèges |
+
+        Générez la clé avec `ssh-keygen -t ed25519 -a 100` : Ed25519 est plus rapide et plus sûr que RSA à
+        taille égale, et `-a 100` renforce la protection de la phrase de passe. Les permissions comptent :
+        `~/.ssh` en `700` et `authorized_keys` en `600`, sinon `sshd` refuse la clé.
+      en: |
+        A password can be guessed, reused and stolen by phishing. A **key pair** works differently: the
+        **private** key stays on your workstation (protected by a passphrase), the **public** key is placed
+        on the server in `~/.ssh/authorized_keys`. The server checks that you hold the private key without
+        it ever travelling over the network.
+
+        | | Password | Ed25519 key | FIDO2 hardware key (`ed25519-sk`) |
+        |---|---|---|---|
+        | Online brute force | Possible | Unrealistic | Unrealistic |
+        | Stolen by phishing | Yes | No | No |
+        | Stolen if the workstation is compromised | Yes | Yes (copyable file) | No (key cannot be extracted) |
+        | Recommendation | Disable | Standard | Privileged accounts |
+
+        Generate the key with `ssh-keygen -t ed25519 -a 100`: Ed25519 is faster and safer than RSA at the
+        same size, and `-a 100` strengthens the passphrase protection. Permissions matter: `~/.ssh` must be
+        `700` and `authorized_keys` `600`, otherwise `sshd` refuses the key.
+  - heading:
+      fr: "Les directives essentielles de sshd_config"
+      en: "The essential sshd_config directives"
+    body:
+      fr: |
+        | Directive | Valeur durcie | Raison |
+        |---|---|---|
+        | `PermitRootLogin` | `no` | `root` existe partout : c'est la cible n°1. On se connecte avec son compte puis `sudo` |
+        | `PasswordAuthentication` | `no` | Supprime la force brute et le vol de mots de passe |
+        | `KbdInteractiveAuthentication` | `no` | Ferme l'autre chemin qui mène aux mots de passe (via PAM) |
+        | `AllowGroups` / `AllowUsers` | liste explicite | Un compte de service ou oublié ne peut pas ouvrir de session |
+        | `MaxAuthTries` | `3` | Limite les essais par connexion |
+        | `LoginGraceTime` | `30` | Libère vite les connexions non authentifiées |
+        | `X11Forwarding`, `AllowTcpForwarding`, `AllowAgentForwarding` | `no` | Empêche d'utiliser le serveur comme tunnel ou de détourner l'agent |
+        | `LogLevel` | `VERBOSE` | Journalise l'empreinte de la clé utilisée : on sait *quelle* clé s'est connectée |
+
+        **Règle de lecture à connaître :** pour chaque directive, `sshd` retient la **première** valeur
+        rencontrée. Sur Debian et Ubuntu, `sshd_config` commence par `Include /etc/ssh/sshd_config.d/*.conf` :
+        les fichiers de ce dossier, lus par ordre alphabétique, passent donc avant le fichier principal. Un
+        fichier `50-cloud-init.conf` contenant `PasswordAuthentication yes` annule silencieusement votre
+        réglage placé plus bas. Vérifiez toujours la configuration **effective** avec `sudo sshd -T`.
+      en: |
+        | Directive | Hardened value | Reason |
+        |---|---|---|
+        | `PermitRootLogin` | `no` | `root` exists everywhere: it is target number one. Log in with your account, then `sudo` |
+        | `PasswordAuthentication` | `no` | Removes brute force and password theft |
+        | `KbdInteractiveAuthentication` | `no` | Closes the other path leading to passwords (through PAM) |
+        | `AllowGroups` / `AllowUsers` | explicit list | A service or forgotten account cannot open a session |
+        | `MaxAuthTries` | `3` | Limits attempts per connection |
+        | `LoginGraceTime` | `30` | Quickly frees unauthenticated connections |
+        | `X11Forwarding`, `AllowTcpForwarding`, `AllowAgentForwarding` | `no` | Stops the server being used as a tunnel or the agent being hijacked |
+        | `LogLevel` | `VERBOSE` | Logs the fingerprint of the key used: you know *which* key logged in |
+
+        **A parsing rule you must know:** for each directive, `sshd` keeps the **first** value it meets.
+        On Debian and Ubuntu, `sshd_config` starts with `Include /etc/ssh/sshd_config.d/*.conf`: the files
+        in that folder, read in alphabetical order, therefore come before the main file. A
+        `50-cloud-init.conf` file containing `PasswordAuthentication yes` silently cancels your setting
+        placed further down. Always check the **effective** configuration with `sudo sshd -T`.
+  - heading:
+      fr: "Algorithmes cryptographiques"
+      en: "Cryptographic algorithms"
+    body:
+      fr: |
+        Une connexion SSH négocie quatre familles d'algorithmes. Les versions récentes d'OpenSSH ont de bons
+        réglages par défaut, mais restreindre la liste élimine les algorithmes hérités et fait taire les
+        scanners de conformité.
+
+        | Famille | Directive | À garder | À bannir |
+        |---|---|---|---|
+        | Échange de clés | `KexAlgorithms` | `curve25519-sha256`, `sntrup761x25519-sha512@openssh.com` | `diffie-hellman-group1-sha1`, `...-group14-sha1` |
+        | Chiffrement | `Ciphers` | `chacha20-poly1305@openssh.com`, `aes256-gcm@openssh.com` | `3des-cbc`, `aes*-cbc`, `arcfour` |
+        | Intégrité | `MACs` | `hmac-sha2-512-etm@openssh.com`, `hmac-sha2-256-etm@openssh.com` | `hmac-md5`, `hmac-sha1` |
+        | Clé d'hôte | `HostKeyAlgorithms` | `ssh-ed25519`, `rsa-sha2-512` | `ssh-rsa` (SHA-1), `ssh-dss` |
+
+        `sntrup761x25519` est un échange de clés hybride **post-quantique** ; OpenSSH 9.9 et suivants
+        ajoutent `mlkem768x25519-sha256`. Attention : un algorithme inconnu de votre version empêche `sshd`
+        de démarrer. Listez ce que votre version connaît avec `ssh -Q kex`, `ssh -Q cipher`, `ssh -Q mac`,
+        et auditez le résultat depuis l'extérieur avec l'outil libre `ssh-audit`.
+      en: |
+        An SSH connection negotiates four families of algorithms. Recent OpenSSH versions have good
+        defaults, but restricting the list removes legacy algorithms and silences compliance scanners.
+
+        | Family | Directive | Keep | Ban |
+        |---|---|---|---|
+        | Key exchange | `KexAlgorithms` | `curve25519-sha256`, `sntrup761x25519-sha512@openssh.com` | `diffie-hellman-group1-sha1`, `...-group14-sha1` |
+        | Encryption | `Ciphers` | `chacha20-poly1305@openssh.com`, `aes256-gcm@openssh.com` | `3des-cbc`, `aes*-cbc`, `arcfour` |
+        | Integrity | `MACs` | `hmac-sha2-512-etm@openssh.com`, `hmac-sha2-256-etm@openssh.com` | `hmac-md5`, `hmac-sha1` |
+        | Host key | `HostKeyAlgorithms` | `ssh-ed25519`, `rsa-sha2-512` | `ssh-rsa` (SHA-1), `ssh-dss` |
+
+        `sntrup761x25519` is a hybrid **post-quantum** key exchange; OpenSSH 9.9 and later add
+        `mlkem768x25519-sha256`. Beware: an algorithm unknown to your version prevents `sshd` from
+        starting. List what your version supports with `ssh -Q kex`, `ssh -Q cipher`, `ssh -Q mac`, and
+        audit the result from outside with the open-source `ssh-audit` tool.
+
+examples:
+  - title:
+      fr: "Une configuration SSH laxiste, fréquente sur les serveurs loués"
+      en: "A lax SSH configuration, common on rented servers"
+    file: sshd_config
+    lang: ini
+    kind: vulnerable
+    code: |
+      # /etc/ssh/sshd_config as delivered by many hosting images
+
+      Port 22
+
+      # root can log in directly: bots only have to guess ONE password
+      PermitRootLogin yes
+
+      # Passwords accepted: brute force and credential stuffing are possible
+      PasswordAuthentication yes
+
+      # Six attempts per connection, two minutes to authenticate
+      MaxAuthTries 6
+      LoginGraceTime 120
+
+      # No user restriction: every account with a shell can try to log in.
+      # Forwarding enabled: a stolen session becomes a tunnel into the network
+      X11Forwarding yes
+      AllowTcpForwarding yes
+      AllowAgentForwarding yes
+    note:
+      fr: "Avec ce fichier, la sécurité du serveur repose sur la solidité du mot de passe de `root`. Les journaux d'un tel serveur montrent des milliers de lignes `Failed password for root` par jour."
+      en: "With this file, the security of the server rests on the strength of the `root` password. The logs of such a server show thousands of `Failed password for root` lines per day."
+
+  - title:
+      fr: "Une configuration SSH durcie"
+      en: "A hardened SSH configuration"
+    file: /etc/ssh/sshd_config.d/00-hardening.conf
+    lang: ini
+    kind: secure
+    code: |
+      # The 00- prefix makes this file the FIRST one read: for each keyword,
+      # sshd keeps the first value it finds, so nothing can override these lines.
+
+      # --- Who may log in ------------------------------------------------
+      # root never logs in directly: use a personal account, then sudo
+      PermitRootLogin no
+      # Only members of this group may open a session
+      AllowGroups ssh-users
+
+      # --- How they authenticate -----------------------------------------
+      # Keys only: no password can be guessed, reused or phished
+      PubkeyAuthentication yes
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitEmptyPasswords no
+      AuthenticationMethods publickey
+
+      # --- Limit abuse ---------------------------------------------------
+      MaxAuthTries 3
+      MaxSessions 4
+      LoginGraceTime 30
+      # Close sessions that have been dead for 10 minutes (2 x 300 s)
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+      # --- Reduce features -----------------------------------------------
+      # The server is not a tunnel, a proxy or an X11 display
+      X11Forwarding no
+      AllowTcpForwarding no
+      AllowAgentForwarding no
+      PermitTunnel no
+      PermitUserEnvironment no
+
+      # --- Logging -------------------------------------------------------
+      # VERBOSE records the fingerprint of the key used at each login
+      LogLevel VERBOSE
+
+      # --- Cryptography (check your version with: ssh -Q kex) ------------
+      KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org
+      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+      HostKeyAlgorithms ssh-ed25519,rsa-sha2-512,rsa-sha2-256
+    note:
+      fr: "Placer le durcissement dans un fichier séparé de `sshd_config.d/` le rend facile à déployer par Ansible et à comparer entre serveurs. Avant de l'activer, ajoutez votre compte au groupe : `sudo groupadd -f ssh-users && sudo usermod -aG ssh-users alice`."
+      en: "Putting the hardening in a separate file under `sshd_config.d/` makes it easy to deploy with Ansible and to compare across servers. Before enabling it, add your account to the group: `sudo groupadd -f ssh-users && sudo usermod -aG ssh-users alice`."
+
+  - title:
+      fr: "Déployer sans s'enfermer dehors : clé, sshd -t, rechargement, test"
+      en: "Deploying without locking yourself out: key, sshd -t, reload, test"
+    file: deploy-ssh-hardening.sh
+    lang: bash
+    kind: secure
+    code: |
+      # --- On your workstation -------------------------------------------
+      # Ed25519 key, 100 KDF rounds to slow down passphrase cracking
+      ssh-keygen -t ed25519 -a 100 -C "alice@laptop" -f ~/.ssh/id_ed25519
+      # Install the PUBLIC key on the server (still using the password, once)
+      ssh-copy-id -i ~/.ssh/id_ed25519.pub alice@192.0.2.10
+
+      # --- On the server (keep this session open until the final test!) ---
+      sudo groupadd -f ssh-users
+      sudo usermod -aG ssh-users alice
+
+      # 1. Syntax check: prints nothing and returns 0 when the files are valid
+      sudo sshd -t
+
+      # 2. Effective configuration, after Include files and defaults
+      sudo sshd -T | grep -Ei '^(permitrootlogin|passwordauthentication|maxauthtries|allowgroups) '
+
+      # 3. Reload only if the check passed. A reload keeps existing sessions alive.
+      #    The unit is named "ssh" on Debian/Ubuntu and "sshd" on RHEL.
+      sudo sshd -t && sudo systemctl reload ssh
+
+      # --- From a SECOND terminal on your workstation ---------------------
+      # Key login must work...
+      ssh alice@192.0.2.10 'echo key login OK'
+      # ...and a password login must now be refused
+      ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password alice@192.0.2.10
+    output: |
+      maxauthtries 3
+      permitrootlogin no
+      passwordauthentication no
+      allowgroups ssh-users
+      key login OK
+      alice@192.0.2.10: Permission denied (publickey).
+    note:
+      fr: "`Permission denied (publickey)` est le résultat recherché : le serveur n'annonce plus que la méthode par clé. Ne fermez votre première session qu'après avoir réussi une **nouvelle** connexion ; en cas d'erreur, elle vous permet de corriger."
+      en: "`Permission denied (publickey)` is the result you want: the server now only advertises the key method. Close your first session only after a **new** connection succeeds; if something is wrong, it lets you fix it."
+
+  - title:
+      fr: "Auditer un sshd_config comme le lit sshd (la première valeur gagne)"
+      en: "Auditing an sshd_config the way sshd reads it (first value wins)"
+    file: audit_sshd.py
+    lang: python
+    kind: neutral
+    code: |
+      # For each keyword, sshd keeps the FIRST value it finds: later lines
+      # are ignored. This audit reproduces that rule.
+
+      CONFIG = """
+      # --- /etc/ssh/sshd_config.d/50-cloud-init.conf (read first) ---
+      PasswordAuthentication yes
+
+      # --- /etc/ssh/sshd_config (read after the Include line) ---
+      PermitRootLogin no
+      PasswordAuthentication no
+      MaxAuthTries 3
+      X11Forwarding yes
+      """
+
+      EXPECTED = {
+          "permitrootlogin": "no",
+          "passwordauthentication": "no",
+          "maxauthtries": "3",
+          "x11forwarding": "no",
+          "allowgroups": None,  # any value is fine, but the keyword must be set
+      }
+
+      effective = {}
+      for line in CONFIG.splitlines():
+          line = line.strip()
+          if not line or line.startswith("#"):
+              continue
+          keyword, _, value = line.partition(" ")
+          # setdefault keeps the first value seen: exactly what sshd does
+          effective.setdefault(keyword.lower(), value.strip())
+
+      problems = 0
+      for keyword, wanted in EXPECTED.items():
+          actual = effective.get(keyword)
+          if actual is None:
+              print(f"FAIL {keyword}: not set")
+              problems += 1
+          elif wanted is not None and actual != wanted:
+              print(f"FAIL {keyword}: {actual} (expected {wanted})")
+              problems += 1
+          else:
+              print(f"PASS {keyword}: {actual}")
+
+      print(f"\n{problems} problem(s) found")
+    output: |
+      PASS permitrootlogin: no
+      FAIL passwordauthentication: yes (expected no)
+      PASS maxauthtries: 3
+      FAIL x11forwarding: yes (expected no)
+      FAIL allowgroups: not set
+
+      3 problem(s) found
+    note:
+      fr: "L'administrateur a bien écrit `PasswordAuthentication no`, mais le fichier `50-cloud-init.conf`, lu avant, impose `yes`. C'est exactement le piège que `sudo sshd -T` révèle sur un vrai serveur."
+      en: "The administrator did write `PasswordAuthentication no`, but the `50-cloud-init.conf` file, read earlier, imposes `yes`. This is exactly the trap that `sudo sshd -T` reveals on a real server."
+
+  - title:
+      fr: "Côté client : passer par un bastion avec ProxyJump"
+      en: "Client side: going through a bastion with ProxyJump"
+    file: ~/.ssh/config
+    lang: ini
+    kind: secure
+    code: |
+      # The bastion is the only machine reachable from the Internet on port 22
+      Host bastion
+          HostName bastion.example.com
+          User alice
+          IdentityFile ~/.ssh/id_ed25519
+          # Only offer this key, not every key loaded in the agent
+          IdentitiesOnly yes
+
+      # Internal servers are reached THROUGH the bastion.
+      # ProxyJump keeps the private key on the workstation: nothing is
+      # copied to the bastion and no agent forwarding is needed.
+      Host app-*.internal.example.com
+          User alice
+          ProxyJump bastion
+          IdentityFile ~/.ssh/id_ed25519
+          IdentitiesOnly yes
+
+      # Defaults for every host
+      Host *
+          # Never forward the agent: root on a remote server could use your keys
+          ForwardAgent no
+          # Hash host names in known_hosts so a stolen file reveals no server list
+          HashKnownHosts yes
+          # Refuse to connect if a known host key changes (possible interception)
+          StrictHostKeyChecking ask
+    note:
+      fr: "Avec ce fichier, `ssh app-01.internal.example.com` ouvre automatiquement la connexion via le bastion. Les serveurs internes n'ont plus besoin d'exposer SSH sur Internet : leur pare-feu n'accepte le port 22 que depuis l'adresse du bastion. Sur le bastion, autorisez le rebond avec `AllowTcpForwarding yes`."
+      en: "With this file, `ssh app-01.internal.example.com` automatically connects through the bastion. Internal servers no longer need to expose SSH to the Internet: their firewall accepts port 22 only from the bastion address. On the bastion itself, allow the jump with `AllowTcpForwarding yes`."
+
+mistake:
+  fr: |
+    **Redémarrer `sshd` sans avoir validé la configuration ni testé une nouvelle connexion.**
+
+    Une faute de frappe, un algorithme inconnu de votre version ou un `AllowGroups` dont vous n'êtes pas
+    membre, et plus personne ne peut se connecter : sur un serveur distant, il ne reste que la console de
+    secours de l'hébergeur. La procédure sûre tient en quatre gestes : garder une session ouverte, lancer
+    `sudo sshd -t`, recharger (`reload`, pas `restart`), puis tester depuis un **second** terminal.
+
+    Deuxième erreur classique : désactiver `PasswordAuthentication` dans `sshd_config` sans voir qu'un
+    fichier de `sshd_config.d/` le réactive. Seul `sudo sshd -T` montre la valeur réellement appliquée.
+
+    Enfin, changer le port (22 vers 2222) n'est pas du durcissement : cela réduit le bruit dans les
+    journaux, mais un scan de ports retrouve le service en quelques secondes.
+  en: |
+    **Restarting `sshd` without validating the configuration or testing a new connection.**
+
+    One typo, an algorithm unknown to your version or an `AllowGroups` you are not a member of, and nobody
+    can log in any more: on a remote server only the provider's rescue console is left. The safe procedure
+    takes four moves: keep a session open, run `sudo sshd -t`, reload (`reload`, not `restart`), then test
+    from a **second** terminal.
+
+    Second classic mistake: disabling `PasswordAuthentication` in `sshd_config` without noticing that a
+    file in `sshd_config.d/` turns it back on. Only `sudo sshd -T` shows the value actually applied.
+
+    Finally, changing the port (22 to 2222) is not hardening: it reduces noise in the logs, but a port
+    scan finds the service again within seconds.
+
+bestPractice:
+  fr: |
+    - **Clés Ed25519 avec phrase de passe**, ou clés matérielles FIDO2 (`ssh-keygen -t ed25519-sk`) pour les administrateurs.
+    - **Jamais de connexion `root`** ni de mot de passe : `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`.
+    - **Liste blanche** avec `AllowGroups` : retirer quelqu'un du groupe lui retire l'accès.
+    - **`sshd -t` avant chaque rechargement**, `sshd -T` pour lire la configuration effective.
+    - **N'exposez pas SSH à tout Internet** : pare-feu limité aux adresses d'administration, VPN ou bastion avec `ProxyJump`.
+    - **Complétez par Fail2Ban** et par un débit limité au pare-feu (voir le cours Firewall, WAF, IDS/IPS).
+    - **Maintenez OpenSSH à jour** : les failles du service lui-même (comme regreSSHion, CVE-2024-6387) se corrigent par les mises à jour.
+    - **À grande échelle**, remplacez les `authorized_keys` par des **certificats SSH** à durée de vie courte signés par une autorité interne.
+  en: |
+    - **Ed25519 keys with a passphrase**, or FIDO2 hardware keys (`ssh-keygen -t ed25519-sk`) for administrators.
+    - **No `root` login and no password**: `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`.
+    - **Allowlist** with `AllowGroups`: removing someone from the group removes their access.
+    - **`sshd -t` before every reload**, `sshd -T` to read the effective configuration.
+    - **Do not expose SSH to the whole Internet**: firewall limited to admin addresses, VPN or bastion with `ProxyJump`.
+    - **Add Fail2Ban** and firewall rate limiting (see the Firewall, WAF, IDS/IPS course).
+    - **Keep OpenSSH up to date**: flaws in the service itself (such as regreSSHion, CVE-2024-6387) are fixed by updates.
+    - **At scale**, replace `authorized_keys` files with short-lived **SSH certificates** signed by an internal authority.
+
+exercise:
+  statement:
+    fr: |
+      Vous héritez d'un serveur Ubuntu dont le fichier `/etc/ssh/sshd_config` contient :
+
+      ```text
+      PermitRootLogin yes
+      PasswordAuthentication yes
+      MaxAuthTries 6
+      X11Forwarding yes
+      ```
+
+      Votre compte `alice` possède déjà une clé publique dans `~/.ssh/authorized_keys`.
+
+      Écrivez un script qui :
+
+      1. crée le groupe `ssh-users` et y ajoute `alice` ;
+      2. écrit un fichier `/etc/ssh/sshd_config.d/00-hardening.conf` interdisant `root`, les mots de passe
+         et le transfert X11, limitant à 3 essais et n'autorisant que le groupe `ssh-users` ;
+      3. valide la configuration et ne recharge le service **que** si elle est correcte ;
+      4. affiche les valeurs effectives de ces cinq directives.
+    en: |
+      You inherit an Ubuntu server whose `/etc/ssh/sshd_config` file contains:
+
+      ```text
+      PermitRootLogin yes
+      PasswordAuthentication yes
+      MaxAuthTries 6
+      X11Forwarding yes
+      ```
+
+      Your `alice` account already has a public key in `~/.ssh/authorized_keys`.
+
+      Write a script that:
+
+      1. creates the `ssh-users` group and adds `alice` to it;
+      2. writes a `/etc/ssh/sshd_config.d/00-hardening.conf` file that forbids `root`, passwords and X11
+         forwarding, limits attempts to 3 and only allows the `ssh-users` group;
+      3. validates the configuration and reloads the service **only** if it is correct;
+      4. prints the effective values of those five directives.
+  solution:
+    file: harden-ssh.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. Allowlist group (-f: no error if it already exists)
+      sudo groupadd -f ssh-users
+      sudo usermod -aG ssh-users alice
+
+      # 2. Drop-in file: read before sshd_config, so its values win
+      sudo tee /etc/ssh/sshd_config.d/00-hardening.conf >/dev/null <<'EOF'
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+      X11Forwarding no
+      AllowGroups ssh-users
+      EOF
+      sudo chmod 600 /etc/ssh/sshd_config.d/00-hardening.conf
+
+      # 3. Reload only when the syntax check succeeds
+      if sudo sshd -t; then
+        sudo systemctl reload ssh
+        echo "sshd reloaded"
+      else
+        echo "Invalid configuration: sshd NOT reloaded" >&2
+        exit 1
+      fi
+
+      # 4. Effective values, whatever file they come from
+      sudo sshd -T | grep -Ei '^(permitrootlogin|passwordauthentication|maxauthtries|x11forwarding|allowgroups) '
+    note:
+      fr: "Gardez votre session ouverte et testez une nouvelle connexion depuis un autre terminal avant de vous déconnecter. Le script échoue volontairement sans recharger si `sshd -t` détecte une erreur."
+      en: "Keep your session open and test a new connection from another terminal before logging out. The script deliberately fails without reloading if `sshd -t` detects an error."
+
+quiz:
+  - q:
+      fr: "Pourquoi désactiver `PasswordAuthentication` ?"
+      en: "Why disable `PasswordAuthentication`?"
+    options:
+      fr:
+        - "Parce que les mots de passe ralentissent la connexion"
+        - "Parce que SSH ne chiffre pas les mots de passe"
+        - "Pour économiser de la mémoire sur le serveur"
+        - "Pour supprimer la force brute et le vol de mots de passe : seule une clé privée permet d'entrer"
+      en:
+        - "Because passwords slow the connection down"
+        - "Because SSH does not encrypt passwords"
+        - "To save memory on the server"
+        - "To remove brute force and password theft: only a private key lets you in"
+    answer: 3
+    why:
+      fr: "Un mot de passe peut être deviné, réutilisé ou hameçonné. Une clé privée de 256 bits ne se devine pas et ne quitte jamais le poste de l'administrateur."
+      en: "A password can be guessed, reused or phished. A 256-bit private key cannot be guessed and never leaves the administrator's workstation."
+  - q:
+      fr: "À quoi sert la commande `sshd -t` ?"
+      en: "What is the `sshd -t` command for?"
+    options:
+      fr:
+        - "À tester la validité de la configuration avant de recharger le service"
+        - "À afficher les connexions en cours"
+        - "À générer une nouvelle clé d'hôte"
+        - "À redémarrer le service en mode test"
+      en:
+        - "To test that the configuration is valid before reloading the service"
+        - "To display current connections"
+        - "To generate a new host key"
+        - "To restart the service in test mode"
+    answer: 0
+    why:
+      fr: "`sshd -t` vérifie la syntaxe et les clés sans rien lancer. Enchaînée avec `&&`, elle empêche de recharger une configuration cassée."
+      en: "`sshd -t` checks the syntax and the keys without starting anything. Chained with `&&`, it prevents reloading a broken configuration."
+  - q:
+      fr: "Une directive apparaît deux fois dans la configuration lue par `sshd`. Laquelle s'applique ?"
+      en: "A directive appears twice in the configuration read by `sshd`. Which one applies?"
+    options:
+      fr:
+        - "La dernière"
+        - "La première"
+        - "La plus restrictive"
+        - "Aucune : `sshd` refuse de démarrer"
+      en:
+        - "The last one"
+        - "The first one"
+        - "The most restrictive one"
+        - "Neither: `sshd` refuses to start"
+    answer: 1
+    why:
+      fr: "`sshd` garde la première valeur rencontrée. C'est pourquoi un fichier de `sshd_config.d/`, inclus en tête, l'emporte sur le fichier principal."
+      en: "`sshd` keeps the first value it meets. That is why a file in `sshd_config.d/`, included at the top, wins over the main file."
+  - q:
+      fr: "Quel est l'intérêt de `ProxyJump` par rapport au transfert d'agent (`ForwardAgent yes`) ?"
+      en: "What is the benefit of `ProxyJump` over agent forwarding (`ForwardAgent yes`)?"
+    options:
+      fr:
+        - "Il chiffre deux fois la connexion pour aller plus vite"
+        - "Il supprime le besoin d'une clé SSH"
+        - "La clé privée et l'agent restent sur le poste : le bastion ne peut pas les utiliser"
+        - "Il ouvre le port 22 de tous les serveurs internes sur Internet"
+      en:
+        - "It encrypts the connection twice to go faster"
+        - "It removes the need for an SSH key"
+        - "The private key and the agent stay on the workstation: the bastion cannot use them"
+        - "It opens port 22 of every internal server to the Internet"
+    answer: 2
+    why:
+      fr: "Avec le transfert d'agent, un administrateur (ou un attaquant) du bastion peut utiliser vos clés tant que vous êtes connecté. `ProxyJump` ne fait que relayer un flux chiffré de bout en bout."
+      en: "With agent forwarding, an administrator (or attacker) on the bastion can use your keys while you are connected. `ProxyJump` merely relays an end-to-end encrypted stream."
+  - q:
+      fr: "Déplacer SSH du port 22 au port 2222 est-il une mesure de durcissement suffisante ?"
+      en: "Is moving SSH from port 22 to port 2222 a sufficient hardening measure?"
+    options:
+      fr:
+        - "Oui, les attaquants ne scannent que le port 22"
+        - "Non : cela réduit le bruit des robots, mais un scan de ports retrouve le service ; il faut des clés et une liste blanche"
+        - "Oui, à condition de garder les mots de passe"
+        - "Non, car SSH ne fonctionne que sur le port 22"
+      en:
+        - "Yes, attackers only scan port 22"
+        - "No: it reduces bot noise, but a port scan finds the service again; keys and an allowlist are required"
+        - "Yes, as long as passwords are kept"
+        - "No, because SSH only works on port 22"
+    answer: 1
+    why:
+      fr: "C'est de la sécurité par l'obscurité : utile contre le bruit de fond, sans effet contre un attaquant qui vous cible. La vraie protection vient de l'authentification et du filtrage."
+      en: "This is security through obscurity: useful against background noise, useless against an attacker targeting you. Real protection comes from authentication and filtering."

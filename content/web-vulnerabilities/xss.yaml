@@ -1,0 +1,641 @@
+description:
+  fr: "Cross-Site Scripting (XSS) : code vulnérable et corrigé en Python, Node.js, PHP et Java, avec encodage en sortie, DOMPurify et Content-Security-Policy."
+  en: "Cross-Site Scripting (XSS): vulnerable and fixed code in Python, Node.js, PHP and Java, with output encoding, DOMPurify and Content-Security-Policy."
+duration: 30
+
+intro:
+  fr: |
+    Le **Cross-Site Scripting** (XSS, « script inter-sites ») permet à un attaquant de faire exécuter
+    **son** JavaScript dans le navigateur d'**un autre** utilisateur, sur **votre** site. Le script
+    s'exécute avec les droits de la victime : il peut lire la page, agir à sa place, voler un jeton de
+    session ou afficher un faux formulaire de connexion.
+
+    Imaginez un tableau d'affichage dans un hall d'immeuble. Tout le monde peut y punaiser un mot. Si le
+    gardien lit à voix haute et **exécute** tout ce qui est écrit (« donnez vos clés au porteur de ce
+    message »), n'importe qui commande l'immeuble. L'application vulnérable est ce gardien : elle recopie
+    du texte d'utilisateur dans une page, et le navigateur l'interprète comme du code.
+
+    Dans cette leçon, vous voyez la faille et sa correction dans quatre langages. La règle est unique :
+    **encoder les données au moment de les écrire dans la page, selon l'endroit où on les écrit**.
+  en: |
+    **Cross-Site Scripting** (XSS) lets an attacker run **their** JavaScript in **another** user's
+    browser, on **your** site. The script runs with the victim's rights: it can read the page, act on
+    their behalf, steal a session token or display a fake login form.
+
+    Picture a notice board in the hall of a building. Anyone can pin a note on it. If the caretaker reads
+    aloud and **carries out** everything written there ("give your keys to the bearer of this note"),
+    anyone controls the building. The vulnerable application is that caretaker: it copies user text into
+    a page, and the browser interprets it as code.
+
+    In this lesson you see the flaw and its fix in four languages. There is a single rule:
+    **encode data at the moment you write it into the page, according to where you write it**.
+
+sections:
+  - heading:
+      fr: "Les trois types de XSS"
+      en: "The three types of XSS"
+    body:
+      fr: |
+        | Type | Où se trouve la charge utile | Qui est touché | Exemple |
+        |---|---|---|---|
+        | **Réfléchi** | Dans la requête (URL, formulaire), renvoyée aussitôt par le serveur | La personne qui clique sur un lien piégé | `/search?q=<script>...</script>` |
+        | **Stocké** | Enregistrée en base (commentaire, pseudo, nom de fichier) | Tous les visiteurs de la page | Un commentaire contenant `<img src=x onerror=...>` |
+        | **Basé sur le DOM** | Jamais vue par le serveur : le JavaScript de la page l'injecte lui-même | La personne qui ouvre le lien | `element.innerHTML = location.hash` |
+
+        La charge utile de test classique est `<script>alert(document.domain)</script>` : si une boîte de
+        dialogue s'ouvre, votre texte a été exécuté comme du code. Une balise `<script>` n'est pas
+        nécessaire : `<img src=x onerror=alert(1)>` ou un attribut `onmouseover` suffisent, ce qui rend
+        les filtres par mots interdits inefficaces.
+
+        Testez ces charges utiles uniquement sur votre labo (`http://localhost:5000`).
+      en: |
+        | Type | Where the payload lives | Who is hit | Example |
+        |---|---|---|---|
+        | **Reflected** | In the request (URL, form), sent straight back by the server | The person who clicks a crafted link | `/search?q=<script>...</script>` |
+        | **Stored** | Saved in the database (comment, nickname, file name) | Every visitor of the page | A comment containing `<img src=x onerror=...>` |
+        | **DOM-based** | Never seen by the server: the page's own JavaScript injects it | The person who opens the link | `element.innerHTML = location.hash` |
+
+        The classic test payload is `<script>alert(document.domain)</script>`: if a dialog box opens, your
+        text was executed as code. A `<script>` tag is not required: `<img src=x onerror=alert(1)>` or an
+        `onmouseover` attribute are enough, which makes forbidden-word filters useless.
+
+        Test these payloads only against your own lab (`http://localhost:5000`).
+  - heading:
+      fr: "La correction : encoder en sortie, selon le contexte"
+      en: "The fix: encode on output, according to the context"
+    body:
+      fr: |
+        Encoder, c'est remplacer les caractères qui ont un sens pour le navigateur par leur équivalent
+        inoffensif : `<` devient `&lt;`, `"` devient `&quot;`. Le texte s'affiche tel quel, il n'est plus
+        interprété. L'encodage dépend de **l'endroit** où la donnée est écrite :
+
+        | Contexte | Exemple | Encodage à appliquer |
+        |---|---|---|
+        | Corps HTML | `<p>ICI</p>` | Entités HTML |
+        | Attribut | `<input value="ICI">` | Entités HTML, attribut **toujours entre guillemets** |
+        | URL | `<a href="/s?q=ICI">` | Encodage pour-cent (`encodeURIComponent`, `rawurlencode`) ; pour une URL entière, vérifier le schéma (`http`, `https`) |
+        | JavaScript | `<script>var x = "ICI"</script>` | À éviter : passer la donnée par un attribut `data-*` ou du JSON sérialisé par le moteur de gabarits |
+
+        Chaque langage offre un moteur de gabarits qui encode **par défaut**, une fonction manuelle, et
+        une « porte de sortie » dangereuse à surveiller en revue de code :
+
+        | Langage | Encodage automatique | Fonction manuelle | À surveiller |
+        |---|---|---|---|
+        | Python | Jinja2 `{{ x }}` | `markupsafe.escape()` | `\|safe`, `Markup(x)` |
+        | Node.js | EJS `<%= x %>`, React `{x}` | `escape-html` | `<%- x %>`, `dangerouslySetInnerHTML` |
+        | PHP | Twig `{{ x }}`, Blade `{{ $x }}` | `htmlspecialchars()` | `\|raw`, `{!! $x !!}` |
+        | Java | Thymeleaf `th:text` | OWASP Java Encoder `Encode.forHtml()` | `th:utext` |
+      en: |
+        Encoding means replacing the characters that carry meaning for the browser with their harmless
+        equivalent: `<` becomes `&lt;`, `"` becomes `&quot;`. The text is displayed as is, it is no longer
+        interpreted. The encoding depends on **where** the data is written:
+
+        | Context | Example | Encoding to apply |
+        |---|---|---|
+        | HTML body | `<p>HERE</p>` | HTML entities |
+        | Attribute | `<input value="HERE">` | HTML entities, attribute **always quoted** |
+        | URL | `<a href="/s?q=HERE">` | Percent-encoding (`encodeURIComponent`, `rawurlencode`); for a whole URL, check the scheme (`http`, `https`) |
+        | JavaScript | `<script>var x = "HERE"</script>` | Avoid it: pass the data through a `data-*` attribute or JSON serialised by the template engine |
+
+        Each language offers a template engine that encodes **by default**, a manual function, and a
+        dangerous "escape hatch" to watch for in code review:
+
+        | Language | Automatic encoding | Manual function | Watch for |
+        |---|---|---|---|
+        | Python | Jinja2 `{{ x }}` | `markupsafe.escape()` | `\|safe`, `Markup(x)` |
+        | Node.js | EJS `<%= x %>`, React `{x}` | `escape-html` | `<%- x %>`, `dangerouslySetInnerHTML` |
+        | PHP | Twig `{{ x }}`, Blade `{{ $x }}` | `htmlspecialchars()` | `\|raw`, `{!! $x !!}` |
+        | Java | Thymeleaf `th:text` | OWASP Java Encoder `Encode.forHtml()` | `th:utext` |
+  - heading:
+      fr: "XSS basé sur le DOM et HTML riche : textContent et DOMPurify"
+      en: "DOM-based XSS and rich HTML: textContent and DOMPurify"
+    body:
+      fr: |
+        Le XSS basé sur le DOM se joue entièrement dans le navigateur : l'encodage côté serveur n'y peut
+        rien. La correction consiste à utiliser des API qui **ne parsent pas de HTML**.
+
+        ```javascript
+        const name = new URLSearchParams(location.search).get("name") ?? "";
+        const hello = document.getElementById("hello");
+
+        // VULNERABLE: the string is parsed as HTML -> ?name=<img src=x onerror=alert(1)>
+        hello.innerHTML = "Hello " + name;
+
+        // FIXED: textContent creates a text node, never an element
+        hello.textContent = "Hello " + name;
+        ```
+
+        Quand l'application doit vraiment afficher du HTML fourni par l'utilisateur (éditeur de texte
+        riche, Markdown converti), l'encodage détruirait la mise en forme. On passe alors par un
+        **assainisseur** qui ne garde que les balises et attributs inoffensifs. La référence est
+        **DOMPurify** :
+
+        ```javascript
+        // Keeps <b>, <i>, <a href="https://...">; removes <script>, onerror=, javascript: URLs
+        comment.innerHTML = DOMPurify.sanitize(userHtml);
+        ```
+
+        N'écrivez jamais votre propre assainisseur à base d'expressions régulières : les navigateurs
+        tolèrent trop de variantes de syntaxe HTML pour qu'un filtre artisanal tienne.
+      en: |
+        DOM-based XSS happens entirely in the browser: server-side encoding cannot help. The fix is to use
+        APIs that **do not parse HTML**.
+
+        ```javascript
+        const name = new URLSearchParams(location.search).get("name") ?? "";
+        const hello = document.getElementById("hello");
+
+        // VULNERABLE: the string is parsed as HTML -> ?name=<img src=x onerror=alert(1)>
+        hello.innerHTML = "Hello " + name;
+
+        // FIXED: textContent creates a text node, never an element
+        hello.textContent = "Hello " + name;
+        ```
+
+        When the application really must display user-supplied HTML (rich text editor, converted
+        Markdown), encoding would destroy the formatting. You then go through a **sanitiser** that keeps
+        only harmless tags and attributes. The reference is **DOMPurify**:
+
+        ```javascript
+        // Keeps <b>, <i>, <a href="https://...">; removes <script>, onerror=, javascript: URLs
+        comment.innerHTML = DOMPurify.sanitize(userHtml);
+        ```
+
+        Never write your own regular-expression sanitiser: browsers tolerate too many variants of HTML
+        syntax for a home-made filter to hold.
+  - heading:
+      fr: "Défense en profondeur et détection dans le pipeline"
+      en: "Defence in depth and detection in the pipeline"
+    body:
+      fr: |
+        L'encodage est la correction. Deux protections limitent les dégâts si un oubli subsiste :
+
+        - **Content-Security-Policy (CSP)** : un en-tête HTTP qui dit au navigateur quels scripts il a le
+          droit d'exécuter. Avec `script-src 'self'`, un `<script>` injecté dans la page ou un attribut
+          `onerror` est **refusé**, car seuls les fichiers servis par votre domaine sont autorisés.
+        - **Cookie de session `HttpOnly`** : JavaScript ne peut pas le lire, donc un XSS ne peut pas
+          l'envoyer à l'attaquant (il peut toujours agir dans la page, d'où l'importance de la correction).
+
+        | Étape du pipeline | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST | Semgrep, CodeQL (`py/reflective-xss`, `js/xss`, `java/xss`) | Une entrée qui atteint une réponse HTML sans encodage, l'usage de `\|safe`, `innerHTML`, `th:utext` |
+        | Lint | `eslint-plugin-no-unsanitized` | `innerHTML` et `document.write` avec une valeur non assainie |
+        | DAST | OWASP ZAP (scan actif) | Une charge utile renvoyée telle quelle dans la réponse |
+        | En-têtes | ZAP (scan passif), tests d'intégration | L'absence d'en-tête `Content-Security-Policy` |
+      en: |
+        Encoding is the fix. Two protections limit the damage if something was missed:
+
+        - **Content-Security-Policy (CSP)**: an HTTP header that tells the browser which scripts it may
+          run. With `script-src 'self'`, a `<script>` injected into the page or an `onerror` attribute is
+          **refused**, because only files served from your own domain are allowed.
+        - **`HttpOnly` session cookie**: JavaScript cannot read it, so an XSS cannot send it to the
+          attacker (it can still act inside the page, hence the importance of the fix).
+
+        | Pipeline stage | Tool | What it spots |
+        |---|---|---|
+        | SAST | Semgrep, CodeQL (`py/reflective-xss`, `js/xss`, `java/xss`) | Input reaching an HTML response without encoding, use of `\|safe`, `innerHTML`, `th:utext` |
+        | Lint | `eslint-plugin-no-unsanitized` | `innerHTML` and `document.write` with an unsanitised value |
+        | DAST | OWASP ZAP (active scan) | A payload sent back unchanged in the response |
+        | Headers | ZAP (passive scan), integration tests | A missing `Content-Security-Policy` header |
+
+examples:
+  - title:
+      fr: "Python (Flask) - vulnérable : XSS réfléchi et XSS stocké"
+      en: "Python (Flask) - vulnerable: reflected and stored XSS"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      from flask import Flask, request
+
+      app = Flask(__name__)
+      COMMENTS = []  # in-memory "database" for the lab
+
+
+      @app.get("/search")
+      def search():
+          q = request.args.get("q", "")
+          # VULNERABLE (reflected XSS): the parameter is pasted into the HTML page
+          return f"<h1>Results for {q}</h1>"
+
+
+      @app.post("/comments")
+      def add_comment():
+          COMMENTS.append(request.form["text"])
+          return "saved", 201
+
+
+      @app.get("/comments")
+      def list_comments():
+          # VULNERABLE (stored XSS): every visitor receives what one user posted
+          items = "".join(f"<li>{c}</li>" for c in COMMENTS)
+          return f"<ul>{items}</ul>"
+
+
+      if __name__ == "__main__":
+          app.run(port=5000)  # lab only: http://localhost:5000
+    output: |
+      $ curl "http://localhost:5000/search?q=%3Cscript%3Ealert(document.domain)%3C/script%3E"
+      <h1>Results for <script>alert(document.domain)</script></h1>
+
+      $ curl -X POST --data-urlencode "text=<img src=x onerror=alert(1)>" http://localhost:5000/comments
+      saved
+      $ curl http://localhost:5000/comments
+      <ul><li><img src=x onerror=alert(1)></li></ul>
+    note:
+      fr: "Le serveur renvoie la balise `<script>` intacte : un navigateur qui ouvre ce lien l'exécute. Le commentaire, lui, est stocké : chaque visiteur de `/comments` déclenche le `onerror`, sans cliquer sur aucun lien."
+      en: "The server sends the `<script>` tag back intact: a browser opening this link executes it. The comment is stored: every visitor of `/comments` triggers the `onerror`, without clicking any link."
+
+  - title:
+      fr: "Python (Flask) - corrigé : auto-échappement Jinja2, markupsafe et CSP"
+      en: "Python (Flask) - fixed: Jinja2 autoescaping, markupsafe and CSP"
+    file: app_fixed.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, render_template_string, request
+      from markupsafe import escape
+
+      app = Flask(__name__)
+      COMMENTS = []
+
+      # Jinja2 autoescaping is active for render_template_string() and for .html templates
+      PAGE = """<!doctype html>
+      <title>Search</title>
+      <h1>Results for {{ q }}</h1>
+      <ul>{% for c in comments %}<li>{{ c }}</li>{% endfor %}</ul>
+      """
+
+
+      @app.get("/search")
+      def search():
+          q = request.args.get("q", "")
+          # FIXED: {{ q }} is HTML-encoded by the template engine
+          return render_template_string(PAGE, q=q, comments=COMMENTS)
+
+
+      @app.post("/comments")
+      def add_comment():
+          # Store the raw text; encode at OUTPUT time, for the context it is written into
+          COMMENTS.append(request.form["text"])
+          return "saved", 201
+
+
+      @app.get("/hello")
+      def hello():
+          # Outside a template, encode by hand with markupsafe
+          return f"<p>Hello {escape(request.args.get('name', ''))}</p>"
+
+
+      @app.after_request
+      def security_headers(response):
+          # Defence in depth: even if an injection slips through, inline scripts are refused
+          response.headers["Content-Security-Policy"] = (
+              "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'"
+          )
+          response.headers["X-Content-Type-Options"] = "nosniff"
+          return response
+
+
+      if __name__ == "__main__":
+          app.run(port=5000)
+    output: |
+      $ curl "http://localhost:5000/search?q=%3Cscript%3Ealert(document.domain)%3C/script%3E"
+      <!doctype html>
+      <title>Search</title>
+      <h1>Results for &lt;script&gt;alert(document.domain)&lt;/script&gt;</h1>
+      <ul><li>&lt;img src=x onerror=alert(1)&gt;</li></ul>
+
+      $ curl "http://localhost:5000/hello?name=%3Cscript%3Ealert(1)%3C/script%3E"
+      <p>Hello &lt;script&gt;alert(1)&lt;/script&gt;</p>
+    note:
+      fr: "`<` et `>` sont devenus `&lt;` et `&gt;` : le navigateur **affiche** le texte au lieu de l'exécuter. Remarquez que le commentaire est stocké brut et encodé à l'affichage : c'est la sortie qui décide de l'encodage. Le filtre `|safe` désactiverait cette protection."
+      en: "`<` and `>` became `&lt;` and `&gt;`: the browser **displays** the text instead of running it. Note that the comment is stored raw and encoded when displayed: the output decides the encoding. The `|safe` filter would switch this protection off."
+
+  - title:
+      fr: "Node.js (Express) - vulnérable puis corrigé avec escape-html et helmet"
+      en: "Node.js (Express) - vulnerable then fixed with escape-html and helmet"
+    file: server.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const helmet = require("helmet");
+      const escapeHtml = require("escape-html");
+
+      const app = express();
+
+      // Defence in depth: CSP header on every response (no inline script, no foreign origin)
+      app.use(
+        helmet({
+          contentSecurityPolicy: {
+            directives: {
+              defaultSrc: ["'self'"],
+              scriptSrc: ["'self'"],
+              objectSrc: ["'none'"],
+              baseUri: ["'none'"],
+            },
+          },
+        }),
+      );
+
+      // ---------- VULNERABLE ----------
+      // The query string is interpolated into the HTML response
+      app.get("/vulnerable/search", (req, res) => {
+        res.send(`<h1>Results for ${req.query.q}</h1>`);
+      });
+
+      // ---------- FIXED ----------
+      app.get("/search", (req, res) => {
+        const q = typeof req.query.q === "string" ? req.query.q : "";
+        // escape-html encodes & < > " ' : safe in an HTML body and in a quoted attribute
+        res.send(`
+          <h1>Results for ${escapeHtml(q)}</h1>
+          <input name="q" value="${escapeHtml(q)}">
+          <a href="/search?q=${encodeURIComponent(q)}">Permalink</a>
+        `);
+      });
+
+      app.listen(3000);
+    note:
+      fr: "Dans un vrai projet, préférez un moteur de gabarits qui encode par défaut (`<%= q %>` avec EJS, `{q}` avec React) plutôt que des chaînes assemblées à la main. Notez l'encodage différent pour l'URL : `encodeURIComponent`, pas `escapeHtml`."
+      en: "In a real project, prefer a template engine that encodes by default (`<%= q %>` with EJS, `{q}` with React) over hand-assembled strings. Note the different encoding for the URL: `encodeURIComponent`, not `escapeHtml`."
+
+  - title:
+      fr: "PHP - `echo` brut vulnérable puis `htmlspecialchars`"
+      en: "PHP - vulnerable raw `echo` then `htmlspecialchars`"
+    file: search.php
+    lang: php
+    kind: secure
+    code: |
+      <?php
+      declare(strict_types=1);
+
+      function e(string $value): string
+      {
+          // ENT_QUOTES also encodes " and ', required inside attributes.
+          // ENT_SUBSTITUTE replaces invalid UTF-8 instead of returning an empty string.
+          return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+      }
+
+      $q = $_GET['q'] ?? '';
+      if (!is_string($q)) {
+          $q = '';
+      }
+
+      header("Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'");
+      ?>
+      <!doctype html>
+      <title>Search</title>
+
+      <!-- ---------- VULNERABLE ---------- -->
+      <h1>Results for <?= $q ?></h1>
+      <input name="q" value="<?= $q ?>">
+
+      <!-- ---------- FIXED ---------- -->
+      <h1>Results for <?= e($q) ?></h1>
+      <input name="q" value="<?= e($q) ?>">
+      <a href="/search.php?q=<?= rawurlencode($q) ?>">Permalink</a>
+
+      <!-- Data needed by JavaScript travels in a data-* attribute, not in an inline script -->
+      <div id="app" data-query="<?= e($q) ?>"></div>
+    note:
+      fr: "La charge utile `\"><script>alert(1)</script>` sort de l'attribut `value` dans la version vulnérable. `htmlspecialchars` avec `ENT_QUOTES` neutralise les deux contextes. Twig (`{{ q }}`) et Blade (`{{ $q }}`) appellent cette fonction pour vous."
+      en: "The payload `\"><script>alert(1)</script>` breaks out of the `value` attribute in the vulnerable version. `htmlspecialchars` with `ENT_QUOTES` neutralises both contexts. Twig (`{{ q }}`) and Blade (`{{ $q }}`) call this function for you."
+
+  - title:
+      fr: "Java - concaténation vulnérable puis OWASP Java Encoder"
+      en: "Java - vulnerable concatenation then OWASP Java Encoder"
+    file: SearchPage.java
+    lang: java
+    kind: secure
+    code: |
+      import org.owasp.encoder.Encode;
+
+      // Dependency: org.owasp.encoder:encoder (OWASP Java Encoder)
+      public final class SearchPage {
+
+          private SearchPage() {
+          }
+
+          // ---------- VULNERABLE ----------
+          // The parameter is concatenated into the HTML page
+          public static String renderVulnerable(String q) {
+              return "<h1>Results for " + q + "</h1>"
+                   + "<input name=\"q\" value=\"" + q + "\">";
+          }
+
+          // ---------- FIXED ----------
+          // One encoder per output context
+          public static String render(String q) {
+              return "<h1>Results for " + Encode.forHtml(q) + "</h1>"
+                   + "<input name=\"q\" value=\"" + Encode.forHtmlAttribute(q) + "\">"
+                   + "<a href=\"/search?q=" + Encode.forUriComponent(q) + "\">Permalink</a>";
+          }
+
+          public static void main(String[] args) {
+              String payload = "\"><script>alert(1)</script>";
+              System.out.println(renderVulnerable(payload));
+              System.out.println(render(payload));
+          }
+      }
+    note:
+      fr: "L'OWASP Java Encoder fournit une méthode par contexte : `forHtml`, `forHtmlAttribute`, `forUriComponent`, `forJavaScript`. Avec Thymeleaf, `th:text` encode automatiquement ; `th:utext` écrit la valeur brute et réintroduit la faille."
+      en: "The OWASP Java Encoder provides one method per context: `forHtml`, `forHtmlAttribute`, `forUriComponent`, `forJavaScript`. With Thymeleaf, `th:text` encodes automatically; `th:utext` writes the raw value and reintroduces the flaw."
+
+mistake:
+  fr: |
+    **Filtrer les entrées avec une liste noire au lieu d'encoder les sorties.**
+
+    Supprimer `<script>` de ce que tape l'utilisateur semble logique, mais ne fonctionne pas :
+    `<img src=x onerror=...>`, `<svg onload=...>`, `<ScRiPt>`, `<scr<script>ipt>` ou une URL `javascript:`
+    passent à travers. De plus, la même donnée sera écrite demain dans un autre contexte (attribut, URL,
+    e-mail HTML) que le filtre d'entrée ne pouvait pas prévoir. Stockez la donnée telle quelle, validez son
+    format si elle en a un (e-mail, nombre), et **encodez toujours à la sortie**.
+
+    Deuxième erreur fréquente : désactiver l'auto-échappement « pour afficher un peu de gras » avec
+    `|safe`, `{!! !!}`, `th:utext` ou `dangerouslySetInnerHTML` sur une valeur qui vient d'un utilisateur.
+  en: |
+    **Filtering input with a deny-list instead of encoding output.**
+
+    Removing `<script>` from what the user types sounds logical, but does not work:
+    `<img src=x onerror=...>`, `<svg onload=...>`, `<ScRiPt>`, `<scr<script>ipt>` or a `javascript:` URL
+    get through. Besides, the same data will be written tomorrow into another context (attribute, URL,
+    HTML e-mail) that the input filter could not foresee. Store the data as is, validate its format if
+    it has one (e-mail, number), and **always encode on output**.
+
+    Second frequent mistake: switching autoescaping off "to display a bit of bold" with `|safe`,
+    `{!! !!}`, `th:utext` or `dangerouslySetInnerHTML` on a value that comes from a user.
+
+bestPractice:
+  fr: |
+    - **Moteur de gabarits à auto-échappement** partout (Jinja2, EJS `<%= %>`, Twig, Blade, Thymeleaf, React) ; aucune page HTML assemblée par concaténation.
+    - **Un encodage par contexte** : HTML, attribut, URL. Pas de donnée utilisateur dans un `<script>` en ligne.
+    - **`textContent`** plutôt que `innerHTML` ; **DOMPurify** quand du HTML riche est indispensable.
+    - **Content-Security-Policy** stricte (`script-src 'self'`, pas de `'unsafe-inline'`) et cookies de session `HttpOnly`.
+    - **Règles SAST** (Semgrep, CodeQL) qui signalent `|safe`, `th:utext`, `innerHTML` : chaque usage est justifié en revue de code.
+    - **Scan ZAP** de l'environnement de test dans la CI, et un test d'intégration qui vérifie la présence de l'en-tête CSP.
+  en: |
+    - **Autoescaping template engine** everywhere (Jinja2, EJS `<%= %>`, Twig, Blade, Thymeleaf, React); no HTML page assembled by concatenation.
+    - **One encoding per context**: HTML, attribute, URL. No user data inside an inline `<script>`.
+    - **`textContent`** rather than `innerHTML`; **DOMPurify** when rich HTML is unavoidable.
+    - Strict **Content-Security-Policy** (`script-src 'self'`, no `'unsafe-inline'`) and `HttpOnly` session cookies.
+    - **SAST rules** (Semgrep, CodeQL) that flag `|safe`, `th:utext`, `innerHTML`: every use is justified in code review.
+    - **ZAP scan** of the test environment in CI, and an integration test asserting the CSP header is present.
+
+exercise:
+  statement:
+    fr: |
+      Cette fonction affiche le profil d'un utilisateur : son nom et un lien vers son site web.
+
+      ```python
+      def render_profile(name, website):
+          return f'<h2>{name}</h2><a href="{website}">My website</a>'
+      ```
+
+      1. Trouvez **trois** attaques différentes : une par le nom, une qui sort de l'attribut `href`,
+         et une qui reste dans `href` sans aucun caractère spécial HTML.
+      2. Réécrivez la fonction avec la bibliothèque standard de Python (`html`, `urllib.parse`) pour
+         bloquer les trois.
+    en: |
+      This function displays a user's profile: their name and a link to their website.
+
+      ```python
+      def render_profile(name, website):
+          return f'<h2>{name}</h2><a href="{website}">My website</a>'
+      ```
+
+      1. Find **three** different attacks: one through the name, one that breaks out of the `href`
+         attribute, and one that stays inside `href` without any HTML special character.
+      2. Rewrite the function with Python's standard library (`html`, `urllib.parse`) to block all three.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import html
+      from urllib.parse import urlsplit
+
+      SAFE_SCHEMES = {"http", "https"}
+
+
+      def render_profile_vulnerable(name, website):
+          # VULNERABLE: raw values in an HTML body and in an attribute
+          return f'<h2>{name}</h2><a href="{website}">My website</a>'
+
+
+      def safe_url(url):
+          # Encoding does not stop javascript: URLs, so the scheme goes through an allow-list
+          return url if urlsplit(url).scheme.lower() in SAFE_SCHEMES else "#"
+
+
+      def render_profile(name, website):
+          # FIXED: html.escape() encodes & < > and, with quote=True (the default), " and '
+          return (f"<h2>{html.escape(name)}</h2>"
+                  f'<a href="{html.escape(safe_url(website))}">My website</a>')
+
+
+      attacks = [
+          ("<script>alert(1)</script>", "https://example.com"),
+          ("Bob", 'https://example.com/" onmouseover="alert(1)'),
+          ("Bob", "javascript:alert(document.cookie)"),
+      ]
+
+      for name, website in attacks:
+          print("vulnerable:", render_profile_vulnerable(name, website))
+          print("fixed     :", render_profile(name, website))
+          print()
+    note:
+      fr: "Attaque 1 : balise `<script>` dans le nom. Attaque 2 : le guillemet ferme `href` et ajoute un attribut `onmouseover`. Attaque 3 : l'URL `javascript:` ne contient aucun caractère à encoder, seule la liste d'autorisation de schémas la bloque (le lien devient `#`)."
+      en: "Attack 1: `<script>` tag in the name. Attack 2: the quote closes `href` and adds an `onmouseover` attribute. Attack 3: the `javascript:` URL contains no character to encode, only the scheme allow-list blocks it (the link becomes `#`)."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre un XSS stocké et un XSS réfléchi ?"
+      en: "What is the difference between stored and reflected XSS?"
+    options:
+      fr:
+        - "Le XSS stocké est enregistré par l'application et servi à tous les visiteurs ; le réfléchi vient de la requête et touche celui qui ouvre le lien"
+        - "Le XSS stocké s'exécute sur le serveur, le réfléchi dans le navigateur"
+        - "Le XSS réfléchi nécessite une base de données, pas le stocké"
+        - "Il n'y a aucune différence, ce sont deux noms pour la même attaque"
+      en:
+        - "Stored XSS is saved by the application and served to every visitor; reflected XSS comes from the request and hits whoever opens the link"
+        - "Stored XSS runs on the server, reflected XSS in the browser"
+        - "Reflected XSS needs a database, stored XSS does not"
+        - "There is no difference, they are two names for the same attack"
+    answer: 0
+    why:
+      fr: "Les deux s'exécutent dans le navigateur de la victime. Le stocké est plus grave car il ne demande aucun clic : il suffit de visiter la page."
+      en: "Both run in the victim's browser. Stored XSS is more serious because it needs no click: visiting the page is enough."
+  - q:
+      fr: "Quelle est la correction principale d'un XSS côté serveur ?"
+      en: "What is the main fix for XSS on the server side?"
+    options:
+      fr:
+        - "Supprimer le mot `script` des entrées"
+        - "Chiffrer la page avec HTTPS"
+        - "Encoder les données à la sortie, selon le contexte HTML où elles sont écrites"
+        - "Limiter la longueur des champs de formulaire"
+      en:
+        - "Remove the word `script` from input"
+        - "Encrypt the page with HTTPS"
+        - "Encode data on output, according to the HTML context it is written into"
+        - "Limit the length of form fields"
+    answer: 2
+    why:
+      fr: "Une liste noire se contourne (`<img onerror>`, `<svg onload>`). L'encodage contextuel transforme toute donnée en texte inerte ; HTTPS protège le transport, pas le contenu."
+      en: "A deny-list gets bypassed (`<img onerror>`, `<svg onload>`). Contextual encoding turns any data into inert text; HTTPS protects transport, not content."
+  - q:
+      fr: "En JavaScript côté navigateur, quelle écriture affiche une valeur utilisateur sans risque de XSS ?"
+      en: "In browser-side JavaScript, which statement displays a user value without XSS risk?"
+    options:
+      fr:
+        - "`element.innerHTML = value`"
+        - "`document.write(value)`"
+        - "`element.outerHTML = value`"
+        - "`element.textContent = value`"
+      en:
+        - "`element.innerHTML = value`"
+        - "`document.write(value)`"
+        - "`element.outerHTML = value`"
+        - "`element.textContent = value`"
+    answer: 3
+    why:
+      fr: "`textContent` crée un nœud de texte : la chaîne n'est jamais analysée comme du HTML. Les trois autres parsent la valeur et peuvent créer des éléments avec des gestionnaires d'événements."
+      en: "`textContent` creates a text node: the string is never parsed as HTML. The other three parse the value and can create elements with event handlers."
+  - q:
+      fr: "Que fait l'en-tête `Content-Security-Policy: script-src 'self'` ?"
+      en: "What does the `Content-Security-Policy: script-src 'self'` header do?"
+    options:
+      fr:
+        - "Il encode automatiquement les variables des gabarits"
+        - "Il n'autorise que les scripts servis par l'origine du site et refuse les scripts en ligne injectés"
+        - "Il empêche JavaScript de lire les cookies"
+        - "Il bloque toutes les requêtes vers d'autres domaines"
+      en:
+        - "It automatically encodes template variables"
+        - "It only allows scripts served from the site's own origin and refuses injected inline scripts"
+        - "It prevents JavaScript from reading cookies"
+        - "It blocks every request to other domains"
+    answer: 1
+    why:
+      fr: "La CSP est une défense en profondeur : elle ne corrige pas l'injection, mais le navigateur refuse d'exécuter le script injecté. C'est l'attribut `HttpOnly` qui protège les cookies."
+      en: "CSP is defence in depth: it does not fix the injection, but the browser refuses to run the injected script. Protecting cookies is the job of the `HttpOnly` attribute."
+  - q:
+      fr: "Pourquoi `html.escape()` ou `htmlspecialchars()` ne suffisent-ils pas pour un lien `<a href=\"...\">` dont l'URL vient de l'utilisateur ?"
+      en: "Why are `html.escape()` or `htmlspecialchars()` not enough for an `<a href=\"...\">` link whose URL comes from the user?"
+    options:
+      fr:
+        - "Parce qu'ils ne fonctionnent que dans les balises `<p>`"
+        - "Parce qu'ils ralentissent trop l'affichage de la page"
+        - "Parce qu'une URL `javascript:alert(1)` ne contient aucun caractère à encoder : il faut aussi vérifier le schéma"
+        - "Parce que les navigateurs décodent les entités avant d'afficher le texte"
+      en:
+        - "Because they only work inside `<p>` tags"
+        - "Because they slow page rendering down too much"
+        - "Because a `javascript:alert(1)` URL contains no character to encode: the scheme must be checked too"
+        - "Because browsers decode entities before displaying text"
+    answer: 2
+    why:
+      fr: "L'encodage empêche de sortir de l'attribut, mais une URL `javascript:` est dangereuse en restant dedans. Il faut une liste d'autorisation de schémas (`http`, `https`)."
+      en: "Encoding prevents breaking out of the attribute, but a `javascript:` URL is dangerous while staying inside it. A scheme allow-list (`http`, `https`) is required."

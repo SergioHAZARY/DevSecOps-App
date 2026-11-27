@@ -1,0 +1,595 @@
+description:
+  fr: "Comprendre le DAST : tester une application en fonctionnement, scans passif et actif, scans authentifiés, cibles de laboratoire et cadre légal."
+  en: "Understand DAST: testing a running application, passive and active scanning, authenticated scans, lab targets and the legal framework."
+duration: 20
+
+intro:
+  fr: |
+    **DAST** signifie *Dynamic Application Security Testing*, soit « test dynamique de la sécurité des
+    applications ». Un outil DAST ne lit pas le code source : il envoie de vraies requêtes HTTP à une
+    application **en cours d'exécution** et observe ses réponses, exactement comme le ferait un attaquant
+    depuis Internet. On parle de test en **boîte noire**.
+
+    Imaginez un immeuble neuf. Relire les plans de l'architecte, c'est le SAST. Payer un serrurier pour
+    faire le tour du bâtiment terminé et essayer chaque porte, chaque fenêtre et chaque interphone, c'est
+    le DAST : il ne sait pas comment les murs ont été construits, mais il vous dit quelle porte s'ouvre.
+
+    Dans cette leçon, vous allez situer le DAST parmi les autres tests, distinguer scan **passif** et scan
+    **actif**, comprendre pourquoi il faut scanner en étant **authentifié**, monter un laboratoire avec
+    OWASP Juice Shop et DVWA, puis écrire un mini-scanner en Python pour voir le mécanisme de l'intérieur.
+  en: |
+    **DAST** stands for *Dynamic Application Security Testing*. A DAST tool does not read source code: it
+    sends real HTTP requests to a **running** application and watches the responses, exactly as an attacker
+    on the Internet would. This is called **black-box** testing.
+
+    Picture a brand-new building. Proofreading the architect's plans is SAST. Paying a locksmith to walk
+    around the finished building and try every door, every window and every intercom is DAST: the locksmith
+    has no idea how the walls were built, but tells you which door opens.
+
+    In this lesson you will place DAST among the other kinds of tests, tell **passive** scanning from
+    **active** scanning, understand why scans must be **authenticated**, build a lab with OWASP Juice Shop
+    and DVWA, and write a tiny scanner in Python to see the mechanism from the inside.
+
+sections:
+  - heading:
+      fr: "Le DAST parmi les autres tests de sécurité"
+      en: "DAST among the other security tests"
+    body:
+      fr: |
+        Aucun outil ne voit tout. Les quatre familles se complètent :
+
+        | | SAST | SCA | DAST | IAST |
+        |---|---|---|---|---|
+        | Ce qui est analysé | Le code source | Les dépendances | L'application qui tourne, vue de l'extérieur | L'application qui tourne, vue de l'intérieur (agent) |
+        | Besoin du code ? | Oui | Fichiers de dépendances | Non, une URL suffit | Agent installé dans le runtime |
+        | Moment | Au commit | Au commit / au build | Après déploiement en environnement de test | Pendant les tests fonctionnels |
+        | Trouve bien | Injections visibles dans le code, fonctions dangereuses | CVE connues dans les bibliothèques | Mauvaise configuration, en-têtes et cookies, failles réellement exploitables | Failles exploitables **avec** la ligne de code |
+        | Limites | Faux positifs, aveugle à la configuration | Uniquement les failles déjà publiées | Pas de ligne de code, ne teste que ce qu'il atteint, plus lent | Agent spécifique à chaque langage |
+
+        Le DAST est le seul à tester l'application **telle qu'elle est déployée** : serveur web, reverse
+        proxy, TLS, en-têtes, cookies de session. Une application dont le code est irréprochable peut être
+        exposée par un serveur mal configuré : seul un test dynamique le voit.
+
+        En revanche, un DAST ne trouve pas les failles de **logique métier** (payer un panier avec un prix
+        négatif) et ne teste pas les pages qu'il n'a pas découvertes.
+      en: |
+        No tool sees everything. The four families complement each other:
+
+        | | SAST | SCA | DAST | IAST |
+        |---|---|---|---|---|
+        | What is analysed | Source code | Dependencies | The running application, from the outside | The running application, from the inside (agent) |
+        | Needs the code? | Yes | Dependency manifests | No, a URL is enough | Agent installed in the runtime |
+        | When | At commit time | At commit / build time | After deployment to a test environment | During functional tests |
+        | Good at finding | Injections visible in code, dangerous functions | Known CVEs in libraries | Misconfiguration, headers and cookies, flaws that are really exploitable | Exploitable flaws **with** the line of code |
+        | Limits | False positives, blind to configuration | Only already published flaws | No line of code, only tests what it reaches, slower | Agent specific to each language |
+
+        DAST is the only one that tests the application **as deployed**: web server, reverse proxy, TLS,
+        headers, session cookies. An application with flawless code can still be exposed by a badly
+        configured server: only a dynamic test sees that.
+
+        On the other hand, DAST does not find **business logic** flaws (paying for a basket with a negative
+        price) and does not test pages it never discovered.
+  - heading:
+      fr: "Scan passif et scan actif"
+      en: "Passive scanning and active scanning"
+    body:
+      fr: |
+        Un scanner DAST commence par **explorer** l'application (un *spider* suit les liens et les
+        formulaires), puis analyse ce qu'il a trouvé de deux façons très différentes :
+
+        | | Scan passif | Scan actif |
+        |---|---|---|
+        | Principe | Lit les requêtes et réponses normales, sans rien modifier | Envoie des requêtes **d'attaque** (charges XSS, injections SQL, traversée de répertoires) |
+        | Trouve | En-têtes manquants, cookies sans `HttpOnly`/`Secure`, fuites d'information, bibliothèques JS vulnérables | XSS, injection SQL, injection de commandes, inclusion de fichiers |
+        | Risque pour la cible | Quasi nul : c'est une navigation normale | Réel : données créées ou supprimées, e-mails envoyés, charge élevée |
+        | Durée | 1 à 5 minutes | De 20 minutes à plusieurs heures |
+        | Où l'utiliser | À chaque pull request, même sur une préproduction partagée | Environnement de test jetable, la nuit |
+
+        Retenez la règle : **le passif observe, l'actif attaque**. Un scan actif remplit réellement les
+        formulaires avec des milliers de valeurs ; s'il trouve un bouton « Supprimer le compte », il
+        cliquera dessus.
+      en: |
+        A DAST scanner first **explores** the application (a *spider* follows links and forms), then
+        analyses what it found in two very different ways:
+
+        | | Passive scan | Active scan |
+        |---|---|---|
+        | Principle | Reads normal requests and responses, changes nothing | Sends **attack** requests (XSS payloads, SQL injections, path traversal) |
+        | Finds | Missing headers, cookies without `HttpOnly`/`Secure`, information leaks, vulnerable JS libraries | XSS, SQL injection, command injection, file inclusion |
+        | Risk for the target | Close to none: it is normal browsing | Real: data created or deleted, e-mails sent, heavy load |
+        | Duration | 1 to 5 minutes | From 20 minutes to several hours |
+        | Where to use it | On every pull request, even on a shared staging | Disposable test environment, at night |
+
+        Remember the rule: **passive observes, active attacks**. An active scan really fills forms with
+        thousands of values; if it finds a "Delete account" button, it will click it.
+  - heading:
+      fr: "Scans authentifiés"
+      en: "Authenticated scans"
+    body:
+      fr: |
+        Sans identifiants, le scanner s'arrête à la page de connexion : il teste 5 % de l'application et
+        affiche un rapport rassurant. Or la majorité des fonctions sensibles (profil, paiement,
+        administration) se trouvent **derrière** le login. Un scan utile est donc un scan authentifié.
+
+        Trois façons de faire, de la plus simple à la plus complète :
+
+        1. **Injecter un jeton** : vous obtenez un jeton (JWT, clé d'API) avec `curl`, puis le scanner
+           l'ajoute dans un en-tête `Authorization` à chaque requête. Idéal pour les API.
+        2. **Décrire le login** : vous indiquez au scanner l'URL de connexion, le corps de la requête et le
+           compte à utiliser ; il se reconnecte seul quand la session expire.
+        3. **Login par navigateur** : le scanner pilote un vrai navigateur pour remplir le formulaire
+           (applications avec SSO ou JavaScript complexe).
+
+        Dans tous les cas, il faut un **indicateur de session** (un texte qui prouve que l'on est connecté,
+        par exemple « Déconnexion »), exclure l'URL de **logout** du scan, et utiliser un **compte de test
+        dédié**, jamais un compte réel ni un compte administrateur de production.
+      en: |
+        Without credentials the scanner stops at the login page: it tests 5% of the application and prints
+        a reassuring report. Yet most sensitive features (profile, payment, administration) live
+        **behind** the login. A useful scan is therefore an authenticated scan.
+
+        Three ways to do it, from the simplest to the most complete:
+
+        1. **Inject a token**: you obtain a token (JWT, API key) with `curl`, then the scanner adds it in an
+           `Authorization` header on every request. Ideal for APIs.
+        2. **Describe the login**: you give the scanner the login URL, the request body and the account to
+           use; it logs in again by itself when the session expires.
+        3. **Browser-based login**: the scanner drives a real browser to fill in the form (applications
+           with SSO or heavy JavaScript).
+
+        In every case you need a **session indicator** (a text proving you are logged in, such as
+        "Logout"), you must exclude the **logout** URL from the scan, and you must use a **dedicated test
+        account**, never a real account or a production administrator.
+  - heading:
+      fr: "Cibles de laboratoire et rappel légal"
+      en: "Lab targets and legal reminder"
+    body:
+      fr: |
+        Pour s'entraîner, il existe des applications **volontairement vulnérables** :
+
+        | Cible | Technologie | Image Docker | Intérêt |
+        |---|---|---|---|
+        | **OWASP Juice Shop** | Node.js, Angular, API REST | `bkimminich/juice-shop` | Application moderne (SPA + API), une centaine de défis |
+        | **DVWA** (*Damn Vulnerable Web Application*) | PHP, MariaDB | `ghcr.io/digininja/dvwa` | Application classique à formulaires, niveaux de difficulté réglables |
+
+        > **Rappel légal.** Ne scannez que ce qui vous **appartient** ou ce pour quoi vous avez une
+        > **autorisation écrite** du propriétaire. Scanner un site tiers, même « juste pour voir », est un
+        > délit dans la plupart des pays (en France : article 323-1 du Code pénal ; au Royaume-Uni :
+        > *Computer Misuse Act* ; aux États-Unis : *Computer Fraud and Abuse Act*). Dans ce cours, toutes
+        > les cibles tournent sur `localhost`, dans des conteneurs que vous lancez vous-même.
+
+        Ces applications sont trouées par conception : ne les exposez **jamais** sur Internet. Les
+        exemples ci-dessous les publient uniquement sur `127.0.0.1`.
+      en: |
+        To practise, there are **deliberately vulnerable** applications:
+
+        | Target | Technology | Docker image | Why use it |
+        |---|---|---|---|
+        | **OWASP Juice Shop** | Node.js, Angular, REST API | `bkimminich/juice-shop` | Modern application (SPA + API), about a hundred challenges |
+        | **DVWA** (*Damn Vulnerable Web Application*) | PHP, MariaDB | `ghcr.io/digininja/dvwa` | Classic form-based application, adjustable difficulty levels |
+
+        > **Legal reminder.** Only scan what you **own** or what you have the owner's **written
+        > authorisation** to test. Scanning a third-party site, even "just to see", is a criminal offence in
+        > most countries (France: article 323-1 of the Penal Code; United Kingdom: Computer Misuse Act;
+        > United States: Computer Fraud and Abuse Act). In this course every target runs on `localhost`, in
+        > containers you start yourself.
+
+        These applications are full of holes by design: **never** expose them to the Internet. The examples
+        below publish them on `127.0.0.1` only.
+
+examples:
+  - title:
+      fr: "Le laboratoire : Juice Shop et DVWA avec Docker Compose"
+      en: "The lab: Juice Shop and DVWA with Docker Compose"
+    file: docker-compose.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      # Project name: the Docker network will be called "dast-lab_default"
+      name: dast-lab
+
+      services:
+        juice-shop:
+          image: bkimminich/juice-shop:v17.1.1
+          ports:
+            # Bind to 127.0.0.1 only: a vulnerable app must never be reachable from the LAN
+            - "127.0.0.1:3000:3000"
+
+        dvwa:
+          image: ghcr.io/digininja/dvwa:latest
+          environment:
+            - DB_SERVER=db
+          depends_on:
+            - db
+          ports:
+            - "127.0.0.1:4280:80"
+
+        db:
+          image: mariadb:10
+          environment:
+            # Lab-only values expected by the DVWA image, never reuse them elsewhere
+            - MYSQL_ROOT_PASSWORD=dvwa
+            - MYSQL_DATABASE=dvwa
+            - MYSQL_USER=dvwa
+            - MYSQL_PASSWORD=p@ssw0rd
+          volumes:
+            - dvwa-db:/var/lib/mysql
+
+      volumes:
+        dvwa-db:
+    note:
+      fr: "Ce fichier sert dans toutes les leçons du cours. Les deux applications ne sont publiées que sur `127.0.0.1`. Les scanners lancés en conteneur rejoindront le réseau `dast-lab_default` et viseront `http://juice-shop:3000` ou `http://dvwa`."
+      en: "This file is used in every lesson of the course. Both applications are published on `127.0.0.1` only. Scanners started as containers will join the `dast-lab_default` network and target `http://juice-shop:3000` or `http://dvwa`."
+
+  - title:
+      fr: "Démarrer le laboratoire et faire un premier contact"
+      en: "Start the lab and make first contact"
+    file: start-lab.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Start the lab in the background
+      docker compose up -d
+
+      # Wait until Juice Shop answers, then look at its first response headers
+      curl --retry 30 --retry-delay 2 --retry-connrefused -sI http://localhost:3000 | head -n 6
+
+      # DVWA: an anonymous visitor is redirected to the login page
+      curl -s -o /dev/null -w "DVWA -> HTTP %{http_code} %{redirect_url}\n" http://localhost:4280/
+
+      # When you are done: stop everything and delete the database volume
+      docker compose down -v
+    output: |
+      HTTP/1.1 200 OK
+      Access-Control-Allow-Origin: *
+      X-Content-Type-Options: nosniff
+      X-Frame-Options: SAMEORIGIN
+      Feature-Policy: payment 'self'
+      X-Recruiting: /#/jobs
+      DVWA -> HTTP 302 http://localhost:4280/login.php
+    note:
+      fr: "Regarder des en-têtes avec `curl -I` est déjà du DAST manuel : on voit ici un CORS ouvert à tous (`*`) et aucune `Content-Security-Policy`. Pour DVWA, ouvrez une fois `http://localhost:4280/setup.php`, cliquez sur *Create / Reset Database*, puis connectez-vous avec `admin` / `password` (identifiants de laboratoire)."
+      en: "Looking at headers with `curl -I` is already manual DAST: here you can see CORS open to everyone (`*`) and no `Content-Security-Policy`. For DVWA, open `http://localhost:4280/setup.php` once, click *Create / Reset Database*, then log in with `admin` / `password` (lab credentials)."
+
+  - title:
+      fr: "Un scan passif en 40 lignes : lire sans attaquer"
+      en: "A passive scan in 40 lines: read without attacking"
+    file: passive_scan.py
+    lang: python
+    kind: neutral
+    code: |
+      # A passive scanner never attacks: it only reads responses that already exist.
+      RESPONSE = {
+          "url": "http://localhost:3000/",
+          "status": 200,
+          "headers": {
+              "Content-Type": "text/html; charset=UTF-8",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "SAMEORIGIN",
+              "Access-Control-Allow-Origin": "*",
+              "Set-Cookie": "session=abc123; Path=/",
+          },
+      }
+
+      EXPECTED_HEADERS = {
+          "Content-Security-Policy": "limits where scripts may come from (XSS damage control)",
+          "Strict-Transport-Security": "forces browsers to come back over HTTPS",
+          "X-Content-Type-Options": "stops MIME type sniffing",
+          "X-Frame-Options": "blocks clickjacking through iframes",
+      }
+
+
+      def passive_scan(response):
+          findings = []
+          headers = response["headers"]
+          for name, reason in EXPECTED_HEADERS.items():
+              if name not in headers:
+                  findings.append(f"WARN  missing header {name}: {reason}")
+          cookie = headers.get("Set-Cookie", "").lower()
+          if cookie:
+              for flag in ("httponly", "secure", "samesite"):
+                  if flag not in cookie:
+                      findings.append(f"WARN  cookie without {flag} flag")
+          if headers.get("Access-Control-Allow-Origin") == "*":
+              findings.append("WARN  CORS allows any origin (*)")
+          return findings
+
+
+      results = passive_scan(RESPONSE)
+      for line in results:
+          print(line)
+      print(f"{len(results)} finding(s), 0 attack request sent")
+    output: |
+      WARN  missing header Content-Security-Policy: limits where scripts may come from (XSS damage control)
+      WARN  missing header Strict-Transport-Security: forces browsers to come back over HTTPS
+      WARN  cookie without httponly flag
+      WARN  cookie without secure flag
+      WARN  cookie without samesite flag
+      WARN  CORS allows any origin (*)
+      6 finding(s), 0 attack request sent
+    note:
+      fr: "Cliquez sur Run : le script n'envoie aucune requête, il inspecte une réponse déjà reçue. C'est exactement ce que fait le scan passif de ZAP, avec une soixantaine de règles au lieu de trois."
+      en: "Press Run: the script sends no request at all, it inspects a response that was already received. This is exactly what ZAP's passive scan does, with about sixty rules instead of three."
+
+  - title:
+      fr: "Un scan actif face à une page vulnérable"
+      en: "An active scan against a vulnerable page"
+    file: active_scan_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # The "application": a search page that reflects the query in its HTML
+      def search_page(query):
+          # Vulnerable: user input is inserted in the page without any encoding
+          return f"<html><body><h1>Results for {query}</h1></body></html>"
+
+
+      # The "scanner": it sends attack payloads and observes the responses
+      PAYLOADS = [
+          "<script>alert(1)</script>",
+          "\"><img src=x onerror=alert(1)>",
+          "'><svg onload=alert(1)>",
+      ]
+
+
+      def active_scan(handler):
+          alerts = []
+          for payload in PAYLOADS:
+              body = handler(payload)  # attack request
+              if payload in body:      # the payload came back unmodified: XSS
+                  alerts.append(payload)
+          return alerts
+
+
+      alerts = active_scan(search_page)
+      for payload in alerts:
+          print("FAIL  Reflected XSS with payload:", payload)
+      print(f"{len(PAYLOADS)} attack request(s) sent, {len(alerts)} alert(s)")
+    output: |
+      FAIL  Reflected XSS with payload: <script>alert(1)</script>
+      FAIL  Reflected XSS with payload: "><img src=x onerror=alert(1)>
+      FAIL  Reflected XSS with payload: '><svg onload=alert(1)>
+      3 attack request(s) sent, 3 alert(s)
+    note:
+      fr: "Le scanner ne connaît pas le code de `search_page` : il envoie des charges et regarde si elles reviennent intactes dans la réponse. C'est le principe de la règle « Cross Site Scripting (Reflected) » d'un vrai scanner."
+      en: "The scanner knows nothing about the code of `search_page`: it sends payloads and checks whether they come back intact in the response. This is the principle behind the \"Cross Site Scripting (Reflected)\" rule of a real scanner."
+
+  - title:
+      fr: "Le même scan actif face à la page corrigée"
+      en: "The same active scan against the fixed page"
+    file: active_scan_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import html
+
+
+      def search_page(query):
+          # Fixed: html.escape turns < > " ' & into harmless entities
+          return f"<html><body><h1>Results for {html.escape(query)}</h1></body></html>"
+
+
+      PAYLOADS = [
+          "<script>alert(1)</script>",
+          "\"><img src=x onerror=alert(1)>",
+          "'><svg onload=alert(1)>",
+      ]
+
+
+      def active_scan(handler):
+          alerts = []
+          for payload in PAYLOADS:
+              body = handler(payload)
+              if payload in body:
+                  alerts.append(payload)
+          return alerts
+
+
+      alerts = active_scan(search_page)
+      print("Response to the first payload:", search_page(PAYLOADS[0]))
+      print(f"{len(PAYLOADS)} attack request(s) sent, {len(alerts)} alert(s)")
+    output: |
+      Response to the first payload: <html><body><h1>Results for &lt;script&gt;alert(1)&lt;/script&gt;</h1></body></html>
+      3 attack request(s) sent, 0 alert(s)
+    note:
+      fr: "Une seule ligne a changé dans l'application et les trois attaques échouent : le navigateur affichera le texte au lieu d'exécuter le script. Le DAST prouve la correction de l'extérieur, sans lire le code."
+      en: "A single line changed in the application and all three attacks fail: the browser will display the text instead of running the script. DAST proves the fix from the outside, without reading the code."
+
+mistake:
+  fr: |
+    **Lancer un scan actif sur la production, ou sur un site qui ne vous appartient pas.**
+
+    Un scan actif n'est pas une simple visite : il soumet chaque formulaire des milliers de fois, crée de
+    faux comptes, envoie des e-mails, peut supprimer des données et saturer le serveur. Sur un site tiers,
+    c'est en plus une infraction pénale, même sans intention de nuire. Autre piège fréquent : scanner
+    **sans authentification** et conclure « zéro alerte, tout va bien » alors que l'outil n'a vu que la
+    page de connexion.
+  en: |
+    **Running an active scan against production, or against a site you do not own.**
+
+    An active scan is not a simple visit: it submits every form thousands of times, creates fake accounts,
+    sends e-mails, may delete data and overload the server. Against a third-party site it is also a
+    criminal offence, even without any intent to harm. Another frequent trap: scanning **without
+    authentication** and concluding "zero alerts, all good" when the tool only ever saw the login page.
+
+bestPractice:
+  fr: |
+    - **Autorisation d'abord** : périmètre écrit (URL, dates, compte utilisé) avant tout scan hors de votre poste.
+    - **Passif partout, actif en bac à sable** : scan passif à chaque pull request, scan actif sur un environnement jetable recréé à chaque exécution.
+    - **Scannez authentifié** avec un compte de test dédié, et vérifiez dans le rapport le nombre d'URL réellement visitées.
+    - **Combinez** SAST, SCA et DAST : chacun trouve ce que les autres ne voient pas.
+    - **N'exposez jamais** Juice Shop ou DVWA ailleurs que sur `127.0.0.1`.
+  en: |
+    - **Authorisation first**: a written scope (URLs, dates, account used) before any scan outside your own machine.
+    - **Passive everywhere, active in a sandbox**: passive scan on every pull request, active scan against a disposable environment recreated on every run.
+    - **Scan authenticated** with a dedicated test account, and check in the report how many URLs were really visited.
+    - **Combine** SAST, SCA and DAST: each one finds what the others cannot see.
+    - **Never expose** Juice Shop or DVWA anywhere else than on `127.0.0.1`.
+
+exercise:
+  statement:
+    fr: |
+      Un serveur qui annonce sa version exacte aide l'attaquant à choisir la bonne CVE. Voici une réponse
+      de DVWA :
+
+      ```python
+      RESPONSE = {
+          "url": "http://localhost:4280/login.php",
+          "headers": {
+              "Server": "Apache/2.4.57 (Debian)",
+              "X-Powered-By": "PHP/8.2.12",
+              "Content-Type": "text/html; charset=utf-8",
+              "Set-Cookie": "PHPSESSID=abc123; path=/",
+          },
+      }
+      ```
+
+      1. Écrivez une fonction `leaky_headers(response)` qui signale les en-têtes `Server` et
+         `X-Powered-By` lorsqu'ils contiennent un numéro de version (par exemple `2.4.57`).
+      2. Ce contrôle est-il passif ou actif ? Pourquoi ?
+    en: |
+      A server that announces its exact version helps the attacker pick the right CVE. Here is a response
+      from DVWA:
+
+      ```python
+      RESPONSE = {
+          "url": "http://localhost:4280/login.php",
+          "headers": {
+              "Server": "Apache/2.4.57 (Debian)",
+              "X-Powered-By": "PHP/8.2.12",
+              "Content-Type": "text/html; charset=utf-8",
+              "Set-Cookie": "PHPSESSID=abc123; path=/",
+          },
+      }
+      ```
+
+      1. Write a function `leaky_headers(response)` that reports the `Server` and `X-Powered-By` headers
+         when they contain a version number (for example `2.4.57`).
+      2. Is this check passive or active? Why?
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import re
+
+      RESPONSE = {
+          "url": "http://localhost:4280/login.php",
+          "headers": {
+              "Server": "Apache/2.4.57 (Debian)",
+              "X-Powered-By": "PHP/8.2.12",
+              "Content-Type": "text/html; charset=utf-8",
+              "Set-Cookie": "PHPSESSID=abc123; path=/",
+          },
+      }
+
+      # A version number looks like 2.4 or 8.2.12
+      VERSION = re.compile(r"\d+\.\d+(\.\d+)?")
+
+
+      def leaky_headers(response):
+          findings = []
+          for name in ("Server", "X-Powered-By"):
+              value = response["headers"].get(name, "")
+              if VERSION.search(value):
+                  findings.append(f"WARN  {name} leaks a version: {value}")
+          return findings
+
+
+      # Passive check: it only reads a response, no attack request is sent
+      for line in leaky_headers(RESPONSE):
+          print(line)
+    note:
+      fr: "Le script affiche deux alertes (`Apache/2.4.57 (Debian)` et `PHP/8.2.12`). Le contrôle est **passif** : il lit une réponse normale sans envoyer de charge d'attaque. ZAP fait la même chose avec ses règles 10036 et 10037."
+      en: "The script prints two alerts (`Apache/2.4.57 (Debian)` and `PHP/8.2.12`). The check is **passive**: it reads a normal response and sends no attack payload. ZAP does the same with its rules 10036 and 10037."
+
+quiz:
+  - q:
+      fr: "Qu'analyse un outil DAST ?"
+      en: "What does a DAST tool analyse?"
+    options:
+      fr:
+        - "Le code source, ligne par ligne"
+        - "Une application en cours d'exécution, à travers ses réponses HTTP"
+        - "La liste des dépendances et leurs CVE"
+        - "Les fichiers Terraform de l'infrastructure"
+      en:
+        - "The source code, line by line"
+        - "A running application, through its HTTP responses"
+        - "The list of dependencies and their CVEs"
+        - "The Terraform files of the infrastructure"
+    answer: 1
+    why:
+      fr: "Le DAST est un test en boîte noire : il envoie des requêtes à l'application qui tourne et observe les réponses, sans accès au code."
+      en: "DAST is black-box testing: it sends requests to the running application and observes the responses, with no access to the code."
+  - q:
+      fr: "Quelle différence y a-t-il entre un scan passif et un scan actif ?"
+      en: "What is the difference between a passive scan and an active scan?"
+    options:
+      fr:
+        - "Le scan passif est payant, le scan actif est gratuit"
+        - "Le scan passif lit le code, le scan actif lit les journaux"
+        - "Le scan passif nécessite un compte, le scan actif non"
+        - "Le scan passif observe le trafic normal, le scan actif envoie des requêtes d'attaque"
+      en:
+        - "The passive scan is paid, the active scan is free"
+        - "The passive scan reads the code, the active scan reads the logs"
+        - "The passive scan needs an account, the active scan does not"
+        - "The passive scan observes normal traffic, the active scan sends attack requests"
+    answer: 3
+    why:
+      fr: "Le passif se contente d'analyser des requêtes et réponses légitimes ; l'actif modifie les requêtes pour tenter d'exploiter des failles."
+      en: "Passive scanning only analyses legitimate requests and responses; active scanning alters requests to try to exploit flaws."
+  - q:
+      fr: "Pourquoi un scan non authentifié donne-t-il souvent un rapport trompeur ?"
+      en: "Why does an unauthenticated scan often produce a misleading report?"
+    options:
+      fr:
+        - "Parce qu'il ne voit que les pages publiques, donc une petite partie de l'application"
+        - "Parce qu'il est toujours bloqué par le pare-feu"
+        - "Parce qu'il ne peut pas lire les en-têtes HTTP"
+        - "Parce qu'il supprime les cookies du serveur"
+      en:
+        - "Because it only sees public pages, a small part of the application"
+        - "Because it is always blocked by the firewall"
+        - "Because it cannot read HTTP headers"
+        - "Because it deletes the server's cookies"
+    answer: 0
+    why:
+      fr: "Les fonctions sensibles sont derrière le login : sans session valide, le scanner s'arrête à la page de connexion et n'a presque rien testé."
+      en: "Sensitive features sit behind the login: without a valid session the scanner stops at the login page and has tested almost nothing."
+  - q:
+      fr: "Sur quelle cible avez-vous le droit de lancer un scan actif ?"
+      en: "Which target are you allowed to run an active scan against?"
+    options:
+      fr:
+        - "N'importe quel site public, tant que le scan est court"
+        - "Le site d'un concurrent, pour comparer"
+        - "Une application qui vous appartient ou pour laquelle vous avez une autorisation écrite"
+        - "Tout site qui n'affiche pas d'interdiction explicite"
+      en:
+        - "Any public site, as long as the scan is short"
+        - "A competitor's site, for comparison"
+        - "An application you own or have written authorisation to test"
+        - "Any site that shows no explicit prohibition"
+    answer: 2
+    why:
+      fr: "Scanner sans autorisation est une infraction dans la plupart des pays. On ne teste que son propre périmètre ou un périmètre autorisé par écrit."
+      en: "Scanning without authorisation is an offence in most countries. You only test your own scope or a scope authorised in writing."
+  - q:
+      fr: "Lequel de ces problèmes un DAST ne peut-il généralement PAS détecter ?"
+      en: "Which of these problems can DAST generally NOT detect?"
+    options:
+      fr:
+        - "Un en-tête Content-Security-Policy manquant"
+        - "Une faille de logique métier, comme un panier payé avec un prix négatif"
+        - "Un cookie de session sans attribut HttpOnly"
+        - "Un XSS réfléchi dans un champ de recherche"
+      en:
+        - "A missing Content-Security-Policy header"
+        - "A business logic flaw, such as a basket paid with a negative price"
+        - "A session cookie without the HttpOnly attribute"
+        - "A reflected XSS in a search field"
+    answer: 1
+    why:
+      fr: "Un scanner ignore les règles métier de votre application : il ne sait pas qu'un prix négatif est anormal. Ces failles demandent une revue humaine ou des tests dédiés."
+      en: "A scanner does not know your application's business rules: it has no idea a negative price is abnormal. Those flaws need human review or dedicated tests."

@@ -1,0 +1,587 @@
+description:
+  fr: "Durcir un environnement Azure : NSG, Microsoft Defender for Cloud, accès conditionnel Entra ID, comptes de stockage et Key Vault, avec az CLI et Terraform."
+  en: "Harden an Azure environment: NSGs, Microsoft Defender for Cloud, Entra ID Conditional Access, storage accounts and Key Vault, with the az CLI and Terraform."
+duration: 30
+
+intro:
+  fr: |
+    **Microsoft Azure** applique le même modèle de responsabilité partagée qu'AWS, avec son propre
+    vocabulaire. Si vous avez suivi les leçons précédentes, vous connaissez déjà les idées ; il reste à
+    apprendre les noms.
+
+    Voyez Azure comme un grand campus d'entreprise. Le **badge** de chaque employé est géré par
+    **Microsoft Entra ID** (l'ancien Azure Active Directory). Les **portiques** entre les bâtiments sont
+    les **NSG** (*Network Security Groups*). Les **archives** sont les comptes de stockage, la **salle des
+    coffres** est **Key Vault**, et le **poste de sécurité** qui surveille l'ensemble s'appelle
+    **Microsoft Defender for Cloud**.
+
+    Dans cette leçon, vous allez durcir chacun de ces cinq éléments, en comparant la configuration laxiste
+    et la configuration sûre, avec `az` (l'interface en ligne de commande d'Azure) et Terraform.
+  en: |
+    **Microsoft Azure** follows the same shared responsibility model as AWS, with its own vocabulary. If
+    you took the previous lessons you already know the ideas; what remains is learning the names.
+
+    See Azure as a large corporate campus. Each employee's **badge** is managed by **Microsoft Entra ID**
+    (formerly Azure Active Directory). The **gates** between buildings are **NSGs** (*Network Security
+    Groups*). The **archives** are storage accounts, the **vault room** is **Key Vault**, and the
+    **security desk** watching everything is called **Microsoft Defender for Cloud**.
+
+    In this lesson you will harden each of these five elements, comparing the lax configuration with the
+    safe one, using `az` (the Azure command-line interface) and Terraform.
+
+sections:
+  - heading:
+      fr: "D'AWS à Azure : la table de correspondance"
+      en: "From AWS to Azure: the mapping table"
+    body:
+      fr: |
+        Azure range les ressources dans une hiérarchie : **locataire** (*tenant*) Entra ID >
+        **groupes d'administration** > **abonnements** > **groupes de ressources** > ressources. Les droits
+        (**Azure RBAC**) et les règles (**Azure Policy**) attribués à un niveau s'héritent vers le bas.
+
+        | Besoin | AWS | Azure |
+        |---|---|---|
+        | Identités | IAM, IAM Identity Center | Microsoft Entra ID, Azure RBAC |
+        | Pare-feu de proximité | Security Group | NSG (*Network Security Group*) |
+        | Stockage objet | S3 | Compte de stockage (Blob) |
+        | Coffre à secrets et clés | Secrets Manager, KMS | Key Vault |
+        | Journal d'audit | CloudTrail | Activity Log, journaux Entra ID |
+        | Détection et posture | GuardDuty, Security Hub | Microsoft Defender for Cloud |
+        | Garde-fous d'organisation | SCP | Azure Policy |
+        | Identité d'une machine | Rôle IAM d'instance | Identité managée (*managed identity*) |
+
+        L'**identité managée** mérite une mention : une VM ou une application reçoit une identité Entra ID
+        sans aucun secret à stocker, exactement comme un rôle IAM sur AWS.
+      en: |
+        Azure arranges resources in a hierarchy: Entra ID **tenant** > **management groups** >
+        **subscriptions** > **resource groups** > resources. Permissions (**Azure RBAC**) and rules
+        (**Azure Policy**) assigned at one level are inherited downwards.
+
+        | Need | AWS | Azure |
+        |---|---|---|
+        | Identities | IAM, IAM Identity Center | Microsoft Entra ID, Azure RBAC |
+        | Close-range firewall | Security Group | NSG (*Network Security Group*) |
+        | Object storage | S3 | Storage account (Blob) |
+        | Secrets and keys vault | Secrets Manager, KMS | Key Vault |
+        | Audit log | CloudTrail | Activity Log, Entra ID logs |
+        | Detection and posture | GuardDuty, Security Hub | Microsoft Defender for Cloud |
+        | Organisation guardrails | SCPs | Azure Policy |
+        | Machine identity | Instance IAM role | Managed identity |
+
+        The **managed identity** deserves a mention: a VM or an application receives an Entra ID identity
+        with no secret to store, exactly like an IAM role on AWS.
+  - heading:
+      fr: "Entra ID et l'accès conditionnel"
+      en: "Entra ID and Conditional Access"
+    body:
+      fr: |
+        Dans Azure, **l'identité est le vrai périmètre** : le portail et les API sont joignables depuis
+        Internet, seul le compte fait barrage. L'**accès conditionnel** (*Conditional Access*) est le moteur
+        de règles d'Entra ID : « **si** tel utilisateur accède à telle application dans telles conditions,
+        **alors** exiger ceci ».
+
+        Les politiques de base d'un locataire :
+
+        - **MFA obligatoire** pour tous, et MFA résistante à l'hameçonnage (clé FIDO2, passkey) pour les administrateurs ;
+        - **blocage de l'authentification héritée** (IMAP, POP, SMTP basique), qui ne sait pas faire de MFA ;
+        - **appareil conforme** ou localisation de confiance pour les accès sensibles ;
+        - deux comptes **« brise-glace »** exclus des politiques, aux identifiants conservés au coffre, pour
+          ne pas se verrouiller dehors.
+
+        L'accès conditionnel demande une licence Entra ID P1. Sans elle, activez au minimum les
+        **paramètres de sécurité par défaut** (*security defaults*), qui imposent la MFA. Testez toujours une
+        nouvelle politique en mode **rapport seul** (*report-only*) avant de l'appliquer.
+      en: |
+        In Azure, **identity is the real perimeter**: the portal and the APIs are reachable from the
+        Internet, only the account stands in the way. **Conditional Access** is Entra ID's rule engine:
+        "**if** this user accesses this application under these conditions, **then** require that".
+
+        The baseline policies of a tenant:
+
+        - **MFA required** for everyone, and phishing-resistant MFA (FIDO2 key, passkey) for administrators;
+        - **legacy authentication blocked** (IMAP, POP, basic SMTP), since it cannot do MFA;
+        - **compliant device** or trusted location for sensitive access;
+        - two **"break-glass"** accounts excluded from the policies, with credentials kept in a safe, so
+          that you cannot lock yourself out.
+
+        Conditional Access requires an Entra ID P1 licence. Without it, at least turn on **security
+        defaults**, which enforce MFA. Always test a new policy in **report-only** mode before enforcing it.
+  - heading:
+      fr: "NSG, stockage, Key Vault et Defender for Cloud"
+      en: "NSGs, storage, Key Vault and Defender for Cloud"
+    body:
+      fr: |
+        **NSG.** Un NSG s'attache à un sous-réseau ou à une carte réseau. Il est *stateful*, et ses règles
+        ont une **priorité** de 100 à 4096 : le plus petit nombre gagne. Trois règles par défaut ferment la
+        marche, dont `DenyAllInBound` (priorité 65500). Contrairement à un Security Group AWS, un NSG
+        accepte des règles **Deny**. Pour administrer une VM, utilisez **Azure Bastion** ou l'accès
+        *just-in-time* de Defender plutôt qu'un port 22 ou 3389 ouvert.
+
+        **Compte de stockage.** Quatre réglages comptent : TLS 1.2 minimum, HTTPS uniquement, accès
+        anonyme aux blobs interdit, et **clés de compte désactivées** au profit d'Entra ID. Une clé de
+        compte donne tous les droits sur toutes les données et n'est liée à aucune personne.
+
+        **Key Vault.** Il stocke secrets, clés et certificats. Activez le modèle d'autorisation **Azure
+        RBAC**, la **protection contre la purge** (personne ne peut détruire définitivement un secret avant
+        la fin de la période de rétention) et fermez l'accès réseau public.
+
+        **Defender for Cloud.** Sa partie gratuite évalue votre configuration face au *Microsoft Cloud
+        Security Benchmark* et calcule un **Secure Score**. Ses plans payants (Servers, Storage,
+        Containers, Key Vault...) ajoutent la détection de menaces par type de ressource.
+      en: |
+        **NSGs.** An NSG attaches to a subnet or a network interface. It is stateful, and its rules have a
+        **priority** from 100 to 4096: the lowest number wins. Three default rules close the list,
+        including `DenyAllInBound` (priority 65500). Unlike an AWS Security Group, an NSG accepts **Deny**
+        rules. To administer a VM, use **Azure Bastion** or Defender's *just-in-time* access rather than an
+        open port 22 or 3389.
+
+        **Storage account.** Four settings matter: TLS 1.2 minimum, HTTPS only, anonymous blob access
+        forbidden, and **account keys disabled** in favour of Entra ID. An account key grants every right
+        on all the data and is tied to no individual.
+
+        **Key Vault.** It stores secrets, keys and certificates. Enable the **Azure RBAC** permission
+        model and **purge protection** (nobody can permanently destroy a secret before the retention
+        period ends), and close public network access.
+
+        **Defender for Cloud.** Its free tier assesses your configuration against the *Microsoft Cloud
+        Security Benchmark* and computes a **Secure Score**. Its paid plans (Servers, Storage, Containers,
+        Key Vault...) add threat detection per resource type.
+
+examples:
+  - title:
+      fr: "Configuration laxiste : RDP ouvert à tous et stockage anonyme"
+      en: "Lax configuration: RDP open to all and anonymous storage"
+    file: main_vulnerable.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      resource "azurerm_resource_group" "prod" {
+        name     = "rg-prod"
+        location = "westeurope"
+      }
+
+      resource "azurerm_network_security_group" "vm" {
+        name                = "nsg-vm"
+        location            = azurerm_resource_group.prod.location
+        resource_group_name = azurerm_resource_group.prod.name
+
+        # RDP from any source: the VM is brute-forced as soon as it has a public IP
+        security_rule {
+          name                       = "allow-rdp"
+          priority                   = 100
+          direction                  = "Inbound"
+          access                     = "Allow"
+          protocol                   = "Tcp"
+          source_port_range          = "*"
+          destination_port_range     = "3389"
+          source_address_prefix      = "*"
+          destination_address_prefix = "*"
+        }
+      }
+
+      resource "azurerm_storage_account" "docs" {
+        name                     = "acmedocsprod"
+        resource_group_name      = azurerm_resource_group.prod.name
+        location                 = azurerm_resource_group.prod.location
+        account_tier             = "Standard"
+        account_replication_type = "LRS"
+
+        min_tls_version                 = "TLS1_0" # obsolete protocol accepted
+        https_traffic_only_enabled      = false    # plain HTTP accepted
+        allow_nested_items_to_be_public = true     # containers may be made anonymous
+        shared_access_key_enabled       = true     # all-powerful account keys in use
+      }
+
+      # A container readable by anyone on the Internet, without authentication
+      resource "azurerm_storage_container" "contracts" {
+        name                  = "contracts"
+        storage_account_id    = azurerm_storage_account.docs.id
+        container_access_type = "blob"
+      }
+    note:
+      fr: "Deux expositions directes : le bureau à distance de la VM et un conteneur dont chaque blob est lisible par simple URL. Les noms de comptes de stockage se devinent et s'énumèrent facilement : « personne ne connaît l'URL » n'est pas une protection."
+      en: "Two direct exposures: the VM's remote desktop and a container whose every blob can be read through a plain URL. Storage account names are easy to guess and enumerate: \"nobody knows the URL\" is not a protection."
+
+  - title:
+      fr: "Configuration durcie : HTTPS seul en entrée, stockage privé sans clés de compte"
+      en: "Hardened configuration: HTTPS-only inbound, private storage without account keys"
+    file: main_secure.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # The provider must authenticate to storage with Entra ID, since account keys are disabled
+      provider "azurerm" {
+        features {}
+        storage_use_azuread = true
+      }
+
+      resource "azurerm_resource_group" "prod" {
+        name     = "rg-prod"
+        location = "westeurope"
+      }
+
+      resource "azurerm_network_security_group" "web" {
+        name                = "nsg-web"
+        location            = azurerm_resource_group.prod.location
+        resource_group_name = azurerm_resource_group.prod.name
+
+        # The only inbound flow from the Internet: HTTPS.
+        # No 22 / 3389: administration goes through Azure Bastion.
+        security_rule {
+          name                       = "allow-https-in"
+          priority                   = 100
+          direction                  = "Inbound"
+          access                     = "Allow"
+          protocol                   = "Tcp"
+          source_port_range          = "*"
+          destination_port_range     = "443"
+          source_address_prefix      = "Internet"
+          destination_address_prefix = "*"
+        }
+        # Everything else from the Internet is refused by the default rule DenyAllInBound (65500)
+      }
+
+      resource "azurerm_storage_account" "docs" {
+        name                     = "acmedocsprod"
+        resource_group_name      = azurerm_resource_group.prod.name
+        location                 = azurerm_resource_group.prod.location
+        account_tier             = "Standard"
+        account_replication_type = "GRS"
+
+        min_tls_version                 = "TLS1_2"
+        https_traffic_only_enabled      = true
+        allow_nested_items_to_be_public = false # anonymous access impossible, even by mistake
+        shared_access_key_enabled       = false # Entra ID identities only: every access is attributable
+        public_network_access_enabled   = false # reachable through a private endpoint only
+
+        blob_properties {
+          versioning_enabled = true
+
+          delete_retention_policy {
+            days = 30 # deleted blobs can be restored for 30 days
+          }
+        }
+      }
+
+      resource "azurerm_storage_container" "contracts" {
+        name                  = "contracts"
+        storage_account_id    = azurerm_storage_account.docs.id
+        container_access_type = "private"
+      }
+    note:
+      fr: "Avec `shared_access_key_enabled = false`, plus aucune clé de compte ne peut fuiter : chaque lecture passe par un rôle Azure RBAC (par exemple *Storage Blob Data Reader*) attribué à une identité précise."
+      en: "With `shared_access_key_enabled = false`, no account key can leak any more: every read goes through an Azure RBAC role (for instance *Storage Blob Data Reader*) assigned to a specific identity."
+
+  - title:
+      fr: "Key Vault : RBAC, protection contre la purge et identité managée"
+      en: "Key Vault: RBAC, purge protection and managed identity"
+    file: keyvault.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      RG=rg-prod
+      KV=kv-acme-prod
+      APP=app-acme-shop
+
+      # 1. A vault with the RBAC permission model, purge protection and no public network access
+      az keyvault create \
+        --name "$KV" --resource-group "$RG" --location westeurope \
+        --enable-rbac-authorization true \
+        --enable-purge-protection true \
+        --retention-days 90 \
+        --public-network-access Disabled
+
+      KV_ID=$(az keyvault show --name "$KV" --query id --output tsv)
+
+      # 2. The web app gets a managed identity: no client secret to store anywhere
+      PRINCIPAL_ID=$(az webapp identity assign \
+        --name "$APP" --resource-group "$RG" --query principalId --output tsv)
+
+      # 3. Least privilege: the app may read secrets of this vault, nothing else
+      az role assignment create \
+        --assignee-object-id "$PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal \
+        --role "Key Vault Secrets User" \
+        --scope "$KV_ID"
+
+      # 4. The app setting is a reference: the platform resolves it at runtime,
+      #    the password itself never appears in the configuration or in Git
+      az webapp config appsettings set \
+        --name "$APP" --resource-group "$RG" \
+        --settings 'DB_PASSWORD=@Microsoft.KeyVault(SecretUri=https://kv-acme-prod.vault.azure.net/secrets/db-password/)'
+    note:
+      fr: "Aucun mot de passe dans ce script. L'application lit `DB_PASSWORD` comme une variable d'environnement ordinaire, mais la valeur vit dans Key Vault, et seule l'identité managée de l'application a le droit de la lire."
+      en: "No password in this script. The application reads `DB_PASSWORD` like an ordinary environment variable, but the value lives in Key Vault, and only the application's managed identity is allowed to read it."
+
+  - title:
+      fr: "Accès conditionnel : MFA obligatoire pour les administrateurs"
+      en: "Conditional Access: MFA required for administrators"
+    file: ca-require-mfa-admins.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "displayName": "CA001 - Require MFA for administrators",
+        "state": "enabledForReportingButNotEnforced",
+        "conditions": {
+          "clientAppTypes": ["all"],
+          "applications": {
+            "includeApplications": ["All"]
+          },
+          "users": {
+            "includeRoles": [
+              "62e90394-69f5-4237-9190-012177145e10",
+              "194ae4cb-b126-40b2-bd5b-6091b380977d",
+              "e8611ab8-c189-46e8-94e1-60213ab1f814"
+            ],
+            "excludeUsers": [
+              "00000000-0000-0000-0000-00000000b001",
+              "00000000-0000-0000-0000-00000000b002"
+            ]
+          }
+        },
+        "grantControls": {
+          "operator": "OR",
+          "builtInControls": ["mfa"]
+        }
+      }
+    output: |
+      $ az rest --method POST \
+          --url https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies \
+          --headers "Content-Type=application/json" \
+          --body @ca-require-mfa-admins.json --query "{id:id, state:state}"
+      {
+        "id": "7c1a2b3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "state": "enabledForReportingButNotEnforced"
+      }
+    note:
+      fr: "Les trois identifiants de `includeRoles` sont les rôles intégrés Administrateur général, Administrateur de sécurité et Administrateur de rôles privilégiés. Les deux comptes exclus sont les comptes brise-glace. La politique démarre en mode rapport seul : passez `state` à `enabled` après avoir vérifié son effet dans les journaux de connexion."
+      en: "The three identifiers in `includeRoles` are the built-in roles Global Administrator, Security Administrator and Privileged Role Administrator. The two excluded accounts are the break-glass accounts. The policy starts in report-only mode: switch `state` to `enabled` after checking its effect in the sign-in logs."
+
+  - title:
+      fr: "Defender for Cloud et audit rapide avec az CLI"
+      en: "Defender for Cloud and a quick audit with the az CLI"
+    file: defender-audit.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Audit commands are read-only: run them on a subscription you are authorised to assess.
+      set -euo pipefail
+
+      # 1. Turn on the Defender plans for storage and Key Vault on the current subscription
+      az security pricing create --name StorageAccounts --tier Standard
+      az security pricing create --name KeyVaults --tier Standard
+
+      # 2. Which recommendations are currently failing?
+      az security assessment list \
+        --query "[?status.code=='Unhealthy'].displayName" --output tsv | sort | uniq -c | sort -rn
+
+      # 3. Inbound NSG rules that allow traffic from any source
+      az network nsg rule list --resource-group rg-prod --nsg-name nsg-vm \
+        --query "[?access=='Allow' && direction=='Inbound' && (sourceAddressPrefix=='*' || sourceAddressPrefix=='Internet')].{rule:name, port:destinationPortRange, priority:priority}" \
+        --output table
+
+      # 4. Storage accounts that still allow anonymous access, old TLS or account keys
+      az storage account list \
+        --query "[].{name:name, tls:minimumTlsVersion, publicBlob:allowBlobPublicAccess, sharedKey:allowSharedKeyAccess}" \
+        --output table
+    output: |
+      3 Storage accounts should prevent shared key access
+      2 Management ports of virtual machines should be protected with just-in-time network access control
+      1 Storage account public access should be disallowed
+
+      Rule       Port    Priority
+      ---------  ------  ----------
+      allow-rdp  3389    100
+
+      Name          Tls     PublicBlob    SharedKey
+      ------------  ------  ------------  -----------
+      acmedocsprod  TLS1_0  True          True
+    note:
+      fr: "La sortie correspond à l'exemple vulnérable : Defender for Cloud remonte les mêmes défauts que nos requêtes manuelles. L'intérêt du service est de faire ce contrôle en continu, sur tous les abonnements, sans script à maintenir."
+      en: "The output matches the vulnerable example: Defender for Cloud reports the same flaws as our manual queries. The point of the service is to run this check continuously, across all subscriptions, with no script to maintain."
+
+mistake:
+  fr: |
+    **Distribuer la clé du compte de stockage ou un jeton SAS sans date de fin.**
+
+    La chaîne de connexion contenant la clé de compte (`AccountKey=...`) se retrouve dans le code, dans les
+    variables de CI et sur les postes des développeurs. Elle donne **tous les droits sur toutes les
+    données**, ne dit pas qui l'utilise et ne peut être retirée à une seule personne : il faut la régénérer
+    pour tout le monde. Un jeton **SAS** (*Shared Access Signature*) valable dix ans pose le même problème.
+    Désactivez les clés partagées et attribuez des rôles Azure RBAC à des identités Entra ID ou à des
+    identités managées.
+  en: |
+    **Handing out the storage account key, or a SAS token with no end date.**
+
+    The connection string holding the account key (`AccountKey=...`) ends up in code, in CI variables and
+    on developers' laptops. It grants **every right on all the data**, does not say who is using it and
+    cannot be withdrawn from one person: it must be regenerated for everybody. A **SAS** (*Shared Access
+    Signature*) token valid for ten years has the same problem. Disable shared keys and assign Azure RBAC
+    roles to Entra ID identities or managed identities.
+
+bestPractice:
+  fr: |
+    - **MFA pour tous** via l'accès conditionnel, authentification héritée bloquée, deux comptes brise-glace surveillés.
+    - **Rôles d'administration à la demande** avec PIM (*Privileged Identity Management*) : personne n'est administrateur en permanence.
+    - **Identités managées** pour les applications ; aucun secret d'application à stocker ni à renouveler.
+    - **NSG sur chaque sous-réseau**, aucun port 22 ou 3389 depuis `Internet` ou `*` ; Azure Bastion pour l'administration.
+    - **Stockage** : TLS 1.2, HTTPS seul, accès anonyme interdit, clés partagées désactivées, points de terminaison privés.
+    - **Key Vault** : modèle RBAC, protection contre la purge, journaux de diagnostic activés.
+    - **Azure Policy** pour interdire les configurations dangereuses à la création, et **Defender for Cloud** pour mesurer le reste.
+  en: |
+    - **MFA for everyone** through Conditional Access, legacy authentication blocked, two monitored break-glass accounts.
+    - **Admin roles on demand** with PIM (*Privileged Identity Management*): nobody is a permanent administrator.
+    - **Managed identities** for applications; no application secret to store or rotate.
+    - **An NSG on every subnet**, no port 22 or 3389 from `Internet` or `*`; Azure Bastion for administration.
+    - **Storage**: TLS 1.2, HTTPS only, anonymous access forbidden, shared keys disabled, private endpoints.
+    - **Key Vault**: RBAC model, purge protection, diagnostic logs enabled.
+    - **Azure Policy** to forbid dangerous configurations at creation time, and **Defender for Cloud** to measure the rest.
+
+exercise:
+  statement:
+    fr: |
+      Le compte de stockage `acmelegacydata` du groupe de ressources `rg-legacy` a été créé il y a des
+      années. Un audit montre : TLS 1.0 accepté, HTTP autorisé, accès anonyme aux blobs possible, clés de
+      compte actives. Le NSG `nsg-legacy` contient une règle `allow-ssh` ouverte à toutes les sources.
+
+      Avec l'**az CLI** :
+
+      1. corrigez les quatre réglages du compte de stockage en une seule commande ;
+      2. supprimez la règle SSH du NSG ;
+      3. affichez les réglages du compte pour vérifier.
+
+      Avant d'exécuter le point 1 en production, que faut-il vérifier concernant les clés de compte ?
+    en: |
+      The storage account `acmelegacydata` in resource group `rg-legacy` was created years ago. An audit
+      shows: TLS 1.0 accepted, HTTP allowed, anonymous blob access possible, account keys active. The NSG
+      `nsg-legacy` contains an `allow-ssh` rule open to all sources.
+
+      With the **az CLI**:
+
+      1. fix the four storage account settings in a single command;
+      2. delete the SSH rule from the NSG;
+      3. display the account settings to verify.
+
+      Before running point 1 in production, what must you check regarding account keys?
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. TLS 1.2 minimum, HTTPS only, no anonymous access, no shared key
+      az storage account update \
+        --name acmelegacydata --resource-group rg-legacy \
+        --min-tls-version TLS1_2 \
+        --https-only true \
+        --allow-blob-public-access false \
+        --allow-shared-key-access false
+
+      # 2. Remove SSH exposure; use Azure Bastion to reach the VM from now on
+      az network nsg rule delete \
+        --resource-group rg-legacy --nsg-name nsg-legacy --name allow-ssh
+
+      # 3. Verification
+      az storage account show \
+        --name acmelegacydata --resource-group rg-legacy \
+        --query "{tls:minimumTlsVersion, httpsOnly:enableHttpsTrafficOnly, publicBlob:allowBlobPublicAccess, sharedKey:allowSharedKeyAccess}"
+    note:
+      fr: "Avant de désactiver les clés partagées, vérifiez qu'aucune application ne s'authentifie encore avec une clé de compte ou un jeton SAS (les journaux du compte indiquent le type d'authentification de chaque requête), puis attribuez-leur un rôle RBAC. Sinon, elles tomberont en panne au moment du changement."
+      en: "Before disabling shared keys, make sure no application still authenticates with an account key or a SAS token (the account's logs show the authentication type of each request), then give them an RBAC role. Otherwise they will break the moment the change is applied."
+
+quiz:
+  - q:
+      fr: "Dans un NSG, deux règles correspondent au même flux : priorité 100 (Allow) et priorité 200 (Deny). Que se passe-t-il ?"
+      en: "In an NSG, two rules match the same flow: priority 100 (Allow) and priority 200 (Deny). What happens?"
+    options:
+      fr:
+        - "Le flux est autorisé : la priorité 100 est évaluée en premier"
+        - "Le flux est refusé : Deny l'emporte toujours"
+        - "Le flux est refusé : le plus grand nombre gagne"
+        - "Azure refuse de créer deux règles contradictoires"
+      en:
+        - "The flow is allowed: priority 100 is evaluated first"
+        - "The flow is denied: Deny always wins"
+        - "The flow is denied: the highest number wins"
+        - "Azure refuses to create two conflicting rules"
+    answer: 0
+    why:
+      fr: "Les règles d'un NSG sont évaluées par priorité croissante et la première qui correspond s'applique : le plus petit nombre gagne."
+      en: "NSG rules are evaluated in ascending priority order and the first match applies: the lowest number wins."
+  - q:
+      fr: "Pourquoi désactiver les clés de compte (`shared key`) d'un compte de stockage ?"
+      en: "Why disable the account keys (`shared key`) of a storage account?"
+    options:
+      fr:
+        - "Parce qu'elles ralentissent les lectures"
+        - "Parce qu'elles empêchent le chiffrement au repos"
+        - "Parce qu'elles donnent tous les droits sans identifier qui les utilise"
+        - "Parce qu'elles expirent toutes les 24 heures"
+      en:
+        - "Because they slow down reads"
+        - "Because they prevent encryption at rest"
+        - "Because they grant every right without identifying who uses them"
+        - "Because they expire every 24 hours"
+    answer: 2
+    why:
+      fr: "Une clé de compte est un secret partagé tout-puissant et anonyme. Avec Entra ID et Azure RBAC, chaque accès est limité à un rôle et attribué à une identité."
+      en: "An account key is an all-powerful, anonymous shared secret. With Entra ID and Azure RBAC every access is limited to a role and attributed to an identity."
+  - q:
+      fr: "À quoi sert le mode « rapport seul » d'une politique d'accès conditionnel ?"
+      en: "What is the \"report-only\" mode of a Conditional Access policy for?"
+    options:
+      fr:
+        - "À désactiver la MFA pendant les tests"
+        - "À observer l'effet de la politique dans les journaux sans bloquer personne"
+        - "À envoyer un rapport hebdomadaire aux utilisateurs"
+        - "À n'appliquer la politique qu'aux administrateurs"
+      en:
+        - "To disable MFA during tests"
+        - "To observe the policy's effect in the logs without blocking anyone"
+        - "To send a weekly report to users"
+        - "To apply the policy to administrators only"
+    answer: 1
+    why:
+      fr: "La politique est évaluée à chaque connexion et son résultat est journalisé, mais rien n'est imposé : on vérifie ainsi qu'elle ne bloquera pas des usages légitimes."
+      en: "The policy is evaluated at each sign-in and its result is logged, but nothing is enforced: this lets you check that it will not block legitimate use."
+  - q:
+      fr: "Que garantit la protection contre la purge d'un Key Vault ?"
+      en: "What does Key Vault purge protection guarantee?"
+    options:
+      fr:
+        - "Les secrets sont renouvelés automatiquement"
+        - "Le coffre est inaccessible depuis Internet"
+        - "Les secrets sont chiffrés avec une clé du client"
+        - "Un secret supprimé ne peut pas être détruit définitivement avant la fin de la rétention"
+      en:
+        - "Secrets are rotated automatically"
+        - "The vault cannot be reached from the Internet"
+        - "Secrets are encrypted with a customer key"
+        - "A deleted secret cannot be permanently destroyed before the retention period ends"
+    answer: 3
+    why:
+      fr: "Même un administrateur (ou un attaquant qui a pris son compte) ne peut pas purger un secret ou une clé supprimés avant l'expiration de la période de rétention."
+      en: "Even an administrator (or an attacker who took over their account) cannot purge a deleted secret or key before the retention period expires."
+  - q:
+      fr: "Quel est l'intérêt d'une identité managée pour une application Azure ?"
+      en: "What is the benefit of a managed identity for an Azure application?"
+    options:
+      fr:
+        - "Elle ouvre automatiquement les ports nécessaires dans le NSG"
+        - "Elle remplace la MFA des administrateurs"
+        - "Elle donne une identité Entra ID à l'application sans secret à stocker ni à renouveler"
+        - "Elle rend le compte de stockage public pour l'application"
+      en:
+        - "It automatically opens the required ports in the NSG"
+        - "It replaces MFA for administrators"
+        - "It gives the application an Entra ID identity with no secret to store or rotate"
+        - "It makes the storage account public for the application"
+    answer: 2
+    why:
+      fr: "Azure gère lui-même les identifiants de l'identité managée : l'application obtient des jetons sans qu'aucun mot de passe ou secret client n'existe dans le code ou la configuration."
+      en: "Azure itself manages the managed identity's credentials: the application obtains tokens without any password or client secret existing in code or configuration."

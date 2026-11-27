@@ -1,0 +1,628 @@
+description:
+  fr: "Écrire des blocs `resource` et `data`, relier les ressources par des références, et maîtriser `depends_on` et `lifecycle`."
+  en: "Write `resource` and `data` blocks, link resources through references, and master `depends_on` and `lifecycle`."
+duration: 25
+
+intro:
+  fr: |
+    Deux blocs font l'essentiel du travail en HCL. Le bloc **`resource`** décrit un objet que Terraform
+    **crée et gère** : un réseau, un disque, un rôle. Le bloc **`data`** (une *data source*) décrit une
+    information que Terraform se contente de **lire** : l'identifiant de votre compte, la dernière image
+    Ubuntu, un réseau créé par une autre équipe.
+
+    Imaginez que vous aménagez un appartement. Les *resources* sont les meubles que vous achetez et dont
+    vous êtes responsable. Les *data sources* sont ce que vous **mesurez** sans le modifier : la largeur du
+    mur, la position des prises. Et quand vous notez « l'étagère se fixe sur *ce* mur », vous créez une
+    **référence** : il faut que le mur existe avant l'étagère.
+
+    Dans cette leçon vous allez relier des ressources entre elles, lire des informations avec des data
+    sources, et découvrir qu'une recherche d'image mal filtrée peut faire démarrer vos serveurs sur
+    l'image d'un attaquant.
+  en: |
+    Two blocks do most of the work in HCL. The **`resource`** block describes an object that Terraform
+    **creates and manages**: a network, a disk, a role. The **`data`** block (a *data source*) describes
+    information that Terraform merely **reads**: your account ID, the latest Ubuntu image, a network
+    created by another team.
+
+    Imagine you are furnishing a flat. *Resources* are the furniture you buy and are responsible for.
+    *Data sources* are what you **measure** without changing it: the width of the wall, the position of
+    the sockets. And when you write "the shelf is fixed on *that* wall", you create a **reference**: the
+    wall must exist before the shelf.
+
+    In this lesson you will link resources together, read information with data sources, and discover
+    that a badly filtered image lookup can boot your servers on an attacker's image.
+
+sections:
+  - heading:
+      fr: "Références et dépendances implicites"
+      en: "References and implicit dependencies"
+    body:
+      fr: |
+        Chaque ressource expose des **attributs** : ceux que vous avez écrits (`cidr_block`) et ceux que
+        la plateforme calcule à la création (`id`, `arn`). On les lit avec une référence :
+
+        | Objet | Syntaxe de la référence | Exemple |
+        |---|---|---|
+        | Ressource | `<type>.<nom>.<attribut>` | `aws_vpc.main.id` |
+        | Data source | `data.<type>.<nom>.<attribut>` | `data.aws_caller_identity.current.account_id` |
+        | Instance avec `for_each` | `<type>.<nom>["clé"].<attribut>` | `aws_subnet.private["eu-west-3a"].id` |
+        | Instance avec `count` | `<type>.<nom>[index].<attribut>` | `aws_instance.web[0].private_ip` |
+
+        Une référence a un second effet, essentiel : elle crée une **dépendance implicite**. Si le
+        sous-réseau contient `vpc_id = aws_vpc.main.id`, Terraform sait qu'il doit créer le VPC d'abord,
+        et le détruire en dernier. L'ordre des blocs dans le fichier n'a aucune importance : Terraform
+        construit un **graphe de dépendances** à partir des références. C'est pourquoi on n'écrit jamais
+        un identifiant en dur (`vpc_id = "vpc-0abc123"`) quand la ressource est dans le même code.
+      en: |
+        Every resource exposes **attributes**: the ones you wrote (`cidr_block`) and the ones the
+        platform computes at creation time (`id`, `arn`). You read them with a reference:
+
+        | Object | Reference syntax | Example |
+        |---|---|---|
+        | Resource | `<type>.<name>.<attribute>` | `aws_vpc.main.id` |
+        | Data source | `data.<type>.<name>.<attribute>` | `data.aws_caller_identity.current.account_id` |
+        | Instance with `for_each` | `<type>.<name>["key"].<attribute>` | `aws_subnet.private["eu-west-3a"].id` |
+        | Instance with `count` | `<type>.<name>[index].<attribute>` | `aws_instance.web[0].private_ip` |
+
+        A reference has a second, essential effect: it creates an **implicit dependency**. If the subnet
+        contains `vpc_id = aws_vpc.main.id`, Terraform knows it must create the VPC first, and destroy it
+        last. The order of blocks in the file does not matter: Terraform builds a **dependency graph**
+        from the references. That is why you never hard-code an identifier (`vpc_id = "vpc-0abc123"`)
+        when the resource lives in the same code.
+  - heading:
+      fr: "Les data sources : lire sans gérer"
+      en: "Data sources: reading without managing"
+    body:
+      fr: |
+        Un bloc `data` a la même forme qu'un bloc `resource`, mais ses arguments sont des **critères de
+        recherche** et Terraform ne crée, ne modifie et ne détruit jamais l'objet trouvé.
+
+        | Data source | Ce qu'elle renvoie |
+        |---|---|
+        | `aws_caller_identity` | Le compte et l'identité utilisés par Terraform |
+        | `aws_availability_zones` | Les zones de disponibilité de la région |
+        | `aws_ami` | Une image machine correspondant à des filtres |
+        | `aws_vpc`, `aws_subnets` | Un réseau existant, créé ailleurs |
+        | `aws_iam_policy_document` | Une politique IAM en JSON, construite à partir de blocs HCL |
+
+        `aws_iam_policy_document` est un cas à part : elle n'interroge pas AWS, elle **génère** un document
+        JSON. C'est l'alternative à `jsonencode`, avec une vérification de la structure par le provider.
+
+        Une data source est une **entrée externe** dans votre code : si le critère de recherche est trop
+        large, c'est quelqu'un d'autre qui décide de ce que vous déployez. Filtrez toujours précisément
+        (propriétaire, nom, tags).
+      en: |
+        A `data` block has the same shape as a `resource` block, but its arguments are **search
+        criteria** and Terraform never creates, modifies or destroys the object it finds.
+
+        | Data source | What it returns |
+        |---|---|
+        | `aws_caller_identity` | The account and identity Terraform is using |
+        | `aws_availability_zones` | The availability zones of the region |
+        | `aws_ami` | A machine image matching some filters |
+        | `aws_vpc`, `aws_subnets` | An existing network, created elsewhere |
+        | `aws_iam_policy_document` | An IAM policy as JSON, built from HCL blocks |
+
+        `aws_iam_policy_document` is a special case: it does not query AWS, it **generates** a JSON
+        document. It is the alternative to `jsonencode`, with the structure checked by the provider.
+
+        A data source is an **external input** to your code: if the search criterion is too broad,
+        someone else decides what you deploy. Always filter precisely (owner, name, tags).
+  - heading:
+      fr: "Méta-arguments : `depends_on` et `lifecycle`"
+      en: "Meta-arguments: `depends_on` and `lifecycle`"
+    body:
+      fr: |
+        Les **méta-arguments** existent sur toutes les ressources, quel que soit le provider :
+        `count`, `for_each`, `provider`, `depends_on` et le bloc `lifecycle`.
+
+        | Réglage | Effet | Quand l'utiliser |
+        |---|---|---|
+        | `depends_on = [aws_x.y]` | Force un ordre que Terraform ne peut pas deviner | Dépendance « cachée », sans référence (ex. une politique IAM qui doit exister avant) |
+        | `lifecycle { prevent_destroy = true }` | Tout plan qui détruirait la ressource échoue | Bases de données, clés de chiffrement, buckets de journaux |
+        | `lifecycle { create_before_destroy = true }` | Lors d'un remplacement, crée la nouvelle avant de supprimer l'ancienne | Éviter une coupure de service |
+        | `lifecycle { ignore_changes = [tags] }` | Ignore les modifications faites hors Terraform sur ces attributs | Attribut géré par un autre outil (autoscaling, agent) |
+        | `lifecycle { replace_triggered_by = [aws_x.y] }` | Remplace la ressource quand une autre change | Recréer des serveurs quand leur configuration change |
+
+        `depends_on` est un dernier recours : si une référence est possible, préférez-la.
+      en: |
+        **Meta-arguments** exist on every resource, whatever the provider: `count`, `for_each`,
+        `provider`, `depends_on` and the `lifecycle` block.
+
+        | Setting | Effect | When to use it |
+        |---|---|---|
+        | `depends_on = [aws_x.y]` | Forces an order Terraform cannot guess | "Hidden" dependency, without a reference (e.g. an IAM policy that must exist first) |
+        | `lifecycle { prevent_destroy = true }` | Any plan that would destroy the resource fails | Databases, encryption keys, log buckets |
+        | `lifecycle { create_before_destroy = true }` | On replacement, creates the new one before deleting the old one | Avoiding a service outage |
+        | `lifecycle { ignore_changes = [tags] }` | Ignores changes made outside Terraform on these attributes | Attribute managed by another tool (autoscaling, agent) |
+        | `lifecycle { replace_triggered_by = [aws_x.y] }` | Replaces the resource when another one changes | Recreating servers when their configuration changes |
+
+        `depends_on` is a last resort: when a reference is possible, prefer it.
+
+examples:
+  - title:
+      fr: "Références : un réseau privé dont les pièces s'emboîtent"
+      en: "References: a private network whose parts fit together"
+    file: network.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      # Data source: read the zones of the current region instead of hard-coding them
+      data "aws_availability_zones" "available" {
+        state = "available"
+      }
+
+      resource "aws_vpc" "main" {
+        cidr_block           = "10.30.0.0/16"
+        enable_dns_hostnames = true
+
+        tags = {
+          Name = "shop"
+        }
+      }
+
+      resource "aws_subnet" "private" {
+        # Reference -> implicit dependency: the VPC is created first
+        vpc_id            = aws_vpc.main.id
+        cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, 1) # 10.30.1.0/24
+        availability_zone = data.aws_availability_zones.available.names[0]
+
+        # Instances launched here never get a public IP address
+        map_public_ip_on_launch = false
+
+        tags = {
+          Name = "shop-private-1"
+        }
+      }
+
+      output "private_subnet_id" {
+        value = aws_subnet.private.id
+      }
+    output: |
+      $ terraform apply -auto-approve
+
+      aws_vpc.main: Creating...
+      aws_vpc.main: Creation complete after 2s [id=vpc-0a1b2c3d4e5f67890]
+      aws_subnet.private: Creating...
+      aws_subnet.private: Creation complete after 1s [id=subnet-0f9e8d7c6b5a43210]
+
+      Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+
+      Outputs:
+
+      private_subnet_id = "subnet-0f9e8d7c6b5a43210"
+    note:
+      fr: "Le sous-réseau est écrit après le VPC, mais ce n'est pas l'ordre du fichier qui compte : c'est la référence `aws_vpc.main.id` qui impose l'ordre de création, visible dans la sortie."
+      en: "The subnet is written after the VPC, but file order is not what matters: the `aws_vpc.main.id` reference dictates the creation order, visible in the output."
+
+  - title:
+      fr: "Data sources : identité du compte et politiques IAM générées"
+      en: "Data sources: account identity and generated IAM policies"
+    file: iam.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Who am I? Avoids hard-coding the 12-digit account ID
+      data "aws_caller_identity" "current" {}
+
+      # Trust policy: only the EC2 service may assume this role
+      data "aws_iam_policy_document" "assume_ec2" {
+        statement {
+          sid     = "AllowEc2ToAssume"
+          effect  = "Allow"
+          actions = ["sts:AssumeRole"]
+
+          principals {
+            type        = "Service"
+            identifiers = ["ec2.amazonaws.com"]
+          }
+        }
+      }
+
+      resource "aws_iam_role" "app" {
+        name               = "shop-app"
+        assume_role_policy = data.aws_iam_policy_document.assume_ec2.json
+      }
+
+      # Permissions: read the application parameters, nothing else
+      data "aws_iam_policy_document" "read_config" {
+        statement {
+          sid     = "ReadShopParameters"
+          effect  = "Allow"
+          actions = ["ssm:GetParameter", "ssm:GetParametersByPath"]
+          resources = [
+            "arn:aws:ssm:eu-west-3:${data.aws_caller_identity.current.account_id}:parameter/shop/*",
+          ]
+        }
+      }
+
+      resource "aws_iam_role_policy" "read_config" {
+        name   = "read-config"
+        role   = aws_iam_role.app.id
+        policy = data.aws_iam_policy_document.read_config.json
+      }
+    note:
+      fr: "Les data sources se lisent avec le préfixe `data.`. Ici la politique accorde deux actions de lecture sur un seul chemin de paramètres : c'est le principe du moindre privilège, écrit en HCL et vérifié par le provider."
+      en: "Data sources are read with the `data.` prefix. Here the policy grants two read actions on a single parameter path: this is the principle of least privilege, written in HCL and checked by the provider."
+
+  - title:
+      fr: "Vulnérable : chercher une image sans préciser son propriétaire"
+      en: "Vulnerable: looking up an image without specifying its owner"
+    file: ami_vulnerable.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      variable "subnet_id" {
+        type = string
+      }
+
+      data "aws_ami" "ubuntu" {
+        most_recent = true
+
+        # No "owners" argument: the search covers EVERY public image on AWS.
+        # Anyone can publish an image whose name matches this pattern.
+        filter {
+          name   = "name"
+          values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+        }
+      }
+
+      resource "aws_instance" "web" {
+        ami           = data.aws_ami.ubuntu.id
+        instance_type = "t3.micro"
+        subnet_id     = var.subnet_id
+      }
+    note:
+      fr: "Cette attaque par confusion de nom a été documentée en 2025 sous le nom *whoAMI* : un attaquant publie une image publique plus récente portant un nom conforme au filtre, et `most_recent = true` la sélectionne. Vos serveurs démarrent alors sur un système piégé."
+      en: "This name-confusion attack was documented in 2025 under the name *whoAMI*: an attacker publishes a newer public image whose name matches the filter, and `most_recent = true` selects it. Your servers then boot on a backdoored system."
+
+  - title:
+      fr: "Sécurisé : propriétaire vérifié, IMDSv2 et disque chiffré"
+      en: "Secure: verified owner, IMDSv2 and encrypted disk"
+    file: ami_secure.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "subnet_id" {
+        type = string
+      }
+
+      data "aws_ami" "ubuntu" {
+        most_recent = true
+        # Canonical's AWS account: only the official publisher is trusted
+        owners = ["099720109477"]
+
+        filter {
+          name   = "name"
+          values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+        }
+
+        filter {
+          name   = "virtualization-type"
+          values = ["hvm"]
+        }
+      }
+
+      resource "aws_instance" "web" {
+        ami           = data.aws_ami.ubuntu.id
+        instance_type = "t3.micro"
+        subnet_id     = var.subnet_id
+
+        # IMDSv2 only: blocks credential theft through SSRF
+        metadata_options {
+          http_endpoint = "enabled"
+          http_tokens   = "required"
+        }
+
+        root_block_device {
+          encrypted = true
+        }
+
+        lifecycle {
+          # A new AMI is published every few weeks: do not rebuild the server
+          # on every plan, replace it deliberately during a maintenance window
+          ignore_changes = [ami]
+        }
+      }
+    note:
+      fr: "`owners` restreint la recherche au compte de l'éditeur officiel. Le bloc `lifecycle` évite qu'une nouvelle image publiée par Canonical ne déclenche le remplacement du serveur à chaque `plan` : la mise à jour devient une décision, pas un accident."
+      en: "`owners` restricts the search to the official publisher's account. The `lifecycle` block prevents a new image published by Canonical from triggering a server replacement on every `plan`: updating becomes a decision, not an accident."
+
+  - title:
+      fr: "`lifecycle` : protéger une table contre la destruction"
+      en: "`lifecycle`: protecting a table against destruction"
+    file: database.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_dynamodb_table" "orders" {
+        name         = "shop-orders"
+        billing_mode = "PAY_PER_REQUEST"
+        hash_key     = "order_id"
+
+        attribute {
+          name = "order_id"
+          type = "S"
+        }
+
+        # Encryption at rest and continuous backups
+        server_side_encryption {
+          enabled = true
+        }
+
+        point_in_time_recovery {
+          enabled = true
+        }
+
+        # Guard on the AWS side: the API itself refuses to delete the table
+        deletion_protection_enabled = true
+
+        lifecycle {
+          # Guard on the Terraform side: the plan fails before anything happens
+          prevent_destroy = true
+        }
+      }
+    output: |
+      $ terraform destroy
+
+      ╷
+      │ Error: Instance cannot be destroyed
+      │
+      │   on database.tf line 1:
+      │    1: resource "aws_dynamodb_table" "orders" {
+      │
+      │ Resource aws_dynamodb_table.orders has lifecycle.prevent_destroy set, but the plan calls for this
+      │ resource to be destroyed. To avoid this error and continue with the plan, either disable
+      │ lifecycle.prevent_destroy or reduce the scope of the plan using the -target option.
+      ╵
+    note:
+      fr: "Deux verrous indépendants : `prevent_destroy` arrête Terraform dès le plan, `deletion_protection_enabled` arrête toute suppression côté AWS, même faite à la main. Renommer la ressource ou changer un attribut qui force son remplacement déclenche aussi cette erreur : c'est le but."
+      en: "Two independent locks: `prevent_destroy` stops Terraform at plan time, `deletion_protection_enabled` stops any deletion on the AWS side, even a manual one. Renaming the resource or changing an attribute that forces replacement also triggers this error: that is the point."
+
+mistake:
+  fr: |
+    **Écrire des identifiants en dur au lieu de références.**
+
+    ```hcl
+    vpc_id = "vpc-0a1b2c3d4e5f67890"   # copied from the console
+    ```
+
+    Trois problèmes : Terraform ne connaît plus la dépendance (il peut créer le sous-réseau avant le VPC,
+    ou échouer à la destruction), le code ne fonctionne que dans **un** compte et **une** région, et
+    personne ne sait d'où vient cet identifiant.
+
+    - La ressource est dans votre code : utilisez `aws_vpc.main.id`.
+    - Elle est gérée ailleurs : utilisez une data source filtrée par tags, ou une variable.
+
+    Erreur inverse : abuser de `depends_on` « par sécurité ». Cela ralentit le plan, masque les vraies
+    dépendances et peut provoquer des remplacements inutiles.
+  en: |
+    **Hard-coding identifiers instead of using references.**
+
+    ```hcl
+    vpc_id = "vpc-0a1b2c3d4e5f67890"   # copied from the console
+    ```
+
+    Three problems: Terraform no longer knows about the dependency (it may create the subnet before the
+    VPC, or fail on destroy), the code only works in **one** account and **one** region, and nobody
+    knows where that identifier comes from.
+
+    - The resource is in your code: use `aws_vpc.main.id`.
+    - It is managed elsewhere: use a data source filtered by tags, or a variable.
+
+    The opposite mistake: overusing `depends_on` "to be safe". It slows the plan down, hides the real
+    dependencies and can cause needless replacements.
+
+bestPractice:
+  fr: |
+    - **Toujours `owners`** sur une data source `aws_ami`, avec l'identifiant de compte de l'éditeur.
+    - **`prevent_destroy = true`** sur tout ce qui contient des données ou des clés : bases, buckets de
+      journaux, clés KMS.
+    - **Aucun identifiant de compte ou de ressource en dur** : `data.aws_caller_identity.current.account_id`
+      et des références.
+    - **Des politiques IAM en HCL** (`aws_iam_policy_document` ou `jsonencode`) : relisibles, sans `*`
+      inutile dans `actions` et `resources`.
+    - **`ignore_changes` reste une exception documentée** : chaque attribut ignoré est un attribut que
+      Terraform ne surveille plus.
+  en: |
+    - **Always `owners`** on an `aws_ami` data source, with the publisher's account ID.
+    - **`prevent_destroy = true`** on anything that holds data or keys: databases, log buckets, KMS keys.
+    - **No hard-coded account or resource identifier**: `data.aws_caller_identity.current.account_id`
+      and references.
+    - **IAM policies in HCL** (`aws_iam_policy_document` or `jsonencode`): reviewable, without needless
+      `*` in `actions` and `resources`.
+    - **`ignore_changes` remains a documented exception**: every ignored attribute is an attribute
+      Terraform no longer watches.
+
+exercise:
+  statement:
+    fr: |
+      Corrigez ce code, qui contient trois défauts vus dans la leçon.
+
+      ```hcl
+      data "aws_ami" "al2023" {
+        most_recent = true
+        filter {
+          name   = "name"
+          values = ["al2023-ami-2023.*-x86_64"]
+        }
+      }
+
+      resource "aws_kms_key" "backups" {
+        description = "Backup encryption key"
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Effect    = "Allow"
+            Principal = { AWS = "arn:aws:iam::111122223333:root" }
+            Action    = "kms:*"
+            Resource  = "*"
+          }]
+        })
+      }
+      ```
+
+      1. Restreignez la recherche d'image aux images publiées par Amazon.
+      2. Remplacez le numéro de compte en dur par une data source.
+      3. Empêchez Terraform de détruire la clé, et activez sa rotation.
+    en: |
+      Fix this code, which contains three flaws seen in the lesson.
+
+      ```hcl
+      data "aws_ami" "al2023" {
+        most_recent = true
+        filter {
+          name   = "name"
+          values = ["al2023-ami-2023.*-x86_64"]
+        }
+      }
+
+      resource "aws_kms_key" "backups" {
+        description = "Backup encryption key"
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Effect    = "Allow"
+            Principal = { AWS = "arn:aws:iam::111122223333:root" }
+            Action    = "kms:*"
+            Resource  = "*"
+          }]
+        })
+      }
+      ```
+
+      1. Restrict the image lookup to images published by Amazon.
+      2. Replace the hard-coded account number with a data source.
+      3. Prevent Terraform from destroying the key, and enable its rotation.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      data "aws_ami" "al2023" {
+        most_recent = true
+        owners      = ["amazon"] # 1. only images published by Amazon itself
+
+        filter {
+          name   = "name"
+          values = ["al2023-ami-2023.*-x86_64"]
+        }
+      }
+
+      # 2. The account ID is read, not typed
+      data "aws_caller_identity" "current" {}
+
+      resource "aws_kms_key" "backups" {
+        description         = "Backup encryption key"
+        enable_key_rotation = true # 3. yearly rotation of the key material
+
+        # Standard key policy: delegates access control to the IAM policies of this account
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Sid       = "EnableIamPolicies"
+            Effect    = "Allow"
+            Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+            Action    = "kms:*"
+            Resource  = "*"
+          }]
+        })
+
+        lifecycle {
+          prevent_destroy = true # 3. losing the key means losing every backup it encrypted
+        }
+      }
+    note:
+      fr: "Pour `aws_ami`, `owners` accepte un identifiant de compte ou un alias tel que `amazon`. La politique de clé avec `kms:*` pour la racine du compte est la politique par défaut d'AWS : elle ne donne accès à personne directement, elle autorise les politiques IAM du compte à le faire."
+      en: "For `aws_ami`, `owners` accepts an account ID or an alias such as `amazon`. The key policy with `kms:*` for the account root is the AWS default policy: it grants access to nobody directly, it allows the IAM policies of the account to do so."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre un bloc `resource` et un bloc `data` ?"
+      en: "What is the difference between a `resource` block and a `data` block?"
+    options:
+      fr:
+        - "`data` crée des bases de données, `resource` crée le reste"
+        - "`resource` est géré (créé, modifié, détruit) par Terraform, `data` est seulement lu"
+        - "`data` s'exécute avant `terraform init`"
+        - "Aucune : ce sont deux mots-clés synonymes"
+      en:
+        - "`data` creates databases, `resource` creates everything else"
+        - "`resource` is managed (created, modified, destroyed) by Terraform, `data` is only read"
+        - "`data` runs before `terraform init`"
+        - "None: they are two synonymous keywords"
+    answer: 1
+    why:
+      fr: "Une data source interroge l'existant (ou génère un document) sans jamais rien créer ni détruire."
+      en: "A data source queries what exists (or generates a document) without ever creating or destroying anything."
+  - q:
+      fr: "Comment Terraform sait-il qu'il doit créer le VPC avant le sous-réseau ?"
+      en: "How does Terraform know it must create the VPC before the subnet?"
+    options:
+      fr:
+        - "Grâce à l'ordre des blocs dans le fichier"
+        - "Grâce à l'ordre alphabétique des noms de ressources"
+        - "Grâce à la référence `aws_vpc.main.id` dans le sous-réseau"
+        - "Il ne le sait pas : il faut lancer deux `apply`"
+      en:
+        - "Through the order of blocks in the file"
+        - "Through the alphabetical order of resource names"
+        - "Through the `aws_vpc.main.id` reference inside the subnet"
+        - "It does not: two `apply` runs are needed"
+    answer: 2
+    why:
+      fr: "Chaque référence crée une dépendance implicite. Terraform en déduit un graphe et l'ordre des opérations."
+      en: "Every reference creates an implicit dependency. Terraform derives a graph and the order of operations from them."
+  - q:
+      fr: "Pourquoi faut-il toujours préciser `owners` dans une data source `aws_ami` ?"
+      en: "Why must you always set `owners` in an `aws_ami` data source?"
+    options:
+      fr:
+        - "Pour éviter de sélectionner une image publique piégée portant un nom similaire"
+        - "Parce que la recherche est payante sans cet argument"
+        - "Pour chiffrer le disque de l'instance"
+        - "Parce que `most_recent` ne fonctionne pas sans lui"
+      en:
+        - "To avoid selecting a backdoored public image with a similar name"
+        - "Because the lookup is billed without this argument"
+        - "To encrypt the instance disk"
+        - "Because `most_recent` does not work without it"
+    answer: 0
+    why:
+      fr: "Sans `owners`, n'importe quel compte AWS peut publier une image qui correspond au filtre de nom et qui sera choisie par `most_recent = true`."
+      en: "Without `owners`, any AWS account can publish an image matching the name filter, which `most_recent = true` will then pick."
+  - q:
+      fr: "Que fait `lifecycle { prevent_destroy = true }` ?"
+      en: "What does `lifecycle { prevent_destroy = true }` do?"
+    options:
+      fr:
+        - "Il active une sauvegarde automatique de la ressource"
+        - "Il empêche toute modification de la ressource"
+        - "Il interdit la suppression depuis la console AWS"
+        - "Il fait échouer tout plan Terraform qui détruirait la ressource"
+      en:
+        - "It enables an automatic backup of the resource"
+        - "It prevents any modification of the resource"
+        - "It forbids deletion from the AWS console"
+        - "It fails any Terraform plan that would destroy the resource"
+    answer: 3
+    why:
+      fr: "C'est une protection côté Terraform uniquement : le plan échoue. Elle ne bloque pas une suppression faite à la main dans la console."
+      en: "It is a Terraform-side protection only: the plan fails. It does not block a manual deletion in the console."
+  - q:
+      fr: "Quand `depends_on` est-il justifié ?"
+      en: "When is `depends_on` justified?"
+    options:
+      fr:
+        - "Sur chaque ressource, par précaution"
+        - "Quand une dépendance réelle existe mais qu'aucune référence ne l'exprime"
+        - "Uniquement dans les blocs `variable`"
+        - "Pour accélérer `terraform plan`"
+      en:
+        - "On every resource, as a precaution"
+        - "When a real dependency exists but no reference expresses it"
+        - "Only in `variable` blocks"
+        - "To speed up `terraform plan`"
+    answer: 1
+    why:
+      fr: "Les références suffisent presque toujours. `depends_on` sert pour les dépendances cachées, par exemple une permission IAM qui doit exister avant qu'un service démarre."
+      en: "References are almost always enough. `depends_on` is for hidden dependencies, for example an IAM permission that must exist before a service starts."

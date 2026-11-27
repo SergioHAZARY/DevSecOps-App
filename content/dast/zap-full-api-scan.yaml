@@ -1,0 +1,688 @@
+description:
+  fr: "Passer au scan actif avec ZAP : zap-full-scan.py, zap-api-scan.py avec un fichier OpenAPI, puis un plan YAML complet de l'Automation Framework."
+  en: "Move to active scanning with ZAP: zap-full-scan.py, zap-api-scan.py with an OpenAPI file, then a complete Automation Framework YAML plan."
+duration: 35
+
+intro:
+  fr: |
+    Le scan baseline se contente d'observer. Pour trouver une injection SQL ou un XSS, il faut **attaquer**
+    l'application : c'est le rôle du **scan actif**. ZAP le propose sous trois formes : `zap-full-scan.py`
+    pour un site web, `zap-api-scan.py` pour une API décrite par un fichier OpenAPI, et l'**Automation
+    Framework**, un plan YAML qui décrit le scan de bout en bout.
+
+    Reprenons l'image du garagiste. Le baseline était le tour rapide de la voiture. Le scan complet, c'est
+    le **contrôle technique** : freinage d'urgence sur banc, suspensions secouées, moteur poussé dans les
+    tours. On apprend beaucoup plus de choses, mais on ne fait pas cela sur l'autoroute avec des passagers
+    à bord : il faut un banc d'essai.
+
+    Dans cette leçon, vous allez lancer un scan complet authentifié contre Juice Shop, scanner son API à
+    partir d'un fichier OpenAPI, puis écrire un plan d'automatisation avec contexte, spider, scan actif,
+    rapports et code de retour.
+
+    > Rappel : un scan actif ne se lance que sur une cible qui vous appartient ou que vous êtes autorisé
+    > par écrit à tester. Ici, tout tourne dans le laboratoire local.
+  en: |
+    The baseline scan only observes. To find a SQL injection or an XSS you have to **attack** the
+    application: that is the job of the **active scan**. ZAP offers it in three forms: `zap-full-scan.py`
+    for a web site, `zap-api-scan.py` for an API described by an OpenAPI file, and the **Automation
+    Framework**, a YAML plan that describes the scan end to end.
+
+    Back to the mechanic. The baseline was the quick walk around the car. The full scan is the
+    **roadworthiness test**: emergency braking on a test bench, suspension shaken, engine pushed to high
+    revs. You learn much more, but you do not do that on the motorway with passengers on board: you need
+    a test bench.
+
+    In this lesson you will run an authenticated full scan against Juice Shop, scan its API from an
+    OpenAPI file, then write an automation plan with a context, spider, active scan, reports and exit
+    status.
+
+    > Reminder: an active scan is only ever run against a target you own or are authorised in writing to
+    > test. Here, everything runs in the local lab.
+
+sections:
+  - heading:
+      fr: "Trois scans packagés, trois usages"
+      en: "Three packaged scans, three uses"
+    body:
+      fr: |
+        | Script | Exploration | Scan passif | Scan actif | Durée typique | Quand |
+        |---|---|---|---|---|---|
+        | `zap-baseline.py` | Spider, 1 minute | Oui | **Non** | 1 à 3 min | À chaque pull request |
+        | `zap-full-scan.py` | Spider sans limite par défaut, AJAX avec `-j` | Oui | **Oui** | 20 min à plusieurs heures | La nuit, sur un environnement jetable |
+        | `zap-api-scan.py` | Import de la définition OpenAPI, SOAP ou GraphQL | Oui | **Oui**, règles adaptées aux API | 5 à 30 min | Quand l'API change, ou la nuit |
+
+        Les trois scripts partagent les mêmes options (`-t`, `-r`, `-J`, `-c`, `-g`, `-I`), le même fichier
+        de règles `.tsv` et les mêmes codes de retour (`0`, `1`, `2`, `3`). Deux détails propres au scan
+        actif :
+
+        - dans le fichier de règles, une règle **active** placée en `IGNORE` n'est **pas exécutée** :
+          c'est le moyen le plus simple d'accélérer un scan ;
+        - pour scanner en étant connecté, définissez la variable d'environnement `ZAP_AUTH_HEADER_VALUE` :
+          ZAP ajoute alors cette valeur dans l'en-tête `Authorization` de toutes ses requêtes
+          (`ZAP_AUTH_HEADER` change le nom de l'en-tête, `ZAP_AUTH_HEADER_SITE` le limite à un site).
+      en: |
+        | Script | Exploration | Passive scan | Active scan | Typical duration | When |
+        |---|---|---|---|---|---|
+        | `zap-baseline.py` | Spider, 1 minute | Yes | **No** | 1 to 3 min | On every pull request |
+        | `zap-full-scan.py` | Spider with no limit by default, AJAX with `-j` | Yes | **Yes** | 20 min to several hours | At night, on a disposable environment |
+        | `zap-api-scan.py` | Imports the OpenAPI, SOAP or GraphQL definition | Yes | **Yes**, rules tuned for APIs | 5 to 30 min | When the API changes, or nightly |
+
+        The three scripts share the same options (`-t`, `-r`, `-J`, `-c`, `-g`, `-I`), the same `.tsv`
+        rules file and the same exit codes (`0`, `1`, `2`, `3`). Two details specific to active scanning:
+
+        - in the rules file, an **active** rule set to `IGNORE` is **not run at all**: this is the easiest
+          way to speed up a scan;
+        - to scan while logged in, set the `ZAP_AUTH_HEADER_VALUE` environment variable: ZAP then adds
+          that value in the `Authorization` header of all its requests (`ZAP_AUTH_HEADER` changes the
+          header name, `ZAP_AUTH_HEADER_SITE` restricts it to one site).
+  - heading:
+      fr: "Scanner une API avec sa définition OpenAPI"
+      en: "Scanning an API with its OpenAPI definition"
+    body:
+      fr: |
+        Un spider suit des liens HTML. Une API REST n'en contient pas : face à `http://api/`, le spider
+        trouve une page vide et le scan se termine en dix secondes, sans rien avoir testé. Il faut donc
+        **donner** la liste des routes au scanner : c'est le rôle du fichier **OpenAPI** (anciennement
+        Swagger).
+
+        `zap-api-scan.py` lit cette définition, appelle chaque route avec des valeurs d'exemple, puis
+        attaque chaque paramètre. Ses options propres :
+
+        | Option | Rôle |
+        |---|---|
+        | `-t <fichier ou URL>` | La définition de l'API : fichier local (dans `/zap/wrk`) ou URL |
+        | `-f openapi` | Le format : `openapi`, `soap` ou `graphql` |
+        | `-O <hôte>` | Remplace l'hôte indiqué dans la définition (utile quand elle pointe vers la production) |
+        | `-S` | Mode « safe » : pas de scan actif, uniquement le passif |
+
+        Le script ajoute deux règles utiles pour les API : `100000` (une réponse en erreur client ou
+        serveur a été renvoyée) et `100001` (type de contenu inattendu). Plus les exemples (`example`) de
+        votre fichier OpenAPI sont réalistes, plus le scan va loin : avec un identifiant inexistant, la
+        route répond `404` et le code qui se trouve derrière n'est jamais atteint.
+      en: |
+        A spider follows HTML links. A REST API has none: facing `http://api/`, the spider finds an empty
+        page and the scan ends within ten seconds, having tested nothing. You therefore have to **give**
+        the list of routes to the scanner: this is what the **OpenAPI** file (formerly Swagger) is for.
+
+        `zap-api-scan.py` reads that definition, calls every route with example values, then attacks
+        every parameter. Its specific options:
+
+        | Option | Purpose |
+        |---|---|
+        | `-t <file or URL>` | The API definition: local file (in `/zap/wrk`) or URL |
+        | `-f openapi` | The format: `openapi`, `soap` or `graphql` |
+        | `-O <host>` | Overrides the host written in the definition (useful when it points to production) |
+        | `-S` | Safe mode: no active scan, passive only |
+
+        The script adds two rules that are useful for APIs: `100000` (a client or server error response
+        was returned) and `100001` (unexpected content type). The more realistic the `example` values in
+        your OpenAPI file, the deeper the scan goes: with a non-existent identifier the route answers
+        `404` and the code behind it is never reached.
+  - heading:
+      fr: "L'Automation Framework : le scan décrit en YAML"
+      en: "The Automation Framework: the scan described in YAML"
+    body:
+      fr: |
+        Les scripts packagés sont pratiques, mais limités : difficile d'y décrire un login, de régler la
+        force d'une règle ou de produire trois rapports. L'**Automation Framework** (AF) remplace les
+        options de ligne de commande par un **plan** YAML versionné dans Git, identique sur votre poste et
+        en CI. Les scripts packagés l'utilisent d'ailleurs eux-mêmes (ligne `Using the Automation
+        Framework` de leur sortie).
+
+        Un plan comporte deux parties :
+
+        - **`env`** : les **contextes** (URL de la cible, chemins inclus et exclus, authentification,
+          gestion de session, utilisateurs) et les paramètres globaux ;
+        - **`jobs`** : la liste ordonnée des tâches.
+
+        | Job | Rôle |
+        |---|---|
+        | `passiveScan-config` | Règle le scan passif (par exemple limiter au périmètre) |
+        | `spider`, `spiderAjax` | Explorent le site (HTML classique, puis navigateur) |
+        | `openapi`, `graphql`, `soap` | Importent une définition d'API |
+        | `passiveScan-wait` | Attend la fin du scan passif |
+        | `activeScan` | Lance les attaques, avec une politique (force et seuil par règle) |
+        | `alertFilter` | Change le risque d'une alerte ou la marque comme faux positif |
+        | `report` | Écrit un rapport : `traditional-html`, `traditional-json`, `sarif-json`... |
+        | `exitStatus` | Fixe le code de retour selon le risque le plus élevé trouvé |
+
+        On l'exécute avec `zap.sh -cmd -autorun plan.yaml`. Sans job `exitStatus`, le code de retour
+        reflète seulement le déroulement du plan (`0` succès, `1` erreurs, `2` avertissements), pas les
+        alertes trouvées.
+      en: |
+        The packaged scripts are handy but limited: it is hard to describe a login with them, tune the
+        strength of one rule or produce three reports. The **Automation Framework** (AF) replaces
+        command-line options with a YAML **plan** versioned in Git, identical on your machine and in CI.
+        The packaged scripts actually use it themselves (the `Using the Automation Framework` line of
+        their output).
+
+        A plan has two parts:
+
+        - **`env`**: the **contexts** (target URLs, included and excluded paths, authentication, session
+          management, users) and the global parameters;
+        - **`jobs`**: the ordered list of tasks.
+
+        | Job | Purpose |
+        |---|---|
+        | `passiveScan-config` | Tunes the passive scan (for example restrict it to the scope) |
+        | `spider`, `spiderAjax` | Explore the site (plain HTML, then with a browser) |
+        | `openapi`, `graphql`, `soap` | Import an API definition |
+        | `passiveScan-wait` | Waits for the passive scan to finish |
+        | `activeScan` | Runs the attacks, with a policy (strength and threshold per rule) |
+        | `alertFilter` | Changes the risk of an alert or marks it as a false positive |
+        | `report` | Writes a report: `traditional-html`, `traditional-json`, `sarif-json`... |
+        | `exitStatus` | Sets the exit code from the highest risk found |
+
+        It is run with `zap.sh -cmd -autorun plan.yaml`. Without an `exitStatus` job, the exit code only
+        reflects how the plan itself went (`0` success, `1` errors, `2` warnings), not the alerts found.
+
+examples:
+  - title:
+      fr: "Scan complet authentifié contre Juice Shop"
+      en: "Authenticated full scan against Juice Shop"
+    file: full-scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # 1. Create a dedicated test account (lab values, never a real account)
+      curl -s -o /dev/null -X POST http://localhost:3000/api/Users \
+        -H "Content-Type: application/json" \
+        -d '{"email":"scanner@example.com","password":"changeme-in-vault","passwordRepeat":"changeme-in-vault"}'
+
+      # 2. Log in and keep the JWT returned by the application
+      TOKEN=$(curl -s -X POST http://localhost:3000/rest/user/login \
+        -H "Content-Type: application/json" \
+        -d '{"email":"scanner@example.com","password":"changeme-in-vault"}' \
+        | jq -r '.authentication.token')
+
+      # 3. Rules that must break the build (real TABs thanks to printf)
+      printf '40018\tFAIL\t(SQL Injection)\n' > full-rules.tsv
+      printf '40012\tFAIL\t(Cross Site Scripting (Reflected))\n' >> full-rules.tsv
+      printf '90020\tFAIL\t(Remote OS Command Injection)\n' >> full-rules.tsv
+      printf '6\tFAIL\t(Path Traversal)\n' >> full-rules.tsv
+
+      # 4. Full scan: spider (5 min max) + AJAX spider + active scan
+      #    ZAP_AUTH_HEADER_VALUE is added as the Authorization header of every request
+      docker run --rm -t \
+        --network dast-lab_default \
+        -v "$(pwd):/zap/wrk/:rw" \
+        -e ZAP_AUTH_HEADER_VALUE="Bearer $TOKEN" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-full-scan.py -t http://juice-shop:3000 -j -m 5 -c full-rules.tsv -I -r full-report.html
+
+      echo "exit code: $?"
+    output: |
+      Using the Automation Framework
+      Total of 327 URLs
+      PASS: Path Traversal [6]
+      PASS: Remote File Inclusion [7]
+      PASS: External Redirect [20019]
+      PASS: Cross Site Scripting (Reflected) [40012]
+      PASS: Remote OS Command Injection [90020]
+      WARN-NEW: Content Security Policy (CSP) Header Not Set [10038] x 11
+      WARN-NEW: Cross-Domain Misconfiguration [10098] x 11
+      FAIL-NEW: SQL Injection [40018] x 1
+          http://juice-shop:3000/rest/products/search?q=%27%28 (500 Internal Server Error)
+      FAIL-NEW: 1	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 124
+      exit code: 1
+    note:
+      fr: "Sortie abrégée ; comptez 20 à 40 minutes. La même cible qui ne donnait que des avertissements d'en-têtes avec le baseline révèle maintenant une injection SQL : ZAP a envoyé `'(` dans le paramètre `q` et le serveur a répondu par une erreur 500. Selon la version de ZAP, l'alerte peut porter un autre identifiant de la famille SQL Injection."
+      en: "Abridged output; allow 20 to 40 minutes. The same target that only produced header warnings with the baseline now reveals a SQL injection: ZAP sent `'(` in the `q` parameter and the server answered with a 500 error. Depending on the ZAP version, the alert may carry another identifier of the SQL Injection family."
+
+  - title:
+      fr: "Décrire l'API à scanner : un fichier OpenAPI"
+      en: "Describing the API to scan: an OpenAPI file"
+    file: openapi.yaml
+    lang: yaml
+    kind: neutral
+    code: |
+      openapi: 3.0.3
+      info:
+        title: Juice Shop - REST endpoints used in the lab
+        version: 1.0.0
+      servers:
+        # Lab address only: never leave a production URL in a file given to a scanner
+        - url: http://juice-shop:3000
+      paths:
+        /rest/products/search:
+          get:
+            summary: Search products by name
+            parameters:
+              - name: q
+                in: query
+                required: true
+                schema:
+                  type: string
+                # A realistic example lets the scanner reach the real code path
+                example: apple
+            responses:
+              "200":
+                description: List of matching products
+        /api/Products/{id}:
+          get:
+            summary: Read one product
+            parameters:
+              - name: id
+                in: path
+                required: true
+                schema:
+                  type: integer
+                example: 1
+            responses:
+              "200":
+                description: The product
+        /rest/user/login:
+          post:
+            summary: Log in and receive a JWT
+            requestBody:
+              required: true
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    required: [email, password]
+                    properties:
+                      email:
+                        type: string
+                        example: scanner@example.com
+                      password:
+                        type: string
+                        example: changeme-in-vault
+            responses:
+              "200":
+                description: Authentication token
+              "401":
+                description: Invalid email or password
+    note:
+      fr: "Trois routes réelles de Juice Shop. Chaque paramètre porte un `example` valide : sans cela, ZAP devine des valeurs, l'API répond `400` ou `404`, et le scan ne teste que la gestion d'erreurs."
+      en: "Three real Juice Shop routes. Every parameter carries a valid `example`: without it ZAP guesses values, the API answers `400` or `404`, and the scan only tests error handling."
+
+  - title:
+      fr: "Scan d'API à partir du fichier OpenAPI"
+      en: "API scan from the OpenAPI file"
+    file: api-scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Fail on injections, whatever identifier the SQL injection rule reports
+      printf '40018\tFAIL\t(SQL Injection)\n' > api-rules.tsv
+      printf '40024\tFAIL\t(SQL Injection - SQLite)\n' >> api-rules.tsv
+      printf '90020\tFAIL\t(Remote OS Command Injection)\n' >> api-rules.tsv
+
+      # -t: the definition (openapi.yaml is in the mounted folder)   -f: its format
+      docker run --rm -t \
+        --network dast-lab_default \
+        -v "$(pwd):/zap/wrk/:rw" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-api-scan.py -t openapi.yaml -f openapi -c api-rules.tsv -I \
+          -r api-report.html -J api-report.json
+
+      echo "exit code: $?"
+    output: |
+      Total of 9 URLs
+      PASS: Path Traversal [6]
+      PASS: Remote File Inclusion [7]
+      PASS: Cross Site Scripting (Reflected) [40012]
+      PASS: Remote OS Command Injection [90020]
+      WARN-NEW: Cross-Domain Misconfiguration [10098] x 4
+      WARN-NEW: A Client Error response code was returned by the server [100000] x 6
+      FAIL-NEW: SQL Injection [40018] x 1
+          http://juice-shop:3000/rest/products/search?q=%27%28 (500 Internal Server Error)
+      FAIL-NEW: 1	FAIL-INPROG: 0	WARN-NEW: 2	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 112
+      exit code: 1
+    note:
+      fr: "Sortie abrégée. Seulement 9 URL, mais elles sont toutes pertinentes : le scan dure quelques minutes au lieu d'une demi-heure et retrouve l'injection SQL de la route de recherche. Pour une API protégée, ajoutez `-e ZAP_AUTH_HEADER_VALUE=\"Bearer $TOKEN\"` comme dans l'exemple précédent."
+      en: "Abridged output. Only 9 URLs, but all of them are relevant: the scan takes a few minutes instead of half an hour and finds the SQL injection of the search route again. For a protected API, add `-e ZAP_AUTH_HEADER_VALUE=\"Bearer $TOKEN\"` as in the previous example."
+
+  - title:
+      fr: "Un plan complet de l'Automation Framework"
+      en: "A complete Automation Framework plan"
+    file: zap.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      env:
+        contexts:
+          - name: juice-shop
+            urls:
+              - http://juice-shop:3000
+            includePaths:
+              - "http://juice-shop:3000.*"
+            excludePaths:
+              # Never let the scanner log itself out
+              - ".*logout.*"
+            authentication:
+              # The login is a JSON POST: ZAP replays it whenever the session is lost
+              method: json
+              parameters:
+                loginPageUrl: http://juice-shop:3000/#/login
+                loginRequestUrl: http://juice-shop:3000/rest/user/login
+                loginRequestBody: '{"email":"{%username%}","password":"{%password%}"}'
+              verification:
+                # Poll an endpoint that only returns the e-mail when logged in
+                method: poll
+                pollUrl: http://juice-shop:3000/rest/user/whoami
+                pollFrequency: 60
+                pollUnits: seconds
+                loggedInRegex: '"email":'
+            sessionManagement:
+              # Reuse the token found in the JSON login response on every request
+              method: headers
+              parameters:
+                Authorization: "Bearer {%json:authentication.token%}"
+                Cookie: "token={%json:authentication.token%}"
+            users:
+              - name: scanner
+                credentials:
+                  # Read from environment variables: no secret in Git
+                  username: "${ZAP_USER}"
+                  password: "${ZAP_PASSWORD}"
+        parameters:
+          failOnError: true
+          failOnWarning: false
+          progressToStdout: true
+
+      jobs:
+        - type: passiveScan-config
+          parameters:
+            maxAlertsPerRule: 10
+            scanOnlyInScope: true
+
+        - type: spider
+          parameters:
+            context: juice-shop
+            user: scanner
+            maxDuration: 2
+
+        - type: spiderAjax
+          parameters:
+            context: juice-shop
+            user: scanner
+            maxDuration: 3
+
+        - type: passiveScan-wait
+          parameters:
+            maxDuration: 5
+
+        - type: activeScan
+          parameters:
+            context: juice-shop
+            user: scanner
+            # Hard limits: a scan that never ends is a scan nobody runs
+            maxRuleDurationInMins: 3
+            maxScanDurationInMins: 20
+          policyDefinition:
+            defaultStrength: medium
+            defaultThreshold: medium
+            rules:
+              - id: 40018
+                name: SQL Injection
+                strength: high
+                threshold: low
+
+        - type: report
+          parameters:
+            template: traditional-html
+            reportDir: /zap/wrk
+            reportFile: zap-report.html
+            reportTitle: DAST report - Juice Shop lab
+
+        - type: report
+          parameters:
+            template: traditional-json
+            reportDir: /zap/wrk
+            reportFile: zap-report.json
+
+        - type: report
+          parameters:
+            template: sarif-json
+            reportDir: /zap/wrk
+            reportFile: zap-report.sarif.json
+
+        - type: exitStatus
+          parameters:
+            # Exit code 1 from a High alert, 2 from a Medium one
+            errorLevel: High
+            warnLevel: Medium
+    note:
+      fr: "`env` décrit **qui** scanner et **comment se connecter** ; `jobs` décrit **quoi faire**, dans l'ordre. Les durées maximales bornent chaque étape, la politique renforce la règle d'injection SQL, trois rapports sont produits et `exitStatus` transforme le risque le plus élevé en code de retour."
+      en: "`env` describes **what** to scan and **how to log in**; `jobs` describes **what to do**, in order. The maximum durations bound every step, the policy strengthens the SQL injection rule, three reports are produced and `exitStatus` turns the highest risk into an exit code."
+
+  - title:
+      fr: "Exécuter le plan"
+      en: "Running the plan"
+    file: run-plan.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Credentials of the dedicated test account, injected by the CI secret store in real life
+      export ZAP_USER='scanner@example.com'
+      export ZAP_PASSWORD='changeme-in-vault'
+
+      # -e VAR (without a value) forwards the variable without printing it in the command line
+      docker run --rm -t \
+        --network dast-lab_default \
+        -v "$(pwd):/zap/wrk/:rw" \
+        -e ZAP_USER -e ZAP_PASSWORD \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap.sh -cmd -autorun /zap/wrk/zap.yaml
+
+      echo "exit code: $?"
+      ls zap-report.*
+    output: |
+      Job passiveScan-config started
+      Job passiveScan-config finished, time taken: 00:00:00
+      Job spider started
+      Job spider found 187 URLs
+      Job spider finished, time taken: 00:00:41
+      Job spiderAjax started
+      Job spiderAjax found 243 URLs
+      Job spiderAjax finished, time taken: 00:03:01
+      Job passiveScan-wait started
+      Job passiveScan-wait finished, time taken: 00:00:12
+      Job activeScan started
+      Job activeScan finished, time taken: 00:14:37
+      Job report started
+      Job report wrote report /zap/wrk/zap-report.html
+      Job report finished, time taken: 00:00:01
+      exit code: 1
+      zap-report.html  zap-report.json  zap-report.sarif.json
+    note:
+      fr: "Sortie abrégée (les trois jobs `report` se suivent). Le code `1` vient du job `exitStatus` : au moins une alerte de risque *High* a été trouvée. La même commande fonctionne à l'identique dans n'importe quel outil de CI."
+      en: "Abridged output (the three `report` jobs follow each other). Exit code `1` comes from the `exitStatus` job: at least one *High* risk alert was found. The very same command works unchanged in any CI tool."
+
+mistake:
+  fr: |
+    **Lancer un scan actif sans limite de durée, sur un environnement partagé qui contient de vraies données.**
+
+    Le scan actif soumet chaque formulaire des milliers de fois : il crée des centaines de comptes et de
+    commentaires, déclenche des e-mails, et peut supprimer des enregistrements s'il découvre une route
+    `DELETE`. Sur une préproduction partagée, toute l'équipe en subit les conséquences. Sans
+    `maxScanDurationInMins`, il peut aussi tourner six heures et bloquer la file de la CI. Deuxième
+    erreur classique : lancer `zap-full-scan.py` sur une API sans définition OpenAPI et croire au
+    résultat « 0 alerte » alors que le spider n'a trouvé aucune route.
+  en: |
+    **Running an active scan with no time limit, on a shared environment that holds real data.**
+
+    The active scan submits every form thousands of times: it creates hundreds of accounts and comments,
+    triggers e-mails, and may delete records if it discovers a `DELETE` route. On a shared staging the
+    whole team suffers the consequences. Without `maxScanDurationInMins` it may also run for six hours and
+    block the CI queue. Second classic mistake: running `zap-full-scan.py` against an API without an
+    OpenAPI definition and trusting the "0 alerts" result when the spider found no route at all.
+
+bestPractice:
+  fr: |
+    - **Environnement jetable** : base de données de test, services tiers (e-mail, paiement) simulés, tout est détruit après le scan.
+    - **Bornez chaque étape** : `maxDuration` pour les spiders, `maxRuleDurationInMins` et `maxScanDurationInMins` pour le scan actif.
+    - **Un plan versionné** (`zap.yaml`) plutôt qu'une longue ligne de commande : il est relu, et identique en local et en CI.
+    - **Identifiants par variables d'environnement** (`${ZAP_USER}`), compte de test dédié, URL de déconnexion exclue.
+    - **Pour une API, toujours la définition** OpenAPI, avec des exemples réalistes.
+    - **Vérifiez l'authentification** : comparez le nombre d'URL trouvées avec et sans utilisateur.
+  en: |
+    - **Disposable environment**: test database, third-party services (e-mail, payment) mocked, everything destroyed after the scan.
+    - **Bound every step**: `maxDuration` for the spiders, `maxRuleDurationInMins` and `maxScanDurationInMins` for the active scan.
+    - **A versioned plan** (`zap.yaml`) rather than a long command line: it gets reviewed, and is identical locally and in CI.
+    - **Credentials through environment variables** (`${ZAP_USER}`), dedicated test account, logout URL excluded.
+    - **For an API, always the definition** (OpenAPI), with realistic examples.
+    - **Verify authentication**: compare the number of URLs found with and without a user.
+
+exercise:
+  statement:
+    fr: |
+      Vous devez scanner uniquement l'**API** de Juice Shop avec l'Automation Framework, à partir du
+      fichier `openapi.yaml` de la leçon (placé dans le dossier monté sur `/zap/wrk`).
+
+      Écrivez un plan `api-plan.yaml` qui :
+
+      1. définit un contexte `shop-api` pour `http://juice-shop:3000` ;
+      2. importe la définition OpenAPI au lieu d'utiliser un spider ;
+      3. attend la fin du scan passif, puis lance un scan actif limité à **10 minutes** ;
+      4. écrit un rapport JSON `api-report.json` dans `/zap/wrk` ;
+      5. renvoie un code d'erreur dès qu'une alerte de risque **Medium** ou plus est trouvée.
+    en: |
+      You must scan only the Juice Shop **API** with the Automation Framework, from the lesson's
+      `openapi.yaml` file (placed in the folder mounted on `/zap/wrk`).
+
+      Write an `api-plan.yaml` plan that:
+
+      1. defines a `shop-api` context for `http://juice-shop:3000`;
+      2. imports the OpenAPI definition instead of using a spider;
+      3. waits for the passive scan to finish, then runs an active scan limited to **10 minutes**;
+      4. writes a JSON report `api-report.json` in `/zap/wrk`;
+      5. returns an error code as soon as an alert of **Medium** risk or higher is found.
+  solution:
+    file: api-plan.yaml
+    lang: yaml
+    code: |
+      env:
+        contexts:
+          - name: shop-api
+            urls:
+              - http://juice-shop:3000
+        parameters:
+          failOnError: true
+          progressToStdout: true
+
+      jobs:
+        # Import the routes: a spider cannot discover a REST API
+        - type: openapi
+          parameters:
+            apiFile: /zap/wrk/openapi.yaml
+            targetUrl: http://juice-shop:3000
+            context: shop-api
+
+        - type: passiveScan-wait
+          parameters:
+            maxDuration: 2
+
+        - type: activeScan
+          parameters:
+            context: shop-api
+            maxScanDurationInMins: 10
+
+        - type: report
+          parameters:
+            template: traditional-json
+            reportDir: /zap/wrk
+            reportFile: api-report.json
+
+        # Medium or higher -> exit code 1, Low -> exit code 2
+        - type: exitStatus
+          parameters:
+            errorLevel: Medium
+            warnLevel: Low
+    note:
+      fr: "On le lance avec `zap.sh -cmd -autorun /zap/wrk/api-plan.yaml` dans l'image `ghcr.io/zaproxy/zaproxy:stable`. Le job `openapi` remplace les spiders ; `exitStatus` avec `errorLevel: Medium` fait échouer le pipeline dès le niveau Medium."
+      en: "Run it with `zap.sh -cmd -autorun /zap/wrk/api-plan.yaml` in the `ghcr.io/zaproxy/zaproxy:stable` image. The `openapi` job replaces the spiders; `exitStatus` with `errorLevel: Medium` fails the pipeline from the Medium level upwards."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence essentielle entre `zap-baseline.py` et `zap-full-scan.py` ?"
+      en: "What is the key difference between `zap-baseline.py` and `zap-full-scan.py`?"
+    options:
+      fr:
+        - "Le scan complet produit un rapport, pas le baseline"
+        - "Le baseline exige un fichier OpenAPI"
+        - "Le scan complet ajoute le scan actif, qui envoie des requêtes d'attaque"
+        - "Le baseline ne fonctionne qu'en HTTPS"
+      en:
+        - "The full scan produces a report, the baseline does not"
+        - "The baseline requires an OpenAPI file"
+        - "The full scan adds active scanning, which sends attack requests"
+        - "The baseline only works over HTTPS"
+    answer: 2
+    why:
+      fr: "Le baseline reste passif ; le scan complet attaque réellement l'application et doit donc viser un environnement de test jetable."
+      en: "The baseline stays passive; the full scan really attacks the application and must therefore target a disposable test environment."
+  - q:
+      fr: "Pourquoi faut-il fournir une définition OpenAPI pour scanner une API REST ?"
+      en: "Why must you provide an OpenAPI definition to scan a REST API?"
+    options:
+      fr:
+        - "Parce qu'une API ne contient pas de liens HTML que le spider pourrait suivre"
+        - "Parce que ZAP refuse de démarrer sans ce fichier"
+        - "Parce que le fichier contient les mots de passe de l'API"
+        - "Parce que cela désactive le scan actif"
+      en:
+        - "Because an API contains no HTML links for the spider to follow"
+        - "Because ZAP refuses to start without that file"
+        - "Because the file contains the API passwords"
+        - "Because it disables the active scan"
+    answer: 0
+    why:
+      fr: "Le spider découvre les pages en suivant des liens ; une API n'en expose pas. La définition donne au scanner la liste des routes et des paramètres."
+      en: "The spider discovers pages by following links; an API exposes none. The definition gives the scanner the list of routes and parameters."
+  - q:
+      fr: "Dans un plan de l'Automation Framework, que contient la section `env` ?"
+      en: "In an Automation Framework plan, what does the `env` section contain?"
+    options:
+      fr:
+        - "La liste ordonnée des tâches à exécuter"
+        - "Les contextes : cibles, périmètre, authentification et utilisateurs"
+        - "Le rapport HTML généré"
+        - "Les variables de la CI uniquement"
+      en:
+        - "The ordered list of tasks to run"
+        - "The contexts: targets, scope, authentication and users"
+        - "The generated HTML report"
+        - "CI variables only"
+    answer: 1
+    why:
+      fr: "`env` décrit la cible et la façon de s'y connecter ; la liste ordonnée des tâches se trouve dans `jobs`."
+      en: "`env` describes the target and how to log in to it; the ordered list of tasks lives in `jobs`."
+  - q:
+      fr: "Quel job permet de faire dépendre le code de retour du niveau de risque des alertes ?"
+      en: "Which job makes the exit code depend on the risk level of the alerts?"
+    options:
+      fr:
+        - "`report`"
+        - "`passiveScan-wait`"
+        - "`activeScan`"
+        - "`exitStatus`"
+      en:
+        - "`report`"
+        - "`passiveScan-wait`"
+        - "`activeScan`"
+        - "`exitStatus`"
+    answer: 3
+    why:
+      fr: "`exitStatus` définit `errorLevel` et `warnLevel`. Sans lui, le code de retour indique seulement si le plan s'est déroulé sans erreur."
+      en: "`exitStatus` defines `errorLevel` and `warnLevel`. Without it, the exit code only tells whether the plan ran without errors."
+  - q:
+      fr: "Pourquoi fixer `maxScanDurationInMins` dans le job `activeScan` ?"
+      en: "Why set `maxScanDurationInMins` in the `activeScan` job?"
+    options:
+      fr:
+        - "Pour désactiver les règles d'injection SQL"
+        - "Pour que le scan se connecte plus vite"
+        - "Pour éviter qu'un scan actif tourne des heures et bloque le pipeline"
+        - "Pour produire un rapport plus court"
+      en:
+        - "To disable the SQL injection rules"
+        - "To make the scan log in faster"
+        - "To prevent an active scan from running for hours and blocking the pipeline"
+        - "To produce a shorter report"
+    answer: 2
+    why:
+      fr: "Un scan actif n'a pas de durée naturelle : sur une grosse application il peut tourner très longtemps. Une limite explicite le rend utilisable en CI."
+      en: "An active scan has no natural duration: on a large application it can run for a very long time. An explicit limit makes it usable in CI."

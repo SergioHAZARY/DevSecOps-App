@@ -1,0 +1,623 @@
+description:
+  fr: "Écrire un scanner de ports TCP en Python avec socket et concurrent.futures, le limiter aux cibles autorisées et comprendre ce que voit le défenseur."
+  en: "Write a TCP port scanner in Python with socket and concurrent.futures, restrict it to authorised targets and understand what the defender sees."
+duration: 40
+
+intro:
+  fr: |
+    Un **port** est un numéro (de 1 à 65535) qui identifie un service sur une machine : 22 pour SSH, 443 pour
+    HTTPS, 5432 pour PostgreSQL. Un **scanner de ports** essaie de se connecter à chacun pour savoir lesquels
+    répondent. C'est le premier geste d'un attaquant, et donc aussi le premier contrôle d'un défenseur :
+    *ce qui est exposé chez moi correspond-il à ce que j'ai prévu ?*
+
+    Imaginez un gardien qui fait sa ronde dans un immeuble et pousse chaque porte : ouverte, fermée à clé, ou
+    aucune réponse. Faire cette ronde dans **votre** immeuble est votre travail. La faire dans celui du
+    voisin, sans son accord, est une tentative d'effraction.
+
+    > **Rappel légal** : ne scannez que des machines qui vous appartiennent ou pour lesquelles vous avez une
+    > autorisation écrite. Dans cette leçon, les seules cibles sont `127.0.0.1` (votre propre machine) et
+    > `scanme.nmap.org`, un serveur que le projet Nmap met à disposition pour tester des scanners, avec
+    > modération.
+
+    Les scripts de cette leçon ouvrent de vraies connexions réseau : ils ne s'exécutent pas dans le
+    navigateur. Copiez-les dans un fichier et lancez-les avec `python3` sur votre poste.
+  en: |
+    A **port** is a number (from 1 to 65535) that identifies a service on a machine: 22 for SSH, 443 for
+    HTTPS, 5432 for PostgreSQL. A **port scanner** tries to connect to each of them to find out which ones
+    answer. It is an attacker's first move, and therefore also a defender's first check: *does what I expose
+    match what I planned?*
+
+    Picture a security guard doing rounds in a building and pushing every door: open, locked, or no answer
+    at all. Doing those rounds in **your** building is your job. Doing them in the neighbour's building,
+    without consent, is an attempted break-in.
+
+    > **Legal reminder**: only scan machines you own or for which you have written authorisation. In this
+    > lesson the only targets are `127.0.0.1` (your own machine) and `scanme.nmap.org`, a server the Nmap
+    > project provides for testing scanners, in moderation.
+
+    The scripts in this lesson open real network connections: they do not run in the browser. Copy them to
+    a file and launch them with `python3` on your workstation.
+
+sections:
+  - heading:
+      fr: "Comment fonctionne un scan TCP « connect »"
+      en: "How a TCP \"connect\" scan works"
+    body:
+      fr: |
+        TCP (*Transmission Control Protocol*) établit une connexion en trois messages, la **poignée de main
+        en trois temps** : le client envoie `SYN`, le serveur répond `SYN/ACK`, le client confirme par
+        `ACK`. Un scan « connect » tente simplement cette poignée de main sur chaque port et observe la
+        réponse :
+
+        | État | Ce que répond la cible | Ce que voit le script |
+        |---|---|---|
+        | **Ouvert** | `SYN/ACK` : un service écoute | la connexion réussit (`connect_ex` renvoie `0`) |
+        | **Fermé** | `RST` : rien n'écoute | refus immédiat (`ECONNREFUSED`) |
+        | **Filtré** | rien : un pare-feu jette le paquet | aucune réponse, il faut attendre le **délai d'expiration** |
+
+        En Python, le module standard `socket` donne accès à ces connexions :
+
+        - `socket.socket(socket.AF_INET, socket.SOCK_STREAM)` crée un point de connexion IPv4 (`AF_INET`)
+          en TCP (`SOCK_STREAM`) ;
+        - `settimeout(1.0)` fixe l'attente maximale, indispensable face aux ports filtrés ;
+        - `connect_ex((hôte, port))` tente la connexion et renvoie `0` en cas de succès, un code d'erreur
+          sinon (là où `connect()` lèverait une exception).
+
+        Ce type de scan termine la poignée de main : il est donc **visible** dans les journaux de la cible.
+        Nmap sait faire des scans plus discrets (`-sS`, SYN seul), qui exigent les droits administrateur.
+      en: |
+        TCP (*Transmission Control Protocol*) sets up a connection with three messages, the **three-way
+        handshake**: the client sends `SYN`, the server answers `SYN/ACK`, the client confirms with `ACK`.
+        A "connect" scan simply attempts that handshake on every port and watches the answer:
+
+        | State | What the target answers | What the script sees |
+        |---|---|---|
+        | **Open** | `SYN/ACK`: a service is listening | the connection succeeds (`connect_ex` returns `0`) |
+        | **Closed** | `RST`: nothing is listening | immediate refusal (`ECONNREFUSED`) |
+        | **Filtered** | nothing: a firewall drops the packet | no answer, you must wait for the **timeout** |
+
+        In Python, the standard `socket` module gives access to these connections:
+
+        - `socket.socket(socket.AF_INET, socket.SOCK_STREAM)` creates an IPv4 (`AF_INET`) TCP
+          (`SOCK_STREAM`) endpoint;
+        - `settimeout(1.0)` sets the maximum wait, essential when facing filtered ports;
+        - `connect_ex((host, port))` attempts the connection and returns `0` on success, an error code
+          otherwise (where `connect()` would raise an exception).
+
+        This kind of scan completes the handshake: it is therefore **visible** in the target's logs. Nmap
+        can run stealthier scans (`-sS`, SYN only), which require administrator rights.
+  - heading:
+      fr: "Aller vite : la concurrence avec concurrent.futures"
+      en: "Going fast: concurrency with concurrent.futures"
+    body:
+      fr: |
+        Tester les ports un par un est lent : sur une cible filtrée, chaque port coûte le délai complet.
+        1 024 ports à 1 seconde, c'est **17 minutes**. Or le programme passe son temps à *attendre le
+        réseau*, pas à calculer : on peut donc lancer de nombreuses tentatives en parallèle avec des
+        **threads** (fils d'exécution).
+
+        `concurrent.futures.ThreadPoolExecutor` gère pour vous un groupe de threads de taille fixe :
+
+        ```python
+        with ThreadPoolExecutor(max_workers=100) as pool:
+            futures = [pool.submit(check_port, host, port) for port in ports]
+            for future in as_completed(futures):
+                result = future.result()
+        ```
+
+        - `max_workers` **plafonne** le nombre de connexions simultanées : c'est ce qui évite de saturer
+          votre machine (limite de fichiers ouverts) ou la cible ;
+        - `submit()` planifie un appel et renvoie un objet `Future` (un résultat à venir) ;
+        - `as_completed()` rend les résultats au fur et à mesure, `future.result()` relance l'exception
+          éventuelle du thread, qui ne passe donc pas inaperçue.
+
+        Avec 100 workers, les 1 024 ports filtrés sont testés en une dizaine de secondes.
+      en: |
+        Testing ports one by one is slow: on a filtered target, each port costs the full timeout. 1,024
+        ports at 1 second each is **17 minutes**. But the program spends its time *waiting for the network*,
+        not computing: so many attempts can run in parallel using **threads**.
+
+        `concurrent.futures.ThreadPoolExecutor` manages a fixed-size group of threads for you:
+
+        ```python
+        with ThreadPoolExecutor(max_workers=100) as pool:
+            futures = [pool.submit(check_port, host, port) for port in ports]
+            for future in as_completed(futures):
+                result = future.result()
+        ```
+
+        - `max_workers` **caps** the number of simultaneous connections: this is what prevents saturating
+          your machine (open file limit) or the target;
+        - `submit()` schedules a call and returns a `Future` object (a result to come);
+        - `as_completed()` yields results as they arrive, and `future.result()` re-raises any exception
+          from the thread, so it does not go unnoticed.
+
+        With 100 workers, the 1,024 filtered ports are tested in about ten seconds.
+  - heading:
+      fr: "Votre script ou Nmap ?"
+      en: "Your script or Nmap?"
+    body:
+      fr: |
+        | | Votre scanner Python | Nmap |
+        |---|---|---|
+        | Objectif | comprendre, automatiser un contrôle précis | audit complet |
+        | Techniques | TCP connect uniquement | SYN, UDP, détection de versions et d'OS, scripts NSE |
+        | Intégration | s'importe dans vos outils, sortie JSON sur mesure | sortie XML (`-oX`), à analyser |
+        | Dépendances | aucune (bibliothèque standard) | binaire à installer |
+
+        Pour un audit réel, utilisez **Nmap** : vingt-cinq ans de cas particuliers y sont traités. Écrire
+        votre propre scanner sert à comprendre ce que fait l'outil, et à automatiser un contrôle simple, par
+        exemple *« après chaque déploiement, vérifier que seuls les ports 22 et 443 répondent, sinon faire
+        échouer le pipeline »*. C'est ce que fait le script complet de cette leçon avec l'option `--allowed`.
+      en: |
+        | | Your Python scanner | Nmap |
+        |---|---|---|
+        | Purpose | understanding, automating one precise check | full audit |
+        | Techniques | TCP connect only | SYN, UDP, version and OS detection, NSE scripts |
+        | Integration | importable in your tools, custom JSON output | XML output (`-oX`), to be parsed |
+        | Dependencies | none (standard library) | a binary to install |
+
+        For a real audit, use **Nmap**: twenty-five years of corner cases are handled in it. Writing your
+        own scanner helps you understand what the tool does, and automate a simple check, for instance
+        *"after every deployment, verify that only ports 22 and 443 answer, otherwise fail the pipeline"*.
+        This is what the complete script of this lesson does with the `--allowed` option.
+
+examples:
+  - title:
+      fr: "Tester un seul port avec socket"
+      en: "Testing a single port with socket"
+    file: check_port.py
+    lang: python
+    code: |
+      import socket
+
+
+      def is_open(host: str, port: int, timeout: float = 1.0) -> bool:
+          """Return True if a TCP connection to host:port succeeds."""
+          # AF_INET = IPv4, SOCK_STREAM = TCP. "with" closes the socket in every case.
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+              sock.settimeout(timeout)        # never wait forever on a filtered port
+              # connect_ex() returns 0 on success instead of raising an exception
+              return sock.connect_ex((host, port)) == 0
+
+
+      # scanme.nmap.org is provided by the Nmap project to test scanners (be gentle)
+      for port in (22, 80, 443):
+          state = "open" if is_open("scanme.nmap.org", port) else "closed or filtered"
+          print(f"scanme.nmap.org:{port:<4} {state}")
+    output: |
+      scanme.nmap.org:22   open
+      scanme.nmap.org:80   open
+      scanme.nmap.org:443  closed or filtered
+    note:
+      fr: "Tout le scanner tient dans `connect_ex` : `0` signifie que la poignée de main TCP a abouti. Sans `settimeout`, un port filtré bloquerait le script pendant plus d'une minute (délai par défaut du système)."
+      en: "The whole scanner boils down to `connect_ex`: `0` means the TCP handshake completed. Without `settimeout`, a filtered port would block the script for more than a minute (the operating system's default)."
+
+  - title:
+      fr: "Lire la bannière d'un service"
+      en: "Reading a service banner"
+    file: banner.py
+    lang: python
+    code: |
+      import socket
+
+
+      def grab_banner(host: str, port: int, timeout: float = 2.0) -> str:
+          """Return the first line a service sends right after the connection."""
+          try:
+              # create_connection() resolves the name, connects and applies the timeout
+              with socket.create_connection((host, port), timeout=timeout) as sock:
+                  data = sock.recv(128)               # read at most 128 bytes
+          except OSError as error:                    # refused, timeout, DNS failure...
+              return f"no banner ({error})"
+          # Network data is untrusted bytes: decode defensively, keep the first line only
+          lines = data.decode("utf-8", errors="replace").splitlines()
+          return lines[0] if lines else "no banner (empty answer)"
+
+
+      print("22/tcp:", grab_banner("scanme.nmap.org", 22))
+    output: |
+      22/tcp: SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13
+    note:
+      fr: "Certains services (SSH, FTP, SMTP) annoncent leur nom et leur version dès la connexion. Pour un attaquant, cette bannière indique quelles failles chercher ; pour vous, c'est un moyen rapide de repérer une version obsolète. D'où l'intérêt de ne pas exposer de service inutile."
+      en: "Some services (SSH, FTP, SMTP) announce their name and version as soon as you connect. To an attacker, that banner says which flaws to look for; to you, it is a quick way to spot an obsolete version. Hence the value of not exposing any unnecessary service."
+
+  - title:
+      fr: "Version naïve et dangereuse : aucune limite"
+      en: "Naive and dangerous version: no limits"
+    file: scan_naive.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import socket
+      import sys
+      import threading
+
+      target = sys.argv[1]                # any target at all, no authorisation check
+
+
+      def probe(port):
+          sock = socket.socket()          # no timeout: a filtered port blocks for minutes
+          if sock.connect_ex((target, port)) == 0:
+              print(port, "open")
+          # the socket is never closed: file descriptors leak
+
+
+      # One thread per port: 65,535 threads and connections started at the same time
+      for port in range(1, 65536):
+          threading.Thread(target=probe, args=(port,)).start()
+    note:
+      fr: "Quatre défauts : n'importe quelle cible est acceptée, aucun délai d'expiration, des sockets jamais fermés et un nombre de threads illimité. Le script s'effondre vite avec `OSError: [Errno 24] Too many open files`, et la rafale de connexions ressemble à une attaque par déni de service pour la cible."
+      en: "Four defects: any target is accepted, no timeout, sockets never closed and an unlimited number of threads. The script quickly collapses with `OSError: [Errno 24] Too many open files`, and the burst of connections looks like a denial-of-service attack to the target."
+
+  - title:
+      fr: "Scanner complet : concurrent, borné et limité au périmètre autorisé"
+      en: "Complete scanner: concurrent, bounded and restricted to the authorised scope"
+    file: portscan.py
+    lang: python
+    kind: secure
+    code: |
+      #!/usr/bin/env python3
+      """portscan.py - concurrent TCP connect scanner with a scope guard.
+
+      Only scan systems you own or are explicitly authorised to test.
+      """
+      import argparse
+      import ipaddress
+      import json
+      import socket
+      import sys
+      from concurrent.futures import ThreadPoolExecutor, as_completed
+
+      # Networks this tool may touch. Add YOUR authorised ranges here, nothing else.
+      AUTHORISED_SCOPE = [
+          ipaddress.ip_network("127.0.0.0/8"),       # your own machine
+          ipaddress.ip_network("45.33.32.156/32"),   # scanme.nmap.org, Nmap's public test host
+      ]
+      MAX_WORKERS = 500
+
+
+      def parse_ports(spec: str) -> list[int]:
+          """Turn "22,80,8000-8010" into a sorted list of valid port numbers."""
+          ports: set[int] = set()
+          for part in spec.split(","):
+              start, _, end = part.partition("-")
+              first = int(start)                       # ValueError if not a number
+              last = int(end) if end else first
+              if not 1 <= first <= last <= 65535:
+                  raise ValueError(f"invalid port range: {part!r}")
+              ports.update(range(first, last + 1))
+          return sorted(ports)
+
+
+      def resolve_in_scope(target: str) -> str:
+          """Resolve the target once and refuse anything outside the authorised scope."""
+          address = socket.gethostbyname(target)       # socket.gaierror if the name is unknown
+          ip = ipaddress.ip_address(address)
+          if not any(ip in network for network in AUTHORISED_SCOPE):
+              raise PermissionError(f"{target} ({address}) is outside the authorised scope")
+          # The caller scans this address, not the name: the name cannot be re-pointed mid-scan
+          return address
+
+
+      def check_port(address: str, port: int, timeout: float) -> tuple[int, bool]:
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+              sock.settimeout(timeout)
+              return port, sock.connect_ex((address, port)) == 0
+
+
+      def scan(address: str, ports: list[int], timeout: float, workers: int) -> list[int]:
+          open_ports = []
+          # The pool caps the number of simultaneous connections
+          with ThreadPoolExecutor(max_workers=workers) as pool:
+              futures = [pool.submit(check_port, address, port, timeout) for port in ports]
+              for future in as_completed(futures):
+                  port, is_open = future.result()      # re-raises any error from the thread
+                  if is_open:
+                      open_ports.append(port)
+          return sorted(open_ports)
+
+
+      def main() -> int:
+          parser = argparse.ArgumentParser(description="TCP connect scanner (authorised targets only)")
+          parser.add_argument("target", help="host name or IPv4 address")
+          parser.add_argument("-p", "--ports", default="1-1024", help='e.g. "22,80,8000-8010"')
+          parser.add_argument("-t", "--timeout", type=float, default=1.0, help="seconds per port")
+          parser.add_argument("-w", "--workers", type=int, default=100, help="simultaneous connections")
+          parser.add_argument("--allowed", default="", help="ports expected to be open; any other one fails the run")
+          parser.add_argument("--json", action="store_true", help="machine-readable output")
+          args = parser.parse_args()
+
+          try:
+              ports = parse_ports(args.ports)
+              allowed = set(parse_ports(args.allowed)) if args.allowed else None
+              address = resolve_in_scope(args.target)
+          except (ValueError, PermissionError, socket.gaierror) as error:
+              print(f"error: {error}", file=sys.stderr)
+              return 2
+
+          workers = max(1, min(args.workers, MAX_WORKERS))
+          open_ports = scan(address, ports, args.timeout, workers)
+          unexpected = sorted(set(open_ports) - allowed) if allowed is not None else []
+
+          if args.json:
+              print(json.dumps({
+                  "target": args.target,
+                  "address": address,
+                  "scanned": len(ports),
+                  "open": open_ports,
+                  "unexpected": unexpected,
+              }))
+          else:
+              print(f"Scanned {len(ports)} port(s) on {args.target} ({address})")
+              for port in open_ports:
+                  flag = "  <-- NOT in the allow-list" if port in unexpected else ""
+                  print(f"  {port}/tcp open{flag}")
+              print(f"{len(open_ports)} open, {len(unexpected)} unexpected")
+
+          # Exit code 1 makes a CI job fail when an unexpected port is exposed
+          return 1 if unexpected else 0
+
+
+      if __name__ == "__main__":
+          sys.exit(main())
+    output: |
+      $ python3 -m http.server 8000 --bind 127.0.0.1 &
+      $ python3 portscan.py 127.0.0.1 -p 7990-8010
+      Scanned 21 port(s) on 127.0.0.1 (127.0.0.1)
+        8000/tcp open
+      1 open, 0 unexpected
+
+      $ python3 portscan.py 127.0.0.1 -p 7990-8010 --allowed 22,443 --json
+      {"target": "127.0.0.1", "address": "127.0.0.1", "scanned": 21, "open": [8000], "unexpected": [8000]}
+      $ echo $?
+      1
+
+      $ python3 portscan.py 192.0.2.10 -p 80
+      error: 192.0.2.10 (192.0.2.10) is outside the authorised scope
+    note:
+      fr: "Le script refuse toute cible hors de `AUTHORISED_SCOPE`, valide les ports, plafonne les connexions simultanées et renvoie un **code de sortie** exploitable : `0` conforme, `1` port inattendu, `2` erreur d'utilisation. Avec `--allowed`, il devient un contrôle d'exposition à lancer après chaque déploiement."
+      en: "The script refuses any target outside `AUTHORISED_SCOPE`, validates ports, caps simultaneous connections and returns a usable **exit code**: `0` compliant, `1` unexpected port, `2` usage error. With `--allowed`, it becomes an exposure check to run after every deployment."
+
+  - title:
+      fr: "Côté défense : repérer un scan dans les journaux du pare-feu"
+      en: "Defender's side: spotting a scan in the firewall logs"
+    file: detect_scan.py
+    lang: python
+    kind: secure
+    code: |
+      import re
+      from collections import defaultdict
+
+      # Shortened UFW (iptables) log lines, as found in /var/log/ufw.log
+      FIREWALL_LOG = """\
+      Nov 12 03:20:01 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.50 DST=192.0.2.10 LEN=44 TTL=52 PROTO=TCP SPT=40512 DPT=21 SYN
+      Nov 12 03:20:01 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.50 DST=192.0.2.10 LEN=44 TTL=52 PROTO=TCP SPT=40512 DPT=23 SYN
+      Nov 12 03:20:01 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.50 DST=192.0.2.10 LEN=44 TTL=52 PROTO=TCP SPT=40513 DPT=25 SYN
+      Nov 12 03:20:02 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.50 DST=192.0.2.10 LEN=44 TTL=52 PROTO=TCP SPT=40513 DPT=3306 SYN
+      Nov 12 03:20:02 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.50 DST=192.0.2.10 LEN=44 TTL=52 PROTO=TCP SPT=40514 DPT=5432 SYN
+      Nov 12 03:20:02 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.50 DST=192.0.2.10 LEN=44 TTL=52 PROTO=TCP SPT=40514 DPT=6379 SYN
+      Nov 12 09:41:17 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=198.51.100.23 DST=192.0.2.10 LEN=60 TTL=57 PROTO=TCP SPT=51880 DPT=8443 SYN
+      Nov 12 09:41:18 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=198.51.100.23 DST=192.0.2.10 LEN=60 TTL=57 PROTO=TCP SPT=51880 DPT=8443 SYN
+      Nov 12 09:41:20 web-01 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=198.51.100.23 DST=192.0.2.10 LEN=60 TTL=57 PROTO=TCP SPT=51880 DPT=8443 SYN
+      """
+
+      BLOCKED = re.compile(r"\[UFW BLOCK\].*? SRC=(?P<src>\S+) .*?PROTO=TCP .*?DPT=(?P<port>\d+)")
+      THRESHOLD = 5        # distinct ports from one source before calling it a scan
+
+      ports_by_source: dict[str, set[int]] = defaultdict(set)
+      for line in FIREWALL_LOG.splitlines():
+          match = BLOCKED.search(line)
+          if match:
+              ports_by_source[match["src"]].add(int(match["port"]))
+
+      # A scan = one source knocking on MANY different ports
+      for source, ports in sorted(ports_by_source.items(), key=lambda item: len(item[1]), reverse=True):
+          verdict = "PORT SCAN" if len(ports) >= THRESHOLD else "ok (retries on one port)"
+          print(f"{source:14} {len(ports)} distinct port(s) {sorted(ports)}  {verdict}")
+    output: |
+      203.0.113.50   6 distinct port(s) [21, 23, 25, 3306, 5432, 6379]  PORT SCAN
+      198.51.100.23  1 distinct port(s) [8443]  ok (retries on one port)
+    note:
+      fr: "Cet exemple s'exécute dans la page. Un scan se reconnaît à sa signature : **une source, beaucoup de ports différents** en peu de temps. Trois paquets vers le même port ne sont que les retransmissions d'un client mal configuré. C'est sur ce principe que reposent les règles de détection des IDS."
+      en: "This example runs in the page. A scan is recognised by its signature: **one source, many different ports** in a short time. Three packets to the same port are just the retransmissions of a misconfigured client. IDS detection rules rely on this principle."
+
+mistake:
+  fr: |
+    **Scanner « pour voir » une machine qui ne vous appartient pas.**
+
+    Un scan de ports laisse des traces chez la cible et chez votre hébergeur. Sans autorisation, il peut
+    entraîner la suspension de votre compte cloud, un signalement à votre fournisseur d'accès ou des
+    poursuites selon la législation locale. « Je voulais juste tester mon script » n'est pas une défense.
+    Demandez toujours un **accord écrit** précisant les adresses, les dates et les techniques autorisées,
+    et vérifiez la politique de test de votre fournisseur cloud.
+
+    Côté technique, l'erreur classique est d'oublier le **délai d'expiration** (`settimeout`) et de lancer
+    un nombre illimité de threads : le scanner se bloque, épuise ses descripteurs de fichiers et produit des
+    résultats faux (ports ouverts déclarés fermés).
+  en: |
+    **Scanning a machine you do not own "just to see".**
+
+    A port scan leaves traces at the target and at your hosting provider. Without authorisation it can lead
+    to your cloud account being suspended, a report to your Internet provider, or prosecution depending on
+    local law. "I only wanted to test my script" is not a defence. Always get a **written agreement**
+    stating the addresses, dates and techniques allowed, and check your cloud provider's testing policy.
+
+    On the technical side, the classic mistake is forgetting the **timeout** (`settimeout`) and starting an
+    unlimited number of threads: the scanner hangs, exhausts its file descriptors and produces wrong
+    results (open ports reported as closed).
+
+bestPractice:
+  fr: |
+    - **Codez le périmètre autorisé dans l'outil** (liste de réseaux) : une faute de frappe dans une adresse
+      ne doit pas pouvoir viser un tiers.
+    - **Résolvez le nom une seule fois** et scannez l'adresse obtenue, après l'avoir comparée au périmètre.
+    - **Toujours un délai d'expiration et un nombre de workers plafonné** ; restez modéré sur les cibles
+      partagées comme `scanme.nmap.org`.
+    - **Scannez-vous vous-même régulièrement** depuis l'extérieur et comparez à une liste d'autorisation :
+      tout nouveau port ouvert doit faire échouer le pipeline ou lever une alerte.
+    - **Fermez ce qui ne sert pas** et placez bases de données et interfaces d'administration derrière un
+      VPN ou un bastion : le meilleur résultat de scan est une liste courte.
+    - **Pour un audit complet, utilisez Nmap** (`nmap -sV -p- cible`) et conservez les rapports.
+  en: |
+    - **Hard-code the authorised scope in the tool** (a list of networks): a typo in an address must not be
+      able to hit a third party.
+    - **Resolve the name only once** and scan the resulting address, after comparing it with the scope.
+    - **Always a timeout and a capped number of workers**; stay gentle with shared targets such as
+      `scanme.nmap.org`.
+    - **Scan yourself regularly** from the outside and compare with an allow-list: any newly opened port
+      must fail the pipeline or raise an alert.
+    - **Close what is not needed** and put databases and admin interfaces behind a VPN or a bastion: the
+      best scan result is a short list.
+    - **For a full audit, use Nmap** (`nmap -sV -p- target`) and keep the reports.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez `local_services.py`, un script qui scanne **votre propre machine** (`127.0.0.1`), ports 1 à
+      1024, et affiche pour chaque port ouvert le nom du service habituel.
+
+      Contraintes :
+
+      1. utilisez `ThreadPoolExecutor` avec la méthode `map()` (au lieu de `submit()`), 100 workers et un
+         délai de 0,5 seconde ;
+      2. obtenez le nom du service avec `socket.getservbyport(port, "tcp")`, qui lève `OSError` quand le
+         port n'a pas de nom connu : affichez alors `unknown` ;
+      3. terminez par le nombre de ports ouverts.
+
+      Pour avoir quelque chose à trouver, lancez d'abord `python3 -m http.server 8000 --bind 127.0.0.1`
+      dans un autre terminal et ajoutez le port 8000 à la liste scannée.
+    en: |
+      Write `local_services.py`, a script that scans **your own machine** (`127.0.0.1`), ports 1 to 1024,
+      and prints the usual service name for each open port.
+
+      Constraints:
+
+      1. use `ThreadPoolExecutor` with the `map()` method (instead of `submit()`), 100 workers and a
+         0.5 second timeout;
+      2. get the service name with `socket.getservbyport(port, "tcp")`, which raises `OSError` when the
+         port has no known name: print `unknown` in that case;
+      3. end with the number of open ports.
+
+      To have something to find, first run `python3 -m http.server 8000 --bind 127.0.0.1` in another
+      terminal and add port 8000 to the scanned list.
+  solution:
+    file: local_services.py
+    lang: python
+    code: |
+      import socket
+      from concurrent.futures import ThreadPoolExecutor
+
+      TARGET = "127.0.0.1"          # your own machine only
+      TIMEOUT = 0.5
+      PORTS = list(range(1, 1025)) + [8000]
+
+
+      def is_open(port: int) -> bool:
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+              sock.settimeout(TIMEOUT)
+              return sock.connect_ex((TARGET, port)) == 0
+
+
+      def service_name(port: int) -> str:
+          try:
+              return socket.getservbyport(port, "tcp")
+          except OSError:           # no entry for this port in the services database
+              return "unknown"
+
+
+      with ThreadPoolExecutor(max_workers=100) as pool:
+          # map() calls is_open(port) for every port and yields results in the SAME order
+          results = list(pool.map(is_open, PORTS))
+
+      open_ports = [port for port, opened in zip(PORTS, results) if opened]
+      for port in open_ports:
+          print(f"{port:>5}/tcp  {service_name(port)}")
+      print(f"{len(open_ports)} open port(s) on {TARGET}")
+    note:
+      fr: "`pool.map()` est plus concis que `submit()` quand la fonction ne prend qu'un argument, et il conserve l'ordre des ports. `zip()` associe ensuite chaque port à son résultat."
+      en: "`pool.map()` is more concise than `submit()` when the function takes a single argument, and it preserves the order of the ports. `zip()` then pairs each port with its result."
+
+quiz:
+  - q:
+      fr: "Que renvoie `connect_ex()` quand le port est ouvert ?"
+      en: "What does `connect_ex()` return when the port is open?"
+    options:
+      fr: ["True", "1", "0", "Une exception"]
+      en: ["True", "1", "0", "An exception"]
+    answer: 2
+    why:
+      fr: "`connect_ex()` renvoie un code d'erreur du système : `0` signifie « aucune erreur », donc connexion établie."
+      en: "`connect_ex()` returns an operating system error code: `0` means \"no error\", so the connection was established."
+  - q:
+      fr: "Comment un scan « connect » reconnaît-il un port filtré par un pare-feu ?"
+      en: "How does a \"connect\" scan recognise a port filtered by a firewall?"
+    options:
+      fr:
+        - "Il ne reçoit aucune réponse avant le délai d'expiration"
+        - "Il reçoit un paquet RST"
+        - "Il reçoit un SYN/ACK"
+        - "Il reçoit la bannière du pare-feu"
+      en:
+        - "It receives no answer before the timeout"
+        - "It receives an RST packet"
+        - "It receives a SYN/ACK"
+        - "It receives the firewall's banner"
+    answer: 0
+    why:
+      fr: "Un pare-feu qui jette les paquets ne répond rien : seul le délai d'expiration permet de conclure. RST indique un port fermé, SYN/ACK un port ouvert."
+      en: "A firewall that drops packets answers nothing: only the timeout lets you conclude. RST means a closed port, SYN/ACK an open port."
+  - q:
+      fr: "À quoi sert `max_workers` dans `ThreadPoolExecutor` ?"
+      en: "What is `max_workers` for in `ThreadPoolExecutor`?"
+    options:
+      fr:
+        - "À fixer le délai d'expiration de chaque connexion"
+        - "À plafonner le nombre de tâches exécutées en même temps"
+        - "À choisir le nombre de ports à scanner"
+        - "À chiffrer les connexions"
+      en:
+        - "To set the timeout of each connection"
+        - "To cap the number of tasks running at the same time"
+        - "To choose the number of ports to scan"
+        - "To encrypt the connections"
+    answer: 1
+    why:
+      fr: "Le pool ne fait jamais tourner plus de `max_workers` threads à la fois, ce qui protège à la fois votre machine et la cible."
+      en: "The pool never runs more than `max_workers` threads at once, which protects both your machine and the target."
+  - q:
+      fr: "Pourquoi le script complet compare-t-il l'adresse résolue à `AUTHORISED_SCOPE` ?"
+      en: "Why does the complete script compare the resolved address with `AUTHORISED_SCOPE`?"
+    options:
+      fr:
+        - "Pour accélérer la résolution DNS"
+        - "Pour éviter les ports filtrés"
+        - "Pour contourner le pare-feu de la cible"
+        - "Pour refuser toute cible que l'on n'est pas autorisé à tester"
+      en:
+        - "To speed up DNS resolution"
+        - "To avoid filtered ports"
+        - "To bypass the target's firewall"
+        - "To refuse any target one is not authorised to test"
+    answer: 3
+    why:
+      fr: "Le périmètre autorisé est inscrit dans l'outil : une erreur de saisie ou un nom DNS inattendu ne peut pas diriger le scan vers un tiers."
+      en: "The authorised scope is written into the tool: a typo or an unexpected DNS name cannot point the scan at a third party."
+  - q:
+      fr: "Dans les journaux d'un pare-feu, quelle est la signature typique d'un scan de ports ?"
+      en: "In firewall logs, what is the typical signature of a port scan?"
+    options:
+      fr:
+        - "Beaucoup de sources différentes vers un seul port"
+        - "Une seule connexion très longue"
+        - "Une même source qui touche de nombreux ports différents en peu de temps"
+        - "Des paquets venant uniquement de 127.0.0.1"
+      en:
+        - "Many different sources hitting a single port"
+        - "A single very long connection"
+        - "One source hitting many different ports in a short time"
+        - "Packets coming only from 127.0.0.1"
+    answer: 2
+    why:
+      fr: "Une source, beaucoup de ports : c'est le balayage. Beaucoup de sources vers un seul port évoque plutôt du trafic légitime ou une attaque distribuée."
+      en: "One source, many ports: that is the sweep. Many sources to a single port rather suggests legitimate traffic or a distributed attack."

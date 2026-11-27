@@ -1,0 +1,799 @@
+description:
+  fr: "Questions d'entretien 61 à 80 : Docker, sécurité des images, objets Kubernetes, RBAC, NetworkPolicy et Pod Security, avec un Dockerfile et un manifeste à corriger en direct."
+  en: "Interview questions 61 to 80: Docker, image security, Kubernetes objects, RBAC, NetworkPolicy and Pod Security, with a Dockerfile and a manifest to fix live."
+duration: 50
+
+intro:
+  fr: |
+    Presque toutes les offres DevSecOps mentionnent **Docker** et **Kubernetes**. Un conteneur ressemble
+    à un appartement dans un immeuble : chaque locataire a ses murs, mais tout le monde partage les mêmes
+    fondations (le noyau Linux de l'hôte). Si un locataire obtient le passe-partout du gardien, il entre
+    chez tous les autres. La sécurité des conteneurs consiste à ne jamais distribuer ce passe-partout.
+
+    Cette leçon couvre les **questions 61 à 80** : les bases de la conteneurisation, la sécurité des
+    images, les objets Kubernetes, puis la sécurité du cluster (RBAC pour Role-Based Access Control,
+    NetworkPolicy, Pod Security Standards, contrôleurs d'admission).
+
+    Les deux exercices incontournables sont ici : « écrivez un Dockerfile sécurisé » et « qu'est-ce qui
+    ne va pas dans ce manifeste Kubernetes ? ». Entraînez-vous à les faire sans documentation, en
+    expliquant chaque ligne.
+  en: |
+    Almost every DevSecOps job offer mentions **Docker** and **Kubernetes**. A container is like a flat
+    in a building: each tenant has their own walls, but everybody shares the same foundations (the
+    host's Linux kernel). If one tenant gets the caretaker's master key, they can enter every other
+    flat. Container security is about never handing out that master key.
+
+    This lesson covers **questions 61 to 80**: containerisation basics, image security, Kubernetes
+    objects, then cluster security (RBAC for Role-Based Access Control, NetworkPolicy, Pod Security
+    Standards, admission controllers).
+
+    The two unavoidable exercises are here: "write a secure Dockerfile" and "what is wrong with this
+    Kubernetes manifest?". Practise doing them without documentation, explaining every line.
+
+sections:
+  - heading:
+      fr: "Questions 61 à 65 : les bases des conteneurs"
+      en: "Questions 61 to 65: container basics"
+    body:
+      fr: |
+        **Q61. Différence entre un conteneur et une machine virtuelle ?** *(junior)*
+
+        | | Machine virtuelle | Conteneur |
+        |---|---|---|
+        | Isolation | Matérielle, par un hyperviseur | Par le noyau de l'hôte (namespaces, cgroups) |
+        | Système | Un noyau complet par VM | Noyau **partagé** avec l'hôte |
+        | Démarrage | Dizaines de secondes | Moins d'une seconde |
+        | Frontière de sécurité | Forte | Plus faible : une faille du noyau touche tout le monde |
+
+        **Q62. Quels mécanismes du noyau isolent un conteneur ?** *(confirmé)*
+
+        Les **namespaces** limitent ce que le processus **voit** (PID, réseau, montages, utilisateurs,
+        nom d'hôte, IPC). Les **cgroups** limitent ce qu'il **consomme** (CPU, mémoire, nombre de
+        processus). S'y ajoutent les **capabilities** (découpage des droits de root), **seccomp**
+        (filtrage des appels système) et AppArmor ou SELinux. Un conteneur n'est donc qu'un processus
+        Linux avec des restrictions.
+
+        **Q63. Différence entre une image et un conteneur ?** *(junior)*
+
+        Une **image** est un modèle immuable, empilement de couches en lecture seule produites par les
+        instructions du Dockerfile. Un **conteneur** est une instance en cours d'exécution de cette image,
+        avec une fine couche inscriptible par-dessus. Conséquence pour la sécurité : un fichier supprimé
+        dans une couche ultérieure reste présent dans la couche précédente, donc un secret copié puis
+        effacé est toujours récupérable.
+
+        **Q64. Pourquoi ne pas exécuter un conteneur en root ?** *(junior)*
+
+        Par défaut, root dans le conteneur est le **même UID 0** que root sur l'hôte. Si l'attaquant
+        s'échappe (faille du runtime, volume mal monté, conteneur privilégié), il est root sur la
+        machine. On crée donc un utilisateur dédié (`USER` dans le Dockerfile), on impose `runAsNonRoot`
+        dans Kubernetes, et l'on peut aller plus loin avec le mode rootless ou les user namespaces.
+
+        **Q65. Pourquoi `--privileged` et le montage de `/var/run/docker.sock` sont-ils dangereux ?** *(confirmé)*
+
+        `--privileged` redonne toutes les capabilities et l'accès aux périphériques de l'hôte :
+        l'isolation disparaît. Monter la socket Docker donne le contrôle du démon, donc la possibilité de
+        lancer un conteneur qui monte `/` de l'hôte : c'est équivalent à un accès root. Pour construire
+        des images en CI sans cette socket, on utilise des outils sans démon comme BuildKit en mode
+        rootless ou Buildah.
+      en: |
+        **Q61. Difference between a container and a virtual machine?** *(junior)*
+
+        | | Virtual machine | Container |
+        |---|---|---|
+        | Isolation | Hardware-level, by a hypervisor | By the host kernel (namespaces, cgroups) |
+        | System | A full kernel per VM | Kernel **shared** with the host |
+        | Start-up | Tens of seconds | Under a second |
+        | Security boundary | Strong | Weaker: a kernel flaw affects everyone |
+
+        **Q62. Which kernel mechanisms isolate a container?** *(mid)*
+
+        **Namespaces** limit what the process can **see** (PID, network, mounts, users, hostname, IPC).
+        **Cgroups** limit what it can **consume** (CPU, memory, number of processes). On top come
+        **capabilities** (root's rights split into pieces), **seccomp** (system call filtering) and
+        AppArmor or SELinux. A container is therefore just a Linux process with restrictions.
+
+        **Q63. Difference between an image and a container?** *(junior)*
+
+        An **image** is an immutable template, a stack of read-only layers produced by the Dockerfile
+        instructions. A **container** is a running instance of that image, with a thin writable layer on
+        top. Security consequence: a file deleted in a later layer is still present in the earlier one, so
+        a secret copied then removed can still be recovered.
+
+        **Q64. Why not run a container as root?** *(junior)*
+
+        By default, root in the container is the **same UID 0** as root on the host. If the attacker
+        escapes (runtime flaw, badly mounted volume, privileged container), they are root on the machine.
+        So you create a dedicated user (`USER` in the Dockerfile), enforce `runAsNonRoot` in Kubernetes,
+        and can go further with rootless mode or user namespaces.
+
+        **Q65. Why are `--privileged` and mounting `/var/run/docker.sock` dangerous?** *(mid)*
+
+        `--privileged` gives back all capabilities and access to the host's devices: isolation is gone.
+        Mounting the Docker socket gives control of the daemon, hence the ability to start a container
+        that mounts the host's `/`: it is equivalent to root access. To build images in CI without that
+        socket, use daemonless tools such as rootless BuildKit or Buildah.
+  - heading:
+      fr: "Questions 66 à 70 : sécurité des images"
+      en: "Questions 66 to 70: image security"
+    body:
+      fr: |
+        **Q66. Comment réduisez-vous la surface d'attaque d'une image ?** *(confirmé)*
+
+        Image de base **minimale** (variante `slim`, Alpine, distroless ou images durcies), **build
+        multi-étapes** pour que les compilateurs et outils de build ne finissent pas dans l'image finale,
+        aucun outil de débogage ni shell si possible, un seul processus, utilisateur non root, et un
+        fichier `.dockerignore` pour ne pas copier `.git` ou `.env`. Moins de paquets signifie moins de
+        CVE et moins d'outils pour l'attaquant.
+
+        **Q67. Quand et comment scannez-vous les images ?** *(confirmé)*
+
+        À trois moments : au **build** dans le pipeline (Trivy, Grype) avec blocage sur les
+        vulnérabilités critiques corrigeables ; dans le **registre**, en continu, car de nouvelles CVE
+        apparaissent sur des images déjà construites ; et à l'**exécution**, pour savoir quelles images
+        vulnérables tournent réellement. Le scan couvre les paquets du système, les dépendances
+        applicatives, les secrets et la configuration.
+
+        **Q68. Comment passer un secret pendant un build Docker ?** *(senior)*
+
+        Ni `ARG` ni `ENV` : leurs valeurs restent visibles dans `docker history` et dans les métadonnées
+        de l'image. On utilise les **secrets BuildKit** :
+        `RUN --mount=type=secret,id=npm_token ...` avec `docker build --secret id=npm_token,src=...`. Le
+        secret est monté le temps de l'instruction et n'est écrit dans aucune couche. À l'exécution, les
+        secrets viennent de l'orchestrateur ou d'un coffre, jamais de l'image.
+
+        **Q69. Pourquoi éviter le tag `latest` ? Tag ou digest ?** *(confirmé)*
+
+        Un tag est un pointeur **mutable** : `latest`, ou même `1.2`, peut désigner demain une autre image,
+        ce qui casse la reproductibilité et permet une substitution malveillante. Un **digest**
+        (`image@sha256:...`) identifie le contenu exact, de façon immuable. On construit avec un tag
+        lisible, on déploie par digest, et l'on met à jour les digests automatiquement (Renovate,
+        Dependabot).
+
+        **Q70. Comment empêcher le déploiement d'images non approuvées ?** *(senior)*
+
+        Par un **contrôle d'admission** dans le cluster : une politique (Kyverno, Gatekeeper, policy
+        controller de Sigstore) n'accepte que les images provenant du registre interne, **signées** par
+        l'identité du pipeline (Cosign) et référencées par digest. On peut aussi exiger une attestation
+        de scan récent. L'image qui contourne le pipeline est refusée par l'API.
+      en: |
+        **Q66. How do you reduce the attack surface of an image?** *(mid)*
+
+        A **minimal** base image (`slim` variant, Alpine, distroless or hardened images), a **multi-stage
+        build** so that compilers and build tools do not end up in the final image, no debugging tools and
+        no shell if possible, a single process, a non-root user, and a `.dockerignore` file so `.git` or
+        `.env` are not copied. Fewer packages means fewer CVEs and fewer tools for the attacker.
+
+        **Q67. When and how do you scan images?** *(mid)*
+
+        At three moments: at **build** time in the pipeline (Trivy, Grype), blocking on fixable critical
+        vulnerabilities; in the **registry**, continuously, because new CVEs appear on images that are
+        already built; and at **runtime**, to know which vulnerable images are actually running. The scan
+        covers OS packages, application dependencies, secrets and configuration.
+
+        **Q68. How do you pass a secret during a Docker build?** *(senior)*
+
+        Neither `ARG` nor `ENV`: their values remain visible in `docker history` and in the image
+        metadata. Use **BuildKit secrets**: `RUN --mount=type=secret,id=npm_token ...` with
+        `docker build --secret id=npm_token,src=...`. The secret is mounted for the duration of the
+        instruction and written to no layer. At runtime, secrets come from the orchestrator or a vault,
+        never from the image.
+
+        **Q69. Why avoid the `latest` tag? Tag or digest?** *(mid)*
+
+        A tag is a **mutable** pointer: `latest`, or even `1.2`, may point to another image tomorrow,
+        which breaks reproducibility and allows a malicious substitution. A **digest**
+        (`image@sha256:...`) identifies the exact content, immutably. You build with a readable tag,
+        deploy by digest, and update digests automatically (Renovate, Dependabot).
+
+        **Q70. How do you prevent unapproved images from being deployed?** *(senior)*
+
+        Through **admission control** in the cluster: a policy (Kyverno, Gatekeeper, Sigstore policy
+        controller) only accepts images coming from the internal registry, **signed** by the pipeline's
+        identity (Cosign) and referenced by digest. You can also require an attestation of a recent scan.
+        An image that bypasses the pipeline is rejected by the API.
+  - heading:
+      fr: "Questions 71 à 75 : les objets Kubernetes"
+      en: "Questions 71 to 75: Kubernetes objects"
+    body:
+      fr: |
+        **Q71. Pod, Deployment, Service : qui fait quoi ?** *(junior)*
+
+        Le **Pod** est la plus petite unité : un ou plusieurs conteneurs partageant réseau et volumes. Le
+        **Deployment** gère un ensemble de Pods identiques : nombre de réplicas, mises à jour
+        progressives, retour arrière. Le **Service** fournit une adresse et un nom DNS stables devant des
+        Pods éphémères, et répartit le trafic. L'**Ingress** (ou la Gateway API) expose ensuite des
+        routes HTTP vers l'extérieur.
+
+        **Q72. Quels sont les composants du plan de contrôle ?** *(confirmé)*
+
+        **kube-apiserver** : la porte d'entrée unique, qui authentifie, autorise et valide. **etcd** : la
+        base clé-valeur qui stocke tout l'état du cluster, y compris les Secrets. **kube-scheduler** :
+        choisit le nœud de chaque Pod. **kube-controller-manager** : les boucles de réconciliation. Sur
+        chaque nœud : **kubelet**, le runtime de conteneurs et kube-proxy. Qui lit etcd ou compromet
+        l'API server possède le cluster.
+
+        **Q73. Un Secret Kubernetes est-il chiffré ?** *(confirmé)*
+
+        Non par défaut : il est seulement encodé en **base64**, et stocké en clair dans etcd. Il faut
+        activer le **chiffrement au repos** (`EncryptionConfiguration`, idéalement avec un fournisseur
+        KMS), limiter par RBAC qui peut lire les Secrets, et ne jamais les commiter tels quels dans Git.
+        Pour le GitOps : External Secrets Operator, Sealed Secrets ou SOPS, ou un pilote CSI qui monte
+        les secrets depuis un coffre.
+
+        **Q74. Différence entre liveness, readiness et startup probes ?** *(junior)*
+
+        La **liveness** répond à « le conteneur est-il bloqué ? » : en cas d'échec, le kubelet le
+        redémarre. La **readiness** répond à « peut-il recevoir du trafic ? » : en cas d'échec, le Pod
+        est retiré des points de terminaison du Service, sans redémarrage. La **startup** protège les
+        applications lentes à démarrer en suspendant les deux autres jusqu'à sa réussite.
+
+        **Q75. Pourquoi définir des requests et des limits ?** *(confirmé)*
+
+        Les **requests** servent au scheduler pour placer le Pod ; les **limits** plafonnent la
+        consommation. Sans limite, un conteneur compromis ou défaillant peut épuiser le nœud et faire
+        tomber ses voisins : c'est un déni de service. On complète avec des `ResourceQuota` et
+        `LimitRange` par namespace. Dépasser la limite mémoire tue le conteneur (OOMKilled) ; dépasser la
+        limite CPU le ralentit.
+      en: |
+        **Q71. Pod, Deployment, Service: who does what?** *(junior)*
+
+        The **Pod** is the smallest unit: one or more containers sharing network and volumes. The
+        **Deployment** manages a set of identical Pods: number of replicas, rolling updates, rollback.
+        The **Service** provides a stable address and DNS name in front of ephemeral Pods, and load
+        balances traffic. The **Ingress** (or the Gateway API) then exposes HTTP routes to the outside.
+
+        **Q72. What are the control plane components?** *(mid)*
+
+        **kube-apiserver**: the single front door, which authenticates, authorises and validates.
+        **etcd**: the key-value store holding the whole cluster state, Secrets included.
+        **kube-scheduler**: picks the node for each Pod. **kube-controller-manager**: the reconciliation
+        loops. On every node: **kubelet**, the container runtime and kube-proxy. Whoever reads etcd or
+        compromises the API server owns the cluster.
+
+        **Q73. Is a Kubernetes Secret encrypted?** *(mid)*
+
+        Not by default: it is only **base64**-encoded, and stored in clear text in etcd. You must enable
+        **encryption at rest** (`EncryptionConfiguration`, ideally with a KMS provider), restrict through
+        RBAC who can read Secrets, and never commit them as-is to Git. For GitOps: External Secrets
+        Operator, Sealed Secrets or SOPS, or a CSI driver mounting secrets from a vault.
+
+        **Q74. Difference between liveness, readiness and startup probes?** *(junior)*
+
+        **Liveness** answers "is the container stuck?": on failure the kubelet restarts it. **Readiness**
+        answers "can it receive traffic?": on failure the Pod is removed from the Service endpoints,
+        without a restart. **Startup** protects slow-starting applications by holding back the other two
+        until it succeeds.
+
+        **Q75. Why set requests and limits?** *(mid)*
+
+        **Requests** are used by the scheduler to place the Pod; **limits** cap consumption. Without a
+        limit, a compromised or faulty container can exhaust the node and take its neighbours down: a
+        denial of service. Complete them with per-namespace `ResourceQuota` and `LimitRange`. Exceeding
+        the memory limit kills the container (OOMKilled); exceeding the CPU limit throttles it.
+  - heading:
+      fr: "Questions 76 à 80 : sécuriser le cluster"
+      en: "Questions 76 to 80: securing the cluster"
+    body:
+      fr: |
+        **Q76. Comment fonctionne le RBAC dans Kubernetes ?** *(confirmé)*
+
+        Un **Role** (limité à un namespace) ou un **ClusterRole** (tout le cluster) liste des verbes
+        (`get`, `list`, `create`...) autorisés sur des ressources. Un **RoleBinding** ou
+        **ClusterRoleBinding** attribue ce rôle à un sujet : utilisateur, groupe ou ServiceAccount. Tout
+        est additif, il n'existe pas de règle de refus. Je vérifie avec `kubectl auth can-i`, j'évite
+        `cluster-admin`, les jokers `*` et l'accès aux Secrets, et chaque application a son propre
+        ServiceAccount.
+
+        **Q77. Par défaut, deux Pods de namespaces différents peuvent-ils communiquer ?** *(confirmé)*
+
+        Oui : sans NetworkPolicy, **tout Pod peut joindre tout Pod**. On commence par une politique
+        **default deny** par namespace, puis on ouvre les flux nécessaires un par un (entrées et
+        sorties, sans oublier le DNS). Attention : les NetworkPolicy ne sont appliquées que si le plugin
+        réseau (CNI) les prend en charge, comme Calico ou Cilium.
+
+        **Q78. Que sont les Pod Security Standards ?** *(confirmé)*
+
+        Trois niveaux de politique définis par Kubernetes : **privileged** (aucune restriction),
+        **baseline** (bloque les élévations connues : conteneurs privilégiés, `hostNetwork`, `hostPath`)
+        et **restricted** (bonnes pratiques : non root, aucune capability, seccomp). Ils sont appliqués
+        par le contrôleur intégré **Pod Security Admission**, au moyen de labels sur le namespace. Ils
+        remplacent les PodSecurityPolicy, supprimées dans Kubernetes 1.25.
+
+        **Q79. Qu'est-ce qu'un contrôleur d'admission ?** *(senior)*
+
+        Un composant qui intercepte les requêtes à l'API server **après** l'authentification et
+        l'autorisation, mais **avant** l'écriture dans etcd. Un contrôleur *mutating* modifie l'objet
+        (ajout de valeurs par défaut, d'un sidecar) ; un contrôleur *validating* l'accepte ou le refuse.
+        C'est là que vivent Kyverno, Gatekeeper et les `ValidatingAdmissionPolicy` écrites en CEL :
+        interdire `latest`, exiger des limites, vérifier les signatures.
+
+        **Q80. Un Pod semble compromis en production. Que faites-vous ?** *(senior)*
+
+        Je ne le supprime pas tout de suite : on perdrait les preuves et le Deployment le recréerait à
+        l'identique. Je l'**isole** : changement de label pour le sortir du Service, NetworkPolicy qui
+        coupe ses flux, `kubectl cordon` du nœud. Je **collecte** : journaux, description du Pod,
+        événements, état des processus via un conteneur éphémère (`kubectl debug`). Puis je révoque le
+        jeton du ServiceAccount et les secrets montés, je cherche le vecteur d'entrée (image, faille
+        applicative, RBAC), je corrige et redéploie, et je vérifie les mouvements latéraux dans les
+        journaux d'audit.
+      en: |
+        **Q76. How does RBAC work in Kubernetes?** *(mid)*
+
+        A **Role** (scoped to a namespace) or a **ClusterRole** (cluster-wide) lists verbs (`get`,
+        `list`, `create`...) allowed on resources. A **RoleBinding** or **ClusterRoleBinding** grants
+        that role to a subject: user, group or ServiceAccount. Everything is additive; there are no deny
+        rules. I check with `kubectl auth can-i`, avoid `cluster-admin`, `*` wildcards and access to
+        Secrets, and each application has its own ServiceAccount.
+
+        **Q77. By default, can two Pods in different namespaces talk to each other?** *(mid)*
+
+        Yes: without a NetworkPolicy, **any Pod can reach any Pod**. Start with a **default deny** policy
+        per namespace, then open the required flows one by one (ingress and egress, not forgetting DNS).
+        Beware: NetworkPolicies are only enforced if the network plugin (CNI) supports them, like Calico
+        or Cilium.
+
+        **Q78. What are the Pod Security Standards?** *(mid)*
+
+        Three policy levels defined by Kubernetes: **privileged** (no restriction), **baseline** (blocks
+        known escalations: privileged containers, `hostNetwork`, `hostPath`) and **restricted** (best
+        practice: non-root, no capabilities, seccomp). They are enforced by the built-in **Pod Security
+        Admission** controller, through labels on the namespace. They replace PodSecurityPolicy, removed
+        in Kubernetes 1.25.
+
+        **Q79. What is an admission controller?** *(senior)*
+
+        A component that intercepts requests to the API server **after** authentication and
+        authorisation, but **before** the write to etcd. A *mutating* controller changes the object (adds
+        defaults, a sidecar); a *validating* controller accepts or rejects it. This is where Kyverno,
+        Gatekeeper and CEL-based `ValidatingAdmissionPolicy` live: forbid `latest`, require limits, verify
+        signatures.
+
+        **Q80. A Pod looks compromised in production. What do you do?** *(senior)*
+
+        I do not delete it right away: the evidence would be lost and the Deployment would recreate an
+        identical one. I **isolate** it: change a label to take it out of the Service, a NetworkPolicy
+        cutting its traffic, `kubectl cordon` on the node. I **collect**: logs, Pod description, events,
+        process state through an ephemeral container (`kubectl debug`). Then I revoke the ServiceAccount
+        token and the mounted secrets, look for the entry vector (image, application flaw, RBAC), fix and
+        redeploy, and check for lateral movement in the audit logs.
+
+examples:
+  - title:
+      fr: "Question en direct : « Qu'est-ce qui ne va pas dans ce Dockerfile ? »"
+      en: "Live question: \"What is wrong with this Dockerfile?\""
+    file: Dockerfile
+    lang: dockerfile
+    kind: vulnerable
+    code: |
+      # Problem 1: mutable tag and a full image with hundreds of packages
+      FROM python:latest
+
+      # Problem 2: secret baked into the image, visible with "docker history"
+      ENV DB_PASSWORD=SuperSecret123!
+
+      # Problem 3: copies everything, including .git, .env and local keys
+      COPY . /app
+      WORKDIR /app
+
+      # Problem 4: unpinned dependencies, pip cache kept in the layer
+      RUN pip install flask requests
+
+      # Problem 5: debugging and network tools give an attacker a ready-made toolbox
+      RUN apt-get update && apt-get install -y curl vim netcat-openbsd openssh-server
+
+      # Problem 6: SSH inside a container
+      EXPOSE 22 8000
+
+      # Problem 7: no USER instruction -> the application runs as root
+      CMD python app.py
+    note:
+      fr: "Sept problèmes. Classez-les : secret dans l'image et exécution en root sont les plus graves ; l'image `latest`, la copie de tout le contexte et les outils inutiles élargissent la surface d'attaque."
+      en: "Seven problems. Rank them: the secret in the image and running as root are the most serious; the `latest` image, copying the whole context and useless tools widen the attack surface."
+
+  - title:
+      fr: "Question en direct : « Écrivez un Dockerfile sécurisé »"
+      en: "Live question: \"Write a secure Dockerfile\""
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # syntax=docker/dockerfile:1
+
+      # ---- Build stage: tools needed to install dependencies stay here ----
+      FROM python:3.13-slim AS build
+      WORKDIR /app
+      # Copy only the dependency list first: better layer caching, nothing unexpected copied
+      COPY requirements.txt .
+      # requirements.txt pins exact versions; --no-cache-dir keeps the layer small
+      RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+      # ---- Runtime stage: minimal image, no build tools ----
+      FROM python:3.13-slim
+      # Dedicated unprivileged user with a fixed numeric UID
+      RUN groupadd --system --gid 10001 app \
+          && useradd --system --uid 10001 --gid app --no-create-home app
+      WORKDIR /app
+      COPY --from=build /install /usr/local
+      # Copy only what the application needs, owned by the unprivileged user
+      COPY --chown=app:app app.py .
+
+      # Numeric UID so Kubernetes can verify runAsNonRoot
+      USER 10001
+      # Unprivileged port (above 1024)
+      EXPOSE 8000
+      HEALTHCHECK --interval=30s --timeout=3s \
+        CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      # Exec form: the app is PID 1 and receives SIGTERM directly
+      CMD ["python", "app.py"]
+    output: |
+      $ docker build -t app:1.0.0 .
+      $ docker run --rm app:1.0.0 id
+      uid=10001(app) gid=10001(app) groups=10001(app)
+    note:
+      fr: "Les points à citer à voix haute : image de base versionnée et minimale, build multi-étapes, aucun secret, utilisateur non root avec UID numérique, forme exec pour `CMD`. Ajoutez un `.dockerignore` (`.git`, `.env`, `*.pem`) et, en production, l'épinglage de l'image de base par digest."
+      en: "The points to say out loud: versioned minimal base image, multi-stage build, no secret, non-root user with a numeric UID, exec form for `CMD`. Add a `.dockerignore` (`.git`, `.env`, `*.pem`) and, in production, pin the base image by digest."
+
+  - title:
+      fr: "Question en direct : « Qu'est-ce qui ne va pas dans ce manifeste Kubernetes ? »"
+      en: "Live question: \"What is wrong with this Kubernetes manifest?\""
+    file: deployment-vulnerable.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+        namespace: default # Problem 1: everything in the default namespace
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: api
+        template:
+          metadata:
+            labels:
+              app: api
+          spec:
+            hostNetwork: true # Problem 2: shares the node's network stack
+            containers:
+              - name: api
+                image: registry.example.com/api:latest # Problem 3: mutable tag
+                securityContext:
+                  privileged: true # Problem 4: full access to the host
+                env:
+                  - name: DB_PASSWORD
+                    value: "SuperSecret123!" # Problem 5: secret in clear text in Git
+                volumeMounts:
+                  - name: docker-sock
+                    mountPath: /var/run/docker.sock
+                # Problem 7: no resources, no probes
+            volumes:
+              - name: docker-sock
+                hostPath:
+                  path: /var/run/docker.sock # Problem 6: control of the node's runtime
+    note:
+      fr: "`privileged: true`, `hostNetwork` et le montage de la socket du runtime donnent chacun un chemin vers root sur le nœud. Avec le niveau `baseline` des Pod Security Standards, ce manifeste serait refusé par l'API."
+      en: "`privileged: true`, `hostNetwork` and mounting the runtime socket each give a path to root on the node. With the `baseline` Pod Security Standards level, this manifest would be rejected by the API."
+
+  - title:
+      fr: "Le même Deployment, durci"
+      en: "The same Deployment, hardened"
+    file: deployment-secure.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+        namespace: shop
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: api
+        template:
+          metadata:
+            labels:
+              app: api
+          spec:
+            serviceAccountName: api
+            automountServiceAccountToken: false # the app does not call the Kubernetes API
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 10001
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: api
+                # Immutable reference: tag for humans, digest for the cluster (example digest)
+                image: registry.example.com/api:1.4.2@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+                ports:
+                  - containerPort: 8000
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]
+                env:
+                  - name: DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef: # value lives in a Secret, synced from a vault
+                        name: api-db
+                        key: password
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    memory: 256Mi
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8000
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8000
+                  initialDelaySeconds: 10
+                volumeMounts:
+                  - name: tmp
+                    mountPath: /tmp
+            volumes:
+              - name: tmp
+                emptyDir: {} # writable scratch space despite the read-only root filesystem
+    note:
+      fr: "Ce Pod respecte le niveau `restricted` : non root, pas d'élévation de privilèges, aucune capability, seccomp par défaut. Le système de fichiers en lecture seule empêche un attaquant de déposer ses outils ; `emptyDir` fournit le seul espace inscriptible."
+      en: "This Pod meets the `restricted` level: non-root, no privilege escalation, no capabilities, default seccomp. The read-only filesystem stops an attacker from dropping tools; `emptyDir` provides the only writable space."
+
+  - title:
+      fr: "Question en direct : « Isolez ce namespace avec des NetworkPolicy »"
+      en: "Live question: \"Isolate this namespace with NetworkPolicies\""
+    file: networkpolicy.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # 1. Default deny: selects every Pod of the namespace, allows nothing in or out
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-all
+        namespace: shop
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+          - Egress
+      ---
+      # 2. Then open only what is needed: the api Pods accept traffic from the web Pods on port 8000
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: api-allow-web
+        namespace: shop
+      spec:
+        podSelector:
+          matchLabels:
+            app: api
+        policyTypes:
+          - Ingress
+          - Egress
+        ingress:
+          - from:
+              - podSelector:
+                  matchLabels:
+                    app: web
+            ports:
+              - protocol: TCP
+                port: 8000
+        egress:
+          # DNS, otherwise the Pods cannot resolve service names any more
+          - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+            ports:
+              - protocol: UDP
+                port: 53
+              - protocol: TCP
+                port: 53
+    note:
+      fr: "`podSelector: {}` sélectionne tous les Pods du namespace. L'oubli classique après un default deny en sortie est le **DNS** : plus rien ne se résout. Le label `kubernetes.io/metadata.name` est posé automatiquement sur chaque namespace."
+      en: "`podSelector: {}` selects every Pod in the namespace. The classic omission after an egress default deny is **DNS**: nothing resolves any more. The `kubernetes.io/metadata.name` label is set automatically on every namespace."
+
+mistake:
+  fr: |
+    **Confondre « ça fonctionne dans Docker » et « c'est isolé ».**
+
+    Beaucoup de candidats présentent le conteneur comme une petite machine virtuelle étanche. Ce n'est
+    pas le cas : le noyau est partagé, root dans le conteneur est root sur l'hôte par défaut, et un
+    simple `privileged: true` supprime toute l'isolation. Dire « le conteneur est sécurisé parce qu'il
+    est isolé » est un signal d'alerte pour le recruteur.
+
+    Même piège côté Kubernetes : croire qu'un **namespace** isole le réseau (faux sans NetworkPolicy) ou
+    qu'un **Secret** est chiffré (faux : base64 par défaut).
+  en: |
+    **Confusing "it works in Docker" with "it is isolated".**
+
+    Many candidates describe a container as a small sealed virtual machine. It is not: the kernel is
+    shared, root in the container is root on the host by default, and a single `privileged: true` removes
+    all isolation. Saying "the container is secure because it is isolated" is a red flag for the
+    interviewer.
+
+    Same trap on the Kubernetes side: believing that a **namespace** isolates the network (false without
+    a NetworkPolicy) or that a **Secret** is encrypted (false: base64 by default).
+
+bestPractice:
+  fr: |
+    - **Récitez le `securityContext` de mémoire** : `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      `readOnlyRootFilesystem`, `capabilities.drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+    - **Raisonnez en couches** : image (build), admission (politiques), exécution (détection avec Falco
+      ou Tetragon), réseau (NetworkPolicy), identité (RBAC).
+    - **Connaissez les 4C** de la sécurité cloud native : Cloud, Cluster, Conteneur, Code.
+    - **Entraînez-vous sur un cluster local** (kind, minikube, k3d) : appliquez le manifeste vulnérable
+      dans un namespace labellisé `pod-security.kubernetes.io/enforce=restricted` et lisez le refus.
+    - **Vérifiez toujours** : `kubectl auth can-i`, `docker history`, `trivy image`. Une affirmation de
+      sécurité se prouve par une commande.
+  en: |
+    - **Recite the `securityContext` from memory**: `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      `readOnlyRootFilesystem`, `capabilities.drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+    - **Think in layers**: image (build), admission (policies), runtime (detection with Falco or
+      Tetragon), network (NetworkPolicy), identity (RBAC).
+    - **Know the 4Cs** of cloud native security: Cloud, Cluster, Container, Code.
+    - **Practise on a local cluster** (kind, minikube, k3d): apply the vulnerable manifest in a namespace
+      labelled `pod-security.kubernetes.io/enforce=restricted` and read the rejection.
+    - **Always verify**: `kubectl auth can-i`, `docker history`, `trivy image`. A security claim is
+      proven by a command.
+
+exercise:
+  statement:
+    fr: |
+      Question classique : « Donnez à l'application de supervision un accès en **lecture seule** aux Pods
+      du namespace `shop`, et rien d'autre. »
+
+      1. Créez un ServiceAccount `monitor` dans le namespace `shop`.
+      2. Créez un Role `pod-reader` autorisant `get`, `list` et `watch` sur les Pods et leurs journaux.
+      3. Liez le Role au ServiceAccount avec un RoleBinding.
+      4. Donnez les deux commandes `kubectl auth can-i` qui prouvent que `monitor` peut lister les Pods
+         mais ne peut pas lire les Secrets.
+    en: |
+      A classic question: "Give the monitoring application **read-only** access to the Pods of the
+      `shop` namespace, and nothing else."
+
+      1. Create a ServiceAccount `monitor` in the `shop` namespace.
+      2. Create a Role `pod-reader` allowing `get`, `list` and `watch` on Pods and their logs.
+      3. Bind the Role to the ServiceAccount with a RoleBinding.
+      4. Give the two `kubectl auth can-i` commands proving that `monitor` can list Pods but cannot read
+         Secrets.
+  solution:
+    file: rbac-pod-reader.yaml
+    lang: yaml
+    code: |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: monitor
+        namespace: shop
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: pod-reader
+        namespace: shop
+      rules:
+        - apiGroups: [""] # "" is the core API group (pods, services, secrets...)
+          resources: ["pods", "pods/log"]
+          verbs: ["get", "list", "watch"] # read-only verbs, no wildcard
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: monitor-pod-reader
+        namespace: shop
+      subjects:
+        - kind: ServiceAccount
+          name: monitor
+          namespace: shop
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: pod-reader
+      # Verification:
+      #   kubectl auth can-i list pods   -n shop --as=system:serviceaccount:shop:monitor   -> yes
+      #   kubectl auth can-i get secrets -n shop --as=system:serviceaccount:shop:monitor   -> no
+    note:
+      fr: "Un Role et un RoleBinding (et non un ClusterRole lié par ClusterRoleBinding) limitent l'accès au seul namespace `shop`. Le sujet d'un ServiceAccount s'écrit `system:serviceaccount:<namespace>:<nom>`."
+      en: "A Role and a RoleBinding (not a ClusterRole bound with a ClusterRoleBinding) restrict access to the `shop` namespace only. A ServiceAccount subject is written `system:serviceaccount:<namespace>:<name>`."
+
+quiz:
+  - q:
+      fr: "Quels mécanismes du noyau Linux limitent ce qu'un conteneur peut **voir** et **consommer** ?"
+      en: "Which Linux kernel mechanisms limit what a container can **see** and **consume**?"
+    options:
+      fr:
+        - "Hyperviseur et BIOS"
+        - "iptables et systemd"
+        - "Namespaces et cgroups"
+        - "SSH et sudo"
+      en:
+        - "Hypervisor and BIOS"
+        - "iptables and systemd"
+        - "Namespaces and cgroups"
+        - "SSH and sudo"
+    answer: 2
+    why:
+      fr: "Les namespaces isolent la vue (PID, réseau, montages...), les cgroups limitent les ressources (CPU, mémoire)."
+      en: "Namespaces isolate the view (PID, network, mounts...), cgroups limit resources (CPU, memory)."
+  - q:
+      fr: "Comment un Secret Kubernetes est-il stocké par défaut ?"
+      en: "How is a Kubernetes Secret stored by default?"
+    options:
+      fr:
+        - "Chiffré en AES-256 dans etcd"
+        - "Encodé en base64, sans chiffrement, dans etcd"
+        - "Haché avec SHA-256"
+        - "Dans un coffre externe géré par le cloud"
+      en:
+        - "AES-256 encrypted in etcd"
+        - "Base64-encoded, unencrypted, in etcd"
+        - "Hashed with SHA-256"
+        - "In an external vault managed by the cloud"
+    answer: 1
+    why:
+      fr: "Base64 est un encodage, pas un chiffrement. Il faut activer le chiffrement au repos et restreindre l'accès par RBAC."
+      en: "Base64 is an encoding, not encryption. You must enable encryption at rest and restrict access with RBAC."
+  - q:
+      fr: "Quelle instruction permet de passer un secret pendant un build sans le laisser dans une couche ?"
+      en: "Which instruction passes a secret during a build without leaving it in a layer?"
+    options:
+      fr:
+        - "ARG NPM_TOKEN"
+        - "ENV NPM_TOKEN=valeur"
+        - "COPY .env /app/.env suivi de RUN rm /app/.env"
+        - "RUN --mount=type=secret,id=npm_token"
+      en:
+        - "ARG NPM_TOKEN"
+        - "ENV NPM_TOKEN=value"
+        - "COPY .env /app/.env followed by RUN rm /app/.env"
+        - "RUN --mount=type=secret,id=npm_token"
+    answer: 3
+    why:
+      fr: "Le secret BuildKit n'est monté que pendant l'instruction. `ARG` et `ENV` restent visibles dans l'historique, et un fichier supprimé subsiste dans la couche précédente."
+      en: "The BuildKit secret is only mounted during the instruction. `ARG` and `ENV` stay visible in the history, and a deleted file remains in the previous layer."
+  - q:
+      fr: "Que fait une NetworkPolicy avec `podSelector: {}` et `policyTypes: [Ingress, Egress]` sans aucune règle ?"
+      en: "What does a NetworkPolicy with `podSelector: {}` and `policyTypes: [Ingress, Egress]` and no rules do?"
+    options:
+      fr:
+        - "Elle bloque tout le trafic entrant et sortant de tous les Pods du namespace"
+        - "Elle autorise tout le trafic dans le namespace"
+        - "Elle ne s'applique à aucun Pod"
+        - "Elle supprime les Pods sans label"
+      en:
+        - "It blocks all inbound and outbound traffic for every Pod in the namespace"
+        - "It allows all traffic in the namespace"
+        - "It applies to no Pod"
+        - "It deletes Pods that have no label"
+    answer: 0
+    why:
+      fr: "Le sélecteur vide cible tous les Pods ; sans règle `ingress` ni `egress`, rien n'est autorisé : c'est le « default deny »."
+      en: "The empty selector targets all Pods; with no `ingress` or `egress` rule, nothing is allowed: this is the \"default deny\"."
+  - q:
+      fr: "Quel mécanisme intégré applique les Pod Security Standards depuis la suppression des PodSecurityPolicy ?"
+      en: "Which built-in mechanism enforces the Pod Security Standards since PodSecurityPolicy was removed?"
+    options:
+      fr:
+        - "kube-proxy"
+        - "Le kube-scheduler"
+        - "Pod Security Admission, par des labels sur le namespace"
+        - "Les ResourceQuota"
+      en:
+        - "kube-proxy"
+        - "The kube-scheduler"
+        - "Pod Security Admission, through labels on the namespace"
+        - "ResourceQuota objects"
+    answer: 2
+    why:
+      fr: "Pod Security Admission lit des labels comme `pod-security.kubernetes.io/enforce=restricted` et refuse les Pods non conformes."
+      en: "Pod Security Admission reads labels such as `pod-security.kubernetes.io/enforce=restricted` and rejects non-compliant Pods."

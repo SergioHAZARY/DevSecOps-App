@@ -1,0 +1,593 @@
+description:
+  fr: "Durcir un compte AWS : compte racine, S3 privé et chiffré, CloudTrail multi-région, GuardDuty, Security Hub et IMDSv2, avec l'AWS CLI et Terraform."
+  en: "Harden an AWS account: root account, private and encrypted S3, multi-region CloudTrail, GuardDuty, Security Hub and IMDSv2, with the AWS CLI and Terraform."
+duration: 35
+
+intro:
+  fr: |
+    Un compte **AWS** (*Amazon Web Services*) tout neuf ressemble à un immeuble vide dont vous venez de
+    recevoir le trousseau : une clé passe-partout (le compte **racine**), aucune caméra allumée et des
+    portes que chaque locataire peut laisser ouvertes.
+
+    Avant d'y installer quoi que ce soit, un gardien sérieux fait quatre choses : il range la clé
+    passe-partout au coffre, il allume les caméras, il engage un vigile et il vérifie que les portes se
+    ferment toutes seules. Sur AWS, cela s'appelle respectivement : protéger le compte racine, activer
+    **CloudTrail**, activer **GuardDuty** et **Security Hub**, et verrouiller **S3** et le service de
+    métadonnées des instances (**IMDSv2**).
+
+    Dans cette leçon, vous allez poser ce socle de sécurité avec l'AWS CLI et Terraform, en comparant à
+    chaque fois la configuration dangereuse et la configuration durcie.
+  en: |
+    A brand-new **AWS** (*Amazon Web Services*) account looks like an empty building whose key ring you
+    have just received: one master key (the **root** account), no camera switched on, and doors that any
+    tenant may leave open.
+
+    Before moving anything in, a serious caretaker does four things: lock the master key in a safe, switch
+    the cameras on, hire a guard, and make sure the doors close by themselves. On AWS these are called:
+    protecting the root account, enabling **CloudTrail**, enabling **GuardDuty** and **Security Hub**, and
+    locking down **S3** and the instance metadata service (**IMDSv2**).
+
+    In this lesson you will lay that security baseline with the AWS CLI and Terraform, comparing the
+    dangerous configuration with the hardened one each time.
+
+sections:
+  - heading:
+      fr: "Le compte racine : la clé passe-partout"
+      en: "The root account: the master key"
+    body:
+      fr: |
+        Le compte **racine** (*root user*) est l'adresse e-mail qui a créé le compte. Il peut tout faire, y
+        compris fermer le compte, et aucune politique IAM ne peut le restreindre à l'intérieur du compte.
+
+        | Règle | Pourquoi |
+        |---|---|
+        | MFA matérielle ou passkey sur le compte racine | Un mot de passe volé ne suffit plus |
+        | **Aucune** clé d'accès (access key) pour le compte racine | Une clé racine publiée dans Git = compte perdu |
+        | Ne jamais l'utiliser au quotidien | Les humains passent par **IAM Identity Center** (SSO) et des rôles temporaires |
+        | Adresse e-mail partagée et contacts de sécurité à jour | AWS doit pouvoir vous prévenir d'un abus |
+        | Alerte sur toute connexion racine | Une connexion racine est un évènement exceptionnel |
+
+        Dans une organisation multi-comptes (**AWS Organizations**), on ajoute des **SCP**
+        (*Service Control Policies*) : des garde-fous qui s'imposent à tous les comptes membres, par exemple
+        « interdiction de désactiver CloudTrail » ou « interdiction de sortir des régions européennes ».
+      en: |
+        The **root user** is the e-mail address that created the account. It can do anything, including
+        closing the account, and no IAM policy can restrict it from inside the account.
+
+        | Rule | Why |
+        |---|---|
+        | Hardware MFA or passkey on the root user | A stolen password is no longer enough |
+        | **No** access key for the root user | A root key pushed to Git = account lost |
+        | Never use it day to day | Humans go through **IAM Identity Center** (SSO) and temporary roles |
+        | Shared mailbox and up-to-date security contacts | AWS must be able to warn you about abuse |
+        | Alert on every root sign-in | A root sign-in is an exceptional event |
+
+        In a multi-account organisation (**AWS Organizations**) you add **SCPs** (*Service Control
+        Policies*): guardrails enforced on every member account, such as "nobody may disable CloudTrail"
+        or "nothing may be created outside European regions".
+  - heading:
+      fr: "S3 : privé, chiffré, et uniquement en TLS"
+      en: "S3: private, encrypted, and TLS only"
+    body:
+      fr: |
+        **S3** (*Simple Storage Service*) stocke des fichiers dans des *buckets*. Trois protections se
+        complètent :
+
+        - **Block Public Access** (BPA) : quatre interrupteurs qui annulent toute ACL ou politique publique.
+          Activez-les **au niveau du compte** : ils s'appliquent alors à tous les buckets, présents et futurs.
+        - **Chiffrement au repos** : S3 chiffre déjà tout nouvel objet avec SSE-S3. Pour des données
+          sensibles, préférez **SSE-KMS** : l'accès à la clé KMS devient un second contrôle, et chaque
+          déchiffrement est journalisé.
+        - **Chiffrement en transit** : une politique de bucket refuse toute requête dont la condition
+          `aws:SecureTransport` vaut `false`, c'est-à-dire toute requête en HTTP simple.
+
+        Ajoutez le **versioning** : un objet écrasé ou supprimé (erreur ou rançongiciel) reste récupérable.
+      en: |
+        **S3** (*Simple Storage Service*) stores files in *buckets*. Three protections work together:
+
+        - **Block Public Access** (BPA): four switches that override any public ACL or policy. Turn them on
+          **at account level**: they then apply to every bucket, present and future.
+        - **Encryption at rest**: S3 already encrypts every new object with SSE-S3. For sensitive data
+          prefer **SSE-KMS**: access to the KMS key becomes a second control, and every decryption is logged.
+        - **Encryption in transit**: a bucket policy denies any request whose `aws:SecureTransport`
+          condition is `false`, meaning any plain-HTTP request.
+
+        Add **versioning**: an overwritten or deleted object (mistake or ransomware) stays recoverable.
+  - heading:
+      fr: "Voir et détecter : CloudTrail, GuardDuty, Security Hub"
+      en: "See and detect: CloudTrail, GuardDuty, Security Hub"
+    body:
+      fr: |
+        | Service | Rôle | Analogie |
+        |---|---|---|
+        | **CloudTrail** | Journalise chaque appel d'API : qui, quoi, quand, depuis quelle adresse | L'enregistrement des caméras |
+        | **GuardDuty** | Détecte les comportements suspects dans CloudTrail, les journaux DNS et les VPC Flow Logs | Le vigile qui regarde les écrans |
+        | **Security Hub** | Centralise les alertes et vérifie la conformité (AWS Foundational Security Best Practices, CIS) | Le tableau de bord du gardien |
+
+        Un journal CloudTrail doit être **multi-région** (un attaquant crée ses ressources dans une région
+        que vous n'utilisez pas), avec **validation de l'intégrité des fichiers**, et stocké dans un bucket
+        d'un compte séparé que les administrateurs du compte audité ne peuvent pas modifier.
+        GuardDuty et Security Hub sont **régionaux** : activez-les dans toutes les régions, idéalement
+        depuis un compte administrateur délégué de l'organisation.
+      en: |
+        | Service | Role | Analogy |
+        |---|---|---|
+        | **CloudTrail** | Logs every API call: who, what, when, from which address | The camera recordings |
+        | **GuardDuty** | Detects suspicious behaviour in CloudTrail, DNS logs and VPC Flow Logs | The guard watching the screens |
+        | **Security Hub** | Centralises alerts and checks compliance (AWS Foundational Security Best Practices, CIS) | The caretaker's dashboard |
+
+        A CloudTrail trail must be **multi-region** (an attacker creates resources in a region you never
+        use), with **log file integrity validation**, and stored in a bucket owned by a separate account
+        that administrators of the audited account cannot modify. GuardDuty and Security Hub are
+        **regional**: enable them in every region, ideally from a delegated administrator account of the
+        organisation.
+  - heading:
+      fr: "IMDSv2 : protéger les identifiants des instances"
+      en: "IMDSv2: protecting instance credentials"
+    body:
+      fr: |
+        Chaque instance EC2 peut interroger le **service de métadonnées** (IMDS, *Instance Metadata
+        Service*) à l'adresse `169.254.169.254`. Il renvoie notamment les **identifiants temporaires du
+        rôle IAM** de l'instance.
+
+        | | IMDSv1 | IMDSv2 |
+        |---|---|---|
+        | Requête | Un simple `GET` | `PUT` pour obtenir un jeton de session, puis `GET` avec l'en-tête du jeton |
+        | Face à une SSRF | L'attaquant fait lire l'URL par l'application et vole les identifiants | La plupart des SSRF ne peuvent ni émettre un `PUT` ni ajouter un en-tête |
+        | Limite de sauts | Aucune | `hop limit` à 1 : la réponse ne traverse pas un conteneur ou un proxy |
+
+        Une **SSRF** (*Server-Side Request Forgery*) est une faille où l'attaquant fait émettre une requête
+        HTTP par votre serveur. Avec IMDSv1, c'est la voie classique du vol d'identifiants cloud. Imposez
+        donc IMDSv2 (`http-tokens = required`) sur toutes les instances.
+      en: |
+        Every EC2 instance can query the **Instance Metadata Service** (IMDS) at `169.254.169.254`. Among
+        other things it returns the **temporary credentials of the instance's IAM role**.
+
+        | | IMDSv1 | IMDSv2 |
+        |---|---|---|
+        | Request | A simple `GET` | `PUT` to obtain a session token, then `GET` with the token header |
+        | Against SSRF | The attacker makes the application read the URL and steals the credentials | Most SSRF flaws can neither send a `PUT` nor add a header |
+        | Hop limit | None | Hop limit of 1: the response does not cross a container or a proxy |
+
+        **SSRF** (*Server-Side Request Forgery*) is a flaw where the attacker makes your server send an
+        HTTP request. With IMDSv1 it is the classic road to stolen cloud credentials. So enforce IMDSv2
+        (`http-tokens = required`) on every instance.
+
+examples:
+  - title:
+      fr: "Un bucket « pratique » : public, sans TLS imposé, sans versioning"
+      en: "A \"convenient\" bucket: public, TLS not enforced, no versioning"
+    file: s3_vulnerable.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      resource "aws_s3_bucket" "invoices" {
+        bucket = "acme-invoices-prod"
+      }
+
+      # The four guards are disabled so that the public policy below is accepted
+      resource "aws_s3_bucket_public_access_block" "invoices" {
+        bucket                  = aws_s3_bucket.invoices.id
+        block_public_acls       = false
+        ignore_public_acls      = false
+        block_public_policy     = false
+        restrict_public_buckets = false
+      }
+
+      # Principal "*" = anyone, without authentication, can list and read every invoice
+      resource "aws_s3_bucket_policy" "invoices" {
+        bucket     = aws_s3_bucket.invoices.id
+        depends_on = [aws_s3_bucket_public_access_block.invoices]
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Sid       = "PublicRead"
+            Effect    = "Allow"
+            Principal = "*"
+            Action    = ["s3:GetObject", "s3:ListBucket"]
+            Resource = [
+              aws_s3_bucket.invoices.arn,
+              "${aws_s3_bucket.invoices.arn}/*",
+            ]
+          }]
+        })
+      }
+
+      # No versioning: an overwritten or deleted invoice is gone for good
+      # No TLS condition: clients may also read the data over plain HTTP
+    note:
+      fr: "Il a fallu désactiver explicitement Block Public Access pour qu'AWS accepte cette politique : les fuites S3 d'aujourd'hui viennent de ce genre de contournement volontaire, « juste pour partager un fichier »."
+      en: "Block Public Access had to be explicitly disabled for AWS to accept this policy: today's S3 leaks come from this kind of deliberate bypass, \"just to share a file\"."
+
+  - title:
+      fr: "Le même bucket, durci : BPA, SSE-KMS, versioning et TLS obligatoire"
+      en: "The same bucket, hardened: BPA, SSE-KMS, versioning and mandatory TLS"
+    file: s3_secure.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_s3_bucket" "invoices" {
+        bucket = "acme-invoices-prod"
+      }
+
+      # 1. Public ACLs and public policies are refused, whatever anyone writes later
+      resource "aws_s3_bucket_public_access_block" "invoices" {
+        bucket                  = aws_s3_bucket.invoices.id
+        block_public_acls       = true
+        ignore_public_acls      = true
+        block_public_policy     = true
+        restrict_public_buckets = true
+      }
+
+      # 2. Encryption at rest with a customer-managed KMS key, rotated every year
+      resource "aws_kms_key" "invoices" {
+        description         = "Encrypts the invoices bucket"
+        enable_key_rotation = true
+      }
+
+      resource "aws_s3_bucket_server_side_encryption_configuration" "invoices" {
+        bucket = aws_s3_bucket.invoices.id
+
+        rule {
+          apply_server_side_encryption_by_default {
+            sse_algorithm     = "aws:kms"
+            kms_master_key_id = aws_kms_key.invoices.arn
+          }
+          bucket_key_enabled = true # fewer KMS calls, lower cost
+        }
+      }
+
+      # 3. Versioning: protection against accidental deletion and ransomware
+      resource "aws_s3_bucket_versioning" "invoices" {
+        bucket = aws_s3_bucket.invoices.id
+
+        versioning_configuration {
+          status = "Enabled"
+        }
+      }
+
+      # 4. Encryption in transit: every request made without TLS is denied
+      resource "aws_s3_bucket_policy" "invoices" {
+        bucket = aws_s3_bucket.invoices.id
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Sid       = "DenyInsecureTransport"
+            Effect    = "Deny"
+            Principal = "*"
+            Action    = "s3:*"
+            Resource = [
+              aws_s3_bucket.invoices.arn,
+              "${aws_s3_bucket.invoices.arn}/*",
+            ]
+            Condition = {
+              Bool = { "aws:SecureTransport" = "false" }
+            }
+          }]
+        })
+      }
+    note:
+      fr: "Quatre ressources, quatre protections indépendantes. Ici `Principal = \"*\"` est sans danger car l'effet est `Deny` : la règle s'applique à tout le monde et refuse le HTTP simple."
+      en: "Four resources, four independent protections. Here `Principal = \"*\"` is harmless because the effect is `Deny`: the rule applies to everyone and refuses plain HTTP."
+
+  - title:
+      fr: "Le socle du compte avec l'AWS CLI"
+      en: "The account baseline with the AWS CLI"
+    file: baseline.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Run once per account with an administrator role (never with the root user).
+      set -euo pipefail
+
+      ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      REGION=eu-west-1
+
+      # 1. S3 Block Public Access for the whole account: covers every present and future bucket
+      aws s3control put-public-access-block \
+        --account-id "$ACCOUNT_ID" \
+        --public-access-block-configuration \
+        BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+      # 2. CloudTrail: one trail for all regions, with tamper-evident log files.
+      #    The bucket lives in a separate log-archive account and its policy allows CloudTrail to write.
+      aws cloudtrail create-trail \
+        --name org-trail \
+        --s3-bucket-name acme-log-archive-cloudtrail \
+        --is-multi-region-trail \
+        --enable-log-file-validation
+      aws cloudtrail start-logging --name org-trail
+
+      # 3. Threat detection and posture management (regional services: repeat in every region)
+      aws guardduty create-detector --enable --region "$REGION"
+      aws securityhub enable-security-hub --enable-default-standards --region "$REGION"
+
+      # 4. IMDSv2 by default for every new instance launched in the region
+      aws ec2 modify-instance-metadata-defaults \
+        --region "$REGION" \
+        --http-tokens required \
+        --http-put-response-hop-limit 1
+
+      # 5. Root user hygiene: MFA must be 1, access keys must be 0
+      aws iam get-account-summary \
+        --query 'SummaryMap.{RootMFA:AccountMFAEnabled,RootAccessKeys:AccountAccessKeysPresent}'
+    output: |
+      {
+          "RootMFA": 1,
+          "RootAccessKeys": 0
+      }
+    note:
+      fr: "Ce script montre l'idée ; pour un socle durable, préférez Terraform. Retenez surtout l'ordre : bloquer l'exposition, journaliser, détecter, puis vérifier le compte racine."
+      en: "This script captures the idea, but prefer Terraform for a lasting baseline. Above all remember the order: block exposure, log, detect, then verify the root user."
+
+  - title:
+      fr: "Imposer IMDSv2 sur une instance EC2"
+      en: "Enforcing IMDSv2 on an EC2 instance"
+    file: ec2.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "ami_id" {
+        type        = string
+        description = "A hardened, up-to-date AMI"
+      }
+
+      variable "private_subnet_id" {
+        type = string
+      }
+
+      resource "aws_instance" "app" {
+        ami           = var.ami_id
+        instance_type = "t3.micro"
+        subnet_id     = var.private_subnet_id
+
+        # No public IP: the instance is reached through a load balancer or Session Manager
+        associate_public_ip_address = false
+
+        metadata_options {
+          http_endpoint               = "enabled"
+          http_tokens                 = "required" # IMDSv2 only: a plain GET gets HTTP 401
+          http_put_response_hop_limit = 1          # the token cannot travel beyond the instance itself
+        }
+
+        root_block_device {
+          encrypted = true # disk encrypted at rest
+        }
+
+        tags = {
+          Name = "app"
+        }
+      }
+    note:
+      fr: "Avec `http_tokens = \"required\"`, une requête IMDSv1 reçoit une erreur 401. Si l'application tourne dans un conteneur sur l'instance et a réellement besoin du rôle, passez la limite de sauts à 2 - mais seulement dans ce cas."
+      en: "With `http_tokens = \"required\"`, an IMDSv1 request gets a 401 error. If the application runs in a container on the instance and truly needs the role, raise the hop limit to 2 - but only in that case."
+
+  - title:
+      fr: "IMDSv1 contre IMDSv2, vu depuis l'instance"
+      en: "IMDSv1 versus IMDSv2, seen from the instance"
+    file: imds-test.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Run these commands ON your own EC2 instance (lab).
+
+      # IMDSv1 style: a single GET. This is exactly what an SSRF flaw can trigger.
+      curl -s -o /dev/null -w "IMDSv1 -> HTTP %{http_code}\n" \
+        http://169.254.169.254/latest/meta-data/iam/security-credentials/
+
+      # IMDSv2: first a PUT with a custom header to obtain a session token...
+      TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+
+      # ...then the GET must carry that token
+      curl -s -o /dev/null -w "IMDSv2 -> HTTP %{http_code}\n" \
+        -H "X-aws-ec2-metadata-token: $TOKEN" \
+        http://169.254.169.254/latest/meta-data/iam/security-credentials/
+    output: |
+      IMDSv1 -> HTTP 401
+      IMDSv2 -> HTTP 200
+    note:
+      fr: "Sur une instance où IMDSv2 est obligatoire, le simple `GET` est refusé (401). Une faille SSRF, qui ne contrôle en général que l'URL, ne peut ni envoyer le `PUT` ni ajouter l'en-tête du jeton."
+      en: "On an instance where IMDSv2 is required, the plain `GET` is refused (401). An SSRF flaw, which usually controls only the URL, can neither send the `PUT` nor add the token header."
+
+mistake:
+  fr: |
+    **Travailler avec des clés d'accès longue durée d'un utilisateur IAM administrateur.**
+
+    Une paire `AKIA...` / clé secrète n'expire jamais d'elle-même. Elle finit dans un fichier
+    `~/.aws/credentials`, dans une variable de CI, puis un jour dans un dépôt Git public, où des robots la
+    trouvent en quelques minutes. Remplacez ces clés par des **identifiants temporaires** :
+    IAM Identity Center pour les humains (`aws sso login`), rôles IAM pour les machines, et fédération
+    **OIDC** pour les pipelines CI/CD (GitHub Actions, GitLab) qui assument un rôle sans stocker de secret.
+  en: |
+    **Working with long-lived access keys of an administrator IAM user.**
+
+    An `AKIA...` / secret key pair never expires on its own. It ends up in a `~/.aws/credentials` file, in
+    a CI variable, then one day in a public Git repository where bots find it within minutes. Replace
+    those keys with **temporary credentials**: IAM Identity Center for humans (`aws sso login`), IAM roles
+    for machines, and **OIDC** federation for CI/CD pipelines (GitHub Actions, GitLab) that assume a role
+    without storing any secret.
+
+bestPractice:
+  fr: |
+    - **Compte racine** : MFA, aucune clé d'accès, usage exceptionnel, alerte à chaque connexion.
+    - **Plusieurs comptes** (prod, hors-prod, journaux, sécurité) dans AWS Organizations, avec des SCP qui
+      interdisent de désactiver CloudTrail, GuardDuty ou Block Public Access.
+    - **Block Public Access au niveau du compte**, et chiffrement SSE-KMS pour les données sensibles.
+    - **CloudTrail multi-région** vers un compte d'archivage séparé, avec validation des fichiers.
+    - **GuardDuty et Security Hub dans toutes les régions**, alertes routées vers une équipe qui les traite.
+    - **IMDSv2 obligatoire** par défaut de région et dans chaque modèle de lancement.
+    - **Tout en Terraform**, scanné avant `apply` (Checkov, Trivy), pour qu'aucun réglage ne dépende d'un clic.
+  en: |
+    - **Root user**: MFA, no access key, exceptional use, an alert on every sign-in.
+    - **Several accounts** (prod, non-prod, logs, security) in AWS Organizations, with SCPs that forbid
+      disabling CloudTrail, GuardDuty or Block Public Access.
+    - **Block Public Access at account level**, and SSE-KMS encryption for sensitive data.
+    - **Multi-region CloudTrail** to a separate archive account, with log file validation.
+    - **GuardDuty and Security Hub in every region**, alerts routed to a team that handles them.
+    - **IMDSv2 required** as the regional default and in every launch template.
+    - **Everything in Terraform**, scanned before `apply` (Checkov, Trivy), so that no setting depends on
+      a click.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe vous confie le bucket existant `acme-hr-documents` (documents RH) et une instance
+      `i-0abc123def4567890` qui utilise encore IMDSv1.
+
+      Avec l'**AWS CLI**, écrivez les commandes qui :
+
+      1. activent les quatre réglages Block Public Access sur le bucket ;
+      2. activent le versioning ;
+      3. appliquent une politique de bucket refusant toute requête sans TLS ;
+      4. imposent IMDSv2 sur l'instance ;
+      5. vérifient le résultat des points 1 et 4.
+    en: |
+      Your team hands you the existing bucket `acme-hr-documents` (HR documents) and an instance
+      `i-0abc123def4567890` that still uses IMDSv1.
+
+      With the **AWS CLI**, write the commands that:
+
+      1. enable the four Block Public Access settings on the bucket;
+      2. enable versioning;
+      3. apply a bucket policy denying any request made without TLS;
+      4. enforce IMDSv2 on the instance;
+      5. verify the result of points 1 and 4.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      BUCKET=acme-hr-documents
+      INSTANCE=i-0abc123def4567890
+
+      # 1. Block Public Access on the bucket
+      aws s3api put-public-access-block --bucket "$BUCKET" \
+        --public-access-block-configuration \
+        BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+      # 2. Versioning
+      aws s3api put-bucket-versioning --bucket "$BUCKET" \
+        --versioning-configuration Status=Enabled
+
+      # 3. Deny every request that does not use TLS
+      cat > tls-only.json <<EOF
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Sid": "DenyInsecureTransport",
+          "Effect": "Deny",
+          "Principal": "*",
+          "Action": "s3:*",
+          "Resource": ["arn:aws:s3:::$BUCKET", "arn:aws:s3:::$BUCKET/*"],
+          "Condition": {"Bool": {"aws:SecureTransport": "false"}}
+        }]
+      }
+      EOF
+      aws s3api put-bucket-policy --bucket "$BUCKET" --policy file://tls-only.json
+
+      # 4. IMDSv2 only on the instance
+      aws ec2 modify-instance-metadata-options --instance-id "$INSTANCE" \
+        --http-tokens required --http-endpoint enabled --http-put-response-hop-limit 1
+
+      # 5. Verification
+      aws s3api get-public-access-block --bucket "$BUCKET"
+      aws ec2 describe-instances --instance-ids "$INSTANCE" \
+        --query 'Reservations[].Instances[].MetadataOptions.HttpTokens' --output text
+    note:
+      fr: "La dernière commande doit afficher `required`. Avant d'imposer IMDSv2 en production, vérifiez dans CloudWatch la métrique `MetadataNoToken` : si elle n'est pas à zéro, une application utilise encore IMDSv1."
+      en: "The last command must print `required`. Before enforcing IMDSv2 in production, check the `MetadataNoToken` metric in CloudWatch: if it is not zero, an application still uses IMDSv1."
+
+quiz:
+  - q:
+      fr: "Quelle règle s'applique au compte racine (root) d'un compte AWS ?"
+      en: "Which rule applies to the root user of an AWS account?"
+    options:
+      fr:
+        - "Lui créer une clé d'accès pour les scripts d'automatisation"
+        - "Le partager entre les administrateurs pour gagner du temps"
+        - "Activer la MFA, ne lui créer aucune clé d'accès et ne pas l'utiliser au quotidien"
+        - "Le supprimer dès que le premier utilisateur IAM existe"
+      en:
+        - "Create an access key for it, for automation scripts"
+        - "Share it among administrators to save time"
+        - "Enable MFA, create no access key for it and do not use it day to day"
+        - "Delete it as soon as the first IAM user exists"
+    answer: 2
+    why:
+      fr: "Le compte racine ne peut être ni supprimé ni restreint par IAM : on le protège par MFA, sans clé d'accès, et on le réserve aux rares opérations qui l'exigent."
+      en: "The root user can be neither deleted nor restricted by IAM: you protect it with MFA, give it no access key, and keep it for the few operations that require it."
+  - q:
+      fr: "Que fait une politique de bucket avec `Deny` et la condition `aws:SecureTransport = false` ?"
+      en: "What does a bucket policy with `Deny` and the condition `aws:SecureTransport = false` do?"
+    options:
+      fr:
+        - "Elle refuse toute requête qui n'utilise pas TLS (HTTPS)"
+        - "Elle chiffre les objets au repos avec KMS"
+        - "Elle rend le bucket public en lecture seule"
+        - "Elle désactive le versioning"
+      en:
+        - "It denies any request that does not use TLS (HTTPS)"
+        - "It encrypts objects at rest with KMS"
+        - "It makes the bucket public in read-only mode"
+        - "It disables versioning"
+    answer: 0
+    why:
+      fr: "`aws:SecureTransport` vaut `false` pour une requête en HTTP simple ; le `Deny` explicite l'emporte sur toute autorisation."
+      en: "`aws:SecureTransport` is `false` for a plain-HTTP request; the explicit `Deny` overrides any allow."
+  - q:
+      fr: "Pourquoi un journal CloudTrail doit-il être multi-région ?"
+      en: "Why must a CloudTrail trail be multi-region?"
+    options:
+      fr:
+        - "Pour réduire la facture de stockage"
+        - "Parce que S3 n'existe que dans une région"
+        - "Pour accélérer les appels d'API"
+        - "Parce qu'un attaquant peut agir dans une région que vous n'utilisez jamais"
+      en:
+        - "To reduce the storage bill"
+        - "Because S3 exists in one region only"
+        - "To speed up API calls"
+        - "Because an attacker can act in a region you never use"
+    answer: 3
+    why:
+      fr: "Avec des identifiants volés, l'attaquant lance souvent ses ressources (minage, exfiltration) dans une région lointaine ; un journal mono-région ne verrait rien."
+      en: "With stolen credentials an attacker often launches resources (mining, exfiltration) in a distant region; a single-region trail would see nothing."
+  - q:
+      fr: "En quoi IMDSv2 protège-t-il mieux qu'IMDSv1 contre une faille SSRF ?"
+      en: "How does IMDSv2 protect better than IMDSv1 against an SSRF flaw?"
+    options:
+      fr:
+        - "Il chiffre les identifiants avec la clé KMS du compte"
+        - "Il exige un jeton obtenu par une requête `PUT`, puis transmis dans un en-tête"
+        - "Il supprime le rôle IAM de l'instance"
+        - "Il déplace le service sur une adresse IP secrète"
+      en:
+        - "It encrypts the credentials with the account's KMS key"
+        - "It requires a token obtained with a `PUT` request, then sent in a header"
+        - "It removes the IAM role from the instance"
+        - "It moves the service to a secret IP address"
+    answer: 1
+    why:
+      fr: "Une SSRF ne contrôle en général que l'URL d'un `GET` : elle ne peut ni faire le `PUT` initial ni ajouter l'en-tête `X-aws-ec2-metadata-token`."
+      en: "An SSRF usually controls only the URL of a `GET`: it can neither issue the initial `PUT` nor add the `X-aws-ec2-metadata-token` header."
+  - q:
+      fr: "Quel service AWS analyse CloudTrail, les journaux DNS et les VPC Flow Logs pour détecter des comportements malveillants ?"
+      en: "Which AWS service analyses CloudTrail, DNS logs and VPC Flow Logs to detect malicious behaviour?"
+    options:
+      fr:
+        - "AWS KMS"
+        - "Amazon S3"
+        - "Amazon GuardDuty"
+        - "AWS Organizations"
+      en:
+        - "AWS KMS"
+        - "Amazon S3"
+        - "Amazon GuardDuty"
+        - "AWS Organizations"
+    answer: 2
+    why:
+      fr: "GuardDuty est le service de détection de menaces ; Security Hub centralise ensuite ses alertes avec les contrôles de conformité."
+      en: "GuardDuty is the threat detection service; Security Hub then centralises its findings together with compliance checks."

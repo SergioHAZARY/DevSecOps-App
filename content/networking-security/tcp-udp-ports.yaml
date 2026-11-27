@@ -1,0 +1,426 @@
+description:
+  fr: "Comprendre TCP, UDP et les numéros de port, lister les ports ouverts d'une machine et repérer ceux qui sont exposés inutilement."
+  en: "Understand TCP, UDP and port numbers, list the open ports of a machine and spot the ones that are needlessly exposed."
+duration: 20
+
+intro:
+  fr: |
+    Une adresse IP désigne une machine, comme une adresse postale désigne un immeuble. Mais dans l'immeuble,
+    il y a plusieurs appartements : le serveur web, la base de données, l'accès SSH... Le **port** est le
+    numéro d'appartement : un nombre de 0 à 65535 qui dit *à quel programme* livrer les données.
+
+    Pour transporter ces données, deux protocoles de la couche 4 existent :
+
+    - **TCP** (*Transmission Control Protocol*) ressemble à un **appel téléphonique** : on décroche, on vérifie
+      que l'autre entend, et on répète ce qui n'a pas été compris.
+    - **UDP** (*User Datagram Protocol*) ressemble à une **carte postale** : on l'envoie sans savoir si elle
+      arrive. C'est plus rapide, mais sans garantie.
+
+    Dans cette leçon, vous allez lister les ports ouverts d'une machine Linux et apprendre à reconnaître un
+    service exposé à tout le réseau alors qu'il ne devrait pas l'être.
+  en: |
+    An IP address identifies a machine, the way a postal address identifies a building. But the building has
+    several flats: the web server, the database, SSH access... The **port** is the flat number: a number from
+    0 to 65535 that says *which program* the data must be delivered to.
+
+    Two layer 4 protocols exist to carry that data:
+
+    - **TCP** (*Transmission Control Protocol*) is like a **phone call**: you pick up, you check the other
+      side can hear you, and you repeat whatever was not understood.
+    - **UDP** (*User Datagram Protocol*) is like a **postcard**: you send it without knowing whether it
+      arrives. It is faster, but comes with no guarantee.
+
+    In this lesson you will list the open ports of a Linux machine and learn to recognise a service that is
+    exposed to the whole network when it should not be.
+
+sections:
+  - heading:
+      fr: "TCP ou UDP ?"
+      en: "TCP or UDP?"
+    body:
+      fr: |
+        | | TCP | UDP |
+        |---|---|---|
+        | Connexion | Oui, établie avant d'échanger | Non, on envoie directement |
+        | Fiabilité | Accusés de réception, renvoi des pertes | Aucune garantie |
+        | Ordre des données | Garanti | Non garanti |
+        | Vitesse | Plus lent (contrôles) | Plus rapide |
+        | Utilisé par | HTTP/HTTPS, SSH, bases de données, e-mail | DNS, DHCP, NTP, visioconférence, HTTP/3 (QUIC) |
+
+        Avant d'échanger des données, TCP ouvre la connexion en trois messages : c'est la **poignée de main en
+        trois temps** (*three-way handshake*).
+
+        | Étape | Qui parle | Message | Signification |
+        |---|---|---|---|
+        | 1 | Client → serveur | `SYN` | « Je voudrais ouvrir une connexion » |
+        | 2 | Serveur → client | `SYN-ACK` | « D'accord, et moi aussi » |
+        | 3 | Client → serveur | `ACK` | « Bien reçu, on peut commencer » |
+
+        Retenez ces trois mots : les scanners de ports, les pare-feu et certaines attaques (le *SYN flood*)
+        jouent précisément avec cette poignée de main.
+      en: |
+        | | TCP | UDP |
+        |---|---|---|
+        | Connection | Yes, set up before exchanging | No, data is sent straight away |
+        | Reliability | Acknowledgements, lost data is resent | No guarantee |
+        | Data order | Guaranteed | Not guaranteed |
+        | Speed | Slower (checks) | Faster |
+        | Used by | HTTP/HTTPS, SSH, databases, e-mail | DNS, DHCP, NTP, video calls, HTTP/3 (QUIC) |
+
+        Before exchanging data, TCP opens the connection with three messages: the **three-way handshake**.
+
+        | Step | Who speaks | Message | Meaning |
+        |---|---|---|---|
+        | 1 | Client → server | `SYN` | "I would like to open a connection" |
+        | 2 | Server → client | `SYN-ACK` | "Agreed, and so would I" |
+        | 3 | Client → server | `ACK` | "Received, we can start" |
+
+        Remember these three words: port scanners, firewalls and some attacks (the *SYN flood*) play with
+        exactly this handshake.
+  - heading:
+      fr: "Les ports à connaître"
+      en: "The ports you should know"
+    body:
+      fr: |
+        Les 65536 ports sont répartis en trois plages :
+
+        | Plage | Nom | Usage |
+        |---|---|---|
+        | 0 - 1023 | Ports bien connus | Services standards ; sous Linux, seul `root` peut les ouvrir par défaut |
+        | 1024 - 49151 | Ports enregistrés | Applications (bases de données, serveurs d'application) |
+        | 49152 - 65535 | Ports dynamiques | Ports temporaires choisis côté client |
+
+        | Port | Protocole | Service | Remarque sécurité |
+        |---|---|---|---|
+        | 22 | TCP | SSH | Cible n°1 des attaques par force brute |
+        | 23 | TCP | Telnet | Tout passe en clair : à bannir |
+        | 25 | TCP | SMTP (e-mail) | Souvent filtré en sortie |
+        | 53 | UDP et TCP | DNS | Utilisé pour l'exfiltration de données |
+        | 80 | TCP | HTTP | En clair : à rediriger vers 443 |
+        | 443 | TCP | HTTPS | Chiffré par TLS |
+        | 3306 | TCP | MySQL / MariaDB | Ne jamais exposer à Internet |
+        | 3389 | TCP | RDP (bureau à distance Windows) | Très attaqué |
+        | 5432 | TCP | PostgreSQL | Ne jamais exposer à Internet |
+        | 6379 | TCP | Redis | Sans mot de passe par défaut |
+        | 27017 | TCP | MongoDB | Ne jamais exposer à Internet |
+      en: |
+        The 65536 ports are split into three ranges:
+
+        | Range | Name | Use |
+        |---|---|---|
+        | 0 - 1023 | Well-known ports | Standard services; on Linux, only `root` can open them by default |
+        | 1024 - 49151 | Registered ports | Applications (databases, application servers) |
+        | 49152 - 65535 | Dynamic ports | Temporary ports chosen on the client side |
+
+        | Port | Protocol | Service | Security remark |
+        |---|---|---|---|
+        | 22 | TCP | SSH | Number one target of brute-force attacks |
+        | 23 | TCP | Telnet | Everything travels in clear text: ban it |
+        | 25 | TCP | SMTP (e-mail) | Often filtered on the way out |
+        | 53 | UDP and TCP | DNS | Used for data exfiltration |
+        | 80 | TCP | HTTP | Clear text: redirect to 443 |
+        | 443 | TCP | HTTPS | Encrypted with TLS |
+        | 3306 | TCP | MySQL / MariaDB | Never expose to the Internet |
+        | 3389 | TCP | RDP (Windows remote desktop) | Heavily attacked |
+        | 5432 | TCP | PostgreSQL | Never expose to the Internet |
+        | 6379 | TCP | Redis | No password by default |
+        | 27017 | TCP | MongoDB | Never expose to the Internet |
+  - heading:
+      fr: "Écouter sur 127.0.0.1 ou sur 0.0.0.0 : toute la différence"
+      en: "Listening on 127.0.0.1 or on 0.0.0.0: all the difference"
+    body:
+      fr: |
+        Un programme qui attend des connexions est dit **en écoute** (*listening*) sur un port. Mais il choisit
+        aussi **sur quelle adresse** il écoute, et c'est là que tout se joue :
+
+        | Adresse d'écoute | Qui peut se connecter ? |
+        |---|---|
+        | `127.0.0.1` (ou `::1` en IPv6) | Uniquement les programmes de la machine elle-même |
+        | `192.168.1.20` (une adresse précise) | Les machines qui peuvent joindre cette adresse |
+        | `0.0.0.0` (ou `::` en IPv6) | **Tout le monde**, par toutes les cartes réseau |
+
+        Vu de l'extérieur, un port peut être dans trois états :
+
+        | État | Ce qui se passe | Signification |
+        |---|---|---|
+        | Ouvert (*open*) | Le serveur répond `SYN-ACK` | Un programme écoute |
+        | Fermé (*closed*) | Le serveur répond `RST` (refus) | Aucun programme n'écoute |
+        | Filtré (*filtered*) | Aucune réponse | Un pare-feu jette les paquets |
+
+        Chaque port ouvert est une porte d'entrée possible : la **surface d'attaque** d'une machine se mesure
+        d'abord au nombre de ports qu'elle expose.
+      en: |
+        A program waiting for connections is said to be **listening** on a port. But it also chooses **on
+        which address** it listens, and that is where everything is decided:
+
+        | Listening address | Who can connect? |
+        |---|---|
+        | `127.0.0.1` (or `::1` in IPv6) | Only programs on the machine itself |
+        | `192.168.1.20` (one specific address) | Machines that can reach that address |
+        | `0.0.0.0` (or `::` in IPv6) | **Everyone**, through every network card |
+
+        Seen from outside, a port can be in three states:
+
+        | State | What happens | Meaning |
+        |---|---|---|
+        | Open | The server answers `SYN-ACK` | A program is listening |
+        | Closed | The server answers `RST` (refusal) | No program is listening |
+        | Filtered | No answer at all | A firewall drops the packets |
+
+        Every open port is a possible way in: the **attack surface** of a machine is first measured by the
+        number of ports it exposes.
+
+examples:
+  - title:
+      fr: "Lister les ports en écoute avec ss"
+      en: "Listing listening ports with ss"
+    file: listening-ports.sh
+    lang: bash
+    code: |
+      # ss = "socket statistics", the modern replacement of netstat
+      #  -t TCP   -u UDP   -l listening only   -p show the program   -n numbers, no name lookup
+      # sudo is needed to see the programs owned by other users
+      sudo ss -tulpn
+    output: |
+      Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+      udp   UNCONN 0      0      127.0.0.53%lo:53         0.0.0.0:*     users:(("systemd-resolve",pid=612,fd=13))
+      tcp   LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*     users:(("systemd-resolve",pid=612,fd=14))
+      tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*     users:(("sshd",pid=842,fd=3))
+      tcp   LISTEN 0      511          0.0.0.0:443        0.0.0.0:*     users:(("nginx",pid=1203,fd=6))
+      tcp   LISTEN 0      200        127.0.0.1:5432       0.0.0.0:*     users:(("postgres",pid=1011,fd=5))
+      tcp   LISTEN 0      511          0.0.0.0:6379       0.0.0.0:*     users:(("redis-server",pid=1377,fd=6))
+      tcp   LISTEN 0      128             [::]:22            [::]:*     users:(("sshd",pid=842,fd=4))
+    note:
+      fr: "Lisez la colonne `Local Address:Port`. PostgreSQL écoute sur `127.0.0.1:5432` : il n'est joignable que depuis la machine, c'est bien. Redis écoute sur `0.0.0.0:6379` : il est joignable par tout le réseau, c'est le problème à corriger dans l'exemple suivant."
+      en: "Read the `Local Address:Port` column. PostgreSQL listens on `127.0.0.1:5432`: it can only be reached from the machine itself, which is good. Redis listens on `0.0.0.0:6379`: it can be reached by the whole network, which is the problem fixed in the next example."
+
+  - title:
+      fr: "Redis exposé à tout le réseau"
+      en: "Redis exposed to the whole network"
+    file: redis.conf
+    lang: ini
+    kind: vulnerable
+    code: |
+      # /etc/redis/redis.conf
+
+      # Listens on every network interface: anyone who can reach the server can connect
+      bind 0.0.0.0
+
+      # Safety net disabled: Redis accepts remote clients even without a password
+      protected-mode no
+
+      port 6379
+    note:
+      fr: "Avec cette configuration, n'importe qui capable de joindre le port 6379 lit et modifie toutes les données, sans mot de passe. Des milliers de serveurs Redis ont été compromis ainsi, simplement parce qu'ils écoutaient sur `0.0.0.0`."
+      en: "With this configuration, anyone able to reach port 6379 reads and changes all the data, without a password. Thousands of Redis servers were compromised this way, simply because they listened on `0.0.0.0`."
+
+  - title:
+      fr: "Redis limité à la machine locale"
+      en: "Redis restricted to the local machine"
+    file: redis.conf
+    lang: ini
+    kind: secure
+    code: |
+      # /etc/redis/redis.conf
+
+      # Listens on the loopback addresses only (IPv4 and IPv6):
+      # only programs running on this server can connect
+      bind 127.0.0.1 -::1
+
+      # Refuses remote clients when no password is configured
+      protected-mode yes
+
+      port 6379
+
+      # A password is still required, even locally (the real value comes from a secret manager)
+      requirepass changeme-in-vault
+    note:
+      fr: "Une seule ligne change tout : `bind 127.0.0.1 -::1`. Après `sudo systemctl restart redis-server`, la commande `ss -tlnp` doit afficher `127.0.0.1:6379` au lieu de `0.0.0.0:6379`. Vérifiez toujours avec `ss` : c'est la preuve."
+      en: "A single line changes everything: `bind 127.0.0.1 -::1`. After `sudo systemctl restart redis-server`, the `ss -tlnp` command must show `127.0.0.1:6379` instead of `0.0.0.0:6379`. Always check with `ss`: that is the proof."
+
+  - title:
+      fr: "Tester un port : ouvert ou fermé ?"
+      en: "Testing a port: open or closed?"
+    file: test-port.sh
+    lang: bash
+    code: |
+      # nc (netcat): -z = just try to connect, send nothing ; -v = verbose
+      # Port 22: an SSH server is listening on this machine
+      nc -zv localhost 22
+
+      # Port 23: nothing listens (and that is good news: Telnet is clear text)
+      nc -zv localhost 23
+    output: |
+      Connection to localhost (127.0.0.1) 22 port [tcp/ssh] succeeded!
+      nc: connect to localhost (127.0.0.1) port 23 (tcp) failed: Connection refused
+    note:
+      fr: "« succeeded » : la poignée de main TCP a abouti, le port est **ouvert**. « Connection refused » : la machine a répondu par un refus, le port est **fermé**. Si la commande reste bloquée sans réponse, le port est **filtré** par un pare-feu."
+      en: "\"succeeded\": the TCP handshake completed, the port is **open**. \"Connection refused\": the machine answered with a refusal, the port is **closed**. If the command hangs with no answer, the port is **filtered** by a firewall."
+
+  - title:
+      fr: "Repérer automatiquement les ports dangereux"
+      en: "Spotting dangerous ports automatically"
+    file: audit_ports.py
+    lang: python
+    code: |
+      # Simplified result of `ss -tulpn`: (protocol, listening address, port, program)
+      listening = [
+          ("tcp", "0.0.0.0", 22, "sshd"),
+          ("tcp", "0.0.0.0", 443, "nginx"),
+          ("tcp", "127.0.0.1", 5432, "postgres"),
+          ("tcp", "0.0.0.0", 6379, "redis-server"),
+          ("udp", "127.0.0.53", 53, "systemd-resolve"),
+          ("tcp", "::", 23, "telnetd"),
+      ]
+
+      # Services that must never listen on every interface
+      SENSITIVE = {23: "Telnet", 3306: "MySQL", 5432: "PostgreSQL", 6379: "Redis", 27017: "MongoDB"}
+      ALL_INTERFACES = {"0.0.0.0", "::", "*"}
+
+      problems = 0
+      for proto, address, port, program in listening:
+          exposed = address in ALL_INTERFACES
+          if exposed and port in SENSITIVE:
+              status = "DANGER"
+              problems += 1
+          elif exposed:
+              status = "exposed"
+          else:
+              status = "local"
+          print(f"{status:8} {proto}/{port:<6} {program:16} listens on {address}")
+
+      print(f"\n{problems} sensitive service(s) exposed on all interfaces")
+    output: |
+      exposed  tcp/22     sshd             listens on 0.0.0.0
+      exposed  tcp/443    nginx            listens on 0.0.0.0
+      local    tcp/5432   postgres         listens on 127.0.0.1
+      DANGER   tcp/6379   redis-server     listens on 0.0.0.0
+      local    udp/53     systemd-resolve  listens on 127.0.0.53
+      DANGER   tcp/23     telnetd          listens on ::
+
+      2 sensitive service(s) exposed on all interfaces
+    note:
+      fr: "Ce script applique la règle de la leçon : un port n'est pas dangereux en soi, c'est le couple **service sensible + écoute sur toutes les interfaces** qui l'est. SSH et HTTPS sont « exposed » volontairement ; Redis et Telnet n'auraient jamais dû l'être."
+      en: "This script applies the rule of the lesson: a port is not dangerous in itself, the pair **sensitive service + listening on every interface** is. SSH and HTTPS are \"exposed\" on purpose; Redis and Telnet should never have been."
+
+mistake:
+  fr: |
+    **Laisser un service écouter sur `0.0.0.0` « parce que c'est la configuration par défaut ».**
+
+    Beaucoup de bases de données, de caches et d'outils d'administration écoutent sur toutes les interfaces
+    dès leur installation ou dès qu'on suit un tutoriel trop rapide. Sur un serveur relié à Internet, des
+    robots trouvent le port en quelques minutes. Autre idée fausse : déplacer SSH du port 22 au port 2222
+    ne protège pas, un scan complet des 65535 ports prend peu de temps. Changer de port réduit le bruit dans
+    les journaux, pas le risque.
+  en: |
+    **Leaving a service listening on `0.0.0.0` "because it is the default configuration".**
+
+    Many databases, caches and admin tools listen on every interface right after installation, or as soon as
+    you follow a quick tutorial. On a server connected to the Internet, bots find the port within minutes.
+    Another misconception: moving SSH from port 22 to port 2222 does not protect you, a full scan of all
+    65535 ports takes little time. Changing the port reduces noise in the logs, not the risk.
+
+bestPractice:
+  fr: |
+    - **Écoutez au plus près** : `127.0.0.1` si le client est sur la même machine, une adresse privée précise sinon, `0.0.0.0` seulement pour un service réellement public.
+    - **Faites l'inventaire** : lancez `sudo ss -tulpn` sur chaque serveur et justifiez chaque ligne.
+    - **Fermez ce qui ne sert pas** : un service inutile s'arrête et se désinstalle (`systemctl disable --now <service>`).
+    - **Préférez les versions chiffrées** : SSH au lieu de Telnet, HTTPS au lieu de HTTP.
+    - **Ajoutez un pare-feu** en plus de l'adresse d'écoute : deux protections valent mieux qu'une.
+  en: |
+    - **Listen as narrowly as possible**: `127.0.0.1` if the client is on the same machine, a specific private address otherwise, `0.0.0.0` only for a truly public service.
+    - **Take an inventory**: run `sudo ss -tulpn` on every server and justify every line.
+    - **Close what is not used**: stop and uninstall useless services (`systemctl disable --now <service>`).
+    - **Prefer encrypted versions**: SSH instead of Telnet, HTTPS instead of HTTP.
+    - **Add a firewall** on top of the listening address: two protections are better than one.
+
+exercise:
+  statement:
+    fr: |
+      Sur une machine Linux, écrivez **une seule ligne de commande** qui affiche uniquement les adresses et
+      ports TCP en écoute qui ne sont **pas** limités à la machine locale, c'est-à-dire tout sauf `127.x.x.x`
+      et `[::1]`.
+
+      Indices : `ss -H` supprime la ligne d'en-tête, et l'adresse d'écoute est la 4e colonne de `ss -tln`.
+    en: |
+      On a Linux machine, write **a single command line** that prints only the listening TCP addresses and
+      ports that are **not** restricted to the local machine, i.e. everything except `127.x.x.x` and
+      `[::1]`.
+
+      Hints: `ss -H` removes the header line, and the listening address is the 4th column of `ss -tln`.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # -H no header, -t TCP, -l listening, -n numeric
+      # awk keeps the lines whose 4th column does NOT start with 127. or [::1]
+      ss -H -tln | awk '$4 !~ /^(127\.|\[::1\])/ {print $4}'
+
+      # Example of result:
+      #   0.0.0.0:22
+      #   0.0.0.0:443
+      #   0.0.0.0:6379
+      #   [::]:22
+    note:
+      fr: "Chaque ligne affichée est un port joignable depuis le réseau : c'est la liste à justifier, service par service."
+      en: "Every line printed is a port reachable from the network: that is the list to justify, service by service."
+
+quiz:
+  - q:
+      fr: "Quel protocole garantit que les données arrivent, et dans le bon ordre ?"
+      en: "Which protocol guarantees that data arrives, and in the right order?"
+    options:
+      fr: ["UDP", "ICMP", "TCP", "ARP"]
+      en: ["UDP", "ICMP", "TCP", "ARP"]
+    answer: 2
+    why:
+      fr: "TCP établit une connexion, accuse réception des données et renvoie ce qui a été perdu. UDP n'offre aucune de ces garanties."
+      en: "TCP sets up a connection, acknowledges data and resends what was lost. UDP offers none of these guarantees."
+  - q:
+      fr: "Dans quel ordre se déroule la poignée de main TCP ?"
+      en: "In which order does the TCP handshake happen?"
+    options:
+      fr: ["SYN, SYN-ACK, ACK", "ACK, SYN, SYN-ACK", "SYN, ACK, FIN", "SYN-ACK, SYN, ACK"]
+      en: ["SYN, SYN-ACK, ACK", "ACK, SYN, SYN-ACK", "SYN, ACK, FIN", "SYN-ACK, SYN, ACK"]
+    answer: 0
+    why:
+      fr: "Le client envoie SYN, le serveur répond SYN-ACK, le client confirme par ACK : la connexion est alors ouverte."
+      en: "The client sends SYN, the server answers SYN-ACK, the client confirms with ACK: the connection is then open."
+  - q:
+      fr: "Un service écoute sur `127.0.0.1:5432`. Qui peut s'y connecter ?"
+      en: "A service listens on `127.0.0.1:5432`. Who can connect to it?"
+    options:
+      fr:
+        - "Tout Internet"
+        - "Toutes les machines du réseau local"
+        - "Personne, le port est fermé"
+        - "Uniquement les programmes de la machine elle-même"
+      en:
+        - "The whole Internet"
+        - "Every machine on the local network"
+        - "Nobody, the port is closed"
+        - "Only programs on the machine itself"
+    answer: 3
+    why:
+      fr: "`127.0.0.1` est l'adresse de bouclage (loopback) : elle n'est joignable que depuis la machine elle-même."
+      en: "`127.0.0.1` is the loopback address: it can only be reached from the machine itself."
+  - q:
+      fr: "Quel port est utilisé par défaut par HTTPS ?"
+      en: "Which port does HTTPS use by default?"
+    options:
+      fr: ["22", "443", "80", "53"]
+      en: ["22", "443", "80", "53"]
+    answer: 1
+    why:
+      fr: "HTTPS utilise le port TCP 443. Le port 80 est celui de HTTP (non chiffré), 22 celui de SSH, 53 celui du DNS."
+      en: "HTTPS uses TCP port 443. Port 80 is HTTP (unencrypted), 22 is SSH, 53 is DNS."
+  - q:
+      fr: "Vous testez un port et vous n'obtenez aucune réponse, la commande reste bloquée. Quel est l'état le plus probable du port ?"
+      en: "You test a port and get no answer at all, the command hangs. What is the most likely state of the port?"
+    options:
+      fr: ["Ouvert", "Fermé", "Filtré par un pare-feu", "En écoute sur 127.0.0.1"]
+      en: ["Open", "Closed", "Filtered by a firewall", "Listening on 127.0.0.1"]
+    answer: 2
+    why:
+      fr: "Un port fermé répond immédiatement par un refus (RST). L'absence totale de réponse indique qu'un pare-feu jette les paquets."
+      en: "A closed port answers immediately with a refusal (RST). No answer at all means a firewall is dropping the packets."

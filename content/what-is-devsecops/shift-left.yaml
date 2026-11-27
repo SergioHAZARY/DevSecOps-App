@@ -1,0 +1,429 @@
+description:
+  fr: "Comprendre le principe du Shift Left : déplacer les contrôles de sécurité au plus tôt, dans l'éditeur, avant le commit et dans la pull request."
+  en: "Understand the Shift Left principle: move security checks as early as possible, into the editor, before the commit and into the pull request."
+duration: 15
+
+intro:
+  fr: |
+    Dessinez la vie d'un logiciel sur une ligne, de gauche à droite : **planifier → coder → construire →
+    tester → déployer → exploiter**. Pendant longtemps, la sécurité se trouvait tout à droite : un audit
+    juste avant la mise en production. **Shift Left** (« décaler à gauche ») signifie simplement :
+    *faire ces contrôles plus tôt sur la ligne*.
+
+    C'est la différence entre le **correcteur orthographique** qui souligne la faute pendant que vous tapez,
+    et l'imprimeur qui découvre la faute quand 5 000 livres sont déjà imprimés. La faute est la même ; le
+    coût de la correction, pas du tout.
+
+    Dans cette leçon, vous allez voir un secret entrer dans Git faute de contrôle, puis installer les
+    garde-fous qui l'auraient arrêté en quelques secondes.
+  en: |
+    Draw the life of a piece of software on a line, from left to right: **plan → code → build → test →
+    deploy → operate**. For a long time, security sat at the far right: an audit just before going to
+    production. **Shift Left** simply means: *run those checks earlier on the line*.
+
+    It is the difference between the **spell checker** that underlines the typo while you type, and the
+    printer who discovers the typo once 5,000 books are already printed. The typo is the same; the cost
+    of fixing it is not.
+
+    In this lesson you will watch a secret enter Git because nothing checked it, then install the
+    guardrails that would have stopped it within seconds.
+
+sections:
+  - heading:
+      fr: "Que veut dire « à gauche » ?"
+      en: "What does \"left\" mean?"
+    body:
+      fr: |
+        Chaque étape du cycle de vie peut accueillir un contrôle de sécurité. Plus l'étape est à gauche,
+        plus le retour arrive vite.
+
+        | Étape | Contrôle possible | Délai du retour |
+        |---|---|---|
+        | Planifier | Se demander « que peut-il arriver de grave ? » (modélisation des menaces) | Avant d'écrire la moindre ligne |
+        | Coder | Extension de sécurité dans l'éditeur | Quelques secondes |
+        | Commit | Crochet Git *pre-commit* (secrets, clés privées) | Quelques secondes |
+        | Pull request | Analyse du code et des dépendances dans le pipeline | Quelques minutes |
+        | Test / préproduction | Scan de l'application en fonctionnement | Quelques heures |
+        | Production | Audit, test d'intrusion, supervision | Jours ou semaines |
+
+        Un **crochet Git** (*hook*) est un script que Git exécute automatiquement à un moment précis.
+        Le crochet `pre-commit` tourne juste avant l'enregistrement d'un commit : s'il échoue, le commit
+        est annulé.
+      en: |
+        Every step of the lifecycle can host a security check. The further left the step, the faster
+        the feedback.
+
+        | Step | Possible check | Feedback delay |
+        |---|---|---|
+        | Plan | Asking "what could go badly wrong?" (threat modeling) | Before a single line is written |
+        | Code | Security extension in the editor | A few seconds |
+        | Commit | Git *pre-commit* hook (secrets, private keys) | A few seconds |
+        | Pull request | Code and dependency analysis in the pipeline | A few minutes |
+        | Test / staging | Scan of the running application | A few hours |
+        | Production | Audit, penetration test, monitoring | Days or weeks |
+
+        A **Git hook** is a script that Git runs automatically at a precise moment. The `pre-commit`
+        hook runs right before a commit is recorded: if it fails, the commit is cancelled.
+  - heading:
+      fr: "Pourquoi plus tôt coûte moins cher"
+      en: "Why earlier is cheaper"
+    body:
+      fr: |
+        Prenons une clé d'accès écrite par erreur dans le code.
+
+        | Moment de la découverte | Ce qu'il faut faire |
+        |---|---|
+        | Dans l'éditeur ou au commit | Effacer la ligne. Une personne, une minute. |
+        | Dans la pull request | Corriger, refaire le commit, relancer le pipeline. |
+        | Après fusion dans la branche principale | Révoquer la clé, en créer une nouvelle, nettoyer l'historique Git. |
+        | Après une attaque en production | Tout ce qui précède, plus l'enquête, les clients à prévenir, parfois le régulateur. |
+
+        Trois raisons expliquent cet écart : à gauche, le développeur a encore **le contexte en tête**,
+        **peu de personnes** sont concernées, et il n'y a **rien à défaire** chez les utilisateurs.
+      en: |
+        Take an access key written into the code by mistake.
+
+        | When it is discovered | What has to be done |
+        |---|---|
+        | In the editor or at commit time | Delete the line. One person, one minute. |
+        | In the pull request | Fix, commit again, rerun the pipeline. |
+        | After the merge into the main branch | Revoke the key, create a new one, clean the Git history. |
+        | After an attack in production | All of the above, plus the investigation, customers to notify, sometimes the regulator. |
+
+        Three reasons explain the gap: on the left, the developer still has **the context in mind**,
+        **few people** are involved, and there is **nothing to undo** on the users' side.
+  - heading:
+      fr: "Les limites : à gauche, mais pas seulement à gauche"
+      en: "The limits: left, but not only left"
+    body:
+      fr: |
+        Shift Left ne veut pas dire « tout mettre sur le poste du développeur » ni « supprimer les contrôles
+        de droite ».
+
+        - Certaines failles ne se voient que sur l'application **en fonctionnement** (mauvaise configuration
+          du serveur, comportement anormal). Il faut garder des tests dynamiques et de la supervision.
+        - Un crochet local peut être **contourné** (`git commit --no-verify`). Le même contrôle doit donc
+          tourner aussi dans le pipeline, que personne ne peut sauter.
+        - Trop d'alertes inutiles (les *faux positifs*) poussent les équipes à tout ignorer. Mieux vaut peu
+          de règles fiables que beaucoup de bruit.
+
+        La bonne image : des filets successifs. Les mailles les plus fines et les plus rapides à gauche,
+        des filets de secours à droite.
+      en: |
+        Shift Left does not mean "put everything on the developer's laptop" nor "remove the checks on
+        the right".
+
+        - Some flaws only show on the **running** application (server misconfiguration, abnormal
+          behaviour). Dynamic tests and monitoring must stay.
+        - A local hook can be **bypassed** (`git commit --no-verify`). The same check must therefore also
+          run in the pipeline, which nobody can skip.
+        - Too many useless alerts (*false positives*) push teams to ignore everything. A few reliable
+          rules beat a lot of noise.
+
+        The right picture: successive nets. The finest and fastest meshes on the left, safety nets on
+        the right.
+
+examples:
+  - title:
+      fr: "Sans contrôle à gauche : le secret entre dans l'historique"
+      en: "No check on the left: the secret enters the history"
+    file: leak.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # A developer writes an access key in a file and commits it
+      git init -q demo && cd demo
+      echo 'AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"' > settings.py
+      git add settings.py
+      git commit -q -m "Add settings"
+
+      # He notices the mistake and removes the key in a second commit
+      echo 'AWS_ACCESS_KEY_ID = ""' > settings.py
+      git commit -q -am "Remove key"
+
+      # Too late: the history still contains the key
+      git log -p | grep "AKIA"
+    output: |
+      -AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+      +AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+    note:
+      fr: "Supprimer la ligne ne supprime pas l'historique : `git log -p` montre encore la clé (ajoutée `+` puis retirée `-`). Toute personne qui clone le dépôt peut la lire. Une clé qui a touché Git doit être **révoquée**, pas seulement effacée."
+      en: "Deleting the line does not delete the history: `git log -p` still shows the key (added `+` then removed `-`). Anyone who clones the repository can read it. A key that touched Git must be **revoked**, not just erased."
+
+  - title:
+      fr: "Sous le capot : un détecteur de secrets en 25 lignes"
+      en: "Under the hood: a secret scanner in 25 lines"
+    file: mini_scanner.py
+    lang: python
+    kind: neutral
+    code: |
+      import re
+
+      # A secret scanner is mostly a list of patterns applied to every line
+      PATTERNS = {
+          "AWS access key": re.compile(r"AKIA[0-9A-Z]{16}"),
+          "Private key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+          "Hard-coded password": re.compile(r"password\s*=\s*[\"'][^\"']+[\"']", re.IGNORECASE),
+      }
+
+      # The file a developer is about to commit
+      staged_file = """
+      import os
+      REGION = "eu-west-3"
+      AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+      db_password = "changeme-in-vault"
+      API_URL = os.environ.get("API_URL", "https://api.example.com")
+      """
+
+      findings = []
+      for number, line in enumerate(staged_file.strip().splitlines(), start=1):
+          for name, pattern in PATTERNS.items():
+              if pattern.search(line):
+                  findings.append((number, name))
+
+      for number, name in findings:
+          print(f"line {number}: {name}")
+
+      # Any finding blocks the commit: this is what a pre-commit hook does
+      print("COMMIT BLOCKED" if findings else "commit allowed")
+    output: |
+      line 3: AWS access key
+      line 4: Hard-coded password
+      COMMIT BLOCKED
+    note:
+      fr: "Les vrais outils (Gitleaks, TruffleHog) fonctionnent sur ce principe, avec des centaines de motifs et moins de fausses alertes. Appuyez sur Run, puis remplacez la clé par `os.environ[\"AWS_ACCESS_KEY_ID\"]` : la ligne 3 n'est plus signalée."
+      en: "Real tools (Gitleaks, TruffleHog) work on this principle, with hundreds of patterns and fewer false alerts. Press Run, then replace the key with `os.environ[\"AWS_ACCESS_KEY_ID\"]`: line 3 is no longer reported."
+
+  - title:
+      fr: "Avant le commit : des crochets installés avec pre-commit"
+      en: "Before the commit: hooks installed with pre-commit"
+    file: .pre-commit-config.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # Install once per machine:    pip install pre-commit
+      # Activate in the repository:  pre-commit install
+      fail_fast: true # stop at the first failing hook: faster feedback
+
+      repos:
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          rev: v5.0.0
+          hooks:
+            - id: check-yaml # a broken YAML file never reaches the pipeline
+            - id: detect-private-key # refuses files that contain a private key
+            - id: check-added-large-files # no database dump committed by accident
+
+        - repo: https://github.com/gitleaks/gitleaks
+          rev: v8.24.2
+          hooks:
+            - id: gitleaks # looks for API keys, tokens and passwords
+    output: |
+      $ git add deploy_key
+      $ git commit -m "Add deploy key"
+      check yaml...........................................(no files to check)Skipped
+      detect private key.......................................................Failed
+      - hook id: detect-private-key
+      - exit code: 1
+
+      Private key found: deploy_key
+    note:
+      fr: "`pre-commit` est un outil qui télécharge et lance des crochets décrits dans ce fichier. Le fichier est versionné : toute l'équipe a les mêmes contrôles. Ici, une clé privée SSH est refusée **avant** d'entrer dans l'historique. `rev` fixe la version de chaque crochet."
+      en: "`pre-commit` is a tool that downloads and runs the hooks described in this file. The file is versioned: the whole team gets the same checks. Here an SSH private key is refused **before** it enters the history. `rev` pins the version of each hook."
+
+  - title:
+      fr: "Dans la pull request : l'analyse que personne ne peut sauter"
+      en: "In the pull request: the analysis nobody can skip"
+    file: .github/workflows/pr-security.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: pr-security
+
+      # Runs on every pull request, before the code can be merged
+      on:
+        pull_request:
+
+      permissions:
+        contents: read
+
+      jobs:
+        semgrep:
+          runs-on: ubuntu-latest
+          container:
+            image: semgrep/semgrep # official image, the tool is already installed
+          steps:
+            - uses: actions/checkout@v4
+            - name: Static analysis of the source code
+              # --error returns a non-zero exit code when something is found
+              run: semgrep scan --config p/default --error
+    note:
+      fr: "Un crochet local peut être contourné avec `--no-verify` ; ce workflow, non. Semgrep lit le code source à la recherche de motifs dangereux et fait échouer la pull request s'il en trouve. Local **et** pipeline : deux filets valent mieux qu'un."
+      en: "A local hook can be bypassed with `--no-verify`; this workflow cannot. Semgrep reads the source code looking for dangerous patterns and fails the pull request when it finds some. Local **and** pipeline: two nets are better than one."
+
+mistake:
+  fr: |
+    **Croire qu'un crochet pre-commit suffit, ou qu'effacer un secret le fait disparaître.**
+
+    Un crochet local n'existe que sur les machines où il a été installé, et `git commit --no-verify` le
+    désactive. Sans le même contrôle dans le pipeline, il suffit d'un collègue pressé pour laisser passer
+    un secret. Et quand un secret est déjà parti dans Git, le supprimer dans un nouveau commit ne sert à
+    rien : il reste lisible dans l'historique. La seule réponse correcte est de **révoquer** le secret
+    et d'en générer un nouveau.
+  en: |
+    **Believing that a pre-commit hook is enough, or that erasing a secret makes it disappear.**
+
+    A local hook only exists on machines where it was installed, and `git commit --no-verify` turns it
+    off. Without the same check in the pipeline, one colleague in a hurry is enough to let a secret
+    through. And once a secret has reached Git, removing it in a new commit is useless: it remains
+    readable in the history. The only correct answer is to **revoke** the secret and generate a new one.
+
+bestPractice:
+  fr: |
+    - **Trois filets** : l'éditeur (conseil immédiat), le crochet pre-commit (blocage local), la pull request (blocage obligatoire).
+    - **Rapide avant tout** : un contrôle local doit répondre en quelques secondes, sinon il sera contourné.
+    - **Versionnez la configuration** (`.pre-commit-config.yaml`, règles d'analyse) pour que toute l'équipe ait les mêmes contrôles.
+    - **Expliquez la correction** dans le message d'erreur : bloquer sans aider crée de la frustration.
+    - **Gardez la droite** : supervision et tests sur l'application en fonctionnement restent indispensables.
+  en: |
+    - **Three nets**: the editor (instant advice), the pre-commit hook (local block), the pull request (mandatory block).
+    - **Speed first**: a local check must answer within seconds, otherwise it will be bypassed.
+    - **Version the configuration** (`.pre-commit-config.yaml`, analysis rules) so the whole team gets the same checks.
+    - **Explain the fix** in the error message: blocking without helping creates frustration.
+    - **Keep the right side**: monitoring and tests on the running application remain essential.
+
+exercise:
+  statement:
+    fr: |
+      Les fichiers `.env` contiennent souvent des mots de passe et ne doivent jamais être versionnés.
+
+      Écrivez **à la main** un crochet Git `pre-commit` (un script Bash placé dans `.git/hooks/pre-commit`) qui :
+
+      1. récupère la liste des fichiers sur le point d'être validés ;
+      2. annule le commit si l'un d'eux s'appelle `.env` (à la racine ou dans un sous-dossier) ;
+      3. affiche un message qui explique comment corriger.
+
+      Indice : `git diff --cached --name-only` affiche les fichiers indexés, et un script qui se termine
+      par `exit 1` fait échouer le commit.
+    en: |
+      `.env` files often contain passwords and must never be versioned.
+
+      Write **by hand** a Git `pre-commit` hook (a Bash script placed in `.git/hooks/pre-commit`) that:
+
+      1. gets the list of files about to be committed;
+      2. cancels the commit if one of them is named `.env` (at the root or in a sub-folder);
+      3. prints a message explaining how to fix the problem.
+
+      Hint: `git diff --cached --name-only` prints the staged files, and a script ending with `exit 1`
+      makes the commit fail.
+  solution:
+    file: .git/hooks/pre-commit
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      # Make it executable once: chmod +x .git/hooks/pre-commit
+      set -eu
+
+      # Files that are about to be committed (Added, Copied, Modified)
+      staged=$(git diff --cached --name-only --diff-filter=ACM)
+
+      # Block any file named .env, at the root or in a sub-folder
+      if echo "$staged" | grep -qE '(^|/)\.env$'; then
+        echo "ERROR: a .env file is staged. Secrets must not be committed." >&2
+        echo "Fix:   git restore --staged .env && echo '.env' >> .gitignore" >&2
+        exit 1 # a non-zero exit code makes Git abort the commit
+      fi
+    note:
+      fr: "Testez-le : `touch .env && git add -f .env && git commit -m test` doit échouer. Ce crochet reste local : ajoutez aussi `.env` au fichier `.gitignore` et un contrôle équivalent dans le pipeline."
+      en: "Test it: `touch .env && git add -f .env && git commit -m test` must fail. This hook stays local: also add `.env` to `.gitignore` and an equivalent check in the pipeline."
+
+quiz:
+  - q:
+      fr: "Que signifie « Shift Left » en sécurité ?"
+      en: "What does \"Shift Left\" mean in security?"
+    options:
+      fr:
+        - "Déplacer les serveurs vers un autre centre de données"
+        - "Confier la sécurité uniquement aux développeurs juniors"
+        - "Réaliser les contrôles de sécurité plus tôt dans le cycle de développement"
+        - "Reporter les contrôles après la mise en production"
+      en:
+        - "Moving servers to another data centre"
+        - "Handing security only to junior developers"
+        - "Running security checks earlier in the development lifecycle"
+        - "Postponing checks until after the production release"
+    answer: 2
+    why:
+      fr: "La « gauche » est le début de la ligne plan → code → build → test → déploiement : on y déplace les contrôles."
+      en: "The \"left\" is the start of the plan → code → build → test → deploy line: checks are moved there."
+  - q:
+      fr: "À quel moment s'exécute un crochet Git `pre-commit` ?"
+      en: "When does a Git `pre-commit` hook run?"
+    options:
+      fr:
+        - "Juste avant l'enregistrement du commit, sur le poste du développeur"
+        - "Après le déploiement en production"
+        - "Une fois par nuit sur le serveur Git"
+        - "Uniquement lors d'un `git clone`"
+      en:
+        - "Right before the commit is recorded, on the developer's machine"
+        - "After the deployment to production"
+        - "Once a night on the Git server"
+        - "Only during a `git clone`"
+    answer: 0
+    why:
+      fr: "Le crochet `pre-commit` est lancé par Git localement avant de créer le commit ; s'il échoue, le commit est annulé."
+      en: "The `pre-commit` hook is run locally by Git before the commit is created; if it fails, the commit is cancelled."
+  - q:
+      fr: "Une clé d'API a été poussée dans le dépôt puis supprimée dans un commit suivant. Que faut-il faire ?"
+      en: "An API key was pushed to the repository and then removed in a later commit. What must be done?"
+    options:
+      fr:
+        - "Rien, la clé n'est plus dans le code"
+        - "Renommer le fichier qui contenait la clé"
+        - "Passer le dépôt en privé, cela suffit"
+        - "Révoquer la clé et en générer une nouvelle"
+      en:
+        - "Nothing, the key is no longer in the code"
+        - "Rename the file that contained the key"
+        - "Make the repository private, that is enough"
+        - "Revoke the key and generate a new one"
+    answer: 3
+    why:
+      fr: "La clé reste lisible dans l'historique Git. Il faut la considérer comme compromise : révocation puis remplacement."
+      en: "The key remains readable in the Git history. It must be considered compromised: revoke it, then replace it."
+  - q:
+      fr: "Pourquoi répéter dans le pipeline un contrôle déjà fait par un crochet local ?"
+      en: "Why repeat in the pipeline a check already done by a local hook?"
+    options:
+      fr:
+        - "Parce que le pipeline est plus rapide que le poste du développeur"
+        - "Parce qu'un crochet local peut ne pas être installé ou être contourné"
+        - "Parce que Git interdit les crochets sur les branches principales"
+        - "Parce que les crochets ne fonctionnent que sous Windows"
+      en:
+        - "Because the pipeline is faster than the developer's machine"
+        - "Because a local hook may not be installed or may be bypassed"
+        - "Because Git forbids hooks on main branches"
+        - "Because hooks only work on Windows"
+    answer: 1
+    why:
+      fr: "Le crochet dépend de chaque poste et `--no-verify` le saute ; le pipeline est le filet que personne ne peut éviter."
+      en: "The hook depends on each machine and `--no-verify` skips it; the pipeline is the net nobody can avoid."
+  - q:
+      fr: "Quelle affirmation sur Shift Left est correcte ?"
+      en: "Which statement about Shift Left is correct?"
+    options:
+      fr:
+        - "Il rend la supervision en production inutile"
+        - "Il consiste à multiplier les alertes, même peu fiables"
+        - "Il complète les contrôles tardifs sans les remplacer"
+        - "Il ne concerne que les applications écrites en Python"
+      en:
+        - "It makes production monitoring useless"
+        - "It consists in multiplying alerts, even unreliable ones"
+        - "It complements late checks without replacing them"
+        - "It only applies to applications written in Python"
+    answer: 2
+    why:
+      fr: "Certaines failles ne se voient qu'en fonctionnement : on ajoute des filets rapides à gauche et on garde ceux de droite."
+      en: "Some flaws only show at runtime: fast nets are added on the left and the ones on the right are kept."

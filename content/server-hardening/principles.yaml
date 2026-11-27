@@ -1,0 +1,508 @@
+description:
+  fr: "Comprendre les principes du durcissement d'un serveur, mesurer sa surface d'attaque et utiliser les CIS Benchmarks comme référentiel."
+  en: "Understand the principles of server hardening, measure the attack surface and use the CIS Benchmarks as a reference baseline."
+duration: 20
+
+intro:
+  fr: |
+    Un serveur fraîchement installé est configuré pour **fonctionner partout**, pas pour être sûr : services
+    inutiles démarrés, mots de passe acceptés à distance, réglages du noyau permissifs. Le **durcissement**
+    (*hardening*) consiste à retirer tout ce qui n'est pas nécessaire et à resserrer ce qui reste.
+
+    Pensez à une maison livrée avec vingt portes et fenêtres, toutes déverrouillées « pour que les ouvriers
+    puissent entrer ». Avant d'y habiter, vous murez les ouvertures inutiles, vous posez des serrures sur les
+    autres et vous installez une alarme. Chaque ouverture restante est un point d'entrée possible : c'est la
+    **surface d'attaque**.
+
+    Dans cette leçon, vous allez mesurer la surface d'attaque d'un serveur, découvrir les **CIS Benchmarks**
+    (le référentiel de durcissement le plus utilisé), lancer un audit automatique et écrire votre premier
+    durcissement « en code ».
+  en: |
+    A freshly installed server is configured to **work everywhere**, not to be safe: unneeded services
+    running, passwords accepted remotely, permissive kernel settings. **Hardening** means removing everything
+    that is not required and tightening what remains.
+
+    Think of a house delivered with twenty doors and windows, all unlocked "so the builders can get in".
+    Before moving in, you brick up the openings you do not need, fit locks on the others and install an
+    alarm. Every remaining opening is a possible way in: that is the **attack surface**.
+
+    In this lesson you will measure the attack surface of a server, discover the **CIS Benchmarks** (the most
+    widely used hardening baseline), run an automated audit and write your first hardening "as code".
+
+sections:
+  - heading:
+      fr: "Les cinq principes du durcissement"
+      en: "The five principles of hardening"
+    body:
+      fr: |
+        | Principe | Question à se poser | Exemple concret |
+        |---|---|---|
+        | **Réduire la surface d'attaque** | Ce service, ce port, ce paquet est-il nécessaire ? | Désinstaller `telnetd`, fermer le port 111 |
+        | **Moindre privilège** | Ce compte a-t-il plus de droits que nécessaire ? | Service lancé par un utilisateur dédié, pas `root` |
+        | **Sécurité par défaut** | Que se passe-t-il si personne ne configure rien ? | Pare-feu en `deny` par défaut |
+        | **Défense en profondeur** | Si ce contrôle tombe, qu'est-ce qui reste ? | Clés SSH **et** pare-feu **et** Fail2Ban |
+        | **Traçabilité** | Saurai-je ce qui s'est passé ? | `auditd`, journaux centralisés |
+
+        Le durcissement n'est pas une action unique mais un **cycle** : mesurer l'état actuel, appliquer une
+        base de référence, vérifier, puis recommencer à chaque changement. Une configuration appliquée à la
+        main sur un serveur dérive en quelques semaines ; c'est pourquoi on l'écrit **en code** (Ansible,
+        image machine, script) et on la revérifie automatiquement.
+      en: |
+        | Principle | Question to ask | Concrete example |
+        |---|---|---|
+        | **Reduce the attack surface** | Is this service, port or package required? | Uninstall `telnetd`, close port 111 |
+        | **Least privilege** | Does this account have more rights than it needs? | Service run by a dedicated user, not `root` |
+        | **Secure by default** | What happens if nobody configures anything? | Firewall set to `deny` by default |
+        | **Defense in depth** | If this control fails, what is left? | SSH keys **and** firewall **and** Fail2Ban |
+        | **Auditability** | Will I know what happened? | `auditd`, centralised logs |
+
+        Hardening is not a one-off action but a **cycle**: measure the current state, apply a baseline,
+        verify, then start again at every change. A configuration applied by hand on one server drifts
+        within weeks; that is why it is written **as code** (Ansible, machine image, script) and re-checked
+        automatically.
+  - heading:
+      fr: "Les CIS Benchmarks"
+      en: "The CIS Benchmarks"
+    body:
+      fr: |
+        Le **CIS** (*Center for Internet Security*) publie gratuitement des guides de configuration appelés
+        **CIS Benchmarks** : un document par système (Ubuntu, RHEL, Windows Server, Docker, Kubernetes, AWS...).
+        Chaque recommandation indique la raison, la commande d'audit et la commande de correction.
+
+        Les recommandations sont regroupées en **profils** :
+
+        | Profil | Objectif | Impact sur le fonctionnement |
+        |---|---|---|
+        | **Level 1** | Socle raisonnable pour tout serveur | Faible : rien ne casse en général |
+        | **Level 2** | Environnements sensibles, défense en profondeur | Possible : certaines fonctions sont désactivées |
+        | **STIG** | Conformité aux exigences de la défense américaine (DISA) | Élevé |
+
+        Chaque profil existe en version *Server* et *Workstation*, et chaque recommandation est marquée
+        **Automated** (vérifiable par un outil) ou **Manual** (jugement humain nécessaire).
+
+        Ne confondez pas avec les **CIS Controls** : ce sont 18 grandes mesures d'organisation (inventaire,
+        gestion des vulnérabilités...), alors que les Benchmarks sont des réglages techniques précis.
+        D'autres référentiels existent : les **STIG** de la DISA, le guide **ANSSI-BP-028** pour GNU/Linux
+        (niveaux minimal, intermédiaire, renforcé, élevé) et les **Microsoft Security Baselines** pour Windows.
+      en: |
+        The **CIS** (*Center for Internet Security*) publishes free configuration guides called
+        **CIS Benchmarks**: one document per system (Ubuntu, RHEL, Windows Server, Docker, Kubernetes, AWS...).
+        Each recommendation gives the rationale, the audit command and the remediation command.
+
+        Recommendations are grouped into **profiles**:
+
+        | Profile | Goal | Impact on functionality |
+        |---|---|---|
+        | **Level 1** | Sensible baseline for any server | Low: usually nothing breaks |
+        | **Level 2** | Sensitive environments, defense in depth | Possible: some features are disabled |
+        | **STIG** | Compliance with US defense requirements (DISA) | High |
+
+        Each profile comes in a *Server* and a *Workstation* flavour, and each recommendation is tagged
+        **Automated** (checkable by a tool) or **Manual** (human judgement needed).
+
+        Do not confuse them with the **CIS Controls**: those are 18 high-level organisational safeguards
+        (inventory, vulnerability management...), whereas Benchmarks are precise technical settings.
+        Other baselines exist: the DISA **STIGs**, the **ANSSI-BP-028** guide for GNU/Linux (minimal,
+        intermediate, enhanced and high levels) and the **Microsoft Security Baselines** for Windows.
+  - heading:
+      fr: "Auditer automatiquement : OpenSCAP, Lynis, CIS-CAT"
+      en: "Auditing automatically: OpenSCAP, Lynis, CIS-CAT"
+    body:
+      fr: |
+        Un Benchmark compte souvent plus de 250 recommandations : personne ne les vérifie à la main.
+
+        | Outil | Éditeur | Ce qu'il fait |
+        |---|---|---|
+        | **OpenSCAP** (`oscap`) | Communauté / Red Hat | Évalue un profil (CIS, STIG, ANSSI) et génère la correction Ansible ou Bash |
+        | **Lynis** | CISOfy | Audit rapide d'un système Unix, donne un indice de durcissement |
+        | **CIS-CAT** | CIS | Outil officiel du CIS (version Lite gratuite, Pro pour les membres) |
+        | **Ubuntu Security Guide** (`usg`) | Canonical | Audit et correction CIS sur Ubuntu Pro |
+
+        Le résultat d'un audit n'est pas un objectif de 100 % : certaines recommandations ne s'appliquent
+        pas à votre contexte. L'important est de **documenter chaque écart accepté** et de faire échouer
+        le pipeline quand un écart *non accepté* apparaît.
+      en: |
+        A Benchmark often contains more than 250 recommendations: nobody checks them by hand.
+
+        | Tool | Vendor | What it does |
+        |---|---|---|
+        | **OpenSCAP** (`oscap`) | Community / Red Hat | Evaluates a profile (CIS, STIG, ANSSI) and generates the Ansible or Bash remediation |
+        | **Lynis** | CISOfy | Quick audit of a Unix system, gives a hardening index |
+        | **CIS-CAT** | CIS | Official CIS tool (free Lite version, Pro for members) |
+        | **Ubuntu Security Guide** (`usg`) | Canonical | CIS audit and remediation on Ubuntu Pro |
+
+        The goal of an audit is not a 100 % score: some recommendations do not apply to your context.
+        What matters is to **document every accepted deviation** and to fail the pipeline when a
+        *non-accepted* deviation appears.
+
+examples:
+  - title:
+      fr: "Mesurer la surface d'attaque d'un serveur par défaut"
+      en: "Measuring the attack surface of a default server"
+    file: attack-surface.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # Inventory of what an attacker can reach or abuse on this host.
+
+      # 1. Listening sockets: every line is a door open to the network
+      sudo ss -tulpn
+
+      # 2. Services started at boot: each one is code running permanently
+      systemctl list-unit-files --type=service --state=enabled --no-legend | wc -l
+
+      # 3. SUID binaries: programs that run as root whoever launches them
+      sudo find / -xdev -perm -4000 -type f 2>/dev/null | wc -l
+
+      # 4. Accounts that can log in with a shell
+      grep -Ev '(nologin|false)$' /etc/passwd | cut -d: -f1
+    output: |
+      Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+      udp   UNCONN 0      0            0.0.0.0:5353       0.0.0.0:*     users:(("avahi-daemon",pid=612,fd=12))
+      udp   UNCONN 0      0            0.0.0.0:111        0.0.0.0:*     users:(("rpcbind",pid=540,fd=5))
+      tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*     users:(("sshd",pid=801,fd=3))
+      tcp   LISTEN 0      4096         0.0.0.0:111        0.0.0.0:*     users:(("rpcbind",pid=540,fd=4))
+      tcp   LISTEN 0      128          0.0.0.0:631        0.0.0.0:*     users:(("cupsd",pid=655,fd=7))
+      tcp   LISTEN 0      151          0.0.0.0:3306       0.0.0.0:*     users:(("mysqld",pid=930,fd=21))
+      74
+      31
+      root
+      deploy
+      backup
+    note:
+      fr: "Sur ce serveur web, seuls SSH et HTTP(S) devraient écouter. Or `rpcbind`, `avahi-daemon` et `cupsd` (impression) sont exposés, et MySQL écoute sur `0.0.0.0` au lieu de `127.0.0.1` : quatre portes d'entrée inutiles."
+      en: "On this web server only SSH and HTTP(S) should be listening. Yet `rpcbind`, `avahi-daemon` and `cupsd` (printing) are exposed, and MySQL listens on `0.0.0.0` instead of `127.0.0.1`: four needless entry points."
+
+  - title:
+      fr: "Le principe d'un audit de conformité, en 30 lignes"
+      en: "How a compliance audit works, in 30 lines"
+    file: baseline_check.py
+    lang: python
+    kind: neutral
+    code: |
+      # A tiny compliance checker: it compares the state of a server with a
+      # baseline, exactly what OpenSCAP or Lynis do at a much larger scale.
+
+      BASELINE = {
+          "ssh.PermitRootLogin": "no",
+          "ssh.PasswordAuthentication": "no",
+          "sysctl.net.ipv4.tcp_syncookies": "1",
+          "sysctl.kernel.randomize_va_space": "2",
+          "service.telnet": "absent",
+          "firewall.default_incoming": "deny",
+      }
+
+      # State collected on a freshly installed server (default configuration)
+      server = {
+          "ssh.PermitRootLogin": "yes",
+          "ssh.PasswordAuthentication": "yes",
+          "sysctl.net.ipv4.tcp_syncookies": "1",
+          "sysctl.kernel.randomize_va_space": "2",
+          "service.telnet": "running",
+          "firewall.default_incoming": "allow",
+      }
+
+      passed = 0
+      for control, expected in BASELINE.items():
+          actual = server.get(control, "missing")
+          ok = actual == expected
+          passed += ok
+          status = "PASS" if ok else "FAIL"
+          print(f"[{status}] {control:<34} expected={expected:<7} actual={actual}")
+
+      score = round(100 * passed / len(BASELINE))
+      print(f"\nCompliance: {passed}/{len(BASELINE)} controls ({score} %)")
+    output: |
+      [FAIL] ssh.PermitRootLogin                expected=no      actual=yes
+      [FAIL] ssh.PasswordAuthentication         expected=no      actual=yes
+      [PASS] sysctl.net.ipv4.tcp_syncookies     expected=1       actual=1
+      [PASS] sysctl.kernel.randomize_va_space   expected=2       actual=2
+      [FAIL] service.telnet                     expected=absent  actual=running
+      [FAIL] firewall.default_incoming          expected=deny    actual=allow
+
+      Compliance: 2/6 controls (33 %)
+    note:
+      fr: "Un référentiel (*baseline*) est simplement une liste de « valeur attendue » par contrôle. Modifiez le dictionnaire `server` pour corriger les écarts et relancez : le score monte. Les vrais outils font la même chose avec des centaines de contrôles."
+      en: "A baseline is simply a list of \"expected value\" per control. Edit the `server` dictionary to fix the deviations and run again: the score goes up. Real tools do the same with hundreds of controls."
+
+  - title:
+      fr: "Auditer un serveur avec OpenSCAP et le profil CIS Level 1"
+      en: "Auditing a server with OpenSCAP and the CIS Level 1 profile"
+    file: cis-audit.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # CIS audit of a RHEL 9 server (Rocky Linux and AlmaLinux ship the same tools;
+      # only the name of the ssg-*-ds.xml file changes).
+      set -euo pipefail
+
+      sudo dnf install -y openscap-scanner scap-security-guide
+
+      CONTENT=/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml
+
+      # List the profiles shipped in the content file (CIS L1/L2, STIG, ANSSI...)
+      oscap info "$CONTENT" | grep -i cis
+
+      # Evaluate the CIS Level 1 Server profile.
+      # oscap exits with code 2 when at least one rule fails: do not stop the script.
+      sudo oscap xccdf eval \
+        --profile xccdf_org.ssgproject.content_profile_cis_server_l1 \
+        --results /root/cis-results.xml \
+        --report /root/cis-report.html \
+        "$CONTENT" || true
+
+      # Generate the Ansible playbook that fixes the failed rules
+      sudo oscap xccdf generate fix \
+        --fix-type ansible \
+        --profile xccdf_org.ssgproject.content_profile_cis_server_l1 \
+        --output /root/cis-l1-remediation.yml \
+        "$CONTENT"
+    output: |
+      Title   Ensure /tmp Located On Separate Partition
+      Rule    xccdf_org.ssgproject.content_rule_partition_for_tmp
+      Result  fail
+
+      Title   Disable SSH Root Login
+      Rule    xccdf_org.ssgproject.content_rule_sshd_disable_root_login
+      Result  fail
+
+      Title   Enable Kernel Parameter to Use TCP Syncookies on Network Interfaces
+      Rule    xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_tcp_syncookies
+      Result  pass
+    note:
+      fr: "Le rapport HTML liste chaque règle avec sa justification et sa correction. Relisez toujours le playbook généré avant de l'appliquer : sur un serveur en production, testez d'abord sur une copie."
+      en: "The HTML report lists every rule with its rationale and its fix. Always review the generated playbook before applying it: for a production server, test on a copy first."
+
+  - title:
+      fr: "Le durcissement en code : un playbook Ansible rejouable"
+      en: "Hardening as code: a repeatable Ansible playbook"
+    file: hardening.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Run with: ansible-playbook -i inventory.ini hardening.yml --check --diff
+      # (--check shows what would change without touching the servers)
+      - name: Baseline hardening (excerpt of a CIS Level 1 profile)
+        hosts: all
+        become: true
+
+        tasks:
+          - name: Remove legacy clear-text services
+            ansible.builtin.package:
+              name:
+                - telnetd
+                - rsh-server
+              state: absent
+
+          - name: Enable SYN cookies and full address space randomisation
+            ansible.posix.sysctl:
+              name: "{{ item.key }}"
+              value: "{{ item.value }}"
+              sysctl_file: /etc/sysctl.d/99-hardening.conf
+              state: present
+              reload: true
+            loop:
+              - { key: net.ipv4.tcp_syncookies, value: "1" }
+              - { key: kernel.randomize_va_space, value: "2" }
+
+          - name: Forbid direct root login over SSH
+            ansible.builtin.lineinfile:
+              path: /etc/ssh/sshd_config
+              regexp: '^#?PermitRootLogin'
+              line: PermitRootLogin no
+              # The file is only replaced if sshd accepts it: no lock-out on a typo
+              validate: /usr/sbin/sshd -t -f %s
+            notify: Reload ssh
+
+        handlers:
+          - name: Reload ssh
+            ansible.builtin.service:
+              name: ssh
+              state: reloaded
+    note:
+      fr: "Le playbook est **idempotent** : on peut le rejouer chaque nuit, il ne modifie que ce qui a dérivé. Versionné dans Git, il devient la preuve de ce qui est appliqué sur chaque serveur."
+      en: "The playbook is **idempotent**: it can run every night and only changes what has drifted. Versioned in Git, it becomes the proof of what is applied on every server."
+
+mistake:
+  fr: |
+    **Appliquer un Benchmark complet d'un seul coup, sur un serveur en production, sans le tester.**
+
+    Un profil Level 2 désactive des modules noyau, impose des options de montage (`noexec` sur `/tmp`) et
+    change la politique de mots de passe : une application peut cesser de démarrer, une sauvegarde peut
+    échouer. À l'inverse, viser « 100 % conforme » pousse à cocher des cases sans comprendre. Procédez par
+    étapes : auditez, appliquez le Level 1 sur un environnement de test, corrigez ce qui casse, puis
+    documentez chaque exception avec sa justification.
+  en: |
+    **Applying a whole Benchmark in one go, on a production server, without testing it.**
+
+    A Level 2 profile disables kernel modules, enforces mount options (`noexec` on `/tmp`) and changes
+    the password policy: an application may stop starting, a backup may fail. Conversely, chasing
+    "100 % compliant" leads to ticking boxes without understanding. Go step by step: audit, apply
+    Level 1 on a test environment, fix what breaks, then document every exception with its rationale.
+
+bestPractice:
+  fr: |
+    - **Partez d'une image minimale** (installation « minimal » ou « server core ») : ce qui n'est pas installé n'a pas besoin d'être durci.
+    - **Choisissez un référentiel** (CIS Level 1 pour commencer) et tenez-vous-y, au lieu d'empiler des conseils trouvés sur des blogs.
+    - **Écrivez le durcissement en code** (Ansible, Packer, cloud-init) et stockez-le dans Git : pas de réglage manuel en production.
+    - **Auditez en continu** : un scan OpenSCAP ou Lynis planifié détecte la dérive de configuration.
+    - **Documentez les exceptions** : une règle désactivée sans justification écrite est une faille en attente.
+    - **Fabriquez des « golden images »** déjà durcies : tout nouveau serveur naît conforme.
+  en: |
+    - **Start from a minimal image** ("minimal" or "server core" install): what is not installed does not need hardening.
+    - **Pick one baseline** (CIS Level 1 to begin with) and stick to it, instead of piling up tips found on blogs.
+    - **Write hardening as code** (Ansible, Packer, cloud-init) and keep it in Git: no manual tweak in production.
+    - **Audit continuously**: a scheduled OpenSCAP or Lynis scan detects configuration drift.
+    - **Document exceptions**: a rule disabled without a written rationale is a flaw waiting to happen.
+    - **Build hardened "golden images"**: every new server is born compliant.
+
+exercise:
+  statement:
+    fr: |
+      Vous administrez un serveur web qui ne doit exposer que les ports **22**, **80** et **443** en TCP.
+
+      Écrivez un script Bash `check-ports.sh` qui :
+
+      1. récupère la liste des ports TCP en écoute sur une adresse autre que la boucle locale ;
+      2. la compare à la liste autorisée `22 80 443` ;
+      3. affiche chaque port inattendu avec le nom du processus ;
+      4. se termine avec le code de retour `1` s'il existe au moins un port inattendu (pour pouvoir être
+         utilisé dans un pipeline ou une tâche planifiée).
+    en: |
+      You manage a web server that must only expose TCP ports **22**, **80** and **443**.
+
+      Write a Bash script `check-ports.sh` that:
+
+      1. collects the TCP ports listening on an address other than loopback;
+      2. compares them with the allowlist `22 80 443`;
+      3. prints every unexpected port with the process name;
+      4. exits with return code `1` if at least one unexpected port exists (so that it can be used in
+         a pipeline or a scheduled job).
+  solution:
+    file: check-ports.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      # Fails when a TCP port outside the allowlist is exposed to the network.
+      set -euo pipefail
+
+      ALLOWED="22 80 443"
+      unexpected=0
+
+      # -H: no header, -t: TCP, -l: listening, -n: numeric, -p: show the process
+      while read -r _ _ _ local _ process; do
+        addr="${local%:*}"   # everything before the last colon
+        port="${local##*:}"  # everything after the last colon
+
+        # Sockets bound to loopback are not reachable from the network
+        case "$addr" in
+          127.*|"[::1]") continue ;;
+        esac
+
+        if ! grep -qw -- "$port" <<<"$ALLOWED"; then
+          echo "UNEXPECTED port $port on $addr -> ${process:-unknown process}"
+          unexpected=1
+        fi
+      done < <(sudo ss -Htlnp)
+
+      if [ "$unexpected" -eq 0 ]; then
+        echo "OK: only ports $ALLOWED are exposed"
+      fi
+      exit "$unexpected"
+    note:
+      fr: "Lancé chaque nuit (timer systemd, cron ou job CI), ce script détecte un service ouvert par erreur. C'est le même principe qu'un contrôle CIS « Automated » : état attendu, état réel, code de retour."
+      en: "Run every night (systemd timer, cron or CI job), this script detects a service opened by mistake. It is the same idea as an \"Automated\" CIS control: expected state, actual state, return code."
+
+quiz:
+  - q:
+      fr: "Que désigne la « surface d'attaque » d'un serveur ?"
+      en: "What is the \"attack surface\" of a server?"
+    options:
+      fr:
+        - "La taille de son disque dur"
+        - "L'ensemble des points par lesquels un attaquant peut tenter d'entrer ou d'agir"
+        - "Le nombre de vulnérabilités publiées pour son système"
+        - "La liste des adresses IP bloquées par le pare-feu"
+      en:
+        - "The size of its hard drive"
+        - "All the points through which an attacker can try to get in or act"
+        - "The number of vulnerabilities published for its operating system"
+        - "The list of IP addresses blocked by the firewall"
+    answer: 1
+    why:
+      fr: "Ports ouverts, services, comptes, binaires SUID, interfaces d'administration : chaque élément exposé fait partie de la surface d'attaque. La réduire est le premier principe du durcissement."
+      en: "Open ports, services, accounts, SUID binaries, admin interfaces: every exposed element is part of the attack surface. Reducing it is the first hardening principle."
+  - q:
+      fr: "Quelle est la différence entre les profils CIS Level 1 et Level 2 ?"
+      en: "What is the difference between the CIS Level 1 and Level 2 profiles?"
+    options:
+      fr:
+        - "Level 1 est payant, Level 2 est gratuit"
+        - "Level 1 concerne Linux, Level 2 concerne Windows"
+        - "Level 1 est destiné aux postes de travail, Level 2 aux serveurs"
+        - "Level 1 est un socle à faible impact, Level 2 ajoute des mesures plus strictes qui peuvent réduire les fonctionnalités"
+      en:
+        - "Level 1 is paid, Level 2 is free"
+        - "Level 1 is for Linux, Level 2 is for Windows"
+        - "Level 1 is for workstations, Level 2 is for servers"
+        - "Level 1 is a low-impact baseline, Level 2 adds stricter measures that may reduce functionality"
+    answer: 3
+    why:
+      fr: "Le Level 1 s'applique à presque tous les systèmes sans rien casser ; le Level 2 vise les environnements sensibles et peut désactiver des fonctions utiles."
+      en: "Level 1 applies to almost any system without breaking things; Level 2 targets sensitive environments and may disable useful features."
+  - q:
+      fr: "Pourquoi écrire le durcissement sous forme de code (Ansible, image machine) ?"
+      en: "Why write hardening as code (Ansible, machine image)?"
+    options:
+      fr:
+        - "Pour qu'il soit reproductible, versionné et rejouable contre la dérive de configuration"
+        - "Parce que les CIS Benchmarks l'imposent légalement"
+        - "Pour ne plus avoir besoin d'auditer les serveurs"
+        - "Parce que les commandes manuelles sont interdites sous Linux"
+      en:
+        - "So that it is reproducible, versioned and replayable against configuration drift"
+        - "Because the CIS Benchmarks legally require it"
+        - "So that servers no longer need to be audited"
+        - "Because manual commands are forbidden on Linux"
+    answer: 0
+    why:
+      fr: "Un réglage manuel est oublié sur le serveur suivant et dérive avec le temps. Le code garantit le même état partout et laisse une trace dans Git."
+      en: "A manual tweak is forgotten on the next server and drifts over time. Code guarantees the same state everywhere and leaves a trace in Git."
+  - q:
+      fr: "Dans l'exemple d'inventaire, pourquoi MySQL en écoute sur `0.0.0.0:3306` est-il un problème ?"
+      en: "In the inventory example, why is MySQL listening on `0.0.0.0:3306` a problem?"
+    options:
+      fr:
+        - "Le port 3306 est réservé à SSH"
+        - "MySQL ne peut pas fonctionner sur ce port"
+        - "La base est joignable depuis toutes les interfaces réseau alors que seule l'application locale en a besoin"
+        - "`0.0.0.0` signifie que le service est arrêté"
+      en:
+        - "Port 3306 is reserved for SSH"
+        - "MySQL cannot work on that port"
+        - "The database is reachable from every network interface although only the local application needs it"
+        - "`0.0.0.0` means the service is stopped"
+    answer: 2
+    why:
+      fr: "`0.0.0.0` signifie « toutes les interfaces ». Si seule l'application locale utilise la base, elle doit écouter sur `127.0.0.1` : un port en moins dans la surface d'attaque."
+      en: "`0.0.0.0` means \"all interfaces\". If only the local application uses the database, it must listen on `127.0.0.1`: one port less in the attack surface."
+  - q:
+      fr: "Que faire d'une recommandation CIS qui ne peut pas être appliquée dans votre contexte ?"
+      en: "What should you do with a CIS recommendation that cannot be applied in your context?"
+    options:
+      fr:
+        - "L'ignorer sans rien noter"
+        - "Documenter l'exception avec sa justification et, si possible, une mesure compensatoire"
+        - "Désactiver l'outil d'audit pour ce serveur"
+        - "Abandonner tout le référentiel"
+      en:
+        - "Ignore it without writing anything down"
+        - "Document the exception with its rationale and, if possible, a compensating control"
+        - "Disable the audit tool for that server"
+        - "Drop the whole baseline"
+    answer: 1
+    why:
+      fr: "Le but n'est pas 100 % mais un écart maîtrisé : chaque exception est écrite, justifiée et revue périodiquement."
+      en: "The goal is not 100 % but a controlled gap: every exception is written down, justified and reviewed periodically."

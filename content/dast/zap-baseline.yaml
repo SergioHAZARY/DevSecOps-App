@@ -1,0 +1,553 @@
+description:
+  fr: "Lancer le scan baseline de ZAP avec l'image Docker officielle, régler les règles IGNORE/WARN/FAIL dans un fichier .tsv et lire le rapport."
+  en: "Run the ZAP baseline scan with the official Docker image, tune the IGNORE/WARN/FAIL rules in a .tsv file and read the report."
+duration: 25
+
+intro:
+  fr: |
+    **ZAP** (*Zed Attack Proxy*) est le scanner DAST open source le plus utilisé au monde. Né au sein de
+    l'OWASP, il est aujourd'hui maintenu par son équipe historique sous le nom « ZAP by Checkmarx ». Son
+    image Docker officielle contient des scripts prêts à l'emploi ; le plus simple s'appelle
+    **`zap-baseline.py`**.
+
+    Le scan *baseline* ressemble au contrôle rapide d'un garagiste à l'entrée de l'atelier : il fait le
+    tour de la voiture, regarde les pneus, les phares et les voyants du tableau de bord, mais il ne
+    démonte rien et ne fait aucun essai de freinage d'urgence. En une à deux minutes, il vous dit ce qui
+    est visiblement mal réglé.
+
+    Dans cette leçon, vous allez lancer ce scan contre le laboratoire Juice Shop, comprendre sa sortie et
+    ses codes de retour, écrire un fichier de règles qui décide quelles alertes font échouer le scan, puis
+    corriger les en-têtes d'une application Express et le vérifier.
+  en: |
+    **ZAP** (*Zed Attack Proxy*) is the most widely used open source DAST scanner in the world. Born
+    inside OWASP, it is now maintained by its original team under the name "ZAP by Checkmarx". Its
+    official Docker image ships ready-made scripts; the simplest one is called **`zap-baseline.py`**.
+
+    The *baseline* scan is like the quick check a mechanic does at the garage door: a walk around the
+    car, a look at the tyres, the lights and the dashboard warnings, but nothing is taken apart and no
+    emergency braking test is done. Within one or two minutes it tells you what is visibly misconfigured.
+
+    In this lesson you will run this scan against the Juice Shop lab, understand its output and exit
+    codes, write a rules file that decides which alerts fail the scan, then fix the headers of an Express
+    application and verify the result.
+
+sections:
+  - heading:
+      fr: "Ce que fait (et ne fait pas) le scan baseline"
+      en: "What the baseline scan does (and does not do)"
+    body:
+      fr: |
+        Le script enchaîne trois étapes :
+
+        1. Il démarre ZAP et lance le **spider** sur la cible pendant **1 minute** (réglable avec `-m`).
+        2. Il attend la fin du **scan passif** de toutes les pages découvertes.
+        3. Il affiche le résultat règle par règle et écrit les rapports demandés.
+
+        Il n'y a **aucune attaque** : le baseline ne fait que naviguer. C'est pourquoi on peut le lancer à
+        chaque pull request, et même contre une préproduction partagée (avec autorisation).
+
+        Ce qu'il détecte : en-têtes de sécurité absents (CSP, anti-clickjacking, `X-Content-Type-Options`),
+        cookies sans `HttpOnly`, `Secure` ou `SameSite`, fuites de version (`Server`, `X-Powered-By`),
+        CORS trop ouvert, bibliothèques JavaScript vulnérables, formulaires sans jeton anti-CSRF.
+        Ce qu'il **ne** détecte **pas** : XSS, injection SQL et toutes les failles qui exigent d'envoyer
+        une charge d'attaque. Ce sera le rôle du scan complet, à la leçon suivante.
+
+        L'image officielle est `ghcr.io/zaproxy/zaproxy:stable`. Le dossier courant se monte sur
+        `/zap/wrk` : c'est là que le script lit sa configuration et écrit ses rapports.
+      en: |
+        The script chains three steps:
+
+        1. It starts ZAP and runs the **spider** against the target for **1 minute** (tunable with `-m`).
+        2. It waits for the **passive scan** of every discovered page to finish.
+        3. It prints the result rule by rule and writes the requested reports.
+
+        There is **no attack**: the baseline only browses. That is why you can run it on every pull
+        request, and even against a shared staging environment (with authorisation).
+
+        What it detects: missing security headers (CSP, anti-clickjacking, `X-Content-Type-Options`),
+        cookies without `HttpOnly`, `Secure` or `SameSite`, version leaks (`Server`, `X-Powered-By`),
+        over-permissive CORS, vulnerable JavaScript libraries, forms without an anti-CSRF token.
+        What it does **not** detect: XSS, SQL injection and every flaw that requires sending an attack
+        payload. That is the job of the full scan, in the next lesson.
+
+        The official image is `ghcr.io/zaproxy/zaproxy:stable`. The current folder is mounted on
+        `/zap/wrk`: this is where the script reads its configuration and writes its reports.
+  - heading:
+      fr: "Options utiles et codes de retour"
+      en: "Useful options and exit codes"
+    body:
+      fr: |
+        | Option | Rôle |
+        |---|---|
+        | `-t <url>` | Cible à scanner (obligatoire) |
+        | `-r report.html` | Rapport HTML (`-J` pour JSON, `-w` pour Markdown, `-x` pour XML) |
+        | `-g gen.conf` | Génère un fichier de règles par défaut, à personnaliser |
+        | `-c rules.tsv` | Utilise votre fichier de règles |
+        | `-m 3` | Durée du spider en minutes (1 par défaut) |
+        | `-j` | Ajoute le spider AJAX, indispensable pour une application monopage (Angular, React) |
+        | `-a` | Inclut aussi les règles passives en version alpha |
+        | `-I` | Ne renvoie pas d'échec quand il n'y a que des avertissements |
+        | `-d` | Affiche les messages de débogage |
+
+        Le **code de retour** est ce qui permet à un pipeline de décider :
+
+        | Code | Signification |
+        |---|---|
+        | `0` | Aucun problème |
+        | `1` | Au moins une règle en `FAIL` a été déclenchée |
+        | `2` | Au moins un `WARN`, aucun `FAIL` |
+        | `3` | Autre échec : cible injoignable, erreur de configuration |
+
+        Par défaut, toutes les règles sont en `WARN` : un premier scan renvoie donc presque toujours `2`.
+      en: |
+        | Option | Purpose |
+        |---|---|
+        | `-t <url>` | Target to scan (mandatory) |
+        | `-r report.html` | HTML report (`-J` for JSON, `-w` for Markdown, `-x` for XML) |
+        | `-g gen.conf` | Generates a default rules file, to be customised |
+        | `-c rules.tsv` | Uses your rules file |
+        | `-m 3` | Spider duration in minutes (1 by default) |
+        | `-j` | Adds the AJAX spider, essential for a single-page application (Angular, React) |
+        | `-a` | Also includes alpha passive scan rules |
+        | `-I` | Does not return a failure when there are only warnings |
+        | `-d` | Shows debug messages |
+
+        The **exit code** is what lets a pipeline decide:
+
+        | Code | Meaning |
+        |---|---|
+        | `0` | No problem |
+        | `1` | At least one rule set to `FAIL` was triggered |
+        | `2` | At least one `WARN`, no `FAIL` |
+        | `3` | Any other failure: unreachable target, configuration error |
+
+        By default every rule is a `WARN`: a first scan therefore almost always returns `2`.
+  - heading:
+      fr: "Le fichier de règles : IGNORE, WARN, FAIL"
+      en: "The rules file: IGNORE, WARN, FAIL"
+    body:
+      fr: |
+        Chaque règle de ZAP porte un **identifiant numérique** affiché entre crochets (`[10038]`). Le
+        fichier de règles associe une action à chaque identifiant, une règle par ligne, les colonnes étant
+        séparées par une **tabulation** : `identifiant`, `action`, `(nom)`.
+
+        | Action | Effet |
+        |---|---|
+        | `IGNORE` | L'alerte est masquée et ne compte pas |
+        | `WARN` | L'alerte est affichée ; le scan se termine avec le code `2` |
+        | `FAIL` | L'alerte fait échouer le scan avec le code `1` |
+
+        Seul l'identifiant est lu par ZAP ; le nom entre parenthèses sert aux humains, mais la troisième
+        colonne doit exister. Les lignes qui commencent par `#` sont des commentaires : utilisez-les pour
+        **justifier** chaque `IGNORE`. Une règle absente du fichier reste en `WARN`.
+
+        La méthode recommandée : générer le fichier complet avec `-g`, le versionner dans Git, puis passer
+        en `FAIL` les règles que l'équipe s'engage à respecter.
+      en: |
+        Every ZAP rule has a **numeric identifier** shown between square brackets (`[10038]`). The rules
+        file maps an action to each identifier, one rule per line, with columns separated by a **tab**
+        character: `identifier`, `action`, `(name)`.
+
+        | Action | Effect |
+        |---|---|
+        | `IGNORE` | The alert is hidden and does not count |
+        | `WARN` | The alert is displayed; the scan ends with exit code `2` |
+        | `FAIL` | The alert fails the scan with exit code `1` |
+
+        ZAP only reads the identifier; the name in parentheses is there for humans, but the third column
+        must exist. Lines starting with `#` are comments: use them to **justify** every `IGNORE`. A rule
+        missing from the file stays a `WARN`.
+
+        The recommended method: generate the full file with `-g`, version it in Git, then switch to `FAIL`
+        the rules the team commits to respect.
+  - heading:
+      fr: "Lire le rapport HTML"
+      en: "Reading the HTML report"
+    body:
+      fr: |
+        Le fichier `report.html` se lit de haut en bas :
+
+        1. **Summary of Alerts** : le nombre d'alertes par niveau de risque (*High*, *Medium*, *Low*,
+           *Informational*).
+        2. **Alerts** : la liste des alertes avec leur risque et le nombre d'**instances** (URL concernées).
+        3. **Alert Detail** : pour chaque alerte, la description, les URL, la méthode, le paramètre,
+           l'**Evidence** (le morceau de réponse qui prouve le problème), la **Solution** proposée, les
+           références, le **CWE Id** et le **Plugin Id** (l'identifiant à mettre dans le fichier de règles).
+
+        Deux notions à ne pas confondre : le **risque** (gravité si la faille est réelle) et la
+        **confiance** (*Confidence* : probabilité que ce ne soit pas un faux positif). Commencez toujours
+        par les alertes à risque élevé **et** confiance élevée. Vérifiez enfin la ligne `Total of N URLs`
+        de la sortie console : si N vaut 3, le spider n'a presque rien vu et le rapport ne vaut rien.
+      en: |
+        The `report.html` file reads from top to bottom:
+
+        1. **Summary of Alerts**: the number of alerts per risk level (*High*, *Medium*, *Low*,
+           *Informational*).
+        2. **Alerts**: the list of alerts with their risk and number of **instances** (affected URLs).
+        3. **Alert Detail**: for each alert, the description, URLs, method, parameter, the **Evidence**
+           (the piece of the response that proves the problem), the suggested **Solution**, references,
+           the **CWE Id** and the **Plugin Id** (the identifier to put in the rules file).
+
+        Two notions must not be confused: **risk** (severity if the flaw is real) and **confidence**
+        (the likelihood that it is not a false positive). Always start with alerts that have high risk
+        **and** high confidence. Finally, check the `Total of N URLs` line of the console output: if N is
+        3, the spider saw almost nothing and the report is worthless.
+
+examples:
+  - title:
+      fr: "Premier scan baseline contre Juice Shop"
+      en: "First baseline scan against Juice Shop"
+    file: baseline.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # The lab from the previous lesson must be running (docker compose up -d)
+      # --network: join the lab network so that the name "juice-shop" resolves
+      # -v: reports are written to the current folder through /zap/wrk
+      docker run --rm -t \
+        --network dast-lab_default \
+        -v "$(pwd):/zap/wrk/:rw" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-baseline.py -t http://juice-shop:3000 -j -r report.html -J report.json
+
+      # 0 = clean, 1 = FAIL, 2 = WARN only, 3 = the scan itself failed
+      echo "exit code: $?"
+    output: |
+      Using the Automation Framework
+      Total of 95 URLs
+      PASS: Cookie No HttpOnly Flag [10010]
+      PASS: Cookie Without Secure Flag [10011]
+      PASS: Missing Anti-clickjacking Header [10020]
+      PASS: X-Content-Type-Options Header Missing [10021]
+      PASS: Absence of Anti-CSRF Tokens [10202]
+      WARN-NEW: Cross-Domain JavaScript Source File Inclusion [10017] x 10
+          http://juice-shop:3000 (200 OK)
+          http://juice-shop:3000/sitemap.xml (200 OK)
+      WARN-NEW: Information Disclosure - Suspicious Comments [10027] x 2
+          http://juice-shop:3000/main.js (200 OK)
+          http://juice-shop:3000/vendor.js (200 OK)
+      WARN-NEW: Content Security Policy (CSP) Header Not Set [10038] x 11
+          http://juice-shop:3000 (200 OK)
+          http://juice-shop:3000/ftp (200 OK)
+      WARN-NEW: Deprecated Feature Policy Header Set [10063] x 11
+      WARN-NEW: Timestamp Disclosure - Unix [10096] x 5
+      WARN-NEW: Cross-Domain Misconfiguration [10098] x 11
+      WARN-NEW: Modern Web Application [10109] x 11
+      WARN-NEW: Dangerous JS Functions [10110] x 2
+      FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 8	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
+      exit code: 2
+    note:
+      fr: "Sortie abrégée : les nombres varient selon les versions. Chaque ligne donne le nom de la règle, son identifiant entre crochets et le nombre d'URL touchées. Tout est en `WARN` par défaut, d'où le code de retour `2`. Si le dossier courant n'est pas inscriptible par l'utilisateur `zap` du conteneur (UID 1000), le rapport ne pourra pas être écrit."
+      en: "Abridged output: numbers vary between versions. Each line gives the rule name, its identifier in square brackets and the number of affected URLs. Everything is a `WARN` by default, hence exit code `2`. If the current folder is not writable by the container's `zap` user (UID 1000), the report cannot be written."
+
+  - title:
+      fr: "Un fichier de règles versionné dans Git"
+      en: "A rules file versioned in Git"
+    file: rules.tsv
+    lang: text
+    kind: secure
+    code: |
+      # ZAP baseline rules - columns are separated by a TAB: id, action, (name)
+      # Generated with "zap-baseline.py -g gen.conf", then reviewed by the team.
+      #
+      # --- Blocking: these alerts break the build
+      10038	FAIL	(Content Security Policy (CSP) Header Not Set)
+      10020	FAIL	(Missing Anti-clickjacking Header)
+      10021	FAIL	(X-Content-Type-Options Header Missing)
+      10010	FAIL	(Cookie No HttpOnly Flag)
+      10011	FAIL	(Cookie Without Secure Flag)
+      10003	FAIL	(Vulnerable JS Library (Powered by Retire.js))
+      #
+      # --- Visible but not blocking yet
+      10054	WARN	(Cookie without SameSite Attribute)
+      10098	WARN	(Cross-Domain Misconfiguration)
+      10017	WARN	(Cross-Domain JavaScript Source File Inclusion)
+      10037	WARN	(Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s))
+      #
+      # --- Ignored, with the reason
+      # 10096: build timestamps in the JS bundles, reviewed 2026-03, not sensitive
+      10096	IGNORE	(Timestamp Disclosure - Unix)
+      # 10109: purely informational, tells that the app is a single-page application
+      10109	IGNORE	(Modern Web Application)
+    note:
+      fr: "Les colonnes sont séparées par de vraies tabulations, pas par des espaces : un éditeur qui convertit les tabulations casse le fichier. Chaque `IGNORE` est précédé d'un commentaire qui explique la décision ; sans justification, un `IGNORE` est une dette cachée."
+      en: "Columns are separated by real tab characters, not spaces: an editor that converts tabs breaks the file. Every `IGNORE` is preceded by a comment explaining the decision; without a justification, an `IGNORE` is hidden debt."
+
+  - title:
+      fr: "Scan avec le fichier de règles : le build échoue"
+      en: "Scan with the rules file: the build fails"
+    file: baseline-with-rules.sh
+    lang: bash
+    kind: secure
+    code: |
+      # rules.tsv sits in the current folder, mounted on /zap/wrk
+      # -c: apply our rules   -I: warnings alone must not fail the pipeline
+      docker run --rm -t \
+        --network dast-lab_default \
+        -v "$(pwd):/zap/wrk/:rw" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-baseline.py -t http://juice-shop:3000 -j -c rules.tsv -I -r report.html
+
+      echo "exit code: $?"
+    output: |
+      Using the Automation Framework
+      Total of 95 URLs
+      PASS: Cookie No HttpOnly Flag [10010]
+      PASS: Cookie Without Secure Flag [10011]
+      PASS: Missing Anti-clickjacking Header [10020]
+      PASS: X-Content-Type-Options Header Missing [10021]
+      IGNORE-NEW: Timestamp Disclosure - Unix [10096] x 5
+      IGNORE-NEW: Modern Web Application [10109] x 11
+      WARN-NEW: Cross-Domain JavaScript Source File Inclusion [10017] x 10
+      WARN-NEW: Information Disclosure - Suspicious Comments [10027] x 2
+      WARN-NEW: Deprecated Feature Policy Header Set [10063] x 11
+      WARN-NEW: Cross-Domain Misconfiguration [10098] x 11
+      WARN-NEW: Dangerous JS Functions [10110] x 2
+      FAIL-NEW: Content Security Policy (CSP) Header Not Set [10038] x 11
+          http://juice-shop:3000 (200 OK)
+          http://juice-shop:3000/ftp (200 OK)
+      FAIL-NEW: 1	FAIL-INPROG: 0	WARN-NEW: 5	WARN-INPROG: 0	INFO: 0	IGNORE: 2	PASS: 58
+      exit code: 1
+    note:
+      fr: "L'absence de CSP est maintenant un `FAIL` : le script renvoie `1` et un pipeline s'arrêterait ici. Grâce à `-I`, les simples `WARN` ne bloquent pas ; ils restent visibles dans le rapport."
+      en: "The missing CSP is now a `FAIL`: the script returns `1` and a pipeline would stop here. Thanks to `-I`, plain `WARN`s do not block; they remain visible in the report."
+
+  - title:
+      fr: "L'application qui déclenche les alertes : Express sans en-têtes"
+      en: "The application that triggers the alerts: Express without headers"
+    file: server.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      const express = require("express");
+
+      const app = express();
+
+      // No security middleware: Express only sends its default headers,
+      // including "X-Powered-By: Express" which reveals the framework
+      app.get("/", (req, res) => {
+        res.send("<html><body><h1>Shop</h1></body></html>");
+      });
+
+      app.listen(3000, () => console.log("listening on http://localhost:3000"));
+    output: |
+      WARN-NEW: Missing Anti-clickjacking Header [10020] x 1
+      WARN-NEW: X-Content-Type-Options Header Missing [10021] x 1
+      WARN-NEW: Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s) [10037] x 1
+      WARN-NEW: Content Security Policy (CSP) Header Not Set [10038] x 1
+    note:
+      fr: "Extrait de la sortie du baseline, limité à quatre règles. Le code fonctionne parfaitement, mais le navigateur ne reçoit aucune consigne de protection : la page peut être placée dans une iframe (clickjacking) et aucun garde-fou ne limite un éventuel XSS."
+      en: "Excerpt of the baseline output, limited to four rules. The code works perfectly, but the browser receives no protection instruction: the page can be framed (clickjacking) and nothing limits a possible XSS."
+
+  - title:
+      fr: "La correction : Helmet ajoute les en-têtes de sécurité"
+      en: "The fix: Helmet adds the security headers"
+    file: server.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const helmet = require("helmet");
+
+      const app = express();
+
+      // helmet() sets Content-Security-Policy, X-Content-Type-Options, X-Frame-Options,
+      // Strict-Transport-Security and removes X-Powered-By
+      app.use(helmet());
+
+      // Helmet does not send Permissions-Policy: deny the browser features we never use
+      app.use((req, res, next) => {
+        res.setHeader("Permissions-Policy", "geolocation=(), camera=(), microphone=()");
+        next();
+      });
+
+      app.get("/", (req, res) => {
+        res.send("<html><body><h1>Shop</h1></body></html>");
+      });
+
+      app.listen(3000, () => console.log("listening on http://localhost:3000"));
+    output: |
+      PASS: Missing Anti-clickjacking Header [10020]
+      PASS: X-Content-Type-Options Header Missing [10021]
+      PASS: Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s) [10037]
+      PASS: Content Security Policy (CSP) Header Not Set [10038]
+    note:
+      fr: "Après `npm install helmet`, les quatre règles passent en `PASS`. ZAP peut encore commenter la *qualité* de la CSP (règle 10055, par exemple `style-src 'unsafe-inline'` dans la politique par défaut de Helmet) : une CSP se durcit progressivement."
+      en: "After `npm install helmet`, the four rules turn to `PASS`. ZAP may still comment on the *quality* of the CSP (rule 10055, for instance `style-src 'unsafe-inline'` in Helmet's default policy): a CSP is hardened step by step."
+
+mistake:
+  fr: |
+    **Ajouter `-I` (ou `|| true`) sans fichier de règles, « pour que le pipeline reste vert ».**
+
+    Sans fichier de règles, tout est en `WARN`. Avec `-I`, les `WARN` ne font plus échouer le scan : le
+    job est donc **toujours vert**, quoi que ZAP trouve, et plus personne n'ouvre le rapport. L'erreur
+    inverse existe aussi : passer toutes les règles en `IGNORE` une par une dès qu'elles gênent, sans
+    aucune justification. Dans les deux cas, le scan tourne mais ne protège plus rien.
+  en: |
+    **Adding `-I` (or `|| true`) without a rules file, "to keep the pipeline green".**
+
+    Without a rules file everything is a `WARN`. With `-I`, `WARN`s no longer fail the scan: the job is
+    therefore **always green**, whatever ZAP finds, and nobody opens the report any more. The opposite
+    mistake also exists: switching rules to `IGNORE` one by one as soon as they get in the way, with no
+    justification at all. In both cases the scan runs but protects nothing.
+
+bestPractice:
+  fr: |
+    - **Versionnez `rules.tsv`** dans le dépôt : chaque changement de seuil passe par une revue de code.
+    - **Peu de `FAIL`, mais de vrais `FAIL`** : commencez par 3 à 5 règles que l'équipe sait corriger, puis élargissez.
+    - **Justifiez chaque `IGNORE`** par un commentaire daté et revoyez la liste régulièrement.
+    - **Utilisez `-j`** pour les applications monopages et contrôlez la ligne `Total of N URLs`.
+    - **Épinglez l'image** (`:stable`, ou mieux un numéro de version) : `:weekly` peut changer de comportement du jour au lendemain.
+    - **Ne scannez que des cibles autorisées**, même en passif.
+  en: |
+    - **Version `rules.tsv`** in the repository: every threshold change goes through code review.
+    - **Few `FAIL`s, but real ones**: start with 3 to 5 rules the team knows how to fix, then widen.
+    - **Justify every `IGNORE`** with a dated comment and review the list regularly.
+    - **Use `-j`** for single-page applications and check the `Total of N URLs` line.
+    - **Pin the image** (`:stable`, or better a version number): `:weekly` may change behaviour overnight.
+    - **Only scan authorised targets**, even passively.
+
+exercise:
+  statement:
+    fr: |
+      Un scan baseline de votre application de test `http://juice-shop:3000` affiche notamment :
+
+      ```text
+      WARN-NEW: Missing Anti-clickjacking Header [10020] x 4
+      WARN-NEW: Content Security Policy (CSP) Header Not Set [10038] x 9
+      WARN-NEW: Cookie without SameSite Attribute [10054] x 2
+      WARN-NEW: Timestamp Disclosure - Unix [10096] x 5
+      ```
+
+      L'équipe décide que l'absence de CSP et d'en-tête anti-clickjacking doit **bloquer** le build, que
+      le cookie sans `SameSite` reste un simple avertissement et que la divulgation d'horodatage est à
+      ignorer.
+
+      1. Créez le fichier `rules.tsv` correspondant, avec de vraies tabulations.
+      2. Écrivez la commande Docker qui lance le baseline avec ce fichier, sans échouer sur les simples
+         avertissements, et qui produit `report.html`.
+      3. Quel sera le code de retour ?
+    en: |
+      A baseline scan of your test application `http://juice-shop:3000` prints, among other lines:
+
+      ```text
+      WARN-NEW: Missing Anti-clickjacking Header [10020] x 4
+      WARN-NEW: Content Security Policy (CSP) Header Not Set [10038] x 9
+      WARN-NEW: Cookie without SameSite Attribute [10054] x 2
+      WARN-NEW: Timestamp Disclosure - Unix [10096] x 5
+      ```
+
+      The team decides that the missing CSP and anti-clickjacking header must **block** the build, that
+      the cookie without `SameSite` stays a plain warning and that the timestamp disclosure is ignored.
+
+      1. Create the matching `rules.tsv` file, with real tab characters.
+      2. Write the Docker command that runs the baseline with this file, does not fail on plain
+         warnings, and produces `report.html`.
+      3. What will the exit code be?
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. printf turns \t into a real TAB, whatever the editor settings are
+      printf '%s\n' '# 10096: build timestamps only, reviewed by the team' > rules.tsv
+      printf '10038\tFAIL\t(Content Security Policy (CSP) Header Not Set)\n' >> rules.tsv
+      printf '10020\tFAIL\t(Missing Anti-clickjacking Header)\n' >> rules.tsv
+      printf '10054\tWARN\t(Cookie without SameSite Attribute)\n' >> rules.tsv
+      printf '10096\tIGNORE\t(Timestamp Disclosure - Unix)\n' >> rules.tsv
+
+      # 2. -c applies the rules, -I keeps warnings from failing the scan
+      docker run --rm -t \
+        --network dast-lab_default \
+        -v "$(pwd):/zap/wrk/:rw" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-baseline.py -t http://juice-shop:3000 -c rules.tsv -I -r report.html
+
+      # 3. Two FAIL rules are triggered: the exit code is 1
+      echo "exit code: $?"
+    note:
+      fr: "Le code de retour est `1` : au moins une règle en `FAIL` (10038 ou 10020) est déclenchée. Sans ces deux `FAIL`, l'option `-I` aurait donné `0` malgré l'avertissement 10054."
+      en: "The exit code is `1`: at least one rule set to `FAIL` (10038 or 10020) is triggered. Without those two `FAIL`s, the `-I` option would have returned `0` despite warning 10054."
+
+quiz:
+  - q:
+      fr: "Que fait `zap-baseline.py` ?"
+      en: "What does `zap-baseline.py` do?"
+    options:
+      fr:
+        - "Il explore la cible un court moment puis applique uniquement le scan passif"
+        - "Il lance toutes les attaques actives de ZAP sans limite de temps"
+        - "Il analyse le code source de l'application"
+        - "Il teste uniquement les API décrites par un fichier OpenAPI"
+      en:
+        - "It spiders the target for a short time, then applies passive scanning only"
+        - "It runs every ZAP active attack with no time limit"
+        - "It analyses the application's source code"
+        - "It only tests APIs described by an OpenAPI file"
+    answer: 0
+    why:
+      fr: "Le baseline lance le spider (1 minute par défaut) et attend la fin du scan passif : aucune requête d'attaque n'est envoyée."
+      en: "The baseline runs the spider (1 minute by default) and waits for the passive scan to finish: no attack request is sent."
+  - q:
+      fr: "Quel code de retour obtient-on quand au moins une règle en FAIL est déclenchée ?"
+      en: "Which exit code do you get when at least one rule set to FAIL is triggered?"
+    options:
+      fr: ["0", "2", "1", "3"]
+      en: ["0", "2", "1", "3"]
+    answer: 2
+    why:
+      fr: "`1` signale au moins un FAIL, `2` des WARN sans FAIL, `3` un échec du scan lui-même et `0` un résultat propre."
+      en: "`1` means at least one FAIL, `2` means WARNs without FAIL, `3` a failure of the scan itself and `0` a clean result."
+  - q:
+      fr: "Dans le fichier de règles, par quoi les colonnes sont-elles séparées ?"
+      en: "In the rules file, what separates the columns?"
+    options:
+      fr:
+        - "Une virgule"
+        - "Un point-virgule"
+        - "Deux espaces"
+        - "Une tabulation"
+      en:
+        - "A comma"
+        - "A semicolon"
+        - "Two spaces"
+        - "A tab character"
+    answer: 3
+    why:
+      fr: "C'est un fichier TSV (*tab-separated values*) : identifiant, action et nom sont séparés par une tabulation."
+      en: "It is a TSV (*tab-separated values*) file: identifier, action and name are separated by a tab character."
+  - q:
+      fr: "À quoi sert l'option `-j` ?"
+      en: "What is the `-j` option for?"
+    options:
+      fr:
+        - "À produire un rapport JSON"
+        - "À lancer aussi le spider AJAX, utile pour les applications monopages"
+        - "À ignorer tous les avertissements"
+        - "À joindre le réseau Docker de la cible"
+      en:
+        - "Producing a JSON report"
+        - "Also running the AJAX spider, useful for single-page applications"
+        - "Ignoring every warning"
+        - "Joining the target's Docker network"
+    answer: 1
+    why:
+      fr: "Le spider classique ne lit que le HTML ; le spider AJAX pilote un navigateur et découvre les pages générées par JavaScript. Le rapport JSON s'obtient avec `-J` (majuscule)."
+      en: "The classic spider only reads HTML; the AJAX spider drives a browser and discovers pages generated by JavaScript. The JSON report is produced with `-J` (upper case)."
+  - q:
+      fr: "Dans le rapport, que mesure la « Confidence » d'une alerte ?"
+      en: "In the report, what does the \"Confidence\" of an alert measure?"
+    options:
+      fr:
+        - "La gravité de la faille si elle est exploitée"
+        - "Le nombre d'URL touchées"
+        - "La probabilité que l'alerte soit réelle et non un faux positif"
+        - "Le temps nécessaire pour corriger"
+      en:
+        - "The severity of the flaw if exploited"
+        - "The number of affected URLs"
+        - "The likelihood that the alert is real and not a false positive"
+        - "The time needed to fix it"
+    answer: 2
+    why:
+      fr: "Le risque indique la gravité ; la confiance indique à quel point ZAP est sûr de son constat. On traite d'abord risque élevé et confiance élevée."
+      en: "Risk indicates severity; confidence indicates how sure ZAP is about its finding. High risk with high confidence gets handled first."

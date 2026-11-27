@@ -1,0 +1,557 @@
+description:
+  fr: "Comprendre le SCA (Software Composition Analysis), les risques de la chaîne d'approvisionnement logicielle et les indicateurs CVE, CVSS, EPSS et KEV."
+  en: "Understand SCA (Software Composition Analysis), software supply chain risks and the CVE, CVSS, EPSS and KEV indicators."
+duration: 20
+
+intro:
+  fr: |
+    Une application moderne contient très peu de code écrit par son équipe : la plus grande partie vient de
+    **dépendances** open source (bibliothèques, frameworks) téléchargées depuis npm, PyPI ou Maven Central.
+    Le **SCA** (*Software Composition Analysis*, analyse de la composition logicielle) consiste à faire
+    l'inventaire de ces composants et à vérifier automatiquement s'ils contiennent des failles connues.
+
+    Pensez à un restaurant. Le chef ne fabrique ni sa farine, ni son huile, ni ses épices : il les achète à
+    des fournisseurs, qui achètent eux-mêmes à d'autres fournisseurs. Si un lot de farine est contaminé, le
+    plat est dangereux même si le chef a travaillé parfaitement. Il doit donc savoir **exactement** ce qu'il
+    y a dans sa réserve et être prévenu dès qu'un lot est rappelé. Le SCA joue ce rôle pour votre code.
+
+    Dans cette leçon, vous allez comprendre ce qu'est une dépendance transitive, comment les attaquants
+    visent la chaîne d'approvisionnement (*supply chain*), et comment lire les quatre sigles que vous
+    retrouverez dans tous les outils du cours : CVE, CVSS, EPSS et KEV.
+  en: |
+    A modern application contains very little code written by its own team: most of it comes from open
+    source **dependencies** (libraries, frameworks) downloaded from npm, PyPI or Maven Central.
+    **SCA** (*Software Composition Analysis*) means taking an inventory of those components and
+    automatically checking whether they contain known flaws.
+
+    Think of a restaurant. The chef does not make the flour, the oil or the spices: they are bought from
+    suppliers, who buy from other suppliers themselves. If a batch of flour is contaminated, the dish is
+    dangerous even though the chef did a perfect job. So the chef must know **exactly** what is in the
+    pantry and be warned as soon as a batch is recalled. SCA plays that role for your code.
+
+    In this lesson you will understand what a transitive dependency is, how attackers target the software
+    supply chain, and how to read the four acronyms you will meet in every tool of this course: CVE, CVSS,
+    EPSS and KEV.
+
+sections:
+  - heading:
+      fr: "Dépendances directes et transitives"
+      en: "Direct and transitive dependencies"
+    body:
+      fr: |
+        Une dépendance **directe** est une bibliothèque que vous avez choisie et écrite dans votre manifeste
+        (`package.json`, `requirements.txt`, `pom.xml`). Une dépendance **transitive** est une dépendance de
+        vos dépendances : vous ne l'avez jamais choisie, souvent vous ignorez qu'elle est là, et pourtant
+        son code s'exécute avec les mêmes droits que le vôtre.
+
+        | | Dépendance directe | Dépendance transitive |
+        |---|---|---|
+        | Qui l'a choisie ? | Vous | L'auteur d'une autre bibliothèque |
+        | Où est-elle déclarée ? | Dans le manifeste | Uniquement dans le fichier de verrouillage (*lockfile*) |
+        | Proportion typique | 10 à 20 % des paquets installés | 80 à 90 % |
+        | Comment la corriger ? | Changer la version dans le manifeste | Mettre à jour le parent, ou forcer la version (`overrides`) |
+
+        Un outil de SCA fonctionne en trois temps : il **lit le lockfile** (la liste exacte de ce qui est
+        installé, transitif compris), il **compare** chaque couple nom/version à des bases de vulnérabilités
+        (NVD, GitHub Advisory Database, OSV), puis il **rapporte** les correspondances avec la version qui
+        corrige. Il ne lit pas votre code : c'est le rôle du SAST, vu dans le cours consacré à l'analyse statique.
+      en: |
+        A **direct** dependency is a library you chose and wrote in your manifest (`package.json`,
+        `requirements.txt`, `pom.xml`). A **transitive** dependency is a dependency of your dependencies:
+        you never chose it, you often do not know it is there, and yet its code runs with the same
+        privileges as yours.
+
+        | | Direct dependency | Transitive dependency |
+        |---|---|---|
+        | Who chose it? | You | The author of another library |
+        | Where is it declared? | In the manifest | Only in the lockfile |
+        | Typical share | 10 to 20% of installed packages | 80 to 90% |
+        | How do you fix it? | Change the version in the manifest | Update the parent, or force the version (`overrides`) |
+
+        An SCA tool works in three steps: it **reads the lockfile** (the exact list of what is installed,
+        transitive packages included), it **compares** each name/version pair with vulnerability databases
+        (NVD, GitHub Advisory Database, OSV), then it **reports** the matches together with the fixing
+        version. It does not read your code: that is the job of SAST, covered in the static analysis course.
+  - heading:
+      fr: "Les attaques sur la chaîne d'approvisionnement"
+      en: "Software supply chain attacks"
+    body:
+      fr: |
+        Une faille dans une dépendance peut être **accidentelle** (un bug) ou **volontaire** (un paquet
+        piégé). Quatre scénarios reviennent sans cesse :
+
+        | Risque | Principe | Défense principale |
+        |---|---|---|
+        | Faille dans une dépendance transitive | Un composant enfoui contient un bug exploitable | SCA dans le pipeline, mises à jour régulières |
+        | *Typosquatting* | Un paquet malveillant porte un nom presque identique (`crossenv` au lieu de `cross-env`) | Relire les noms, lockfile, registre interne |
+        | *Dependency confusion* | Un paquet public reprend le nom d'un paquet interne avec une version plus haute | Portée (*scope*) réservée, registre privé explicite |
+        | Mainteneur compromis | Le compte ou le projet d'un mainteneur légitime est détourné | Versions épinglées, hachages, délai avant adoption |
+
+        Trois incidents à connaître :
+
+        - **Log4Shell (CVE-2021-44228, décembre 2021)** : la bibliothèque Java Log4j, de la version 2.0-beta9
+          à la 2.14.1, exécutait du code distant quand elle journalisait une chaîne comme `${jndi:ldap://…}`.
+          Score CVSS 10.0. Des milliers d'entreprises ne savaient pas si elles l'utilisaient : Log4j était
+          presque toujours une dépendance **transitive**.
+        - **event-stream (novembre 2018)** : le mainteneur, lassé, a confié le paquet npm à un inconnu qui
+          proposait son aide. La version 3.3.6 a ajouté une dépendance, `flatmap-stream`, contenant un code
+          chiffré qui volait les portefeuilles bitcoin de l'application Copay. Aucun CVE n'existait : le
+          code piégé a circulé environ deux mois avant d'être remarqué.
+        - **xz (CVE-2024-3094, mars 2024)** : après deux ans de contributions patientes, un faux
+          contributeur devenu co-mainteneur a glissé une porte dérobée dans les archives de xz 5.6.0 et
+          5.6.1, visant le serveur SSH des distributions Linux. Elle a été découverte par hasard, grâce à
+          une demi-seconde de lenteur anormale à la connexion.
+
+        Depuis, les attaques se sont industrialisées : en septembre 2025, l'hameçonnage d'un mainteneur npm
+        a permis de piéger des paquets aussi répandus que `chalk` et `debug`.
+      en: |
+        A flaw in a dependency can be **accidental** (a bug) or **deliberate** (a booby-trapped package).
+        Four scenarios keep coming back:
+
+        | Risk | Principle | Main defense |
+        |---|---|---|
+        | Flaw in a transitive dependency | A deeply buried component contains an exploitable bug | SCA in the pipeline, regular updates |
+        | Typosquatting | A malicious package has an almost identical name (`crossenv` instead of `cross-env`) | Review names, lockfile, internal registry |
+        | Dependency confusion | A public package reuses the name of an internal one with a higher version | Reserved scope, explicit private registry |
+        | Compromised maintainer | The account or project of a legitimate maintainer is hijacked | Pinned versions, hashes, delay before adoption |
+
+        Three incidents you should know:
+
+        - **Log4Shell (CVE-2021-44228, December 2021)**: the Java library Log4j, from version 2.0-beta9 to
+          2.14.1, executed remote code when it logged a string such as `${jndi:ldap://…}`. CVSS score 10.0.
+          Thousands of companies did not know whether they used it: Log4j was almost always a
+          **transitive** dependency.
+        - **event-stream (November 2018)**: the tired maintainer handed the npm package over to a stranger
+          who offered to help. Version 3.3.6 added a dependency, `flatmap-stream`, containing encrypted code
+          that stole bitcoin wallets from the Copay application. No CVE existed: the malicious code
+          circulated for about two months before anyone noticed.
+        - **xz (CVE-2024-3094, March 2024)**: after two years of patient contributions, a fake contributor
+          who had become co-maintainer slipped a backdoor into the xz 5.6.0 and 5.6.1 release archives,
+          targeting the SSH server of Linux distributions. It was found by chance, thanks to an abnormal
+          half-second delay at login.
+
+        Attacks have been industrialised since: in September 2025, phishing a single npm maintainer was
+        enough to booby-trap packages as widespread as `chalk` and `debug`.
+  - heading:
+      fr: "CVE, CVSS, EPSS, KEV : lire une alerte"
+      en: "CVE, CVSS, EPSS, KEV: reading an alert"
+    body:
+      fr: |
+        Chaque résultat d'un outil de SCA est décrit par plusieurs indicateurs. Ils ne répondent pas à la
+        même question :
+
+        | Sigle | Signification | Question à laquelle il répond | Géré par | Exemple (Log4Shell) |
+        |---|---|---|---|---|
+        | **CVE** | Common Vulnerabilities and Exposures | « De quelle faille parle-t-on ? » (identifiant unique) | Programme CVE (MITRE) | `CVE-2021-44228` |
+        | **CVSS** | Common Vulnerability Scoring System | « Quelle est sa gravité technique ? » (0 à 10) | FIRST | 10.0 (critique) |
+        | **EPSS** | Exploit Prediction Scoring System | « Quelle est la probabilité qu'elle soit exploitée dans les 30 prochains jours ? » (0 à 1) | FIRST | supérieur à 0,9 |
+        | **KEV** | Known Exploited Vulnerabilities | « Est-elle déjà exploitée par de vrais attaquants ? » (oui/non) | CISA (États-Unis) | Oui |
+
+        Les niveaux CVSS : **faible** (0,1 à 3,9), **moyen** (4,0 à 6,9), **élevé** (7,0 à 8,9) et
+        **critique** (9,0 à 10,0).
+
+        Le CVSS seul trompe : la majorité des failles « critiques » ne sont jamais exploitées. Une bonne
+        priorisation combine les trois : d'abord ce qui est dans le catalogue **KEV**, puis ce qui a un
+        **EPSS** élevé, puis le **CVSS**, en tenant compte de l'exposition réelle du composant (accessible
+        depuis Internet ou non).
+
+        Enfin, gardez en tête la limite du SCA : il ne trouve que les failles **connues**. Un paquet piégé
+        comme event-stream n'avait aucun CVE le jour de sa publication. C'est pourquoi les leçons suivantes
+        ajoutent des défenses complémentaires : fichiers de verrouillage, hachages, inventaire (SBOM) et
+        signatures.
+      en: |
+        Every finding of an SCA tool is described by several indicators. They do not answer the same
+        question:
+
+        | Acronym | Meaning | Question it answers | Run by | Example (Log4Shell) |
+        |---|---|---|---|---|
+        | **CVE** | Common Vulnerabilities and Exposures | "Which flaw are we talking about?" (unique identifier) | CVE Program (MITRE) | `CVE-2021-44228` |
+        | **CVSS** | Common Vulnerability Scoring System | "How severe is it technically?" (0 to 10) | FIRST | 10.0 (critical) |
+        | **EPSS** | Exploit Prediction Scoring System | "How likely is it to be exploited in the next 30 days?" (0 to 1) | FIRST | above 0.9 |
+        | **KEV** | Known Exploited Vulnerabilities | "Is it already exploited by real attackers?" (yes/no) | CISA (United States) | Yes |
+
+        CVSS levels: **low** (0.1 to 3.9), **medium** (4.0 to 6.9), **high** (7.0 to 8.9) and **critical**
+        (9.0 to 10.0).
+
+        CVSS alone is misleading: most "critical" flaws are never exploited. Good prioritisation combines
+        all three: first whatever is in the **KEV** catalog, then whatever has a high **EPSS**, then
+        **CVSS**, taking into account how exposed the component really is (reachable from the Internet or
+        not).
+
+        Finally, keep the limit of SCA in mind: it only finds **known** flaws. A booby-trapped package such
+        as event-stream had no CVE on the day it was published. That is why the next lessons add
+        complementary defenses: lockfiles, hashes, inventories (SBOM) and signatures.
+
+examples:
+  - title:
+      fr: "Un mini-moteur de SCA : graphe de dépendances + base de vulnérabilités"
+      en: "A mini SCA engine: dependency graph + vulnerability database"
+    file: mini_sca.py
+    lang: python
+    kind: neutral
+    code: |
+      # A tiny SCA engine: installed packages + dependency graph + advisory database
+
+      # What is really installed (this is what a lockfile records)
+      INSTALLED = {
+          "shop-api": "1.0.0",
+          "report-engine": "3.2.0",
+          "pdf-writer": "1.8.4",
+          "log4j-core": "2.14.1",
+          "commons-text": "1.10.0",
+      }
+
+      # Who pulls whom. The developer only wrote the first line.
+      DEPENDS_ON = {
+          "shop-api": ["report-engine", "commons-text"],
+          "report-engine": ["pdf-writer"],
+          "pdf-writer": ["log4j-core"],
+      }
+
+      # Extract of a vulnerability database (real CVE identifiers)
+      ADVISORIES = [
+          {"id": "CVE-2021-44228", "package": "log4j-core", "fixed_in": "2.15.0", "cvss": 10.0},
+          {"id": "CVE-2022-42889", "package": "commons-text", "fixed_in": "1.10.0", "cvss": 9.8},
+      ]
+
+
+      def parse(version):
+          # "2.14.1" -> (2, 14, 1): versions must compare as numbers, not as text
+          return tuple(int(part) for part in version.split("."))
+
+
+      def path_to(target, current="shop-api", trail=()):
+          # Depth-first search: which chain of dependencies brings the package in?
+          trail = trail + (current,)
+          if current == target:
+              return trail
+          for child in DEPENDS_ON.get(current, []):
+              found = path_to(target, child, trail)
+              if found:
+                  return found
+          return None
+
+
+      direct = DEPENDS_ON["shop-api"]
+      print(f"{len(INSTALLED) - 1} dependencies installed, {len(direct)} declared by the developer")
+
+      for adv in ADVISORIES:
+          name = adv["package"]
+          installed = INSTALLED[name]
+          if parse(installed) < parse(adv["fixed_in"]):
+              print(f"[VULNERABLE] {name} {installed} -> {adv['id']} (CVSS {adv['cvss']}), fixed in {adv['fixed_in']}")
+              print("             path:", " > ".join(path_to(name)))
+          else:
+              print(f"[OK]         {name} {installed} is not affected by {adv['id']}")
+    output: |
+      4 dependencies installed, 2 declared by the developer
+      [VULNERABLE] log4j-core 2.14.1 -> CVE-2021-44228 (CVSS 10.0), fixed in 2.15.0
+                   path: shop-api > report-engine > pdf-writer > log4j-core
+      [OK]         commons-text 1.10.0 is not affected by CVE-2022-42889
+    note:
+      fr: "Cliquez sur Run. Le développeur n'a déclaré que 2 dépendances, mais 4 sont installées, et la faille se trouve trois niveaux plus bas. Le chemin (`path`) indique quel paquet parent mettre à jour : c'est exactement ce que font npm audit, Snyk ou Trivy."
+      en: "Press Run. The developer declared only 2 dependencies, yet 4 are installed, and the flaw sits three levels down. The `path` tells you which parent package to update: this is exactly what npm audit, Snyk or Trivy do."
+
+  - title:
+      fr: "Un manifeste qui ouvre la porte aux attaques"
+      en: "A manifest that opens the door to attacks"
+    file: package.json
+    lang: json
+    kind: vulnerable
+    code: |
+      {
+        "name": "shop-api",
+        "version": "1.0.0",
+        "private": true,
+        "scripts": {
+          "start": "crossenv NODE_ENV=production node server.js"
+        },
+        "dependencies": {
+          "crossenv": "*",
+          "express": "latest",
+          "acme-billing-utils": "^1.2.0"
+        }
+      }
+    note:
+      fr: "Trois problèmes. `crossenv` est une faute de frappe pour `cross-env` : en 2017, un paquet malveillant portant ce nom volait les variables d'environnement. `*` et `latest` installent n'importe quelle version publiée, y compris une version piégée cinq minutes plus tôt. Enfin `acme-billing-utils` est un paquet interne sans portée : si quelqu'un publie ce nom sur le registre public, npm peut le préférer (*dependency confusion*)."
+      en: "Three problems. `crossenv` is a typo for `cross-env`: in 2017 a malicious package with that name stole environment variables. `*` and `latest` install whatever version is published, including one booby-trapped five minutes ago. Finally `acme-billing-utils` is an internal package without a scope: if someone publishes that name on the public registry, npm may prefer it (dependency confusion)."
+
+  - title:
+      fr: "Le même manifeste, corrigé"
+      en: "The same manifest, fixed"
+    file: package.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "name": "shop-api",
+        "version": "1.0.0",
+        "private": true,
+        "scripts": {
+          "start": "cross-env NODE_ENV=production node server.js"
+        },
+        "dependencies": {
+          "@acme/billing-utils": "1.2.0",
+          "cross-env": "7.0.3",
+          "express": "5.1.0"
+        }
+      }
+    note:
+      fr: "Le nom est correct, chaque version est exacte (pas de `*`, `^` ni `latest`) et le paquet interne vit dans la portée `@acme`, réservée à l'entreprise. Une version exacte n'est pas « sûre pour toujours » : elle rend l'installation reproductible, et c'est le SCA qui vous dira quand la changer."
+      en: "The name is right, every version is exact (no `*`, `^` or `latest`) and the internal package lives in the `@acme` scope, reserved for the company. An exact version is not \"safe forever\": it makes the install reproducible, and SCA is what tells you when to change it."
+
+  - title:
+      fr: "Forcer le registre privé pour la portée interne"
+      en: "Forcing the private registry for the internal scope"
+    file: .npmrc
+    lang: ini
+    kind: secure
+    code: |
+      ; Every package of the @acme scope comes ONLY from the private registry:
+      ; a public package can never take its place (blocks dependency confusion)
+      @acme:registry=https://npm.internal.example.com/
+
+      ; The token is injected by the CI as an environment variable, never committed
+      //npm.internal.example.com/:_authToken=${NPM_TOKEN}
+
+      ; Do not run install scripts of dependencies: postinstall is the usual
+      ; entry point of malicious packages
+      ignore-scripts=true
+
+      ; "npm install <pkg>" writes an exact version instead of a ^range
+      save-exact=true
+    note:
+      fr: "Ce fichier, versionné avec le projet, complète le manifeste corrigé. La ligne `@acme:registry` est la vraie défense contre la *dependency confusion* ; `ignore-scripts` neutralise la plupart des paquets piégés, qui agissent dès l'installation."
+      en: "This file, versioned with the project, completes the fixed manifest. The `@acme:registry` line is the real defense against dependency confusion; `ignore-scripts` neutralises most booby-trapped packages, which act at install time."
+
+  - title:
+      fr: "Interroger la base OSV : cette version est-elle touchée par Log4Shell ?"
+      en: "Querying the OSV database: is this version affected by Log4Shell?"
+    file: osv-query.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # OSV (osv.dev) is a free, open vulnerability database with a public API.
+      # We ask: "which known vulnerabilities affect log4j-core 2.14.1?"
+      curl -s https://api.osv.dev/v1/query \
+        -d '{
+              "version": "2.14.1",
+              "package": {
+                "name": "org.apache.logging.log4j:log4j-core",
+                "ecosystem": "Maven"
+              }
+            }' > osv.json
+
+      # Keep only the advisory that is an alias of the Log4Shell CVE
+      jq -r '.vulns[]
+             | select((.aliases // []) | index("CVE-2021-44228"))
+             | "\(.id)  \(.summary)"' osv.json
+
+      # Same question for the fixed version 2.17.1: Log4Shell must be gone
+      curl -s https://api.osv.dev/v1/query \
+        -d '{"version": "2.17.1",
+             "package": {"name": "org.apache.logging.log4j:log4j-core", "ecosystem": "Maven"}}' \
+        | jq '[.vulns[]? | select((.aliases // []) | index("CVE-2021-44228"))] | length'
+    output: |
+      GHSA-jfh8-c2jp-5v3q  Remote code injection in Log4j
+      0
+    note:
+      fr: "Un outil de SCA fait exactement cela, pour chaque paquet de votre lockfile. Une même faille porte souvent plusieurs identifiants : `GHSA-…` dans la base GitHub, `CVE-…` dans le programme CVE ; le champ `aliases` les relie."
+      en: "An SCA tool does exactly this, for every package in your lockfile. The same flaw often has several identifiers: `GHSA-…` in the GitHub database, `CVE-…` in the CVE Program; the `aliases` field links them."
+
+mistake:
+  fr: |
+    **Ne regarder que les dépendances que l'on a soi-même déclarées, et ne trier que par score CVSS.**
+
+    Les dépendances directes ne représentent qu'une petite partie de ce qui est installé : Log4Shell se
+    cachait presque toujours trois ou quatre niveaux plus bas. Et trier 400 alertes par CVSS décroissant
+    conduit à traiter des failles « critiques » jamais exploitées avant une faille « élevée » activement
+    utilisée par des attaquants. Scannez le **lockfile complet** et priorisez avec **KEV** et **EPSS**.
+  en: |
+    **Looking only at the dependencies you declared yourself, and sorting only by CVSS score.**
+
+    Direct dependencies are a small part of what is installed: Log4Shell almost always hid three or four
+    levels down. And sorting 400 alerts by decreasing CVSS means handling "critical" flaws that are never
+    exploited before a "high" flaw that attackers are actively using. Scan the **full lockfile** and
+    prioritise with **KEV** and **EPSS**.
+
+bestPractice:
+  fr: |
+    - **Versionnez toujours le lockfile** (`package-lock.json`, `poetry.lock`, `go.sum`) : c'est lui que les outils de SCA analysent.
+    - **Lancez le SCA à chaque pull request et chaque nuit** : une faille peut être publiée sur un code qui n'a pas changé.
+    - **Réduisez la surface** : chaque dépendance ajoutée est un fournisseur de plus à surveiller. Supprimez celles qui ne servent plus.
+    - **Réservez vos noms internes** : portée (`@acme/…`) et registre privé explicite contre la *dependency confusion*.
+    - **Laissez mûrir les nouvelles versions** quelques jours avant de les adopter, sauf correctif de sécurité : la plupart des paquets piégés sont retirés en moins d'une semaine.
+    - **Priorisez** : KEV d'abord, puis EPSS, puis CVSS, puis exposition réelle.
+  en: |
+    - **Always commit the lockfile** (`package-lock.json`, `poetry.lock`, `go.sum`): it is what SCA tools analyse.
+    - **Run SCA on every pull request and every night**: a flaw can be published against code that has not changed.
+    - **Reduce the surface**: every added dependency is one more supplier to watch. Remove the ones you no longer use.
+    - **Reserve your internal names**: a scope (`@acme/…`) and an explicit private registry against dependency confusion.
+    - **Let new versions mature** for a few days before adopting them, except for security fixes: most booby-trapped packages are removed in less than a week.
+    - **Prioritise**: KEV first, then EPSS, then CVSS, then real exposure.
+
+exercise:
+  statement:
+    fr: |
+      Votre outil de SCA vient de remonter quatre failles. Les valeurs EPSS et KEV ci-dessous sont un
+      instantané figé pour l'exercice (dans la réalité elles évoluent chaque jour).
+
+      | CVE | Paquet | CVSS | EPSS | KEV |
+      |---|---|---|---|---|
+      | CVE-2020-28500 | lodash | 5.3 | 0.002 | non |
+      | CVE-2020-14343 | pyyaml | 9.8 | 0.03 | non |
+      | CVE-2021-44228 | log4j-core | 10.0 | 0.94 | oui |
+      | CVE-2022-42889 | commons-text | 9.8 | 0.93 | non |
+
+      Écrivez un script Python qui :
+
+      1. trie ces failles dans l'ordre de traitement : **KEV d'abord**, puis **EPSS décroissant**, puis **CVSS décroissant** ;
+      2. affiche pour chacune un délai : « fix now » si KEV, « fix this week » si EPSS ≥ 0.1,
+         « fix this month » si CVSS ≥ 7.0, sinon « next regular update ».
+    en: |
+      Your SCA tool has just reported four flaws. The EPSS and KEV values below are a frozen snapshot for
+      the exercise (in real life they change every day).
+
+      | CVE | Package | CVSS | EPSS | KEV |
+      |---|---|---|---|---|
+      | CVE-2020-28500 | lodash | 5.3 | 0.002 | no |
+      | CVE-2020-14343 | pyyaml | 9.8 | 0.03 | no |
+      | CVE-2021-44228 | log4j-core | 10.0 | 0.94 | yes |
+      | CVE-2022-42889 | commons-text | 9.8 | 0.93 | no |
+
+      Write a Python script that:
+
+      1. sorts these flaws in handling order: **KEV first**, then **decreasing EPSS**, then **decreasing CVSS**;
+      2. prints a deadline for each: "fix now" if KEV, "fix this week" if EPSS ≥ 0.1,
+         "fix this month" if CVSS ≥ 7.0, otherwise "next regular update".
+  solution:
+    file: prioritise.py
+    lang: python
+    code: |
+      # Four findings reported by an SCA tool on the same day.
+      # EPSS and KEV values are a snapshot: both are updated continuously.
+      findings = [
+          {"id": "CVE-2020-28500", "package": "lodash",       "cvss": 5.3,  "epss": 0.002, "kev": False},
+          {"id": "CVE-2020-14343", "package": "pyyaml",       "cvss": 9.8,  "epss": 0.03,  "kev": False},
+          {"id": "CVE-2021-44228", "package": "log4j-core",   "cvss": 10.0, "epss": 0.94,  "kev": True},
+          {"id": "CVE-2022-42889", "package": "commons-text", "cvss": 9.8,  "epss": 0.93,  "kev": False},
+      ]
+
+
+      def priority(finding):
+          # Sort key: exploited for real first, then likely to be exploited, then severity.
+          # Negative numbers because sorted() puts the smallest key first.
+          return (not finding["kev"], -finding["epss"], -finding["cvss"])
+
+
+      def deadline(finding):
+          if finding["kev"]:
+              return "fix now"
+          if finding["epss"] >= 0.1:
+              return "fix this week"
+          if finding["cvss"] >= 7.0:
+              return "fix this month"
+          return "next regular update"
+
+
+      for rank, f in enumerate(sorted(findings, key=priority), start=1):
+          print(f"{rank}. {f['id']:<15} {f['package']:<13} CVSS {f['cvss']:<4} EPSS {f['epss']:<5} -> {deadline(f)}")
+    note:
+      fr: "Résultat : Log4Shell (KEV) en premier, puis commons-text (EPSS 0.93), puis pyyaml, puis lodash. Remarquez que pyyaml et commons-text ont le même CVSS (9.8) mais pas du tout la même urgence : c'est l'EPSS qui les départage."
+      en: "Result: Log4Shell (KEV) first, then commons-text (EPSS 0.93), then pyyaml, then lodash. Notice that pyyaml and commons-text share the same CVSS (9.8) but not at all the same urgency: EPSS is what separates them."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'une dépendance transitive ?"
+      en: "What is a transitive dependency?"
+    options:
+      fr:
+        - "Une dépendance utilisée uniquement pendant les tests"
+        - "Une dépendance tirée par une autre dépendance, sans que vous l'ayez déclarée"
+        - "Une dépendance téléchargée depuis un registre privé"
+        - "Une dépendance dont la version n'est pas épinglée"
+      en:
+        - "A dependency used only during tests"
+        - "A dependency pulled in by another dependency, without you declaring it"
+        - "A dependency downloaded from a private registry"
+        - "A dependency whose version is not pinned"
+    answer: 1
+    why:
+      fr: "Une dépendance transitive est une dépendance de vos dépendances : elle n'apparaît que dans le lockfile, et représente la grande majorité des paquets installés."
+      en: "A transitive dependency is a dependency of your dependencies: it only appears in the lockfile, and accounts for the vast majority of installed packages."
+  - q:
+      fr: "Que mesure le score EPSS ?"
+      en: "What does the EPSS score measure?"
+    options:
+      fr:
+        - "La gravité technique d'une faille, de 0 à 10"
+        - "Le nombre de paquets touchés par une faille"
+        - "Le temps nécessaire pour corriger une faille"
+        - "La probabilité qu'une faille soit exploitée dans les 30 prochains jours"
+      en:
+        - "The technical severity of a flaw, from 0 to 10"
+        - "The number of packages affected by a flaw"
+        - "The time needed to fix a flaw"
+        - "The probability that a flaw will be exploited in the next 30 days"
+    answer: 3
+    why:
+      fr: "L'EPSS est une probabilité (0 à 1) d'exploitation à 30 jours. La gravité technique, c'est le CVSS ; l'exploitation déjà constatée, c'est le catalogue KEV."
+      en: "EPSS is a probability (0 to 1) of exploitation within 30 days. Technical severity is CVSS; exploitation already observed is the KEV catalog."
+  - q:
+      fr: "Un attaquant publie sur npm un paquet public nommé comme un paquet interne de votre entreprise, avec une version plus élevée. Comment s'appelle cette attaque ?"
+      en: "An attacker publishes on npm a public package named like one of your company's internal packages, with a higher version. What is this attack called?"
+    options:
+      fr:
+        - "Dependency confusion"
+        - "Typosquatting"
+        - "Injection SQL"
+        - "Attaque par force brute"
+      en:
+        - "Dependency confusion"
+        - "Typosquatting"
+        - "SQL injection"
+        - "Brute-force attack"
+    answer: 0
+    why:
+      fr: "La dependency confusion exploite le gestionnaire de paquets qui préfère la version publique la plus haute. Le typosquatting, lui, repose sur un nom mal orthographié."
+      en: "Dependency confusion exploits the package manager preferring the highest public version. Typosquatting, by contrast, relies on a misspelled name."
+  - q:
+      fr: "Pourquoi un outil de SCA n'aurait-il pas détecté le paquet piégé d'event-stream le jour de sa publication ?"
+      en: "Why would an SCA tool not have detected the booby-trapped event-stream package on the day it was published?"
+    options:
+      fr:
+        - "Parce que les outils de SCA ne lisent pas les paquets npm"
+        - "Parce que le paquet était une dépendance directe"
+        - "Parce qu'aucun avis de sécurité n'existait encore : le SCA ne trouve que les failles connues"
+        - "Parce que le score CVSS était trop bas"
+      en:
+        - "Because SCA tools do not read npm packages"
+        - "Because the package was a direct dependency"
+        - "Because no security advisory existed yet: SCA only finds known flaws"
+        - "Because the CVSS score was too low"
+    answer: 2
+    why:
+      fr: "Le SCA compare des versions à une base de failles connues. Un code malveillant tout neuf n'y figure pas : il faut des défenses complémentaires (lockfile, hachages, délai d'adoption)."
+      en: "SCA compares versions against a database of known flaws. Brand-new malicious code is not in it: complementary defenses are needed (lockfile, hashes, adoption delay)."
+  - q:
+      fr: "Quelle faille traiter en premier ?"
+      en: "Which flaw should be handled first?"
+    options:
+      fr:
+        - "CVSS 9.8, EPSS 0.01, absente du KEV"
+        - "CVSS 9.1, EPSS 0.02, absente du KEV"
+        - "CVSS 7.5, EPSS 0.60, présente dans le KEV"
+        - "CVSS 5.0, EPSS 0.05, absente du KEV"
+      en:
+        - "CVSS 9.8, EPSS 0.01, not in KEV"
+        - "CVSS 9.1, EPSS 0.02, not in KEV"
+        - "CVSS 7.5, EPSS 0.60, listed in KEV"
+        - "CVSS 5.0, EPSS 0.05, not in KEV"
+    answer: 2
+    why:
+      fr: "Une faille présente dans le KEV est exploitée en ce moment par de vrais attaquants : elle passe avant une faille au CVSS plus élevé mais jamais exploitée."
+      en: "A flaw listed in KEV is being exploited right now by real attackers: it comes before a flaw with a higher CVSS that is never exploited."

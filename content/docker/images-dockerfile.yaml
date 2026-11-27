@@ -1,0 +1,523 @@
+description:
+  fr: "Comprendre les images Docker et leurs couches, puis écrire un Dockerfile propre et sûr : instructions essentielles, cache de build, .dockerignore et utilisateur non-root."
+  en: "Understand Docker images and their layers, then write a clean and safe Dockerfile: essential instructions, build cache, .dockerignore and non-root user."
+duration: 30
+
+intro:
+  fr: |
+    Dans la leçon précédente, vous avez lancé des images créées par d'autres. Il est temps de fabriquer la
+    vôtre. Une **image** se décrit dans un fichier texte nommé **Dockerfile** : une suite d'instructions que
+    Docker exécute une à une pour assembler le système de fichiers de votre application.
+
+    Imaginez un gâteau à étages. Chaque instruction du Dockerfile pose une **couche** (*layer*) sur la
+    précédente : la base (un système minimal), puis les dépendances, puis votre code. Si vous ne changez que
+    le glaçage, inutile de refaire cuire tous les étages : Docker réutilise les couches intactes. C'est le
+    **cache de build**, et bien l'utiliser divise les temps de construction par dix.
+
+    Vous allez emballer une petite API Python, d'abord de la mauvaise façon (image énorme, exécutée en
+    `root`, secrets embarqués), puis de la bonne.
+  en: |
+    In the previous lesson you ran images made by others. Time to build your own. An **image** is described
+    in a text file called a **Dockerfile**: a list of instructions Docker executes one by one to assemble
+    your application's file system.
+
+    Picture a layer cake. Each Dockerfile instruction puts a **layer** on top of the previous one: the base
+    (a minimal system), then the dependencies, then your code. If you only change the icing, there is no
+    need to bake every tier again: Docker reuses the untouched layers. That is the **build cache**, and
+    using it well divides build times by ten.
+
+    You will package a small Python API, first the wrong way (huge image, running as `root`, secrets baked
+    in), then the right way.
+
+sections:
+  - heading:
+      fr: "Images et couches"
+      en: "Images and layers"
+    body:
+      fr: |
+        Une image est un empilement de **couches en lecture seule**, plus quelques métadonnées (commande de
+        démarrage, utilisateur, variables d'environnement). Quand un conteneur démarre, Docker ajoute
+        par-dessus une fine **couche inscriptible** qui disparaît avec le conteneur.
+
+        Trois conséquences pratiques :
+
+        - **Les couches sont partagées.** Dix images construites sur `python:3.13-slim` ne stockent la base
+          qu'une seule fois.
+        - **Rien ne s'efface vraiment.** Un fichier ajouté dans une couche puis supprimé dans la suivante
+          reste dans l'image : `docker history` et un simple `docker save` permettent de le retrouver. Un
+          secret copié « temporairement » est donc **définitivement** compromis.
+        - **Une couche modifiée invalide toutes les suivantes.** L'ordre des instructions décide de la
+          vitesse du build.
+      en: |
+        An image is a stack of **read-only layers** plus some metadata (start command, user, environment
+        variables). When a container starts, Docker adds a thin **writable layer** on top, which disappears
+        with the container.
+
+        Three practical consequences:
+
+        - **Layers are shared.** Ten images built on `python:3.13-slim` store the base only once.
+        - **Nothing is really deleted.** A file added in one layer and removed in the next one stays in the
+          image: `docker history` and a plain `docker save` are enough to recover it. A secret copied
+          "temporarily" is therefore **permanently** compromised.
+        - **A changed layer invalidates all the following ones.** The order of the instructions decides
+          how fast the build is.
+  - heading:
+      fr: "Les instructions du Dockerfile"
+      en: "The Dockerfile instructions"
+    body:
+      fr: |
+        | Instruction | Rôle |
+        |---|---|
+        | `FROM` | Image de base. Toujours avec une version précise. |
+        | `WORKDIR` | Répertoire de travail (créé s'il n'existe pas). |
+        | `COPY` | Copier des fichiers du contexte de build vers l'image. Préférez-le à `ADD`. |
+        | `RUN` | Exécuter une commande **pendant le build** (installer des paquets). |
+        | `ENV` / `ARG` | Variable présente dans l'image / uniquement pendant le build. Jamais de secret dans l'une ou l'autre. |
+        | `USER` | Utilisateur qui exécutera les instructions suivantes et le conteneur. |
+        | `EXPOSE` | **Documente** le port d'écoute. Ne publie rien : c'est `-p` qui publie. |
+        | `HEALTHCHECK` | Commande que Docker lance régulièrement pour savoir si l'application répond. |
+        | `CMD` / `ENTRYPOINT` | Ce qui s'exécute **au démarrage du conteneur**. |
+
+        ### CMD ou ENTRYPOINT ?
+
+        | | `CMD` | `ENTRYPOINT` |
+        |---|---|---|
+        | Rôle | Commande (ou arguments) **par défaut** | Exécutable **fixe** du conteneur |
+        | `docker run IMAGE autre-commande` | Remplace `CMD` | Est passé en **argument** à l'`ENTRYPOINT` |
+        | Usage typique | Un service : `CMD ["gunicorn", "app:app"]` | Une image « outil » : `ENTRYPOINT ["trivy"]` |
+
+        Utilisez la **forme exec** (un tableau JSON : `CMD ["gunicorn", "app:app"]`). Avec la forme shell
+        (`CMD gunicorn app:app`), le processus numéro 1 est `/bin/sh`, qui ne transmet pas le signal
+        `SIGTERM` : `docker stop` attend 10 secondes puis tue brutalement l'application.
+      en: |
+        | Instruction | Purpose |
+        |---|---|
+        | `FROM` | Base image. Always with a precise version. |
+        | `WORKDIR` | Working directory (created if missing). |
+        | `COPY` | Copy files from the build context into the image. Prefer it to `ADD`. |
+        | `RUN` | Execute a command **during the build** (install packages). |
+        | `ENV` / `ARG` | Variable present in the image / only during the build. Never a secret in either. |
+        | `USER` | User that runs the following instructions and the container. |
+        | `EXPOSE` | **Documents** the listening port. Publishes nothing: `-p` does. |
+        | `HEALTHCHECK` | Command Docker runs regularly to know whether the application answers. |
+        | `CMD` / `ENTRYPOINT` | What runs **when the container starts**. |
+
+        ### CMD or ENTRYPOINT?
+
+        | | `CMD` | `ENTRYPOINT` |
+        |---|---|---|
+        | Purpose | **Default** command (or arguments) | **Fixed** executable of the container |
+        | `docker run IMAGE other-command` | Replaces `CMD` | Is passed as an **argument** to the `ENTRYPOINT` |
+        | Typical use | A service: `CMD ["gunicorn", "app:app"]` | A "tool" image: `ENTRYPOINT ["trivy"]` |
+
+        Use the **exec form** (a JSON array: `CMD ["gunicorn", "app:app"]`). With the shell form
+        (`CMD gunicorn app:app`), process number 1 is `/bin/sh`, which does not forward the `SIGTERM`
+        signal: `docker stop` waits 10 seconds and then kills the application abruptly.
+  - heading:
+      fr: "Contexte de build, cache et .dockerignore"
+      en: "Build context, cache and .dockerignore"
+    body:
+      fr: |
+        `docker build -t nom:tag .` envoie le répertoire courant (le **contexte**, ici `.`) au moteur de
+        build, puis exécute le Dockerfile. Deux règles en découlent :
+
+        1. **Tout ce qui est dans le contexte peut finir dans l'image.** Un `COPY . .` embarque le dossier
+           `.git`, le fichier `.env` et vos clés si rien ne l'en empêche. Le fichier **`.dockerignore`**
+           (même syntaxe que `.gitignore`) exclut ces fichiers du contexte.
+        2. **Docker réutilise une couche tant que l'instruction et les fichiers copiés n'ont pas changé.**
+           Placez en haut ce qui change rarement (base, dépendances) et en bas ce qui change souvent (votre
+           code). Copier `requirements.txt` seul, installer, *puis* copier le code évite de réinstaller
+           toutes les dépendances à chaque modification d'une ligne.
+
+        Depuis Docker 23, le moteur de build par défaut est **BuildKit** : builds parallèles, meilleur cache
+        et montages de secrets (leçon 5).
+      en: |
+        `docker build -t name:tag .` sends the current directory (the **context**, here `.`) to the build
+        engine, then executes the Dockerfile. Two rules follow:
+
+        1. **Anything in the context can end up in the image.** A `COPY . .` ships the `.git` folder, the
+           `.env` file and your keys unless something stops it. The **`.dockerignore`** file (same syntax as
+           `.gitignore`) excludes those files from the context.
+        2. **Docker reuses a layer as long as the instruction and the copied files have not changed.**
+           Put what rarely changes at the top (base, dependencies) and what changes often at the bottom
+           (your code). Copying `requirements.txt` alone, installing, *then* copying the code avoids
+           reinstalling every dependency each time one line changes.
+
+        Since Docker 23 the default build engine is **BuildKit**: parallel builds, better caching and
+        secret mounts (lesson 5).
+
+examples:
+  - title:
+      fr: "L'application à emballer : une petite API Flask"
+      en: "The application to package: a small Flask API"
+    file: app.py
+    lang: python
+    kind: neutral
+    code: |
+      # requirements.txt (two lines, pinned versions):
+      #   flask==3.1.0
+      #   gunicorn==23.0.0
+      from flask import Flask
+
+      app = Flask(__name__)
+
+
+      @app.get("/")
+      def index():
+          return {"message": "Hello from a container"}
+
+
+      @app.get("/healthz")
+      def healthz():
+          # Cheap endpoint used by the HEALTHCHECK instruction
+          return {"status": "ok"}
+    note:
+      fr: "Deux fichiers suffisent : `app.py` et `requirements.txt` avec les deux lignes indiquées en commentaire. Les versions des dépendances sont figées, comme celle de l'image de base."
+      en: "Two files are enough: `app.py` and a `requirements.txt` holding the two lines shown in the comment. Dependency versions are pinned, just like the base image version."
+
+  - title:
+      fr: "Dockerfile à ne pas reproduire"
+      en: "A Dockerfile not to imitate"
+    file: Dockerfile.vulnerable
+    lang: dockerfile
+    kind: vulnerable
+    code: |
+      # Problem 1: no version -> a different image tomorrow, and the full image weighs about 1 GB
+      FROM python:latest
+
+      # Problem 2: a secret in ENV is visible to anyone with "docker history" or "docker inspect"
+      ENV API_TOKEN=sk_live_changeme-in-vault
+
+      WORKDIR /app
+
+      # Problem 3: copies everything (.git, .env, SSH keys...) and breaks the cache on every edit
+      COPY . .
+
+      # Problem 4: dependencies are reinstalled on each build because of the COPY above
+      RUN pip install -r requirements.txt
+
+      # Problem 5: no USER -> the application runs as root
+      # Problem 6: shell form -> /bin/sh is PID 1 and "docker stop" cannot stop the app gracefully
+      CMD gunicorn --bind 0.0.0.0:8000 app:app
+    note:
+      fr: "Cette image fonctionne, et c'est bien le piège. Elle est lourde, non reproductible, exécutée en `root`, et son secret se lit en une commande : `docker history --no-trunc IMAGE`."
+      en: "This image works, and that is the trap. It is heavy, non-reproducible, runs as `root`, and its secret can be read with one command: `docker history --no-trunc IMAGE`."
+
+  - title:
+      fr: "Le même Dockerfile, corrigé"
+      en: "The same Dockerfile, fixed"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # syntax=docker/dockerfile:1
+
+      # Pinned version on a slim base: reproducible, and about 8 times smaller than the full image
+      FROM python:3.13-slim
+
+      # No .pyc files written to disk, logs flushed immediately to stdout
+      ENV PYTHONDONTWRITEBYTECODE=1 \
+          PYTHONUNBUFFERED=1
+
+      WORKDIR /app
+
+      # Dedicated unprivileged user with a fixed UID (handy for volumes and Kubernetes later)
+      RUN groupadd --gid 10001 app \
+       && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+
+      # Dependencies first: this layer stays cached while requirements.txt does not change
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+
+      # Application code last: it changes most often. Owned by root, so the app cannot rewrite itself.
+      COPY app.py .
+
+      # Everything below, and the container itself, runs without privileges
+      USER app
+
+      # Documentation only: EXPOSE does not publish the port
+      EXPOSE 8000
+
+      # Docker marks the container "unhealthy" after 3 failed checks
+      HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+        CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+
+      # Exec form: gunicorn is PID 1 and receives SIGTERM directly
+      CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "app:app"]
+    note:
+      fr: "Aucun secret dans l'image : il sera fourni au démarrage (leçon 4). Le contrôle de santé utilise Python, déjà présent, plutôt que d'installer `curl` : moins de paquets, moins de failles."
+      en: "No secret in the image: it will be supplied at start-up (lesson 4). The health check uses Python, already present, instead of installing `curl`: fewer packages, fewer vulnerabilities."
+
+  - title:
+      fr: "Le fichier .dockerignore"
+      en: "The .dockerignore file"
+    file: .dockerignore
+    lang: text
+    kind: secure
+    code: |
+      # Version control history: useless at runtime, full of old secrets
+      .git
+      .gitignore
+
+      # Local secrets and environment files must never enter the build context
+      .env
+      .env.*
+      *.pem
+      *.key
+      secrets/
+
+      # Local artefacts that would bloat the image and break the cache
+      __pycache__/
+      *.pyc
+      .venv/
+      .pytest_cache/
+      node_modules/
+
+      # Docker files themselves are not needed inside the image
+      Dockerfile*
+      compose*.yaml
+      .dockerignore
+    note:
+      fr: "Sans ce fichier, un simple `COPY . .` peut embarquer votre fichier `.env`. Ajoutez-le en même temps que le Dockerfile, pas après le premier incident."
+      en: "Without this file, a plain `COPY . .` can ship your `.env` file. Add it together with the Dockerfile, not after the first incident."
+
+  - title:
+      fr: "Construire, lancer et inspecter l'image"
+      en: "Build, run and inspect the image"
+    file: build.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Build the image from the Dockerfile in the current directory and give it a versioned tag
+      docker build -t demo-api:1.0.0 .
+
+      # How big is it?
+      docker image ls demo-api
+
+      # Run it with the safe options from lesson 1
+      docker run -d --name api --read-only --tmpfs /tmp --cap-drop ALL \
+        --security-opt no-new-privileges -p 127.0.0.1:8000:8000 demo-api:1.0.0
+
+      curl -s http://127.0.0.1:8000/healthz
+
+      # Who runs the application?
+      docker exec api id
+
+      # Result of the HEALTHCHECK instruction (wait about 30 seconds after the start)
+      docker inspect --format '{{.State.Health.Status}}' api
+
+      # Which instruction created which layer, and how much each one weighs
+      docker history --format 'table {{.Size}}\t{{.CreatedBy}}' demo-api:1.0.0 | head -n 6
+    output: |
+      REPOSITORY   TAG       IMAGE ID       CREATED          SIZE
+      demo-api     1.0.0     4b7d2f9a61c3   12 seconds ago   139MB
+      {"status":"ok"}
+      uid=10001(app) gid=10001(app) groups=10001(app)
+      healthy
+      SIZE      CREATED BY
+      0B        CMD ["gunicorn" "--bind" "0.0.0.0:8000" "--w…
+      0B        HEALTHCHECK &{["CMD" "python" "-c" "import u…
+      0B        EXPOSE map[8000/tcp:{}]
+      0B        USER app
+      201B      COPY app.py . # buildkit
+    note:
+      fr: "Modifiez une ligne de `app.py` et relancez le build : toutes les étapes jusqu'à `pip install` affichent `CACHED`, seul le `COPY app.py` est rejoué. Les tailles exactes varient selon les versions."
+      en: "Edit one line of `app.py` and build again: every step up to `pip install` shows `CACHED`, only `COPY app.py` is replayed. Exact sizes vary with versions."
+
+mistake:
+  fr: |
+    **Mettre un secret dans l'image « juste pour le build ».**
+
+    ```dockerfile
+    COPY id_rsa /root/.ssh/id_rsa
+    RUN git clone git@github.com:example-org/private-lib.git
+    RUN rm /root/.ssh/id_rsa
+    ```
+
+    Le `rm` crée une nouvelle couche qui *masque* le fichier, mais la couche du `COPY` contient toujours la
+    clé. Quiconque peut télécharger l'image peut l'extraire. Il en va de même pour `ARG TOKEN=...` et
+    `ENV PASSWORD=...`, visibles dans `docker history`.
+
+    Les secrets nécessaires **au build** passent par les montages de secrets BuildKit (leçon 5) ; ceux
+    nécessaires **à l'exécution** sont injectés au démarrage du conteneur (leçon 4).
+  en: |
+    **Putting a secret in the image "just for the build".**
+
+    ```dockerfile
+    COPY id_rsa /root/.ssh/id_rsa
+    RUN git clone git@github.com:example-org/private-lib.git
+    RUN rm /root/.ssh/id_rsa
+    ```
+
+    The `rm` creates a new layer that *hides* the file, but the `COPY` layer still contains the key. Anyone
+    able to pull the image can extract it. The same goes for `ARG TOKEN=...` and `ENV PASSWORD=...`, both
+    visible in `docker history`.
+
+    Secrets needed **at build time** go through BuildKit secret mounts (lesson 5); those needed **at run
+    time** are injected when the container starts (lesson 4).
+
+bestPractice:
+  fr: |
+    - **Base minimale et versionnée** : `python:3.13-slim` plutôt que `python:latest`.
+    - **Un `USER` non-root** avec un UID fixe, déclaré avant `CMD`.
+    - **Ordre des instructions** : ce qui change peu en haut, le code en bas.
+    - **`.dockerignore` systématique**, et `COPY` de fichiers précis plutôt que `COPY . .` quand c'est possible.
+    - **`COPY` plutôt que `ADD`** : `ADD` télécharge des URL et décompresse des archives sans prévenir.
+    - **Forme exec** pour `CMD` et `ENTRYPOINT`, et un `HEALTHCHECK` qui teste réellement l'application.
+    - **Aucun secret** dans `ENV`, `ARG` ou un fichier copié. Vérifiez avec `docker history --no-trunc`.
+  en: |
+    - **Minimal, versioned base**: `python:3.13-slim` rather than `python:latest`.
+    - **A non-root `USER`** with a fixed UID, declared before `CMD`.
+    - **Instruction order**: what rarely changes at the top, the code at the bottom.
+    - **Always a `.dockerignore`**, and `COPY` precise files rather than `COPY . .` whenever possible.
+    - **`COPY` rather than `ADD`**: `ADD` downloads URLs and unpacks archives without warning.
+    - **Exec form** for `CMD` and `ENTRYPOINT`, and a `HEALTHCHECK` that really tests the application.
+    - **No secret** in `ENV`, `ARG` or a copied file. Check with `docker history --no-trunc`.
+
+exercise:
+  statement:
+    fr: |
+      Voici le Dockerfile d'un petit site statique servi par nginx. Il contient **quatre** défauts vus dans
+      la leçon.
+
+      ```dockerfile
+      FROM nginx
+      ENV ADMIN_PASSWORD=changeme-in-vault
+      COPY . /usr/share/nginx/html
+      CMD nginx -g "daemon off;"
+      ```
+
+      1. Listez les quatre défauts.
+      2. Réécrivez le Dockerfile en partant de `nginxinc/nginx-unprivileged:1.28-alpine` (utilisateur
+         non-root, port 8080), en ne copiant que le dossier `site/` et en ajoutant un `HEALTHCHECK`.
+    en: |
+      Here is the Dockerfile of a small static site served by nginx. It contains **four** flaws seen in
+      the lesson.
+
+      ```dockerfile
+      FROM nginx
+      ENV ADMIN_PASSWORD=changeme-in-vault
+      COPY . /usr/share/nginx/html
+      CMD nginx -g "daemon off;"
+      ```
+
+      1. List the four flaws.
+      2. Rewrite the Dockerfile starting from `nginxinc/nginx-unprivileged:1.28-alpine` (non-root user,
+         port 8080), copying only the `site/` folder and adding a `HEALTHCHECK`.
+  solution:
+    file: Dockerfile
+    lang: dockerfile
+    code: |
+      # syntax=docker/dockerfile:1
+
+      # Fix 1: pinned version; this image already runs as UID 101 (fix for "runs as root")
+      FROM nginxinc/nginx-unprivileged:1.28-alpine
+
+      # Fix 2: no secret in ENV - a static site needs none, and a real one is injected at run time
+
+      # Fix 3: copy only the public files, not the whole context (.git, .env...)
+      COPY site/ /usr/share/nginx/html/
+
+      EXPOSE 8080
+
+      # busybox wget is part of the Alpine base image: nothing extra to install
+      HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+        CMD ["wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+
+      # Fix 4: exec form, so nginx is PID 1 and stops cleanly on SIGTERM
+      CMD ["nginx", "-g", "daemon off;"]
+    note:
+      fr: "Les quatre défauts : image sans version, secret dans `ENV`, `COPY .` de tout le contexte, et `CMD` en forme shell. L'image d'origine lance en plus son processus maître en `root`."
+      en: "The four flaws: unversioned image, secret in `ENV`, `COPY .` of the whole context, and `CMD` in shell form. On top of that, the original image starts its master process as `root`."
+
+quiz:
+  - q:
+      fr: "Un fichier est copié dans une couche puis supprimé par un `RUN rm` dans la couche suivante. Que devient-il ?"
+      en: "A file is copied in one layer and then deleted by a `RUN rm` in the next layer. What happens to it?"
+    options:
+      fr:
+        - "Il est effacé définitivement de l'image"
+        - "Il est chiffré automatiquement"
+        - "Il reste récupérable dans la couche précédente"
+        - "Le build échoue"
+      en:
+        - "It is permanently erased from the image"
+        - "It is encrypted automatically"
+        - "It remains recoverable in the previous layer"
+        - "The build fails"
+    answer: 2
+    why:
+      fr: "Les couches sont immuables : la suppression masque le fichier, mais la couche qui l'a ajouté fait toujours partie de l'image."
+      en: "Layers are immutable: the deletion hides the file, but the layer that added it is still part of the image."
+  - q:
+      fr: "Pourquoi copier `requirements.txt` et installer les dépendances **avant** de copier le code ?"
+      en: "Why copy `requirements.txt` and install the dependencies **before** copying the code?"
+    options:
+      fr:
+        - "Pour que la couche des dépendances reste en cache quand seul le code change"
+        - "Parce que `COPY` ne peut copier qu'un fichier à la fois"
+        - "Pour que les dépendances soient chiffrées"
+        - "Parce que `pip` refuse de s'exécuter après un `COPY`"
+      en:
+        - "So the dependency layer stays cached when only the code changes"
+        - "Because `COPY` can only copy one file at a time"
+        - "So the dependencies are encrypted"
+        - "Because `pip` refuses to run after a `COPY`"
+    answer: 0
+    why:
+      fr: "Docker ne rejoue une instruction que si elle ou ses fichiers ont changé ; isoler les dépendances évite de les réinstaller à chaque modification du code."
+      en: "Docker only replays an instruction if it or its files changed; isolating the dependencies avoids reinstalling them on every code change."
+  - q:
+      fr: "Que fait l'instruction `EXPOSE 8000` ?"
+      en: "What does the `EXPOSE 8000` instruction do?"
+    options:
+      fr:
+        - "Elle ouvre le port 8000 sur le pare-feu de l'hôte"
+        - "Elle documente le port d'écoute, sans rien publier"
+        - "Elle publie le port 8000 sur toutes les interfaces"
+        - "Elle lance l'application sur le port 8000"
+      en:
+        - "It opens port 8000 on the host firewall"
+        - "It documents the listening port, without publishing anything"
+        - "It publishes port 8000 on every interface"
+        - "It starts the application on port 8000"
+    answer: 1
+    why:
+      fr: "`EXPOSE` est une métadonnée ; seule l'option `-p` de `docker run` (ou `ports:` dans Compose) publie réellement un port."
+      en: "`EXPOSE` is metadata; only the `-p` option of `docker run` (or `ports:` in Compose) actually publishes a port."
+  - q:
+      fr: "Avec `ENTRYPOINT [\"trivy\"]`, que se passe-t-il lors de `docker run IMAGE image nginx:1.28` ?"
+      en: "With `ENTRYPOINT [\"trivy\"]`, what happens on `docker run IMAGE image nginx:1.28`?"
+    options:
+      fr:
+        - "`image nginx:1.28` remplace l'ENTRYPOINT"
+        - "Docker refuse les arguments supplémentaires"
+        - "Le conteneur démarre un shell"
+        - "Le conteneur exécute `trivy image nginx:1.28`"
+      en:
+        - "`image nginx:1.28` replaces the ENTRYPOINT"
+        - "Docker refuses the extra arguments"
+        - "The container starts a shell"
+        - "The container runs `trivy image nginx:1.28`"
+    answer: 3
+    why:
+      fr: "Les arguments de `docker run` remplacent `CMD` et sont ajoutés à la suite de l'`ENTRYPOINT`, qui reste l'exécutable fixe."
+      en: "The `docker run` arguments replace `CMD` and are appended to the `ENTRYPOINT`, which stays the fixed executable."
+  - q:
+      fr: "Quel est le risque d'un `ENV API_TOKEN=...` dans un Dockerfile ?"
+      en: "What is the risk of an `ENV API_TOKEN=...` in a Dockerfile?"
+    options:
+      fr:
+        - "La variable n'est pas transmise au conteneur"
+        - "Le build devient plus lent"
+        - "Le secret est lisible par quiconque obtient l'image"
+        - "L'image ne peut plus être poussée vers un registre"
+      en:
+        - "The variable is not passed to the container"
+        - "The build becomes slower"
+        - "The secret is readable by anyone who obtains the image"
+        - "The image can no longer be pushed to a registry"
+    answer: 2
+    why:
+      fr: "Les variables `ENV` sont stockées dans les métadonnées de l'image et affichées par `docker history` et `docker inspect`."
+      en: "`ENV` variables are stored in the image metadata and displayed by `docker history` and `docker inspect`."

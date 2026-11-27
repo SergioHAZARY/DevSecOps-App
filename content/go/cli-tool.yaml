@@ -1,0 +1,673 @@
+description:
+  fr: "Créer un outil en ligne de commande en Go : paquet flag de la bibliothèque standard, sous-commandes avec Cobra, codes de sortie et gestion sûre des secrets."
+  en: "Build a command-line tool in Go: the standard library flag package, subcommands with Cobra, exit codes and safe handling of secrets."
+duration: 35
+
+intro:
+  fr: |
+    `kubectl`, `terraform`, `trivy`, `gh`, `cosign` : les outils que vous lancez tous les jours dans un
+    terminal ou dans un pipeline sont des **CLI** (*Command-Line Interface*, interface en ligne de commande)
+    écrites en Go. Savoir en écrire une, c'est pouvoir transformer n'importe quel contrôle de sécurité en
+    une étape de pipeline réutilisable par toute l'équipe.
+
+    Une bonne CLI ressemble à un distributeur automatique : on choisit avec des boutons clairs (les
+    *flags*), le produit sort toujours au même endroit (la sortie standard), et un voyant indique si tout
+    s'est bien passé (le **code de sortie**). C'est ce voyant que lit le pipeline CI/CD pour décider de
+    bloquer ou non une livraison.
+
+    Vous allez écrire un vérificateur d'empreinte SHA-256 avec le paquet standard `flag`, puis un outil à
+    sous-commandes avec **Cobra**, et voir comment passer un secret à un programme sans l'exposer.
+  en: |
+    `kubectl`, `terraform`, `trivy`, `gh`, `cosign`: the tools you run every day in a terminal or in a
+    pipeline are **CLIs** (*Command-Line Interfaces*) written in Go. Knowing how to write one means being
+    able to turn any security check into a pipeline step the whole team can reuse.
+
+    A good CLI is like a vending machine: you choose with clear buttons (the *flags*), the product always
+    comes out at the same place (standard output), and a light tells you whether everything went well (the
+    **exit code**). That light is what the CI/CD pipeline reads to decide whether to block a release.
+
+    You will write a SHA-256 checksum verifier with the standard `flag` package, then a tool with
+    subcommands using **Cobra**, and see how to hand a secret to a program without exposing it.
+
+sections:
+  - heading:
+      fr: "Les conventions d'une bonne CLI"
+      en: "The conventions of a good CLI"
+    body:
+      fr: |
+        | Élément | Convention | Pourquoi |
+        |---|---|---|
+        | Sortie standard (`stdout`) | Le **résultat** uniquement | Peut être redirigé vers un fichier ou un autre outil (`\| jq`) |
+        | Sortie d'erreur (`stderr`) | Messages, progression, erreurs | Ne pollue pas le résultat |
+        | Code de sortie `0` | Succès, rien à signaler | Le pipeline continue |
+        | Code de sortie `1` | Le contrôle a trouvé un problème | Le pipeline **échoue** |
+        | Code de sortie `2` | Mauvaise utilisation (flag manquant, fichier illisible) | Distinguer « faille » et « outil mal appelé » |
+        | Option `--json` | Sortie structurée | Exploitable par un autre programme |
+        | Secrets | Variable d'environnement, fichier ou saisie masquée | Jamais dans un flag (visible dans `ps` et l'historique) |
+
+        En Go, `os.Args` contient les arguments bruts, `os.Exit(n)` fixe le code de sortie, et
+        `fmt.Fprintln(os.Stderr, ...)` écrit sur la sortie d'erreur. Attention : `os.Exit` arrête le
+        programme immédiatement, **sans exécuter les `defer`**. Appelez-le uniquement dans `main`.
+      en: |
+        | Element | Convention | Why |
+        |---|---|---|
+        | Standard output (`stdout`) | The **result** only | Can be redirected to a file or another tool (`\| jq`) |
+        | Standard error (`stderr`) | Messages, progress, errors | Does not pollute the result |
+        | Exit code `0` | Success, nothing to report | The pipeline continues |
+        | Exit code `1` | The check found a problem | The pipeline **fails** |
+        | Exit code `2` | Wrong usage (missing flag, unreadable file) | Tell "flaw found" from "tool misused" |
+        | `--json` option | Structured output | Usable by another program |
+        | Secrets | Environment variable, file or hidden prompt | Never in a flag (visible in `ps` and shell history) |
+
+        In Go, `os.Args` holds the raw arguments, `os.Exit(n)` sets the exit code, and
+        `fmt.Fprintln(os.Stderr, ...)` writes to standard error. Beware: `os.Exit` stops the program
+        immediately, **without running `defer` calls**. Only call it in `main`.
+  - heading:
+      fr: "Le paquet flag, puis Cobra"
+      en: "The flag package, then Cobra"
+    body:
+      fr: |
+        Le paquet standard `flag` suffit pour un outil simple :
+
+        ```go
+        file := flag.String("file", "", "file to verify")          // -file path
+        workers := flag.Int("workers", 100, "parallel connections")  // -workers 50
+        timeout := flag.Duration("timeout", time.Second, "timeout")  // -timeout 500ms
+        flag.Parse()                                                  // always call it
+        rest := flag.Args()                                           // positional arguments
+        ```
+
+        Chaque fonction renvoie un **pointeur** : la valeur se lit avec `*file`. L'option `-h` est générée
+        automatiquement.
+
+        | | `flag` (bibliothèque standard) | Cobra (`github.com/spf13/cobra`) |
+        |---|---|---|
+        | Dépendance | Aucune | Un module externe à auditer et à maintenir à jour |
+        | Syntaxe des options | `-file x` ou `--file x` | POSIX : `--file x` et forme courte `-f x` |
+        | Sous-commandes | À écrire soi-même (`flag.NewFlagSet`) | Intégrées (`tool scan`, `tool version`) |
+        | Aide, auto-complétion shell | Aide simple | Aide détaillée, complétion bash/zsh/fish/PowerShell |
+        | Utilisé par | Petits outils internes | `kubectl`, `gh`, `helm`, `trivy`, `cosign` |
+
+        Règle pratique : commencez avec `flag` ; passez à Cobra quand vous avez besoin de sous-commandes.
+        Chaque dépendance ajoutée élargit votre **chaîne d'approvisionnement logicielle** : c'est un choix
+        de sécurité, pas seulement de confort.
+      en: |
+        The standard `flag` package is enough for a simple tool:
+
+        ```go
+        file := flag.String("file", "", "file to verify")          // -file path
+        workers := flag.Int("workers", 100, "parallel connections")  // -workers 50
+        timeout := flag.Duration("timeout", time.Second, "timeout")  // -timeout 500ms
+        flag.Parse()                                                  // always call it
+        rest := flag.Args()                                           // positional arguments
+        ```
+
+        Each function returns a **pointer**: read the value with `*file`. The `-h` option is generated
+        automatically.
+
+        | | `flag` (standard library) | Cobra (`github.com/spf13/cobra`) |
+        |---|---|---|
+        | Dependency | None | An external module to audit and keep up to date |
+        | Option syntax | `-file x` or `--file x` | POSIX: `--file x` and short form `-f x` |
+        | Subcommands | Hand-written (`flag.NewFlagSet`) | Built in (`tool scan`, `tool version`) |
+        | Help, shell completion | Simple help | Detailed help, bash/zsh/fish/PowerShell completion |
+        | Used by | Small internal tools | `kubectl`, `gh`, `helm`, `trivy`, `cosign` |
+
+        Rule of thumb: start with `flag`; move to Cobra when you need subcommands. Every dependency you
+        add widens your **software supply chain**: it is a security decision, not just a comfort one.
+
+examples:
+  - title:
+      fr: "Avec flag : vérifier l'empreinte SHA-256 d'un fichier téléchargé"
+      en: "With flag: verifying the SHA-256 checksum of a downloaded file"
+    file: main.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"crypto/sha256"
+      	"encoding/hex"
+      	"flag"
+      	"fmt"
+      	"io"
+      	"os"
+      	"strings"
+      )
+
+      // Exit codes are the contract between the CLI and the pipeline
+      const (
+      	exitOK       = 0
+      	exitMismatch = 1
+      	exitUsage    = 2
+      )
+
+      // fileSHA256 streams the file through the hash: no need to load it in memory
+      func fileSHA256(path string) (string, error) {
+      	f, err := os.Open(path)
+      	if err != nil {
+      		return "", err
+      	}
+      	defer f.Close()
+
+      	h := sha256.New()
+      	if _, err := io.Copy(h, f); err != nil {
+      		return "", err
+      	}
+      	return hex.EncodeToString(h.Sum(nil)), nil
+      }
+
+      func main() {
+      	file := flag.String("file", "", "path of the file to verify (required)")
+      	expected := flag.String("sha256", "", "expected SHA-256, 64 hex characters (required)")
+      	quiet := flag.Bool("quiet", false, "print nothing, only set the exit code")
+      	flag.Parse()
+
+      	// Validate the input before doing any work
+      	if *file == "" || len(*expected) != 64 {
+      		fmt.Fprintln(os.Stderr, "error: -file and a 64-character -sha256 are required")
+      		flag.Usage()
+      		os.Exit(exitUsage)
+      	}
+
+      	actual, err := fileSHA256(*file)
+      	if err != nil {
+      		fmt.Fprintln(os.Stderr, "error:", err)
+      		os.Exit(exitUsage)
+      	}
+
+      	if !strings.EqualFold(actual, *expected) {
+      		if !*quiet {
+      			fmt.Fprintf(os.Stderr, "MISMATCH %s\n  expected %s\n  actual   %s\n", *file, *expected, actual)
+      		}
+      		os.Exit(exitMismatch)
+      	}
+
+      	if !*quiet {
+      		fmt.Printf("OK %s\n", *file)
+      	}
+      	os.Exit(exitOK)
+      }
+    output: |
+      $ printf 'hello\n' > release.txt
+      $ go run . -file release.txt -sha256 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03
+      OK release.txt
+      $ go run . -file release.txt -sha256 0000000000000000000000000000000000000000000000000000000000000000
+      MISMATCH release.txt
+        expected 0000000000000000000000000000000000000000000000000000000000000000
+        actual   5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03
+      exit status 1
+    note:
+      fr: "Vérifier l'empreinte d'un binaire téléchargé avant de l'exécuter est un contrôle de base de la chaîne d'approvisionnement. Le code de sortie `1` fait échouer l'étape du pipeline ; le code `2` signale une mauvaise utilisation de l'outil."
+      en: "Checking the checksum of a downloaded binary before running it is a basic supply chain control. Exit code `1` fails the pipeline step; exit code `2` signals that the tool was misused."
+
+  - title:
+      fr: "Avec Cobra : un outil d'audit à sous-commandes"
+      en: "With Cobra: an audit tool with subcommands"
+    file: main.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import (
+      	"encoding/json"
+      	"fmt"
+      	"io/fs"
+      	"os"
+      	"path/filepath"
+
+      	"github.com/spf13/cobra"
+      )
+
+      // Overridden at build time: go build -ldflags "-X main.version=1.2.0"
+      var version = "dev"
+
+      type finding struct {
+      	Path string `json:"path"`
+      	Mode string `json:"mode"`
+      }
+
+      // findWorldWritable returns the regular files that any local user can modify
+      func findWorldWritable(dir string) ([]finding, error) {
+      	findings := []finding{}
+      	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+      		if err != nil {
+      			return err
+      		}
+      		info, err := d.Info()
+      		if err != nil {
+      			return err
+      		}
+      		// 0o002 is the "others can write" permission bit
+      		if info.Mode().IsRegular() && info.Mode().Perm()&0o002 != 0 {
+      			findings = append(findings, finding{Path: path, Mode: info.Mode().Perm().String()})
+      		}
+      		return nil
+      	})
+      	return findings, err
+      }
+
+      func newPermsCmd() *cobra.Command {
+      	var asJSON bool
+
+      	cmd := &cobra.Command{
+      		Use:   "perms <directory>",
+      		Short: "Find world-writable files in a directory",
+      		Args:  cobra.ExactArgs(1), // Cobra validates the number of arguments
+      		RunE: func(cmd *cobra.Command, args []string) error {
+      			findings, err := findWorldWritable(args[0])
+      			if err != nil {
+      				return fmt.Errorf("scan %s: %w", args[0], err)
+      			}
+
+      			out := cmd.OutOrStdout()
+      			if asJSON {
+      				enc := json.NewEncoder(out)
+      				enc.SetIndent("", "  ")
+      				if err := enc.Encode(findings); err != nil {
+      					return err
+      				}
+      			} else {
+      				for _, f := range findings {
+      					fmt.Fprintf(out, "%s  %s\n", f.Mode, f.Path)
+      				}
+      			}
+
+      			// Returning an error makes main exit with code 1: the pipeline fails
+      			if len(findings) > 0 {
+      				return fmt.Errorf("%d world-writable file(s) found", len(findings))
+      			}
+      			return nil
+      		},
+      	}
+      	cmd.Flags().BoolVar(&asJSON, "json", false, "print findings as JSON")
+      	return cmd
+      }
+
+      func main() {
+      	root := &cobra.Command{
+      		Use:          "secaudit",
+      		Short:        "Small security audit toolbox",
+      		Version:      version, // adds the --version flag
+      		SilenceUsage: true,    // do not print the help text on runtime errors
+      	}
+      	root.AddCommand(newPermsCmd())
+
+      	if err := root.Execute(); err != nil {
+      		os.Exit(1)
+      	}
+      }
+    output: |
+      $ ./secaudit perms ./deploy
+      -rw-rw-rw-  deploy/config/db.env
+      -rwxrwxrwx  deploy/scripts/backup.sh
+      Error: 2 world-writable file(s) found
+      $ echo $?
+      1
+    note:
+      fr: "Chaque sous-commande est un `*cobra.Command` avec ses propres flags. `RunE` renvoie une `error` au lieu d'appeler `os.Exit` : la fonction reste testable, et un seul endroit (`main`) décide du code de sortie. Un fichier modifiable par tous dans un dossier de déploiement permet à n'importe quel compte local d'injecter du code."
+      en: "Each subcommand is a `*cobra.Command` with its own flags. `RunE` returns an `error` instead of calling `os.Exit`: the function stays testable, and a single place (`main`) decides on the exit code. A world-writable file in a deployment folder lets any local account inject code."
+
+  - title:
+      fr: "Créer le projet, ajouter Cobra, compiler avec un numéro de version"
+      en: "Create the project, add Cobra, build with a version number"
+    file: build.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Create the module (the name is usually the repository URL)
+      mkdir secaudit && cd secaudit
+      go mod init example.com/secaudit
+
+      # Add the dependency: go.mod records the version, go.sum its checksum
+      go get github.com/spf13/cobra@latest
+
+      # Verify that downloaded modules still match go.sum
+      go mod verify
+
+      # Build, injecting the version into the "version" variable of package main
+      go build -ldflags "-X main.version=1.2.0" -o secaudit .
+
+      ./secaudit --version
+      ./secaudit --help
+    output: |
+      secaudit version 1.2.0
+      Small security audit toolbox
+
+      Usage:
+        secaudit [command]
+
+      Available Commands:
+        completion  Generate the autocompletion script for the specified shell
+        help        Help about any command
+        perms       Find world-writable files in a directory
+
+      Flags:
+        -h, --help      help for secaudit
+        -v, --version   version for secaudit
+
+      Use "secaudit [command] --help" for more information about a command.
+    note:
+      fr: "L'aide, la commande `completion` et le flag `--version` sont générés par Cobra. Versionnez `go.mod` **et** `go.sum` : le second contient l'empreinte de chaque dépendance, et `go mod verify` détecte toute modification."
+      en: "The help text, the `completion` command and the `--version` flag are generated by Cobra. Commit `go.mod` **and** `go.sum`: the latter holds the checksum of every dependency, and `go mod verify` detects any alteration."
+
+  - title:
+      fr: "Secret passé par un flag : visible par toute la machine"
+      en: "Secret passed as a flag: visible to the whole machine"
+    file: deploy_vulnerable.go
+    lang: go
+    kind: vulnerable
+    code: |
+      package main
+
+      import (
+      	"flag"
+      	"fmt"
+      	"os"
+      	"time"
+      )
+
+      func main() {
+      	// Command-line arguments are public: any local user can list them with "ps"
+      	token := flag.String("token", "", "API token")
+      	flag.Parse()
+
+      	if *token == "" {
+      		fmt.Fprintln(os.Stderr, "error: -token is required")
+      		os.Exit(2)
+      	}
+
+      	// Second leak: the secret is printed, so it ends up in the CI logs
+      	fmt.Printf("authenticating with token %s\n", *token)
+      	time.Sleep(30 * time.Second) // simulates a long deployment
+      }
+    output: |
+      $ ./deploy -token changeme-in-vault &
+      authenticating with token changeme-in-vault
+      $ ps -eo user,args | grep deploy
+      alice    ./deploy -token changeme-in-vault
+      $ history | tail -n 2
+        501  ./deploy -token changeme-in-vault &
+    note:
+      fr: "Le jeton apparaît à trois endroits : la liste des processus (lisible par tous les utilisateurs de la machine), l'historique du shell et les journaux. Sur un runner CI partagé, c'est une fuite immédiate."
+      en: "The token shows up in three places: the process list (readable by every user of the machine), the shell history and the logs. On a shared CI runner, that is an immediate leak."
+
+  - title:
+      fr: "Secret lu depuis l'environnement ou une saisie masquée"
+      en: "Secret read from the environment or a hidden prompt"
+    file: deploy_secure.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"errors"
+      	"fmt"
+      	"os"
+      	"strings"
+
+      	"golang.org/x/term"
+      )
+
+      // readToken takes the secret from the environment (CI) or a hidden prompt (human)
+      func readToken() (string, error) {
+      	if token := os.Getenv("DEPLOY_TOKEN"); token != "" {
+      		return token, nil
+      	}
+
+      	fd := int(os.Stdin.Fd())
+      	if !term.IsTerminal(fd) {
+      		return "", errors.New("DEPLOY_TOKEN is not set and there is no terminal to prompt on")
+      	}
+
+      	fmt.Fprint(os.Stderr, "API token: ")
+      	raw, err := term.ReadPassword(fd) // the typed characters are not displayed
+      	fmt.Fprintln(os.Stderr)
+      	if err != nil {
+      		return "", fmt.Errorf("read token: %w", err)
+      	}
+      	return strings.TrimSpace(string(raw)), nil
+      }
+
+      func main() {
+      	token, err := readToken()
+      	if err != nil {
+      		fmt.Fprintln(os.Stderr, "error:", err)
+      		os.Exit(2)
+      	}
+      	if token == "" {
+      		fmt.Fprintln(os.Stderr, "error: empty token")
+      		os.Exit(2)
+      	}
+
+      	// Log that a token is present, never its value
+      	fmt.Printf("authenticating with a %d-character token\n", len(token))
+      }
+    output: |
+      $ ./deploy
+      API token:
+      authenticating with a 17-character token
+      $ ps -eo user,args | grep deploy
+      alice    ./deploy
+    note:
+      fr: "En CI, le secret arrive par la variable `DEPLOY_TOKEN`, injectée par le gestionnaire de secrets du pipeline. En interactif, `term.ReadPassword` (module `golang.org/x/term`) le demande sans l'afficher. Rien n'apparaît dans `ps`, l'historique ou les logs."
+      en: "In CI, the secret comes through the `DEPLOY_TOKEN` variable, injected by the pipeline's secret manager. Interactively, `term.ReadPassword` (module `golang.org/x/term`) asks for it without echoing. Nothing shows up in `ps`, the history or the logs."
+
+mistake:
+  fr: |
+    **Toujours renvoyer le code de sortie 0.**
+
+    ```go
+    if len(findings) > 0 {
+        fmt.Println("vulnerabilities found!")
+    }
+    // main returns normally: exit code 0
+    ```
+
+    Le message s'affiche, mais le pipeline lit le **code de sortie**, pas le texte. Avec un code `0`, l'étape
+    est verte et le code vulnérable est déployé. Un outil de contrôle doit sortir avec un code **non nul**
+    dès qu'il trouve un problème bloquant.
+
+    L'erreur inverse existe aussi : appeler `os.Exit(1)` au fond d'une fonction. Les `defer` ne sont pas
+    exécutés (fichiers non fermés, rapports non écrits) et la fonction devient impossible à tester.
+    Renvoyez une `error` et laissez `main` décider.
+  en: |
+    **Always returning exit code 0.**
+
+    ```go
+    if len(findings) > 0 {
+        fmt.Println("vulnerabilities found!")
+    }
+    // main returns normally: exit code 0
+    ```
+
+    The message is printed, but the pipeline reads the **exit code**, not the text. With code `0`, the step
+    is green and the vulnerable code gets deployed. A checking tool must exit with a **non-zero** code as
+    soon as it finds a blocking problem.
+
+    The opposite mistake exists too: calling `os.Exit(1)` deep inside a function. `defer` calls do not run
+    (files left open, reports not written) and the function becomes impossible to test. Return an `error`
+    and let `main` decide.
+
+bestPractice:
+  fr: |
+    - **Résultat sur `stdout`, messages sur `stderr`** : `outil --json | jq` doit toujours fonctionner.
+    - **Codes de sortie documentés** : `0` succès, `1` problème trouvé, `2` erreur d'utilisation.
+    - **Jamais de secret dans un flag** : variable d'environnement, fichier aux permissions `0600` ou saisie masquée.
+    - **Validez tous les arguments** (longueur, format, plage de valeurs) avant d'agir, et affichez un message clair.
+    - **Proposez `--json`** : la sortie devient exploitable par un SIEM, un tableau de bord ou un autre outil.
+    - **Injectez la version** avec `-ldflags "-X main.version=..."` : on sait toujours quel binaire tourne.
+    - **Limitez et auditez les dépendances** : `go mod verify`, `govulncheck ./...`, mises à jour régulières.
+  en: |
+    - **Result on `stdout`, messages on `stderr`**: `tool --json | jq` must always work.
+    - **Documented exit codes**: `0` success, `1` problem found, `2` usage error.
+    - **Never put a secret in a flag**: environment variable, file with `0600` permissions or hidden prompt.
+    - **Validate every argument** (length, format, value range) before acting, and print a clear message.
+    - **Offer `--json`**: the output becomes usable by a SIEM, a dashboard or another tool.
+    - **Inject the version** with `-ldflags "-X main.version=..."`: you always know which binary is running.
+    - **Limit and audit dependencies**: `go mod verify`, `govulncheck ./...`, regular updates.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez `portcheck`, une petite CLI utilisable dans un pipeline pour vérifier qu'un port est (ou n'est
+      pas) joignable. Utilisez uniquement le paquet `flag`.
+
+      1. Flags : `-host` (défaut `127.0.0.1`), `-port` (entier, obligatoire), `-timeout` (durée, défaut `2s`,
+         avec `flag.Duration`).
+      2. Si le port n'est pas compris entre 1 et 65535, affichez une erreur sur `stderr`, puis l'aide, et
+         sortez avec le code `2`.
+      3. Tentez une connexion TCP avec `net.DialTimeout`.
+      4. Port ouvert : affichez `open <hôte>:<port>` sur `stdout`, code `0`. Port fermé ou filtré : affichez
+         `closed <hôte>:<port>` sur `stdout`, code `1`.
+
+      Rappel : ne testez que vos propres machines.
+    en: |
+      Write `portcheck`, a small CLI usable in a pipeline to verify that a port is (or is not) reachable.
+      Use the `flag` package only.
+
+      1. Flags: `-host` (default `127.0.0.1`), `-port` (integer, required), `-timeout` (duration, default
+         `2s`, using `flag.Duration`).
+      2. If the port is not between 1 and 65535, print an error to `stderr`, then the usage, and exit with
+         code `2`.
+      3. Attempt a TCP connection with `net.DialTimeout`.
+      4. Open port: print `open <host>:<port>` to `stdout`, code `0`. Closed or filtered port: print
+         `closed <host>:<port>` to `stdout`, code `1`.
+
+      Reminder: only test your own machines.
+  solution:
+    file: main.go
+    lang: go
+    code: |
+      package main
+
+      import (
+      	"flag"
+      	"fmt"
+      	"net"
+      	"os"
+      	"strconv"
+      	"time"
+      )
+
+      func main() {
+      	host := flag.String("host", "127.0.0.1", "host to test (only hosts you are authorised to test)")
+      	port := flag.Int("port", 0, "TCP port to test, 1-65535 (required)")
+      	timeout := flag.Duration("timeout", 2*time.Second, "connection timeout, for example 500ms or 3s")
+      	flag.Parse()
+
+      	// Usage errors exit with code 2, so they are not mistaken for a "closed" result
+      	if *port < 1 || *port > 65535 {
+      		fmt.Fprintln(os.Stderr, "error: -port must be between 1 and 65535")
+      		flag.Usage()
+      		os.Exit(2)
+      	}
+
+      	address := net.JoinHostPort(*host, strconv.Itoa(*port))
+      	conn, err := net.DialTimeout("tcp", address, *timeout)
+      	if err != nil {
+      		fmt.Println("closed", address)
+      		os.Exit(1)
+      	}
+      	conn.Close()
+
+      	fmt.Println("open", address)
+      }
+    note:
+      fr: "Dans un pipeline : `./portcheck -host 127.0.0.1 -port 23 && exit 1` fait échouer l'étape si Telnet est ouvert. Le code de sortie rend l'outil composable sans analyser son texte."
+      en: "In a pipeline: `./portcheck -host 127.0.0.1 -port 23 && exit 1` fails the step when Telnet is open. The exit code makes the tool composable without parsing its text."
+
+quiz:
+  - q:
+      fr: "Sur quoi un pipeline CI/CD se base-t-il pour savoir si un outil a détecté un problème ?"
+      en: "What does a CI/CD pipeline rely on to know whether a tool detected a problem?"
+    options:
+      fr:
+        - "La couleur du texte affiché"
+        - "La présence du mot « error » dans la sortie"
+        - "Le temps d'exécution de l'outil"
+        - "Le code de sortie du processus"
+      en:
+        - "The colour of the printed text"
+        - "The presence of the word \"error\" in the output"
+        - "The execution time of the tool"
+        - "The exit code of the process"
+    answer: 3
+    why:
+      fr: "Un code de sortie non nul fait échouer l'étape ; le texte affiché n'est pas interprété par le pipeline."
+      en: "A non-zero exit code fails the step; the printed text is not interpreted by the pipeline."
+  - q:
+      fr: "Pourquoi ne faut-il pas passer un secret dans un flag comme `-token` ?"
+      en: "Why should a secret not be passed in a flag such as `-token`?"
+    options:
+      fr:
+        - "Parce que les flags sont limités à 8 caractères"
+        - "Parce que les arguments sont visibles dans la liste des processus et l'historique du shell"
+        - "Parce que le paquet `flag` chiffre mal les valeurs"
+        - "Parce que Go interdit les chaînes dans les flags"
+      en:
+        - "Because flags are limited to 8 characters"
+        - "Because arguments are visible in the process list and the shell history"
+        - "Because the `flag` package encrypts values badly"
+        - "Because Go forbids strings in flags"
+    answer: 1
+    why:
+      fr: "N'importe quel utilisateur local peut lire les arguments d'un processus avec `ps`, et le shell les enregistre dans son historique."
+      en: "Any local user can read a process's arguments with `ps`, and the shell records them in its history."
+  - q:
+      fr: "Que doit-on absolument appeler avant de lire la valeur des flags du paquet `flag` ?"
+      en: "What must be called before reading the values of `flag` package flags?"
+    options:
+      fr:
+        - "`flag.Parse()`"
+        - "`flag.Usage()`"
+        - "`os.Exit(0)`"
+        - "`flag.Args()`"
+      en:
+        - "`flag.Parse()`"
+        - "`flag.Usage()`"
+        - "`os.Exit(0)`"
+        - "`flag.Args()`"
+    answer: 0
+    why:
+      fr: "Sans `flag.Parse()`, les variables gardent leur valeur par défaut : la ligne de commande n'est jamais lue."
+      en: "Without `flag.Parse()`, the variables keep their default values: the command line is never read."
+  - q:
+      fr: "Quel avantage principal Cobra apporte-t-il par rapport au paquet `flag` ?"
+      en: "What is the main advantage of Cobra over the `flag` package?"
+    options:
+      fr:
+        - "Il rend le binaire plus petit"
+        - "Il supprime le besoin de valider les arguments"
+        - "Il gère les sous-commandes, l'aide détaillée et l'auto-complétion"
+        - "Il chiffre automatiquement les secrets passés en flag"
+      en:
+        - "It makes the binary smaller"
+        - "It removes the need to validate arguments"
+        - "It handles subcommands, detailed help and shell completion"
+        - "It automatically encrypts secrets passed as flags"
+    answer: 2
+    why:
+      fr: "Cobra structure l'outil en commandes et sous-commandes et génère aide et complétion, au prix d'une dépendance externe."
+      en: "Cobra structures the tool into commands and subcommands and generates help and completion, at the cost of an external dependency."
+  - q:
+      fr: "Pourquoi éviter `os.Exit(1)` au fond d'une fonction utilitaire ?"
+      en: "Why avoid `os.Exit(1)` deep inside a helper function?"
+    options:
+      fr:
+        - "Parce que `os.Exit` ne fonctionne que sous Linux"
+        - "Parce que le code 1 est réservé au système"
+        - "Parce que `os.Exit` affiche le mot de passe"
+        - "Parce que les `defer` ne s'exécutent pas et la fonction devient difficile à tester"
+      en:
+        - "Because `os.Exit` only works on Linux"
+        - "Because code 1 is reserved for the system"
+        - "Because `os.Exit` prints the password"
+        - "Because `defer` calls do not run and the function becomes hard to test"
+    answer: 3
+    why:
+      fr: "`os.Exit` termine le processus immédiatement : mieux vaut renvoyer une `error` et laisser `main` choisir le code de sortie."
+      en: "`os.Exit` terminates the process immediately: return an `error` instead and let `main` choose the exit code."

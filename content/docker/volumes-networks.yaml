@@ -1,0 +1,476 @@
+description:
+  fr: "Conserver les données avec les volumes et les bind mounts, puis faire communiquer les conteneurs par nom sur un réseau dédié sans exposer de port inutile."
+  en: "Keep data with volumes and bind mounts, then let containers talk to each other by name on a dedicated network without exposing needless ports."
+duration: 30
+
+intro:
+  fr: |
+    Un conteneur est jetable : supprimez-le, et tout ce qu'il a écrit disparaît. Parfait pour un serveur
+    web, catastrophique pour une base de données. Il faut donc ranger les données **hors** du conteneur.
+    Par ailleurs, une application réelle compte plusieurs conteneurs (une API, une base, un cache) qui
+    doivent se parler, sans pour autant être joignables depuis Internet.
+
+    Une image : un conteneur est une chambre d'hôtel. Vous y séjournez, mais vos objets de valeur vont dans
+    le **coffre** de l'hôtel (le *volume*), qui reste là quand la chambre est nettoyée pour le client
+    suivant. Et les chambres communiquent entre elles par le **téléphone interne** (le *réseau Docker*),
+    avec le nom de la chambre plutôt qu'un numéro extérieur.
+
+    Vous allez créer un volume pour PostgreSQL, vérifier que les données survivent à la suppression du
+    conteneur, monter un dossier en lecture seule, puis relier deux conteneurs par leur nom.
+  en: |
+    A container is disposable: remove it, and everything it wrote is gone. Perfect for a web server,
+    disastrous for a database. Data must therefore be stored **outside** the container. Besides, a real
+    application is made of several containers (an API, a database, a cache) that must talk to each other
+    without being reachable from the Internet.
+
+    An image: a container is a hotel room. You stay in it, but your valuables go into the hotel **safe**
+    (the *volume*), which stays there when the room is cleaned for the next guest. And rooms call each
+    other on the **internal phone** (the *Docker network*), using the room name rather than an outside
+    number.
+
+    You will create a volume for PostgreSQL, check that data survives the removal of the container, mount a
+    folder read-only, then connect two containers by name.
+
+sections:
+  - heading:
+      fr: "Trois façons de stocker des données"
+      en: "Three ways to store data"
+    body:
+      fr: |
+        | | Volume nommé | Bind mount | tmpfs |
+        |---|---|---|---|
+        | Syntaxe | `-v pgdata:/chemin` | `-v /chemin/hote:/chemin` | `--tmpfs /chemin` |
+        | Où sont les données | Zone gérée par Docker (`/var/lib/docker/volumes`) | Un dossier précis de l'hôte | En mémoire vive |
+        | Survit à `docker rm` | Oui | Oui | Non |
+        | Usage typique | Bases de données, données applicatives | Code en développement, fichiers de configuration | Fichiers temporaires, secrets en mémoire |
+        | Risque principal | Oublié lors des sauvegardes | Donne accès à une partie de l'hôte | Perdu à l'arrêt |
+
+        Deux réflexes de sécurité :
+
+        - Ajoutez **`:ro`** (lecture seule) à tout montage que le conteneur n'a pas besoin de modifier :
+          `-v ./nginx.conf:/etc/nginx/nginx.conf:ro`.
+        - Ne montez **que le dossier nécessaire**. Monter `/`, `/etc` ou `/var/run/docker.sock` revient à
+          donner les clés de l'hôte au conteneur : celui qui contrôle le socket Docker contrôle la machine.
+
+        Un volume n'est **pas une sauvegarde** : `docker volume rm` ou `docker compose down -v` le détruisent
+        sans confirmation.
+      en: |
+        | | Named volume | Bind mount | tmpfs |
+        |---|---|---|---|
+        | Syntax | `-v pgdata:/path` | `-v /host/path:/path` | `--tmpfs /path` |
+        | Where the data lives | Area managed by Docker (`/var/lib/docker/volumes`) | A precise folder on the host | In RAM |
+        | Survives `docker rm` | Yes | Yes | No |
+        | Typical use | Databases, application data | Code during development, configuration files | Temporary files, in-memory secrets |
+        | Main risk | Forgotten by backups | Gives access to part of the host | Lost on stop |
+
+        Two security reflexes:
+
+        - Add **`:ro`** (read-only) to every mount the container does not need to modify:
+          `-v ./nginx.conf:/etc/nginx/nginx.conf:ro`.
+        - Mount **only the folder you need**. Mounting `/`, `/etc` or `/var/run/docker.sock` amounts to
+          handing the host keys to the container: whoever controls the Docker socket controls the machine.
+
+        A volume is **not a backup**: `docker volume rm` or `docker compose down -v` destroy it without
+        asking for confirmation.
+  - heading:
+      fr: "Les réseaux Docker"
+      en: "Docker networks"
+    body:
+      fr: |
+        Chaque conteneur reçoit sa propre interface réseau et une adresse IP privée. Le *pilote* du réseau
+        décide de ce qu'il peut joindre :
+
+        | Réseau | Résolution des noms | Usage |
+        |---|---|---|
+        | `bridge` par défaut | **Non** (adresses IP uniquement) | Tests rapides ; à éviter pour une vraie application |
+        | Bridge **défini par l'utilisateur** | **Oui** : chaque conteneur est joignable par son nom | Le choix normal |
+        | Bridge `--internal` | Oui, mais **aucune sortie** vers l'extérieur | Bases de données, services internes |
+        | `host` | Sans objet (le conteneur partage le réseau de l'hôte) | Cas particuliers ; supprime l'isolation réseau |
+        | `none` | Aucun réseau | Traitements qui ne doivent rien joindre |
+
+        Sur un réseau que vous créez (`docker network create backend`), Docker fournit un petit serveur DNS :
+        le conteneur `api` joint la base avec l'adresse `db:5432`, sans connaître son IP. Deux conteneurs
+        placés sur des réseaux différents ne se voient pas : c'est une **segmentation** gratuite.
+      en: |
+        Every container gets its own network interface and a private IP address. The network *driver*
+        decides what it can reach:
+
+        | Network | Name resolution | Use |
+        |---|---|---|
+        | Default `bridge` | **No** (IP addresses only) | Quick tests; avoid it for a real application |
+        | **User-defined** bridge | **Yes**: every container is reachable by its name | The normal choice |
+        | `--internal` bridge | Yes, but **no way out** to the outside | Databases, internal services |
+        | `host` | Not applicable (the container shares the host network) | Special cases; removes network isolation |
+        | `none` | No network | Jobs that must reach nothing |
+
+        On a network you create (`docker network create backend`), Docker provides a small DNS server: the
+        `api` container reaches the database at `db:5432` without knowing its IP. Two containers placed on
+        different networks cannot see each other: that is free **segmentation**.
+  - heading:
+      fr: "Publier un port : le piège du 0.0.0.0"
+      en: "Publishing a port: the 0.0.0.0 trap"
+    body:
+      fr: |
+        Publier un port (`-p`) rend un conteneur joignable **depuis l'extérieur de Docker**. Deux conteneurs
+        du même réseau n'en ont **pas besoin** pour se parler.
+
+        | Écriture | Qui peut se connecter |
+        |---|---|
+        | `-p 5432:5432` | **Tout le monde** : équivaut à `0.0.0.0:5432`, toutes les interfaces |
+        | `-p 127.0.0.1:5432:5432` | Uniquement la machine hôte |
+        | *(pas de `-p`)* | Uniquement les conteneurs du même réseau |
+
+        Point crucial sous Linux : Docker écrit ses propres règles `iptables`, **avant** celles de votre
+        pare-feu. Un port publié sur `0.0.0.0` reste ouvert même si `ufw` annonce qu'il est bloqué. Des
+        milliers de bases de données se retrouvent ainsi exposées sur Internet par un simple `-p 5432:5432`.
+      en: |
+        Publishing a port (`-p`) makes a container reachable **from outside Docker**. Two containers on the
+        same network do **not** need it to talk to each other.
+
+        | Notation | Who can connect |
+        |---|---|
+        | `-p 5432:5432` | **Everyone**: equivalent to `0.0.0.0:5432`, all interfaces |
+        | `-p 127.0.0.1:5432:5432` | Only the host machine |
+        | *(no `-p`)* | Only the containers on the same network |
+
+        A crucial point on Linux: Docker writes its own `iptables` rules, **ahead of** those of your
+        firewall. A port published on `0.0.0.0` stays open even when `ufw` reports it as blocked. Thousands
+        of databases end up exposed on the Internet through a simple `-p 5432:5432`.
+
+examples:
+  - title:
+      fr: "Un volume nommé : les données survivent au conteneur"
+      en: "A named volume: data outlives the container"
+    file: volume.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Create a volume managed by Docker
+      docker volume create pgdata
+
+      # Start PostgreSQL with its data directory stored in the volume (lab password, not a real one)
+      docker run -d --name db \
+        -e POSTGRES_PASSWORD=changeme-in-vault \
+        -v pgdata:/var/lib/postgresql/data \
+        postgres:17-alpine
+
+      # Wait until the server accepts TCP connections (the temporary init server does not), then write one row
+      until docker exec db pg_isready -h 127.0.0.1 -q; do sleep 1; done
+      docker exec db psql -U postgres -c "CREATE TABLE notes (txt text)" -c "INSERT INTO notes VALUES ('still here')"
+
+      # Destroy the container completely...
+      docker rm -f db
+
+      # ...start a brand new one on the same volume: the row is back
+      docker run -d --name db -v pgdata:/var/lib/postgresql/data postgres:17-alpine
+      until docker exec db pg_isready -h 127.0.0.1 -q; do sleep 1; done
+      docker exec db psql -U postgres -c "SELECT txt FROM notes"
+    output: |
+      pgdata
+      a41c0e9b7d3f5a6c8e2b1d0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b
+      CREATE TABLE
+      INSERT 0 1
+      db
+      c7e5a3b1d9f806142a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f
+          txt
+      ------------
+       still here
+      (1 row)
+    note:
+      fr: "Le second conteneur n'a même pas besoin de `POSTGRES_PASSWORD` : la base est déjà initialisée dans le volume. Ici le mot de passe passe par une variable pour aller vite ; la leçon suivante le remplace par un secret."
+      en: "The second container does not even need `POSTGRES_PASSWORD`: the database is already initialised in the volume. Here the password goes through a variable to keep things short; the next lesson replaces it with a secret."
+
+  - title:
+      fr: "Un bind mount en lecture seule"
+      en: "A read-only bind mount"
+    file: bind-mount.sh
+    lang: bash
+    kind: secure
+    code: |
+      # A folder on the host with one page
+      mkdir -p site
+      echo '<h1>Served from the host</h1>' > site/index.html
+
+      # Mount only that folder, read-only (:ro): the container can serve it but never alter it
+      docker run -d --name web \
+        -v "$PWD/site:/usr/share/nginx/html:ro" \
+        -p 127.0.0.1:8080:8080 \
+        nginxinc/nginx-unprivileged:1.28-alpine
+
+      curl -s http://127.0.0.1:8080
+
+      # A change on the host is visible immediately, without rebuilding anything
+      echo '<h1>Updated on the host</h1>' > site/index.html
+      curl -s http://127.0.0.1:8080
+
+      # A compromised web server cannot deface the site
+      docker exec web sh -c 'echo hacked > /usr/share/nginx/html/index.html'
+    output: |
+      9f8e7d6c5b4a39281706f5e4d3c2b1a0998877665544332211ffeeddccbbaa00
+      <h1>Served from the host</h1>
+      <h1>Updated on the host</h1>
+      sh: can't create /usr/share/nginx/html/index.html: Read-only file system
+    note:
+      fr: "Le bind mount est idéal en développement : le code de l'hôte est visible en direct dans le conteneur. Le suffixe `:ro` garantit que la circulation se fait dans un seul sens."
+      en: "A bind mount is ideal during development: host code is visible live inside the container. The `:ro` suffix guarantees traffic flows one way only."
+
+  - title:
+      fr: "Un réseau dédié : les conteneurs se trouvent par leur nom"
+      en: "A dedicated network: containers find each other by name"
+    file: network.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # A user-defined bridge network comes with built-in DNS
+      docker network create backend
+
+      # Attach the database from the first example to this network
+      docker network connect backend db
+
+      # From another container on the SAME network, the name "db" resolves
+      docker run --rm --network backend alpine:3.22 ping -c 1 db
+
+      # From a container on the default bridge, the name is unknown
+      docker run --rm alpine:3.22 ping -c 1 db
+    output: |
+      2b7c1d9e4f3a6058b9c2d1e0f7a6b5c4d3e2f1a09b8c7d6e5f4a3b2c1d0e9f8a
+      PING db (172.18.0.2): 56 data bytes
+      64 bytes from 172.18.0.2: seq=0 ttl=64 time=0.094 ms
+
+      --- db ping statistics ---
+      1 packets transmitted, 1 packets received, 0% packet loss
+      round-trip min/avg/max = 0.094/0.094/0.094 ms
+      ping: bad address 'db'
+    note:
+      fr: "L'application se configure avec `DB_HOST=db`, jamais avec une adresse IP qui change à chaque recréation. Le second `ping` échoue : un conteneur hors du réseau `backend` ne peut même pas résoudre le nom de la base."
+      en: "The application is configured with `DB_HOST=db`, never with an IP address that changes on every recreation. The second `ping` fails: a container outside the `backend` network cannot even resolve the database name."
+
+  - title:
+      fr: "Base de données publiée sur toutes les interfaces"
+      en: "Database published on every interface"
+    file: publish-vulnerable.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # Problem: -p 5432:5432 means 0.0.0.0:5432 -> the database listens on the public interface too
+      docker run -d --name db-exposed \
+        -e POSTGRES_PASSWORD=changeme-in-vault \
+        -p 5432:5432 \
+        postgres:17-alpine
+
+      docker port db-exposed
+
+      # On Linux, Docker's iptables rules bypass ufw: "ufw deny 5432" does NOT close this port
+    output: |
+      71a3c5e7b9d1f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2
+      5432/tcp -> 0.0.0.0:5432
+      5432/tcp -> [::]:5432
+    note:
+      fr: "`0.0.0.0` et `[::]` signifient « toutes les interfaces, en IPv4 et IPv6 ». Sur un serveur doté d'une adresse publique, des robots tenteront de s'y connecter en quelques minutes."
+      en: "`0.0.0.0` and `[::]` mean \"every interface, IPv4 and IPv6\". On a server with a public address, bots will try to connect within minutes."
+
+  - title:
+      fr: "Base de données sur un réseau interne, sans port publié"
+      en: "Database on an internal network, no published port"
+    file: publish-secure.sh
+    lang: bash
+    kind: secure
+    code: |
+      # --internal: containers on this network can talk to each other but have no route to the outside
+      docker network create --internal data
+
+      # No -p at all: only containers attached to "data" can reach port 5432
+      docker run -d --name db-private --network data \
+        -e POSTGRES_PASSWORD=changeme-in-vault \
+        -v pgdata-private:/var/lib/postgresql/data \
+        postgres:17-alpine
+
+      # Nothing is published on the host
+      docker port db-private
+
+      # A client on the same network reaches it by name
+      docker run --rm --network data postgres:17-alpine pg_isready -h db-private
+
+      # Need a temporary access from your workstation? Publish on loopback only, on a separate container:
+      #   docker run -d --name db-dev -p 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD=changeme-in-vault postgres:17-alpine
+    output: |
+      6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c4b3a29180f7e
+      0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7
+      db-private:5432 - accepting connections
+    note:
+      fr: "`docker port` ne renvoie rien : aucun port n'est ouvert sur l'hôte. La base reste pleinement utilisable par les conteneurs du réseau `data`, et elle ne peut pas non plus appeler Internet."
+      en: "`docker port` returns nothing: no port is open on the host. The database stays fully usable by the containers on the `data` network, and it cannot call the Internet either."
+
+mistake:
+  fr: |
+    **Publier un port « pour que les conteneurs se parlent ».**
+
+    On voit souvent `-p 5432:5432` sur la base et `-p 6379:6379` sur le cache, simplement parce que l'API
+    n'arrivait pas à les joindre. La vraie cause était l'absence de réseau commun. Résultat : la base est
+    ouverte au monde entier, et le pare-feu `ufw` n'y change rien puisque Docker passe devant lui.
+
+    Deux conteneurs du même réseau défini par l'utilisateur se joignent par leur **nom** et leur port
+    **interne**, sans aucun `-p`. On ne publie que le point d'entrée (le reverse proxy), et sur `127.0.0.1`
+    tant qu'il n'a pas à être public.
+  en: |
+    **Publishing a port "so the containers can talk to each other".**
+
+    You often see `-p 5432:5432` on the database and `-p 6379:6379` on the cache, simply because the API
+    could not reach them. The real cause was the lack of a shared network. Result: the database is open to
+    the whole world, and the `ufw` firewall changes nothing since Docker goes ahead of it.
+
+    Two containers on the same user-defined network reach each other by **name** and **internal** port,
+    without any `-p`. Only the entry point (the reverse proxy) is published, and on `127.0.0.1` as long as
+    it does not have to be public.
+
+bestPractice:
+  fr: |
+    - **Volumes nommés** pour les données à conserver ; **bind mounts** pour la configuration et le développement.
+    - **`:ro`** sur tout montage qui n'a pas besoin d'écriture.
+    - **Jamais** de montage de `/`, `/etc` ou `/var/run/docker.sock` dans un conteneur applicatif.
+    - **Un réseau défini par l'utilisateur** par application ; un réseau `--internal` pour les bases de données.
+    - **Ne publiez que le nécessaire**, et précisez l'adresse : `127.0.0.1:8080:8080`.
+    - **Sauvegardez les volumes** (un `pg_dump` régulier vers un stockage externe) : un volume protège d'un `docker rm`, pas d'une erreur humaine ni d'une panne de disque.
+  en: |
+    - **Named volumes** for data that must be kept; **bind mounts** for configuration and development.
+    - **`:ro`** on every mount that needs no write access.
+    - **Never** mount `/`, `/etc` or `/var/run/docker.sock` in an application container.
+    - **One user-defined network** per application; an `--internal` network for databases.
+    - **Publish only what is needed**, and state the address: `127.0.0.1:8080:8080`.
+    - **Back up your volumes** (a regular `pg_dump` to external storage): a volume protects against `docker rm`, not against human error or a disk failure.
+
+exercise:
+  statement:
+    fr: |
+      Construisez à la main une mini-architecture « cache + client » :
+
+      1. Créez un réseau `cache-net` **interne** et un volume `redis-data`.
+      2. Lancez `redis:7.4-alpine` nommé `cache` sur ce réseau, données dans le volume (chemin `/data`),
+         **sans publier de port**, avec la persistance activée (`redis-server --appendonly yes`).
+      3. Depuis un conteneur temporaire du même réseau, écrivez la clé `lesson` avec la valeur `volumes`.
+      4. Supprimez le conteneur `cache`, recréez-le, et vérifiez que la clé existe toujours.
+    en: |
+      Build a small "cache + client" architecture by hand:
+
+      1. Create an **internal** network `cache-net` and a volume `redis-data`.
+      2. Start `redis:7.4-alpine` named `cache` on that network, data in the volume (path `/data`),
+         **without publishing any port**, with persistence enabled (`redis-server --appendonly yes`).
+      3. From a temporary container on the same network, write the key `lesson` with the value `volumes`.
+      4. Remove the `cache` container, recreate it, and check that the key still exists.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Internal network (no route to the outside) and a named volume
+      docker network create --internal cache-net
+      docker volume create redis-data
+
+      # 2. Redis with append-only persistence, no -p: reachable only from cache-net
+      docker run -d --name cache --network cache-net \
+        -v redis-data:/data \
+        redis:7.4-alpine redis-server --appendonly yes
+
+      # 3. A throw-away client on the same network reaches the server by its name
+      docker run --rm --network cache-net redis:7.4-alpine redis-cli -h cache SET lesson volumes
+
+      # 4. Destroy and recreate the server: the data comes back from the volume
+      docker rm -f cache
+      docker run -d --name cache --network cache-net \
+        -v redis-data:/data \
+        redis:7.4-alpine redis-server --appendonly yes
+      docker run --rm --network cache-net redis:7.4-alpine redis-cli -h cache GET lesson
+    note:
+      fr: "La dernière commande affiche `volumes`. L'image Redis officielle abandonne déjà les privilèges `root` au démarrage pour l'utilisateur `redis`."
+      en: "The last command prints `volumes`. The official Redis image already drops `root` privileges at start-up in favour of the `redis` user."
+
+quiz:
+  - q:
+      fr: "Que deviennent les fichiers écrits dans un conteneur **sans** volume lorsqu'on le supprime ?"
+      en: "What happens to files written inside a container **without** a volume when it is removed?"
+    options:
+      fr:
+        - "Ils sont copiés dans l'image"
+        - "Ils sont déplacés dans `/tmp` sur l'hôte"
+        - "Ils sont conservés dans un volume automatique nommé `data`"
+        - "Ils sont perdus avec la couche inscriptible du conteneur"
+      en:
+        - "They are copied into the image"
+        - "They are moved to `/tmp` on the host"
+        - "They are kept in an automatic volume named `data`"
+        - "They are lost along with the container's writable layer"
+    answer: 3
+    why:
+      fr: "La couche inscriptible appartient au conteneur : `docker rm` la détruit. Seuls les volumes et les bind mounts persistent."
+      en: "The writable layer belongs to the container: `docker rm` destroys it. Only volumes and bind mounts persist."
+  - q:
+      fr: "Quel est l'avantage d'un réseau bridge défini par l'utilisateur sur le bridge par défaut ?"
+      en: "What is the advantage of a user-defined bridge network over the default bridge?"
+    options:
+      fr:
+        - "Les conteneurs s'y joignent par leur nom grâce au DNS intégré"
+        - "Il publie automatiquement tous les ports"
+        - "Il chiffre tout le trafic entre conteneurs"
+        - "Il est plus rapide que le réseau de l'hôte"
+      en:
+        - "Containers reach each other by name thanks to the built-in DNS"
+        - "It automatically publishes every port"
+        - "It encrypts all traffic between containers"
+        - "It is faster than the host network"
+    answer: 0
+    why:
+      fr: "Docker fournit une résolution de noms sur les réseaux créés par l'utilisateur, pas sur le bridge par défaut."
+      en: "Docker provides name resolution on user-created networks, not on the default bridge."
+  - q:
+      fr: "Sur un serveur Linux, que signifie `-p 5432:5432` ?"
+      en: "On a Linux server, what does `-p 5432:5432` mean?"
+    options:
+      fr:
+        - "Le port n'est joignable que depuis `localhost`"
+        - "Le port est publié sur toutes les interfaces, y compris publiques"
+        - "Le port n'est joignable que par les autres conteneurs"
+        - "Le port est protégé par `ufw`"
+      en:
+        - "The port is reachable from `localhost` only"
+        - "The port is published on every interface, public ones included"
+        - "The port is reachable by other containers only"
+        - "The port is protected by `ufw`"
+    answer: 1
+    why:
+      fr: "Sans adresse, Docker publie sur `0.0.0.0`, et ses règles iptables passent avant celles de `ufw`."
+      en: "Without an address Docker publishes on `0.0.0.0`, and its iptables rules are evaluated before those of `ufw`."
+  - q:
+      fr: "Que garantit le suffixe `:ro` dans `-v \"$PWD/site:/usr/share/nginx/html:ro\"` ?"
+      en: "What does the `:ro` suffix guarantee in `-v \"$PWD/site:/usr/share/nginx/html:ro\"`?"
+    options:
+      fr:
+        - "Le dossier est supprimé à l'arrêt du conteneur"
+        - "Le dossier est chiffré"
+        - "Le conteneur ne peut pas modifier les fichiers montés"
+        - "Seul `root` peut lire le dossier"
+      en:
+        - "The folder is deleted when the container stops"
+        - "The folder is encrypted"
+        - "The container cannot modify the mounted files"
+        - "Only `root` can read the folder"
+    answer: 2
+    why:
+      fr: "`ro` signifie *read-only* : le conteneur lit les fichiers de l'hôte mais toute écriture est refusée."
+      en: "`ro` means *read-only*: the container reads the host files but any write is refused."
+  - q:
+      fr: "Deux conteneurs `api` et `db` sont sur le même réseau défini par l'utilisateur. De quoi `api` a-t-il besoin pour joindre PostgreSQL ?"
+      en: "Two containers `api` and `db` are on the same user-defined network. What does `api` need to reach PostgreSQL?"
+    options:
+      fr:
+        - "Que `db` soit lancé avec `-p 5432:5432`"
+        - "Que `db` soit lancé avec `--privileged`"
+        - "De l'adresse IP publique de l'hôte"
+        - "Uniquement du nom `db` et du port interne 5432"
+      en:
+        - "`db` must be started with `-p 5432:5432`"
+        - "`db` must be started with `--privileged`"
+        - "The public IP address of the host"
+        - "Only the name `db` and the internal port 5432"
+    answer: 3
+    why:
+      fr: "Sur un même réseau, les conteneurs communiquent directement par nom et port interne ; publier un port ne sert qu'à l'accès depuis l'extérieur."
+      en: "On the same network, containers talk directly using name and internal port; publishing a port is only for access from outside."

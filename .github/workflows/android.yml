@@ -1,0 +1,78 @@
+name: Build Android app & OTA bundle
+
+# Builds the installable Android APK (the whole site is bundled, so it works 100%
+# offline) and the over-the-air web bundle, then publishes them to a GitHub Release.
+# The installed app reads app-version.json (published to Pages by deploy.yml) and
+# pulls the newest web-bundle.zip from the latest release - updating itself with no
+# reinstall.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - run: npm ci
+
+      - name: Build web bundle for the app (no base path)
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SITE_URL: https://sergiohazary.github.io/DevSecOps-App
+          NEXT_PUBLIC_BASE_PATH: ""
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Package the over-the-air web bundle
+        run: |
+          cd out
+          zip -qr ../web-bundle.zip .
+          cd ..
+          ls -lh web-bundle.zip
+
+      - name: Sync web assets into the Android project
+        run: npx cap sync android
+
+      - name: Build the APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../devsecops-app.apk
+
+      - name: Publish release with APK and OTA bundle
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-v1.0.${{ github.run_number }}
+          name: DevSecOps App v1.0.${{ github.run_number }}
+          body: |
+            Application Android DevSecOps App (hors-ligne) + bundle de mise a jour OTA.
+
+            - **devsecops-app.apk** : a installer sur le telephone (Parametres > Securite > Sources inconnues).
+            - **web-bundle.zip** : contenu web, recupere automatiquement par l'app deja installee (aucune reinstallation).
+          files: |
+            devsecops-app.apk
+            web-bundle.zip
+          fail_on_unmatched_files: true

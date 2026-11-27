@@ -1,0 +1,532 @@
+description:
+  fr: "Déclarer des variables typées, des valeurs locales et des outputs en HCL, et protéger les valeurs sensibles avec `sensitive`."
+  en: "Declare typed variables, local values and outputs in HCL, and protect sensitive values with `sensitive`."
+duration: 25
+
+intro:
+  fr: |
+    Une configuration où tout est écrit « en dur » ne sert qu'une fois. Pour la réutiliser en
+    développement, en recette et en production, il faut la **paramétrer**. HCL offre trois blocs pour cela :
+    `variable` (ce qui **entre**), `locals` (ce qui est **calculé** à l'intérieur) et `output` (ce qui **sort**).
+
+    Pensez à une **recette de cuisine** : le nombre de convives est une *variable* (vous le choisissez à
+    chaque fois), la quantité de farine par personne multipliée par les convives est une *valeur locale*
+    (un calcul intermédiaire), et le plat servi est l'*output*.
+
+    Dans cette leçon vous allez déclarer des variables avec des **types** précis, factoriser des valeurs
+    avec `locals`, exposer des résultats avec `output`, et surtout apprendre à ne **jamais** laisser un mot
+    de passe dans une valeur par défaut.
+  en: |
+    A configuration where everything is hard-coded is only useful once. To reuse it in development,
+    staging and production, it must be **parameterised**. HCL provides three blocks for that:
+    `variable` (what comes **in**), `locals` (what is **computed** inside) and `output` (what goes **out**).
+
+    Think of a **cooking recipe**: the number of guests is a *variable* (you choose it every time), the
+    amount of flour per person multiplied by the guests is a *local value* (an intermediate computation),
+    and the dish that is served is the *output*.
+
+    In this lesson you will declare variables with precise **types**, factor values out with `locals`,
+    expose results with `output`, and above all learn to **never** leave a password in a default value.
+
+sections:
+  - heading:
+      fr: "Trois blocs, trois rôles"
+      en: "Three blocks, three roles"
+    body:
+      fr: |
+        | Bloc | Équivalent en programmation | Référence | Qui fixe la valeur ? |
+        |---|---|---|---|
+        | `variable "x" { }` | Paramètre de fonction | `var.x` | L'appelant (fichier tfvars, ligne de commande, module parent) |
+        | `locals { x = ... }` | Variable locale | `local.x` | L'auteur du code, par une expression |
+        | `output "x" { }` | Valeur de retour | `module.<nom>.x` | Le code, à partir des ressources créées |
+
+        Attention au piège de vocabulaire : on **déclare** dans un bloc `locals` (pluriel) mais on **lit**
+        avec `local.` (singulier).
+
+        Arguments d'un bloc `variable` :
+
+        - `type` : la contrainte de type (voir section suivante) ;
+        - `description` : à quoi sert la variable (affichée dans la documentation et les invites) ;
+        - `default` : la valeur si rien n'est fourni. **Sans** `default`, la variable est obligatoire ;
+        - `sensitive = true` : masque la valeur dans l'affichage de `plan` et `apply` ;
+        - `nullable = false` : interdit de passer `null` ;
+        - `validation { }` : des règles sur la valeur (étudiées dans la dernière leçon du cours).
+      en: |
+        | Block | Programming equivalent | Reference | Who sets the value? |
+        |---|---|---|---|
+        | `variable "x" { }` | Function parameter | `var.x` | The caller (tfvars file, command line, parent module) |
+        | `locals { x = ... }` | Local variable | `local.x` | The author of the code, through an expression |
+        | `output "x" { }` | Return value | `module.<name>.x` | The code, from the created resources |
+
+        Mind the vocabulary trap: you **declare** inside a `locals` block (plural) but you **read** with
+        `local.` (singular).
+
+        Arguments of a `variable` block:
+
+        - `type`: the type constraint (see next section);
+        - `description`: what the variable is for (shown in documentation and prompts);
+        - `default`: the value when nothing is supplied. **Without** `default`, the variable is required;
+        - `sensitive = true`: hides the value in the `plan` and `apply` display;
+        - `nullable = false`: forbids passing `null`;
+        - `validation { }`: rules on the value (studied in the last lesson of this course).
+  - heading:
+      fr: "Les contraintes de type"
+      en: "Type constraints"
+    body:
+      fr: |
+        Typer une variable, c'est refuser une mauvaise valeur **avant** de toucher à l'infrastructure.
+
+        | Contrainte | Valeur acceptée |
+        |---|---|
+        | `string`, `number`, `bool` | Une valeur simple |
+        | `list(string)` | Liste ordonnée, doublons permis |
+        | `set(string)` | Ensemble sans ordre ni doublon |
+        | `map(number)` | Clés libres, valeurs du même type |
+        | `object({ name = string, port = number })` | Attributs nommés, chacun avec son type |
+        | `optional(number, 5432)` | Dans un `object` : attribut facultatif avec valeur par défaut |
+        | `any` | N'importe quoi (à éviter : aucun contrôle) |
+
+        Un type `object` documente exactement ce que le code attend : c'est un contrat. Avec `any`, une
+        faute de frappe dans un nom d'attribut n'est découverte qu'au moment de l'utiliser.
+      en: |
+        Typing a variable means rejecting a wrong value **before** touching the infrastructure.
+
+        | Constraint | Accepted value |
+        |---|---|
+        | `string`, `number`, `bool` | A simple value |
+        | `list(string)` | Ordered list, duplicates allowed |
+        | `set(string)` | Unordered collection without duplicates |
+        | `map(number)` | Free keys, values of the same type |
+        | `object({ name = string, port = number })` | Named attributes, each with its own type |
+        | `optional(number, 5432)` | Inside an `object`: optional attribute with a default value |
+        | `any` | Anything (avoid it: no checking at all) |
+
+        An `object` type documents exactly what the code expects: it is a contract. With `any`, a typo in
+        an attribute name is only discovered when the value is used.
+  - heading:
+      fr: "`sensitive` : ce que cela protège, et ce que cela ne protège pas"
+      en: "`sensitive`: what it protects, and what it does not"
+    body:
+      fr: |
+        `sensitive = true` remplace la valeur par `(sensitive value)` dans la sortie de `terraform plan`,
+        `terraform apply` et `terraform output`. Le marquage se **propage** : toute expression qui utilise
+        une valeur sensible devient sensible, et Terraform refuse un `output` qui l'expose sans être
+        lui-même marqué `sensitive`.
+
+        Mais `sensitive` ne **chiffre rien** : la valeur est toujours enregistrée **en clair dans le
+        fichier d'état** (*state*). Ce marquage évite les fuites dans les journaux de CI, il ne remplace ni
+        un coffre-fort de secrets, ni la protection du state (voir le cours « Terraform complet »).
+        Depuis Terraform 1.10, `ephemeral = true` va plus loin : la valeur n'est écrite ni dans le plan ni
+        dans le state, mais elle ne peut être utilisée que dans des contextes prévus pour cela.
+      en: |
+        `sensitive = true` replaces the value with `(sensitive value)` in the output of `terraform plan`,
+        `terraform apply` and `terraform output`. The marking **propagates**: any expression that uses a
+        sensitive value becomes sensitive, and Terraform rejects an `output` exposing it unless that
+        output is itself marked `sensitive`.
+
+        But `sensitive` **encrypts nothing**: the value is still recorded **in clear text in the state
+        file**. This marking prevents leaks in CI logs; it replaces neither a secrets vault nor the
+        protection of the state (see the "Complete Terraform" course).
+        Since Terraform 1.10, `ephemeral = true` goes further: the value is written neither to the plan
+        nor to the state, but it can only be used in contexts designed for it.
+
+examples:
+  - title:
+      fr: "Déclarer des variables typées et documentées"
+      en: "Declaring typed, documented variables"
+    file: variables.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      # Required: no default, Terraform asks for it or fails in CI
+      variable "environment" {
+        type        = string
+        description = "Deployment environment: dev, staging or prod"
+      }
+
+      # Optional: a safe default
+      variable "log_retention_days" {
+        type        = number
+        description = "How long application logs are kept"
+        default     = 90
+      }
+
+      variable "enable_deletion_protection" {
+        type        = bool
+        description = "Refuse accidental deletion of the database"
+        default     = true # secure by default: the caller must opt out explicitly
+      }
+
+      variable "admin_cidrs" {
+        type        = list(string)
+        description = "Networks allowed to reach the administration port"
+        default     = [] # empty list = nobody, never 0.0.0.0/0
+      }
+
+      # Object: a contract describing exactly what is expected
+      variable "database" {
+        type = object({
+          engine         = string
+          instance_class = string
+          port           = optional(number, 5432) # optional attribute with a default
+          multi_az       = optional(bool, false)
+        })
+        description = "Settings of the application database"
+        nullable    = false
+      }
+    note:
+      fr: "Remarquez les **valeurs par défaut sûres** : protection activée, liste d'accès vide. Celui qui veut une configuration moins stricte doit l'écrire explicitement, et cela se verra en revue de code."
+      en: "Notice the **safe defaults**: protection enabled, empty access list. Whoever wants a looser configuration must write it explicitly, and it will show in code review."
+
+  - title:
+      fr: "Factoriser avec `locals` : préfixe de nommage et tags communs"
+      en: "Factoring with `locals`: naming prefix and common tags"
+    file: locals.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      locals {
+        # One place to change the naming convention
+        name_prefix = "shop-${var.environment}"
+
+        # A local can use another local
+        is_production = var.environment == "prod"
+
+        # Tags applied to every resource: who owns it, how it was created
+        common_tags = {
+          Project     = "shop"
+          Environment = var.environment
+          ManagedBy   = "terraform"
+          Owner       = "platform-team@example.com"
+        }
+      }
+
+      resource "aws_cloudwatch_log_group" "app" {
+        name              = "/${local.name_prefix}/app"
+        retention_in_days = var.log_retention_days
+        tags              = local.common_tags
+      }
+
+      resource "aws_cloudwatch_log_group" "audit" {
+        name = "/${local.name_prefix}/audit"
+        # Audit logs are kept one year in production, whatever the variable says
+        retention_in_days = local.is_production ? 365 : var.log_retention_days
+        tags              = local.common_tags
+      }
+
+      output "log_group_names" {
+        description = "Names of the log groups, for the monitoring team"
+        value       = [aws_cloudwatch_log_group.app.name, aws_cloudwatch_log_group.audit.name]
+      }
+    output: |
+      $ terraform plan -var="environment=prod"
+
+        # aws_cloudwatch_log_group.app will be created
+        + resource "aws_cloudwatch_log_group" "app" {
+            + name              = "/shop-prod/app"
+            + retention_in_days = 90
+            + tags              = {
+                + "Environment" = "prod"
+                + "ManagedBy"   = "terraform"
+                + "Owner"       = "platform-team@example.com"
+                + "Project"     = "shop"
+              }
+          }
+
+        # aws_cloudwatch_log_group.audit will be created
+        + resource "aws_cloudwatch_log_group" "audit" {
+            + name              = "/shop-prod/audit"
+            + retention_in_days = 365
+          }
+
+      Plan: 2 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "Sans `locals`, le préfixe et les tags seraient copiés dans chaque ressource : un oubli et une ressource n'a plus de propriétaire identifiable. Des tags cohérents sont une mesure de sécurité : ils permettent de savoir **à qui** appartient une ressource lors d'un incident. (Sortie abrégée.)"
+      en: "Without `locals`, the prefix and tags would be copied into every resource: one omission and a resource has no identifiable owner. Consistent tags are a security measure: they tell you **who** owns a resource during an incident. (Abridged output.)"
+
+  - title:
+      fr: "Vulnérable : un mot de passe en valeur par défaut, exposé en output"
+      en: "Vulnerable: a password as default value, exposed as an output"
+    file: database_vulnerable.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      variable "db_password" {
+        type = string
+        # The secret is now in Git history, in every clone, forever
+        default = "Sup3rS3cret!2026"
+      }
+
+      resource "aws_db_instance" "main" {
+        identifier          = "shop-db"
+        engine              = "postgres"
+        instance_class      = "db.t4g.micro"
+        allocated_storage   = 20
+        username            = "shop_admin"
+        password            = var.db_password
+        skip_final_snapshot = true
+      }
+
+      # Printed in clear text at the end of every apply, including in CI logs
+      output "db_connection_string" {
+        value = "postgres://shop_admin:${var.db_password}@${aws_db_instance.main.endpoint}/shop"
+      }
+    output: |
+      Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+      Outputs:
+
+      db_connection_string = "postgres://shop_admin:Sup3rS3cret!2026@shop-db.c9akciq32.eu-west-3.rds.amazonaws.com:5432/shop"
+    note:
+      fr: "Deux fuites : le mot de passe est versionné dans Git (valeur par défaut) et il s'affiche dans le terminal et les journaux de CI (output). Tous ceux qui ont accès au dépôt ou au pipeline ont accès à la base."
+      en: "Two leaks: the password is versioned in Git (default value) and it is printed in the terminal and CI logs (output). Everyone with access to the repository or the pipeline has access to the database."
+
+  - title:
+      fr: "Sécurisé : variable sensible sans valeur par défaut"
+      en: "Secure: a sensitive variable with no default"
+    file: database_secure.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "db_password" {
+        type        = string
+        description = "Master password, injected at run time (TF_VAR_db_password)"
+        sensitive   = true  # masked in plan/apply output
+        nullable    = false # null is refused: the password can never be silently unset
+        # No default: the secret never lives in the repository
+      }
+
+      resource "aws_db_instance" "main" {
+        identifier          = "shop-db"
+        engine              = "postgres"
+        instance_class      = "db.t4g.micro"
+        allocated_storage   = 20
+        username            = "shop_admin"
+        password            = var.db_password
+        storage_encrypted   = true
+        skip_final_snapshot = true
+      }
+
+      # Expose what consumers need, not the secret
+      output "db_endpoint" {
+        description = "Host and port of the database"
+        value       = aws_db_instance.main.endpoint
+      }
+    output: |
+      $ terraform plan
+
+        # aws_db_instance.main will be created
+        + resource "aws_db_instance" "main" {
+            + engine            = "postgres"
+            + identifier        = "shop-db"
+            + password          = (sensitive value)
+            + storage_encrypted = true
+            + username          = "shop_admin"
+          }
+
+      Plan: 1 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "Le mot de passe n'est plus dans le code et n'apparaît plus à l'écran. Rappel : il reste écrit en clair dans le state. La solution la plus robuste (laisser AWS générer et stocker le secret) est présentée dans la leçon « Sécurité » du cours Terraform. (Sortie abrégée.)"
+      en: "The password is no longer in the code and no longer shows on screen. Reminder: it is still written in clear text in the state. The most robust solution (letting AWS generate and store the secret) is presented in the \"Security\" lesson of the Terraform course. (Abridged output.)"
+
+mistake:
+  fr: |
+    **Croire que `sensitive = true` suffit à protéger un secret.**
+
+    `sensitive` ne fait que masquer l'affichage. La valeur reste :
+
+    - en clair dans le **fichier d'état** (`terraform.tfstate`) ;
+    - en clair dans tout fichier `.tfvars` où vous l'auriez écrite ;
+    - visible avec `terraform output -raw <nom>` pour qui a accès au state.
+
+    Autre erreur classique : utiliser un bloc `variable` pour une valeur que personne ne doit changer.
+    Si la valeur est **calculée** ou **fixe**, c'est un `local`. Trop de variables rendent un module
+    impossible à utiliser correctement.
+  en: |
+    **Believing that `sensitive = true` is enough to protect a secret.**
+
+    `sensitive` only hides the display. The value remains:
+
+    - in clear text in the **state file** (`terraform.tfstate`);
+    - in clear text in any `.tfvars` file where you wrote it;
+    - visible with `terraform output -raw <name>` to anyone with access to the state.
+
+    Another classic mistake: using a `variable` block for a value nobody should change. If the value is
+    **computed** or **fixed**, it is a `local`. Too many variables make a module impossible to use
+    correctly.
+
+bestPractice:
+  fr: |
+    - **Toujours un `type` et une `description`** sur chaque variable ; bannissez `any`.
+    - **Des valeurs par défaut sûres** : `true` pour une protection, liste vide pour un accès. Aucun
+      `default` pour un secret ou pour une valeur qui dépend de l'environnement.
+    - **Marquez `sensitive`** les variables *et* les outputs qui transportent un secret.
+    - **Centralisez tags et préfixes dans `locals`** : une seule ligne à modifier, aucune ressource oubliée.
+    - **N'exposez en output que le nécessaire** : un identifiant ou une adresse, jamais un mot de passe
+      ni une clé privée.
+  en: |
+    - **Always a `type` and a `description`** on every variable; ban `any`.
+    - **Safe defaults**: `true` for a protection, an empty list for an access rule. No `default` for a
+      secret or for a value that depends on the environment.
+    - **Mark as `sensitive`** both the variables *and* the outputs that carry a secret.
+    - **Centralise tags and prefixes in `locals`**: a single line to change, no resource forgotten.
+    - **Expose only what is needed as output**: an identifier or an address, never a password or a
+      private key.
+
+exercise:
+  statement:
+    fr: |
+      Vous devez paramétrer un groupe de journaux CloudWatch.
+
+      1. Déclarez une variable obligatoire `team` (chaîne) et une variable `retention_days` (nombre,
+         30 par défaut), chacune avec une description.
+      2. Déclarez une variable `alert_webhook_token` qui ne doit **jamais** s'afficher dans un plan et qui
+         n'a pas de valeur par défaut.
+      3. Dans un bloc `locals`, construisez `log_group_name` au format `/<team>/application` et une map
+         `tags` contenant `Team` et `ManagedBy = "terraform"`.
+      4. Créez la ressource `aws_cloudwatch_log_group` qui utilise ces valeurs, et un output `log_group_arn`.
+    en: |
+      You must parameterise a CloudWatch log group.
+
+      1. Declare a required variable `team` (string) and a variable `retention_days` (number, default 30),
+         each with a description.
+      2. Declare a variable `alert_webhook_token` that must **never** be displayed in a plan and has no
+         default value.
+      3. In a `locals` block, build `log_group_name` with the format `/<team>/application` and a `tags`
+         map holding `Team` and `ManagedBy = "terraform"`.
+      4. Create the `aws_cloudwatch_log_group` resource using these values, and a `log_group_arn` output.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      variable "team" {
+        type        = string
+        description = "Team that owns the log group" # no default: required
+      }
+
+      variable "retention_days" {
+        type        = number
+        description = "Number of days logs are kept"
+        default     = 30
+      }
+
+      variable "alert_webhook_token" {
+        type        = string
+        description = "Token of the alerting webhook, injected by the CI"
+        sensitive   = true # never printed by plan or apply
+      }
+
+      locals {
+        log_group_name = "/${var.team}/application"
+
+        tags = {
+          Team      = var.team
+          ManagedBy = "terraform"
+        }
+      }
+
+      resource "aws_cloudwatch_log_group" "application" {
+        name              = local.log_group_name
+        retention_in_days = var.retention_days
+        tags              = local.tags
+      }
+
+      output "log_group_arn" {
+        description = "ARN of the application log group"
+        value       = aws_cloudwatch_log_group.application.arn
+      }
+    note:
+      fr: "On lit une variable avec `var.`, une valeur locale avec `local.` (singulier) et l'attribut d'une ressource avec `<type>.<nom>.<attribut>`."
+      en: "A variable is read with `var.`, a local value with `local.` (singular) and a resource attribute with `<type>.<name>.<attribute>`."
+
+quiz:
+  - q:
+      fr: "Comment rend-on une variable obligatoire ?"
+      en: "How do you make a variable required?"
+    options:
+      fr:
+        - "En ajoutant `required = true`"
+        - "En ajoutant `nullable = false`"
+        - "En ne lui donnant pas d'argument `default`"
+        - "En la déclarant dans un bloc `locals`"
+      en:
+        - "By adding `required = true`"
+        - "By adding `nullable = false`"
+        - "By giving it no `default` argument"
+        - "By declaring it in a `locals` block"
+    answer: 2
+    why:
+      fr: "Une variable sans `default` doit recevoir une valeur, sinon Terraform la demande ou échoue. L'argument `required` n'existe pas."
+      en: "A variable without `default` must receive a value, otherwise Terraform prompts for it or fails. There is no `required` argument."
+  - q:
+      fr: "Quelle référence est correcte pour lire la valeur `name_prefix` déclarée dans `locals { }` ?"
+      en: "Which reference is correct to read the `name_prefix` value declared in `locals { }`?"
+    options:
+      fr:
+        - "`local.name_prefix`"
+        - "`locals.name_prefix`"
+        - "`var.name_prefix`"
+        - "`${name_prefix}`"
+      en:
+        - "`local.name_prefix`"
+        - "`locals.name_prefix`"
+        - "`var.name_prefix`"
+        - "`${name_prefix}`"
+    answer: 0
+    why:
+      fr: "Le bloc s'appelle `locals` (pluriel) mais la référence s'écrit `local.<nom>` (singulier)."
+      en: "The block is called `locals` (plural) but the reference is written `local.<name>` (singular)."
+  - q:
+      fr: "Que fait exactement `sensitive = true` sur une variable ?"
+      en: "What exactly does `sensitive = true` do on a variable?"
+    options:
+      fr:
+        - "Il chiffre la valeur dans le fichier d'état"
+        - "Il empêche d'utiliser la valeur dans une ressource"
+        - "Il stocke la valeur dans AWS Secrets Manager"
+        - "Il masque la valeur dans l'affichage de plan, apply et output"
+      en:
+        - "It encrypts the value in the state file"
+        - "It prevents the value from being used in a resource"
+        - "It stores the value in AWS Secrets Manager"
+        - "It hides the value in the plan, apply and output display"
+    answer: 3
+    why:
+      fr: "`sensitive` agit uniquement sur l'affichage. La valeur reste écrite en clair dans le state, qu'il faut donc protéger."
+      en: "`sensitive` only affects what is displayed. The value is still written in clear text in the state, which therefore must be protected."
+  - q:
+      fr: "Quel type convient pour une variable décrivant une base avec un moteur (texte) et un port (nombre) ?"
+      en: "Which type suits a variable describing a database with an engine (text) and a port (number)?"
+    options:
+      fr:
+        - "`list(string)`"
+        - "`object({ engine = string, port = number })`"
+        - "`map(string)`"
+        - "`set(number)`"
+      en:
+        - "`list(string)`"
+        - "`object({ engine = string, port = number })`"
+        - "`map(string)`"
+        - "`set(number)`"
+    answer: 1
+    why:
+      fr: "Un `object` décrit des attributs nommés de types différents. Une `map` impose le même type à toutes les valeurs."
+      en: "An `object` describes named attributes of different types. A `map` forces the same type on all values."
+  - q:
+      fr: "Pourquoi un mot de passe ne doit-il jamais figurer dans le `default` d'une variable ?"
+      en: "Why must a password never appear in the `default` of a variable?"
+    options:
+      fr:
+        - "Parce que `default` n'accepte que des nombres"
+        - "Parce que Terraform ignore les valeurs par défaut en production"
+        - "Parce qu'il est alors versionné dans Git et lisible par tous ceux qui ont accès au dépôt"
+        - "Parce que cela ralentit `terraform plan`"
+      en:
+        - "Because `default` only accepts numbers"
+        - "Because Terraform ignores default values in production"
+        - "Because it is then versioned in Git and readable by everyone with access to the repository"
+        - "Because it slows down `terraform plan`"
+    answer: 2
+    why:
+      fr: "Une valeur par défaut fait partie du code source : elle reste dans l'historique Git même après suppression. Le secret doit être injecté à l'exécution."
+      en: "A default value is part of the source code: it stays in Git history even after removal. The secret must be injected at run time."

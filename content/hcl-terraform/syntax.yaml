@@ -1,0 +1,514 @@
+description:
+  fr: "Découvrir la syntaxe HCL utilisée par Terraform : blocs, labels, arguments, types de valeurs, commentaires et formatage."
+  en: "Discover the HCL syntax used by Terraform: blocks, labels, arguments, value types, comments and formatting."
+duration: 20
+
+intro:
+  fr: |
+    **HCL** (*HashiCorp Configuration Language*) est le langage dans lequel on écrit les fichiers
+    Terraform (`.tf`). Terraform est un outil d'**IaC** (*Infrastructure as Code*, infrastructure décrite
+    par du code) : au lieu de cliquer dans une console cloud, vous **décrivez** ce que vous voulez et
+    l'outil le crée pour vous.
+
+    HCL ressemble à un **bon de commande** : vous ne dites pas au menuisier *comment* scier le bois, vous
+    écrivez « une table, en chêne, 2 mètres de long ». Chaque objet commandé est un **bloc**, chaque
+    caractéristique est un **argument**. HCL est dit *déclaratif* : on décrit le résultat, pas les étapes.
+
+    Dans cette leçon vous allez lire et écrire vos premiers blocs HCL, reconnaître les types de valeurs,
+    et voir comment **un seul argument** suffit à rendre une ressource sûre ou dangereuse. Ce cours
+    enseigne le **langage** ; l'outil lui-même (installation, `plan`, `apply`, state) est détaillé dans le
+    cours « Terraform complet ».
+  en: |
+    **HCL** (*HashiCorp Configuration Language*) is the language used to write Terraform files (`.tf`).
+    Terraform is an **IaC** tool (*Infrastructure as Code*): instead of clicking around a cloud console,
+    you **describe** what you want and the tool creates it for you.
+
+    HCL works like an **order form**: you do not tell the carpenter *how* to saw the wood, you write
+    "one table, oak, 2 metres long". Every ordered item is a **block**, every characteristic is an
+    **argument**. HCL is *declarative*: you describe the result, not the steps.
+
+    In this lesson you will read and write your first HCL blocks, recognise the value types, and see how
+    **a single argument** is enough to make a resource safe or dangerous. This course teaches the
+    **language**; the tool itself (installation, `plan`, `apply`, state) is covered in the
+    "Complete Terraform" course.
+
+sections:
+  - heading:
+      fr: "Blocs, labels et arguments"
+      en: "Blocks, labels and arguments"
+    body:
+      fr: |
+        Tout fichier HCL est fait de deux briques :
+
+        - un **argument** associe une valeur à un nom : `size = 50` ;
+        - un **bloc** est un conteneur : un **type**, zéro à deux **labels** entre guillemets, puis un
+          corps entre accolades `{ }` qui contient des arguments et d'autres blocs.
+
+        ```hcl
+        resource "aws_ebs_volume" "data" {   # type  label 1  label 2
+          size = 50                          # argument
+        }
+        ```
+
+        | Type de bloc | Labels | Rôle |
+        |---|---|---|
+        | `terraform` | aucun | Réglages de l'outil : version, providers requis |
+        | `provider` | 1 (nom) | Configure l'accès à une plateforme (AWS, Azure...) |
+        | `resource` | 2 (type, nom local) | Un objet d'infrastructure à créer |
+        | `data` | 2 (type, nom local) | Une information à lire, sans rien créer |
+        | `variable` | 1 (nom) | Un paramètre d'entrée |
+        | `output` | 1 (nom) | Une valeur exposée en sortie |
+        | `locals` | aucun | Des valeurs calculées, internes |
+        | `module` | 1 (nom) | L'appel d'un groupe de ressources réutilisable |
+
+        Pour une ressource, le premier label (`aws_ebs_volume`) est imposé par le provider ; le second
+        (`data`) est **votre** nom, utilisé pour y faire référence ailleurs : `aws_ebs_volume.data.id`.
+        Un argument s'écrit avec `=`, un bloc imbriqué **sans** `=` : c'est la confusion la plus fréquente.
+      en: |
+        Every HCL file is made of two building bricks:
+
+        - an **argument** assigns a value to a name: `size = 50`;
+        - a **block** is a container: a **type**, zero to two quoted **labels**, then a body between
+          braces `{ }` holding arguments and other blocks.
+
+        ```hcl
+        resource "aws_ebs_volume" "data" {   # type  label 1  label 2
+          size = 50                          # argument
+        }
+        ```
+
+        | Block type | Labels | Role |
+        |---|---|---|
+        | `terraform` | none | Tool settings: version, required providers |
+        | `provider` | 1 (name) | Configures access to a platform (AWS, Azure...) |
+        | `resource` | 2 (type, local name) | An infrastructure object to create |
+        | `data` | 2 (type, local name) | A piece of information to read, creating nothing |
+        | `variable` | 1 (name) | An input parameter |
+        | `output` | 1 (name) | A value exposed as a result |
+        | `locals` | none | Computed, internal values |
+        | `module` | 1 (name) | A call to a reusable group of resources |
+
+        For a resource, the first label (`aws_ebs_volume`) is dictated by the provider; the second one
+        (`data`) is **your** name, used to reference it elsewhere: `aws_ebs_volume.data.id`.
+        An argument is written with `=`, a nested block **without** `=`: this is the most common mix-up.
+  - heading:
+      fr: "Types de valeurs, chaînes et commentaires"
+      en: "Value types, strings and comments"
+    body:
+      fr: |
+        | Type | Exemple | Remarque |
+        |---|---|---|
+        | `string` | `"eu-west-3"` | Toujours entre guillemets **doubles** |
+        | `number` | `50`, `0.5` | Entier ou décimal, sans guillemets |
+        | `bool` | `true`, `false` | En minuscules, sans guillemets |
+        | `list` | `["a", "b"]` | Ordonnée, indexée à partir de 0 |
+        | `map` | `{ Team = "ops" }` | Clés et valeurs de même type |
+        | `object` | `{ port = 5432, tls = true }` | Attributs de types différents |
+        | `null` | `null` | « Pas de valeur » : l'argument est ignoré |
+
+        Dans une chaîne, `${ ... }` insère une valeur : `"/${local.project}/app"` (interpolation).
+        Pour un texte de plusieurs lignes, on utilise un *heredoc* : `<<-EOT` ... `EOT`.
+
+        Trois styles de commentaires existent : `#` (le style recommandé), `//` et `/* ... */` pour
+        plusieurs lignes. Enfin, tous les fichiers `.tf` d'un même dossier sont lus **ensemble** : l'ordre
+        des blocs et le découpage en fichiers (`main.tf`, `variables.tf`, `outputs.tf`) sont une convention
+        de lisibilité, pas une contrainte du langage.
+      en: |
+        | Type | Example | Remark |
+        |---|---|---|
+        | `string` | `"eu-west-3"` | Always in **double** quotes |
+        | `number` | `50`, `0.5` | Integer or decimal, no quotes |
+        | `bool` | `true`, `false` | Lowercase, no quotes |
+        | `list` | `["a", "b"]` | Ordered, indexed from 0 |
+        | `map` | `{ Team = "ops" }` | Keys and values of the same type |
+        | `object` | `{ port = 5432, tls = true }` | Attributes of different types |
+        | `null` | `null` | "No value": the argument is ignored |
+
+        Inside a string, `${ ... }` inserts a value: `"/${local.project}/app"` (interpolation).
+        For multi-line text, use a *heredoc*: `<<-EOT` ... `EOT`.
+
+        Three comment styles exist: `#` (the recommended one), `//` and `/* ... */` for several lines.
+        Finally, all `.tf` files in the same directory are read **together**: the order of blocks and the
+        split into files (`main.tf`, `variables.tf`, `outputs.tf`) is a readability convention, not a
+        language constraint.
+
+examples:
+  - title:
+      fr: "Anatomie d'un fichier HCL : trois blocs, des arguments, un bloc imbriqué"
+      en: "Anatomy of an HCL file: three blocks, arguments, a nested block"
+    file: main.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      # Block without label: settings of Terraform itself
+      terraform {
+        required_version = ">= 1.10"
+
+        # Nested block (no "=" sign before the brace)
+        required_providers {
+          # Argument whose value is an object
+          aws = {
+            source  = "hashicorp/aws"
+            version = "~> 6.0"
+          }
+        }
+      }
+
+      # Block with one label: the provider name
+      provider "aws" {
+        region = "eu-west-3" # string argument
+      }
+
+      # Block with two labels: resource type, then local name
+      resource "aws_kms_key" "logs" {
+        description             = "Key used to encrypt application logs"
+        enable_key_rotation     = true # bool: rotate the key material every year
+        deletion_window_in_days = 30   # number: delay before a deleted key is really gone
+
+        # Map argument: note the "=" sign, tags is not a block
+        tags = {
+          Team        = "platform"
+          Environment = "dev"
+        }
+      }
+    note:
+      fr: "Repérez les trois formes : bloc sans label (`terraform`), à un label (`provider \"aws\"`), à deux labels (`resource \"aws_kms_key\" \"logs\"`). `required_providers { }` est un bloc imbriqué (pas de `=`), alors que `tags = { }` est un argument de type map."
+      en: "Spot the three shapes: a block with no label (`terraform`), one label (`provider \"aws\"`), two labels (`resource \"aws_kms_key\" \"logs\"`). `required_providers { }` is a nested block (no `=`), whereas `tags = { }` is a map argument."
+
+  - title:
+      fr: "Tous les types de valeurs dans un seul fichier"
+      en: "Every value type in a single file"
+    file: types.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      locals {
+        project            = "shop"                        # string
+        retention_days     = 90                            # number
+        encryption_enabled = true                          # bool
+        availability_zones = ["eu-west-3a", "eu-west-3b"]  # list of strings
+
+        # map of strings
+        tags = {
+          Project   = "shop"
+          ManagedBy = "terraform"
+        }
+
+        # object: attributes of different types
+        database = {
+          engine   = "postgres"
+          port     = 5432
+          multi_az = true
+        }
+
+        # Interpolation: a value inserted inside a string
+        log_group_name = "/${local.project}/app"
+
+        # Heredoc: multi-line string, "<<-" strips the leading indentation
+        login_banner = <<-EOT
+          Authorized access only.
+          Activity on this system is logged.
+        EOT
+      }
+
+      /* Outputs let us display the values:
+         index access with [0], attribute access with a dot. */
+      output "first_az" {
+        value = local.availability_zones[0]
+      }
+
+      output "db_port" {
+        value = local.database.port
+      }
+
+      output "log_group_name" {
+        value = local.log_group_name
+      }
+    output: |
+      $ terraform apply -auto-approve
+
+      Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+
+      Outputs:
+
+      db_port = 5432
+      first_az = "eu-west-3a"
+      log_group_name = "/shop/app"
+    note:
+      fr: "Ce fichier ne crée aucune ressource : il ne contient que des valeurs locales et des sorties, il fonctionne donc sans compte cloud. Les listes s'indexent avec `[0]`, les objets et maps avec un point ou `[\"clé\"]`."
+      en: "This file creates no resource: it only holds local values and outputs, so it works without any cloud account. Lists are indexed with `[0]`, objects and maps with a dot or `[\"key\"]`."
+
+  - title:
+      fr: "Vulnérable : un disque créé sans chiffrement"
+      en: "Vulnerable: a disk created without encryption"
+    file: volume_vulnerable.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      resource "aws_ebs_volume" "customer_data" {
+        availability_zone = "eu-west-3a"
+        size              = 50 # GiB
+        type              = "gp3"
+
+        # No "encrypted" argument: it defaults to false.
+        # Anyone able to copy a snapshot of this disk can read customer data.
+
+        tags = {
+          Name = "customer-data"
+        }
+      }
+    note:
+      fr: "Le fichier est syntaxiquement parfait, et pourtant dangereux : un argument **absent** prend sa valeur par défaut, ici `encrypted = false`. En IaC, ce qu'on n'écrit pas compte autant que ce qu'on écrit."
+      en: "The file is syntactically perfect, yet dangerous: a **missing** argument takes its default value, here `encrypted = false`. In IaC, what you do not write matters as much as what you write."
+
+  - title:
+      fr: "Sécurisé : le même disque, chiffré avec une clé KMS"
+      en: "Secure: the same disk, encrypted with a KMS key"
+    file: volume_secure.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_kms_key" "data" {
+        description             = "Encrypts customer data volumes"
+        enable_key_rotation     = true
+        deletion_window_in_days = 30
+      }
+
+      resource "aws_ebs_volume" "customer_data" {
+        availability_zone = "eu-west-3a"
+        size              = 50
+        type              = "gp3"
+
+        # Encryption at rest: explicit, reviewable in a pull request
+        encrypted = true
+        # Reference to another block: <type>.<local name>.<attribute>
+        kms_key_id = aws_kms_key.data.arn
+
+        tags = {
+          Name = "customer-data"
+        }
+      }
+    note:
+      fr: "Deux arguments ont été ajoutés. `aws_kms_key.data.arn` est une **référence** : Terraform comprend qu'il doit créer la clé avant le disque. Le chiffrement devient visible dans le code, donc vérifiable en revue et par des scanners."
+      en: "Two arguments were added. `aws_kms_key.data.arn` is a **reference**: Terraform understands that the key must be created before the disk. Encryption is now visible in the code, hence checkable in review and by scanners."
+
+  - title:
+      fr: "Formater et valider la syntaxe"
+      en: "Formatting and validating the syntax"
+    file: check-syntax.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Rewrite every .tf file with the canonical style (2 spaces, aligned "=")
+      terraform fmt
+
+      # In CI: change nothing, list badly formatted files and exit with a non-zero code
+      terraform fmt -check -diff
+
+      # Download the providers (needed once), then check syntax and argument names
+      terraform init -backend=false
+      terraform validate
+    output: |
+      ╷
+      │ Error: Unsupported argument
+      │
+      │   on volume_secure.tf line 13, in resource "aws_ebs_volume" "customer_data":
+      │   13:   encypted = true
+      │
+      │ An argument named "encypted" is not expected here. Did you mean "encrypted"?
+      ╵
+    note:
+      fr: "`terraform fmt` règle la forme, `terraform validate` vérifie le fond : blocs fermés, arguments connus du provider, types corrects. Ici une faute de frappe sur `encrypted` est détectée avant tout déploiement."
+      en: "`terraform fmt` fixes the form, `terraform validate` checks the substance: closed blocks, arguments known to the provider, correct types. Here a typo in `encrypted` is caught before any deployment."
+
+mistake:
+  fr: |
+    **Confondre argument et bloc, et mettre des guillemets partout (ou nulle part).**
+
+    - `tags { Name = "x" }` est refusé : `tags` est un **argument** de type map, il faut `tags = { ... }`.
+      À l'inverse, `required_providers = { ... }` est faux : c'est un **bloc**.
+    - `encrypted = "true"` et `size = "50"` « marchent » grâce à la conversion automatique, mais
+      `encrypted = "yes"` échoue. Écrivez les booléens et les nombres **sans guillemets**.
+    - Les guillemets simples `'texte'` n'existent pas en HCL : seules les doubles sont valides.
+
+    En cas de doute, la documentation du provider indique pour chaque ressource ce qui est un argument et
+    ce qui est un bloc imbriqué.
+  en: |
+    **Mixing up arguments and blocks, and quoting everything (or nothing).**
+
+    - `tags { Name = "x" }` is rejected: `tags` is a map **argument**, it must be `tags = { ... }`.
+      Conversely, `required_providers = { ... }` is wrong: that one is a **block**.
+    - `encrypted = "true"` and `size = "50"` "work" thanks to automatic conversion, but
+      `encrypted = "yes"` fails. Write booleans and numbers **without quotes**.
+    - Single quotes `'text'` do not exist in HCL: only double quotes are valid.
+
+    When in doubt, the provider documentation tells you, for each resource, what is an argument and what
+    is a nested block.
+
+bestPractice:
+  fr: |
+    - **Écrivez explicitement les arguments de sécurité** (`encrypted = true`), même quand la valeur par
+      défaut vous convient aujourd'hui : le code devient sa propre documentation.
+    - **Lancez `terraform fmt` avant chaque commit** et `terraform fmt -check` dans le pipeline : un code
+      au style uniforme se relit plus vite, et les changements dangereux se voient mieux dans un diff.
+    - **Nommez les ressources par leur rôle** (`customer_data`, `logs`), en `snake_case`, sans répéter le
+      type (`aws_kms_key.logs`, pas `aws_kms_key.logs_kms_key`).
+    - **Commentez le pourquoi**, surtout pour une exception de sécurité : `# public on purpose: static website`.
+    - **Un dossier = une configuration** : gardez `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`.
+  en: |
+    - **Write security arguments explicitly** (`encrypted = true`), even when today's default suits you:
+      the code becomes its own documentation.
+    - **Run `terraform fmt` before each commit** and `terraform fmt -check` in the pipeline: uniformly
+      styled code is faster to review, and dangerous changes stand out better in a diff.
+    - **Name resources after their role** (`customer_data`, `logs`), in `snake_case`, without repeating
+      the type (`aws_kms_key.logs`, not `aws_kms_key.logs_kms_key`).
+    - **Comment the why**, especially for a security exception: `# public on purpose: static website`.
+    - **One directory = one configuration**: keep `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`.
+
+exercise:
+  statement:
+    fr: |
+      Le fichier ci-dessous contient **cinq erreurs** de syntaxe HCL et **un oubli de sécurité**.
+
+      ```hcl
+      resource aws_ebs_volume, "backup" {
+        availability_zone : "eu-west-3a"
+        size = "100 GB"
+        type = 'gp3'
+        tags {
+          Name = backup-volume
+        }
+      }
+      ```
+
+      1. Corrigez les erreurs de syntaxe pour que `terraform validate` passe.
+      2. Ajoutez l'argument qui manque pour que les sauvegardes soient chiffrées au repos.
+    en: |
+      The file below contains **five** HCL syntax errors and **one security omission**.
+
+      ```hcl
+      resource aws_ebs_volume, "backup" {
+        availability_zone : "eu-west-3a"
+        size = "100 GB"
+        type = 'gp3'
+        tags {
+          Name = backup-volume
+        }
+      }
+      ```
+
+      1. Fix the syntax errors so that `terraform validate` passes.
+      2. Add the missing argument so that backups are encrypted at rest.
+  solution:
+    file: backup.tf
+    lang: hcl
+    code: |
+      # 1. Labels are quoted and separated by a space, not a comma
+      resource "aws_ebs_volume" "backup" {
+        availability_zone = "eu-west-3a" # 2. "=" assigns a value, not ":"
+        size              = 100          # 3. a number, in GiB, without unit or quotes
+        type              = "gp3"        # 4. double quotes only
+
+        # Security fix: encryption at rest (defaults to false when omitted)
+        encrypted = true
+
+        # 5. tags is a map argument (needs "="), and its value is a quoted string
+        tags = {
+          Name = "backup-volume"
+        }
+      }
+    note:
+      fr: "Sans guillemets, `backup-volume` serait lu comme une soustraction entre deux références (`backup` moins `volume`). Sans `kms_key_id`, AWS chiffre avec la clé gérée par défaut du service EBS."
+      en: "Without quotes, `backup-volume` would be read as a subtraction between two references (`backup` minus `volume`). Without `kms_key_id`, AWS encrypts with the default managed key of the EBS service."
+
+quiz:
+  - q:
+      fr: "Dans `resource \"aws_kms_key\" \"logs\" { ... }`, que représente `\"logs\"` ?"
+      en: "In `resource \"aws_kms_key\" \"logs\" { ... }`, what does `\"logs\"` stand for?"
+    options:
+      fr:
+        - "Le nom réel de la clé dans AWS"
+        - "Le nom local, choisi par vous, pour référencer la ressource dans le code"
+        - "Le type de ressource imposé par le provider"
+        - "La région où la clé est créée"
+      en:
+        - "The real name of the key in AWS"
+        - "The local name, chosen by you, used to reference the resource in the code"
+        - "The resource type dictated by the provider"
+        - "The region where the key is created"
+    answer: 1
+    why:
+      fr: "Le premier label est le type de ressource, le second est un nom local qui n'existe que dans votre code : `aws_kms_key.logs`."
+      en: "The first label is the resource type, the second is a local name that only exists in your code: `aws_kms_key.logs`."
+  - q:
+      fr: "Quelle écriture est correcte pour des tags sur une ressource AWS ?"
+      en: "Which form is correct for tags on an AWS resource?"
+    options:
+      fr:
+        - "`tags { Team = \"ops\" }`"
+        - "`tags: { Team: \"ops\" }`"
+        - "`tags = [ Team = \"ops\" ]`"
+        - "`tags = { Team = \"ops\" }`"
+      en:
+        - "`tags { Team = \"ops\" }`"
+        - "`tags: { Team: \"ops\" }`"
+        - "`tags = [ Team = \"ops\" ]`"
+        - "`tags = { Team = \"ops\" }`"
+    answer: 3
+    why:
+      fr: "`tags` est un argument de type map : il lui faut le signe `=` puis des accolades contenant des paires clé = valeur."
+      en: "`tags` is a map argument: it needs the `=` sign followed by braces holding key = value pairs."
+  - q:
+      fr: "Que se passe-t-il si l'argument `encrypted` est absent d'un `aws_ebs_volume` ?"
+      en: "What happens when the `encrypted` argument is missing from an `aws_ebs_volume`?"
+    options:
+      fr:
+        - "La valeur par défaut `false` s'applique : le volume est créé non chiffré"
+        - "Terraform refuse de créer le volume"
+        - "Le volume est chiffré automatiquement par Terraform"
+        - "`terraform fmt` ajoute l'argument tout seul"
+      en:
+        - "The default value `false` applies: the volume is created unencrypted"
+        - "Terraform refuses to create the volume"
+        - "The volume is automatically encrypted by Terraform"
+        - "`terraform fmt` adds the argument by itself"
+    answer: 0
+    why:
+      fr: "Un argument optionnel absent prend sa valeur par défaut. Pour `encrypted`, c'est `false` (sauf si le chiffrement par défaut est activé au niveau du compte AWS)."
+      en: "A missing optional argument takes its default value. For `encrypted`, that is `false` (unless default encryption is enabled at the AWS account level)."
+  - q:
+      fr: "Quelle commande vérifie que les noms d'arguments existent bien pour le provider ?"
+      en: "Which command checks that argument names really exist for the provider?"
+    options:
+      fr:
+        - "`terraform fmt`"
+        - "`terraform fmt -check`"
+        - "`terraform validate`"
+        - "`terraform version`"
+      en:
+        - "`terraform fmt`"
+        - "`terraform fmt -check`"
+        - "`terraform validate`"
+        - "`terraform version`"
+    answer: 2
+    why:
+      fr: "`fmt` ne s'occupe que de la mise en forme. `validate` contrôle la syntaxe, les types et les arguments par rapport au schéma du provider."
+      en: "`fmt` only deals with layout. `validate` checks syntax, types and arguments against the provider schema."
+  - q:
+      fr: "Que produit `\"/${local.project}/app\"` si `local.project` vaut `\"shop\"` ?"
+      en: "What does `\"/${local.project}/app\"` produce when `local.project` is `\"shop\"`?"
+    options:
+      fr:
+        - "Une erreur : on ne peut pas mélanger texte et référence"
+        - "La chaîne `/shop/app`"
+        - "La chaîne `/${local.project}/app` telle quelle"
+        - "Une liste de deux éléments"
+      en:
+        - "An error: text and references cannot be mixed"
+        - "The string `/shop/app`"
+        - "The string `/${local.project}/app` as is"
+        - "A list of two elements"
+    answer: 1
+    why:
+      fr: "`${ ... }` est l'interpolation : l'expression est évaluée et son résultat inséré dans la chaîne."
+      en: "`${ ... }` is interpolation: the expression is evaluated and its result inserted into the string."

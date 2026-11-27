@@ -1,0 +1,560 @@
+description:
+  fr: "Organiser des données avec les listes, dictionnaires et ensembles, puis structurer son code avec des fonctions et une gestion d'erreurs qui échoue de façon sûre."
+  en: "Organise data with lists, dictionaries and sets, then structure your code with functions and error handling that fails safely."
+duration: 30
+
+intro:
+  fr: |
+    Dans la leçon précédente, chaque variable contenait une seule valeur. Or un ingénieur DevSecOps manipule
+    des **collections** : 200 serveurs, 1 500 vulnérabilités, 30 000 lignes de log. Python fournit quatre
+    « conteneurs » pour les ranger, et les **fonctions** pour ne pas réécrire dix fois le même code.
+
+    Pensez à un atelier : la **liste** est une étagère où les objets sont rangés dans l'ordre, le
+    **dictionnaire** est une armoire à tiroirs étiquetés (on ouvre directement le bon tiroir), l'**ensemble**
+    est un sac où chaque objet n'existe qu'en un exemplaire. Une **fonction**, c'est une machine de l'atelier :
+    on lui donne une pièce, elle rend toujours le même type de résultat.
+
+    Vous allez construire un inventaire de serveurs, comparer des ports ouverts à une liste autorisée, trier
+    des vulnérabilités par gravité et écrire un contrôle d'accès qui reste sûr même quand une erreur survient.
+  en: |
+    In the previous lesson, each variable held a single value. But a DevSecOps engineer handles
+    **collections**: 200 servers, 1,500 vulnerabilities, 30,000 log lines. Python provides four
+    "containers" to store them, and **functions** so you do not rewrite the same code ten times.
+
+    Think of a workshop: the **list** is a shelf where objects are kept in order, the **dictionary** is a
+    cabinet of labelled drawers (you open the right drawer directly), the **set** is a bag where each object
+    exists only once. A **function** is a machine in the workshop: you give it a part, it always returns the
+    same kind of result.
+
+    You will build a server inventory, compare open ports with an allow-list, sort vulnerabilities by
+    severity and write an access check that stays safe even when an error occurs.
+
+sections:
+  - heading:
+      fr: "Les quatre conteneurs"
+      en: "The four containers"
+    body:
+      fr: |
+        | Conteneur | Syntaxe | Ordonné | Modifiable | Doublons | À utiliser pour |
+        |---|---|---|---|---|---|
+        | Liste `list` | `[22, 80, 443]` | oui | oui | oui | une suite d'éléments à parcourir |
+        | Tuple `tuple` | `("web-01", 443)` | oui | **non** | oui | un petit groupe fixe (hôte, port) |
+        | Dictionnaire `dict` | `{"host": "web-01"}` | oui | oui | clés uniques | associer une clé à une valeur |
+        | Ensemble `set` | `{22, 443}` | non | oui | **non** | tester l'appartenance, comparer deux groupes |
+
+        - On accède à un élément de liste par sa **position**, qui commence à `0` : `ports[0]`.
+          `ports[-1]` désigne le dernier.
+        - On accède à une valeur de dictionnaire par sa **clé** : `server["host"]`. Si la clé peut manquer,
+          `server.get("owner", "unknown")` renvoie une valeur par défaut au lieu de provoquer une erreur.
+        - Les ensembles offrent les opérations des mathématiques : `a - b` (dans a mais pas dans b),
+          `a & b` (dans les deux), `a | b` (dans l'un ou l'autre).
+
+        Une **compréhension de liste** construit une liste en une ligne :
+        `[p for p in ports if p < 1024]` se lit « p, pour chaque p de ports, si p est inférieur à 1024 ».
+      en: |
+        | Container | Syntax | Ordered | Mutable | Duplicates | Use it for |
+        |---|---|---|---|---|---|
+        | List `list` | `[22, 80, 443]` | yes | yes | yes | a sequence of items to walk through |
+        | Tuple `tuple` | `("web-01", 443)` | yes | **no** | yes | a small fixed group (host, port) |
+        | Dictionary `dict` | `{"host": "web-01"}` | yes | yes | unique keys | mapping a key to a value |
+        | Set `set` | `{22, 443}` | no | yes | **no** | membership tests, comparing two groups |
+
+        - You reach a list item by its **position**, which starts at `0`: `ports[0]`. `ports[-1]` is the
+          last one.
+        - You reach a dictionary value by its **key**: `server["host"]`. If the key may be missing,
+          `server.get("owner", "unknown")` returns a default value instead of raising an error.
+        - Sets offer the operations of mathematics: `a - b` (in a but not in b), `a & b` (in both),
+          `a | b` (in either).
+
+        A **list comprehension** builds a list in one line: `[p for p in ports if p < 1024]` reads "p, for
+        each p in ports, if p is lower than 1024".
+  - heading:
+      fr: "Les fonctions"
+      en: "Functions"
+    body:
+      fr: |
+        Une fonction se définit avec `def`, reçoit des **paramètres** et renvoie un résultat avec `return` :
+
+        ```python
+        def severity(score: float) -> str:
+            """Return the CVSS v3 severity label for a score."""
+            if score >= 9.0:
+                return "CRITICAL"
+            return "OTHER"
+        ```
+
+        - `score: float` et `-> str` sont des **annotations de type** : elles ne sont pas vérifiées à
+          l'exécution, mais elles documentent le code et permettent aux outils (mypy, éditeurs) de détecter
+          des erreurs.
+        - Le texte entre triples guillemets est la **docstring** : la documentation de la fonction.
+        - Un paramètre peut avoir une **valeur par défaut** : `def scan(host, timeout=1.0)`.
+        - Une fonction sans `return` renvoie `None`.
+
+        Une bonne fonction fait **une seule chose**, porte un nom qui dit ce qu'elle fait, et ne dépend que
+        de ses paramètres. Elle devient alors facile à tester, ce qui est indispensable pour du code de
+        sécurité.
+      en: |
+        A function is defined with `def`, receives **parameters** and gives back a result with `return`:
+
+        ```python
+        def severity(score: float) -> str:
+            """Return the CVSS v3 severity label for a score."""
+            if score >= 9.0:
+                return "CRITICAL"
+            return "OTHER"
+        ```
+
+        - `score: float` and `-> str` are **type hints**: they are not checked at run time, but they
+          document the code and let tools (mypy, editors) catch mistakes.
+        - The text between triple quotes is the **docstring**: the documentation of the function.
+        - A parameter can have a **default value**: `def scan(host, timeout=1.0)`.
+        - A function without `return` returns `None`.
+
+        A good function does **one thing**, has a name that says what it does, and depends only on its
+        parameters. It then becomes easy to test, which is essential for security code.
+  - heading:
+      fr: "Les erreurs : try, except et le principe « fail closed »"
+      en: "Errors: try, except and the \"fail closed\" principle"
+    body:
+      fr: |
+        Quand quelque chose se passe mal, Python lève une **exception** (`ValueError`, `KeyError`,
+        `FileNotFoundError`...). Sans traitement, le programme s'arrête. On l'intercepte avec
+        `try` / `except` :
+
+        ```python
+        try:
+            port = int(text)
+        except ValueError:
+            port = None
+        ```
+
+        Deux règles de sécurité :
+
+        1. **Attrapez l'exception précise** (`except ValueError:`), jamais `except:` tout seul, qui avale
+           aussi les fautes de frappe et les bugs.
+        2. **Échouez fermé (*fail closed*)** : en cas d'erreur dans un contrôle de sécurité, la réponse doit
+           être « refusé ». Un contrôle qui répond « autorisé » quand il plante (*fail open*) offre un
+           contournement à l'attaquant : il lui suffit de provoquer l'erreur.
+
+        La bibliothèque standard fournit des modules prêts à l'emploi que l'on charge avec `import` :
+        `ipaddress` pour valider des adresses IP, `json`, `re`, `hashlib`... Utilisez-les plutôt que de
+        réinventer une validation fragile.
+      en: |
+        When something goes wrong, Python raises an **exception** (`ValueError`, `KeyError`,
+        `FileNotFoundError`...). If nothing handles it, the program stops. You catch it with
+        `try` / `except`:
+
+        ```python
+        try:
+            port = int(text)
+        except ValueError:
+            port = None
+        ```
+
+        Two security rules:
+
+        1. **Catch the precise exception** (`except ValueError:`), never a bare `except:`, which also
+           swallows typos and bugs.
+        2. **Fail closed**: when an error occurs inside a security check, the answer must be "denied". A
+           check that answers "allowed" when it crashes (*fail open*) hands the attacker a bypass: all they
+           need to do is trigger the error.
+
+        The standard library ships ready-made modules that you load with `import`: `ipaddress` to validate
+        IP addresses, `json`, `re`, `hashlib`... Use them rather than reinventing a fragile validation.
+
+examples:
+  - title:
+      fr: "Listes et dictionnaires : un inventaire de serveurs"
+      en: "Lists and dictionaries: a server inventory"
+    file: inventory.py
+    lang: python
+    code: |
+      # A list keeps items in order; positions start at 0
+      ports = [22, 80, 443]
+      ports.append(8080)                 # add at the end
+      print(ports[0], ports[-1], len(ports))
+
+      # A dictionary maps keys to values: one dict = one server
+      server = {"host": "web-01", "env": "prod", "ports": [22, 443]}
+      server["patched"] = False          # add or change a key
+      print(server["host"], server.get("owner", "unknown"))
+
+      # A list of dictionaries is the usual shape of an inventory (and of JSON data)
+      inventory = [
+          {"host": "web-01", "env": "prod", "ports": [22, 443]},
+          {"host": "db-01", "env": "prod", "ports": [22, 5432]},
+          {"host": "test-07", "env": "dev", "ports": [22, 23, 8080]},
+      ]
+
+      for srv in inventory:
+          flag = "TELNET!" if 23 in srv["ports"] else "ok"
+          print(f"{srv['host']:8} {srv['env']:5} {len(srv['ports'])} ports  {flag}")
+
+      # List comprehension: build a new list from a filter, in one line
+      prod_hosts = [srv["host"] for srv in inventory if srv["env"] == "prod"]
+      print("Production:", prod_hosts)
+    output: |
+      22 8080 4
+      web-01 unknown
+      web-01   prod  2 ports  ok
+      db-01    prod  2 ports  ok
+      test-07  dev   3 ports  TELNET!
+      Production: ['web-01', 'db-01']
+    note:
+      fr: "`server.get(\"owner\", \"unknown\")` ne plante pas quand la clé manque, contrairement à `server[\"owner\"]` qui lève `KeyError`. Dans une f-string, `{valeur:8}` complète avec des espaces pour aligner les colonnes."
+      en: "`server.get(\"owner\", \"unknown\")` does not crash when the key is missing, unlike `server[\"owner\"]` which raises `KeyError`. In an f-string, `{value:8}` pads with spaces to align columns."
+
+  - title:
+      fr: "Ensembles : comparer les ports ouverts à la liste autorisée"
+      en: "Sets: comparing open ports with the allow-list"
+    file: port_drift.py
+    lang: python
+    code: |
+      # What the firewall policy allows vs what the scan really found
+      allowed = {22, 443}
+      scanned = [22, 443, 443, 3306, 8080, 22]      # raw scan result, with duplicates
+
+      open_ports = set(scanned)                     # a set removes duplicates
+      print("Open        :", sorted(open_ports))
+
+      # Set arithmetic answers audit questions in one line
+      unexpected = open_ports - allowed             # open but not allowed
+      missing = allowed - open_ports                # allowed but closed
+      print("Unexpected  :", sorted(unexpected))
+      print("Missing     :", sorted(missing))
+      print("Compliant   :", open_ports <= allowed) # <= means "is a subset of"
+
+      # Tuples group values that belong together and never change
+      findings = [("web-01", 3306), ("web-01", 8080)]
+      for host, port in findings:                   # unpacking: one name per element
+          print(f"Close port {port} on {host}")
+    output: |
+      Open        : [22, 443, 3306, 8080]
+      Unexpected  : [3306, 8080]
+      Missing     : []
+      Compliant   : False
+      Close port 3306 on web-01
+      Close port 8080 on web-01
+    note:
+      fr: "Détecter la **dérive de configuration** (ce qui est réellement ouvert par rapport à ce qui est autorisé) est une tâche d'audit classique. Avec des ensembles, c'est une simple soustraction."
+      en: "Detecting **configuration drift** (what is really open versus what is allowed) is a classic audit task. With sets, it is a simple subtraction."
+
+  - title:
+      fr: "Fonctions : trier des vulnérabilités par gravité"
+      en: "Functions: triaging vulnerabilities by severity"
+    file: triage.py
+    lang: python
+    code: |
+      def severity(score: float) -> str:
+          """Return the CVSS v3 severity label for a base score (0.0 to 10.0)."""
+          if not 0.0 <= score <= 10.0:
+              raise ValueError(f"invalid CVSS score: {score}")
+          if score >= 9.0:
+              return "CRITICAL"
+          if score >= 7.0:
+              return "HIGH"
+          if score >= 4.0:
+              return "MEDIUM"
+          if score > 0.0:
+              return "LOW"
+          return "NONE"
+
+
+      def triage(findings: list[dict], minimum: float = 7.0) -> list[dict]:
+          """Keep findings at or above `minimum`, most severe first."""
+          kept = [f for f in findings if f["cvss"] >= minimum]
+          # sorted() never modifies the original list; key= tells it what to compare
+          return sorted(kept, key=lambda f: f["cvss"], reverse=True)
+
+
+      findings = [
+          {"id": "CVE-2021-44228", "pkg": "log4j-core", "cvss": 10.0},
+          {"id": "CVE-2023-44487", "pkg": "nghttp2", "cvss": 7.5},
+          {"id": "CVE-2024-3094", "pkg": "xz-utils", "cvss": 10.0},
+          {"id": "CVE-2023-48795", "pkg": "openssh", "cvss": 5.9},
+      ]
+
+      for f in triage(findings):
+          print(f"{severity(f['cvss']):8} {f['cvss']:>4} {f['id']:15} {f['pkg']}")
+
+      # The default value of `minimum` can be overridden by name
+      print("All findings from MEDIUM:", len(triage(findings, minimum=4.0)))
+
+      # Count per severity with a dictionary
+      counts: dict[str, int] = {}
+      for f in findings:
+          label = severity(f["cvss"])
+          counts[label] = counts.get(label, 0) + 1
+      print(counts)
+    output: |
+      CRITICAL 10.0 CVE-2021-44228  log4j-core
+      CRITICAL 10.0 CVE-2024-3094   xz-utils
+      HIGH      7.5 CVE-2023-44487  nghttp2
+      All findings from MEDIUM: 4
+      {'CRITICAL': 2, 'HIGH': 1, 'MEDIUM': 1}
+    note:
+      fr: "Les seuils sont ceux de l'échelle officielle CVSS v3 (9.0 critique, 7.0 élevé, 4.0 moyen). `lambda f: f[\"cvss\"]` est une mini-fonction sans nom : elle indique à `sorted()` sur quelle valeur trier. La fonction `severity` refuse un score impossible avec `raise ValueError`."
+      en: "The thresholds are those of the official CVSS v3 scale (9.0 critical, 7.0 high, 4.0 medium). `lambda f: f[\"cvss\"]` is a tiny unnamed function: it tells `sorted()` which value to sort on. The `severity` function refuses an impossible score with `raise ValueError`."
+
+  - title:
+      fr: "Gestion d'erreurs dangereuse : le contrôle qui échoue ouvert"
+      en: "Dangerous error handling: the check that fails open"
+    file: acl_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import ipaddress
+
+      BLOCKED = ipaddress.ip_network("203.0.113.0/24")
+
+
+      def is_allowed(ip_text):
+          try:
+              return ipaddress.ip_address(ip_text) not in BLOCKED
+          except:
+              # Fail open: "if the check crashes, let the request through"
+              return True
+
+
+      for candidate in ["198.51.100.7", "203.0.113.50", "203.0.113.50 ", "not-an-ip"]:
+          print(f"{candidate!r:16} allowed={is_allowed(candidate)}")
+    output: |
+      '198.51.100.7'   allowed=True
+      '203.0.113.50'   allowed=False
+      '203.0.113.50 '  allowed=True
+      'not-an-ip'      allowed=True
+    note:
+      fr: "L'adresse bloquée passe dès qu'on lui ajoute **une espace** : `ip_address()` lève une exception, le `except:` nu l'avale et la fonction répond « autorisé ». Provoquer une erreur pour contourner un contrôle est une technique d'attaque courante."
+      en: "The blocked address gets through as soon as **a space** is appended: `ip_address()` raises an exception, the bare `except:` swallows it and the function answers \"allowed\". Triggering an error to bypass a check is a common attack technique."
+
+  - title:
+      fr: "Gestion d'erreurs sûre : exception précise et refus par défaut"
+      en: "Safe error handling: precise exception and deny by default"
+    file: acl_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import ipaddress
+
+      BLOCKED = ipaddress.ip_network("203.0.113.0/24")
+
+
+      def is_allowed(ip_text: str) -> bool:
+          """Return True only for a valid IP address outside the blocked network."""
+          try:
+              address = ipaddress.ip_address(ip_text)
+          except ValueError:
+              # Fail closed: an input we cannot parse is refused, never trusted
+              return False
+          return address not in BLOCKED
+
+
+      for candidate in ["198.51.100.7", "203.0.113.50", "203.0.113.50 ", "not-an-ip"]:
+          print(f"{candidate!r:16} allowed={is_allowed(candidate)}")
+    output: |
+      '198.51.100.7'   allowed=True
+      '203.0.113.50'   allowed=False
+      '203.0.113.50 '  allowed=False
+      'not-an-ip'      allowed=False
+    note:
+      fr: "Deux changements : on n'attrape que `ValueError` (l'erreur attendue pour une adresse invalide) et on renvoie `False`. Toute entrée que le contrôle ne comprend pas est refusée : c'est le principe *fail closed*."
+      en: "Two changes: only `ValueError` is caught (the expected error for an invalid address) and `False` is returned. Any input the check does not understand is refused: this is the *fail closed* principle."
+
+mistake:
+  fr: |
+    **Utiliser une liste ou un dictionnaire comme valeur par défaut d'un paramètre.**
+
+    ```python
+    def add_finding(item, findings=[]):   # the same list is reused by every call!
+        findings.append(item)
+        return findings
+    ```
+
+    La valeur par défaut est créée **une seule fois**, à la définition de la fonction : le deuxième appel
+    retrouve les éléments du premier, et des données d'un utilisateur peuvent fuiter vers un autre. Écrivez
+    `findings=None` puis, dans la fonction, `if findings is None: findings = []`.
+
+    Autre piège fréquent : `except: pass`, qui masque toutes les erreurs. Un script d'audit qui « ne plante
+    jamais » parce qu'il ignore ses erreurs produit un rapport faussement rassurant.
+  en: |
+    **Using a list or a dictionary as the default value of a parameter.**
+
+    ```python
+    def add_finding(item, findings=[]):   # the same list is reused by every call!
+        findings.append(item)
+        return findings
+    ```
+
+    The default value is created **only once**, when the function is defined: the second call finds the
+    items of the first one, and one user's data can leak to another. Write `findings=None` and then, inside
+    the function, `if findings is None: findings = []`.
+
+    Another frequent trap: `except: pass`, which hides every error. An audit script that "never crashes"
+    because it ignores its errors produces a falsely reassuring report.
+
+bestPractice:
+  fr: |
+    - **Échouez fermé** : dans un contrôle d'accès ou une validation, toute erreur doit conduire à un refus.
+    - **Attrapez des exceptions précises** (`ValueError`, `KeyError`) et laissez remonter les autres : un
+      bug visible est préférable à un bug silencieux.
+    - **Listes d'autorisation plutôt que listes d'interdiction** : comparez à l'ensemble de ce qui est
+      permis (`allowed`) ; tout le reste est suspect par défaut.
+    - **Des fonctions courtes, avec annotations de type et docstring** : elles se testent facilement et les
+      outils d'analyse statique y trouvent plus de bugs.
+    - **Préférez la bibliothèque standard** (`ipaddress`, `json`, `hashlib`, `secrets`) à une validation
+      « maison » à base de découpage de chaînes.
+  en: |
+    - **Fail closed**: in an access check or a validation, any error must lead to a denial.
+    - **Catch precise exceptions** (`ValueError`, `KeyError`) and let the others propagate: a visible bug
+      is better than a silent one.
+    - **Allow-lists rather than deny-lists**: compare against the set of what is permitted (`allowed`);
+      everything else is suspicious by default.
+    - **Short functions with type hints and a docstring**: they are easy to test and static analysis tools
+      find more bugs in them.
+    - **Prefer the standard library** (`ipaddress`, `json`, `hashlib`, `secrets`) to a home-made
+      validation based on string splitting.
+
+exercise:
+  statement:
+    fr: |
+      Un scanner renvoie la liste suivante :
+
+      ```python
+      findings = [
+          {"host": "web-01", "cve": "CVE-2021-44228", "cvss": 10.0},
+          {"host": "web-01", "cve": "CVE-2023-48795", "cvss": 5.9},
+          {"host": "db-01", "cve": "CVE-2024-3094", "cvss": 10.0},
+          {"host": "db-01", "cve": "CVE-2023-44487", "cvss": 7.5},
+          {"host": "test-07", "cve": "CVE-2023-48795", "cvss": 5.9},
+      ]
+      ```
+
+      Écrivez une fonction `summarize(findings)` qui renvoie un dictionnaire contenant :
+
+      - `"hosts"` : le nombre d'hôtes distincts ;
+      - `"worst"` : pour chaque hôte, son score CVSS le plus élevé ;
+      - `"critical_hosts"` : la liste triée des hôtes ayant au moins un score supérieur ou égal à 9.0.
+
+      Affichez le résultat.
+    en: |
+      A scanner returns the following list:
+
+      ```python
+      findings = [
+          {"host": "web-01", "cve": "CVE-2021-44228", "cvss": 10.0},
+          {"host": "web-01", "cve": "CVE-2023-48795", "cvss": 5.9},
+          {"host": "db-01", "cve": "CVE-2024-3094", "cvss": 10.0},
+          {"host": "db-01", "cve": "CVE-2023-44487", "cvss": 7.5},
+          {"host": "test-07", "cve": "CVE-2023-48795", "cvss": 5.9},
+      ]
+      ```
+
+      Write a function `summarize(findings)` that returns a dictionary containing:
+
+      - `"hosts"`: the number of distinct hosts;
+      - `"worst"`: for each host, its highest CVSS score;
+      - `"critical_hosts"`: the sorted list of hosts with at least one score greater than or equal to 9.0.
+
+      Print the result.
+  solution:
+    file: summarize.py
+    lang: python
+    code: |
+      def summarize(findings: list[dict]) -> dict:
+          """Aggregate scanner findings per host."""
+          worst: dict[str, float] = {}
+          for f in findings:
+              host = f["host"]
+              # Keep the highest score seen so far for this host
+              worst[host] = max(worst.get(host, 0.0), f["cvss"])
+
+          # A set comprehension removes duplicates automatically
+          critical = {f["host"] for f in findings if f["cvss"] >= 9.0}
+
+          return {
+              "hosts": len(worst),
+              "worst": worst,
+              "critical_hosts": sorted(critical),
+          }
+
+
+      findings = [
+          {"host": "web-01", "cve": "CVE-2021-44228", "cvss": 10.0},
+          {"host": "web-01", "cve": "CVE-2023-48795", "cvss": 5.9},
+          {"host": "db-01", "cve": "CVE-2024-3094", "cvss": 10.0},
+          {"host": "db-01", "cve": "CVE-2023-44487", "cvss": 7.5},
+          {"host": "test-07", "cve": "CVE-2023-48795", "cvss": 5.9},
+      ]
+
+      print(summarize(findings))
+    note:
+      fr: "Résultat : `{'hosts': 3, 'worst': {'web-01': 10.0, 'db-01': 10.0, 'test-07': 5.9}, 'critical_hosts': ['db-01', 'web-01']}`. Le dictionnaire `worst` sert à la fois à compter les hôtes et à mémoriser le pire score."
+      en: "Result: `{'hosts': 3, 'worst': {'web-01': 10.0, 'db-01': 10.0, 'test-07': 5.9}, 'critical_hosts': ['db-01', 'web-01']}`. The `worst` dictionary is used both to count hosts and to remember the worst score."
+
+quiz:
+  - q:
+      fr: "Quel conteneur choisir pour associer un nom d'hôte à son adresse IP ?"
+      en: "Which container should you choose to map a host name to its IP address?"
+    options:
+      fr: ["Une liste", "Un tuple", "Un dictionnaire", "Un ensemble"]
+      en: ["A list", "A tuple", "A dictionary", "A set"]
+    answer: 2
+    why:
+      fr: "Le dictionnaire associe une clé (le nom d'hôte) à une valeur (l'adresse) et permet d'y accéder directement par la clé."
+      en: "The dictionary maps a key (the host name) to a value (the address) and gives direct access through the key."
+  - q:
+      fr: "Que vaut `{22, 443, 3306} - {22, 443}` ?"
+      en: "What is the value of `{22, 443, 3306} - {22, 443}`?"
+    options:
+      fr: ["{3306}", "{22, 443}", "{22, 443, 3306}", "Une erreur"]
+      en: ["{3306}", "{22, 443}", "{22, 443, 3306}", "An error"]
+    answer: 0
+    why:
+      fr: "La soustraction d'ensembles garde les éléments du premier qui ne sont pas dans le second : ici le port ouvert mais non autorisé."
+      en: "Set subtraction keeps the items of the first set that are not in the second: here the port that is open but not allowed."
+  - q:
+      fr: "Que signifie « fail closed » pour un contrôle de sécurité ?"
+      en: "What does \"fail closed\" mean for a security check?"
+    options:
+      fr:
+        - "Le programme se ferme sans message"
+        - "En cas d'erreur, l'accès est accordé pour ne pas bloquer les utilisateurs"
+        - "Les erreurs sont écrites dans un fichier fermé"
+        - "En cas d'erreur, l'accès est refusé"
+      en:
+        - "The program closes without a message"
+        - "On error, access is granted so that users are not blocked"
+        - "Errors are written to a closed file"
+        - "On error, access is denied"
+    answer: 3
+    why:
+      fr: "Un contrôle qui échoue doit refuser. Sinon, il suffit à l'attaquant de provoquer l'erreur (une espace en trop, par exemple) pour passer."
+      en: "A check that fails must deny. Otherwise the attacker only needs to trigger the error (an extra space, for instance) to get through."
+  - q:
+      fr: "Pourquoi éviter `except:` sans nom d'exception ?"
+      en: "Why avoid `except:` without an exception name?"
+    options:
+      fr:
+        - "Parce que c'est plus lent"
+        - "Parce qu'il attrape aussi les bugs et erreurs inattendues, qui passent alors inaperçus"
+        - "Parce que ce n'est pas une syntaxe Python valide"
+        - "Parce qu'il n'attrape que `ValueError`"
+      en:
+        - "Because it is slower"
+        - "Because it also catches bugs and unexpected errors, which then go unnoticed"
+        - "Because it is not valid Python syntax"
+        - "Because it only catches `ValueError`"
+    answer: 1
+    why:
+      fr: "Un `except:` nu intercepte tout, y compris une faute de frappe dans un nom de variable. On attrape l'exception attendue et on laisse les autres remonter."
+      en: "A bare `except:` intercepts everything, including a typo in a variable name. Catch the expected exception and let the others propagate."
+  - q:
+      fr: "Que renvoie `server.get(\"owner\", \"unknown\")` si la clé `owner` n'existe pas ?"
+      en: "What does `server.get(\"owner\", \"unknown\")` return if the key `owner` does not exist?"
+    options:
+      fr: ["Une exception KeyError", "None", "La chaîne \"unknown\"", "Un dictionnaire vide"]
+      en: ["A KeyError exception", "None", "The string \"unknown\"", "An empty dictionary"]
+    answer: 2
+    why:
+      fr: "Le second argument de `get()` est la valeur renvoyée quand la clé est absente. Sans ce second argument, `get()` renverrait `None`."
+      en: "The second argument of `get()` is the value returned when the key is missing. Without that second argument, `get()` would return `None`."

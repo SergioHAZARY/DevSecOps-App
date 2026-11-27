@@ -1,0 +1,660 @@
+description:
+  fr: "Injection SQL : le code vulnérable et sa correction par requêtes paramétrées, côte à côte en Python, Node.js, PHP et Java."
+  en: "SQL injection: vulnerable code and its parameterized-query fix, side by side in Python, Node.js, PHP and Java."
+duration: 30
+
+intro:
+  fr: |
+    Une **injection SQL** (SQLi) se produit quand une application fabrique une requête SQL en **collant**
+    du texte fourni par l'utilisateur dans la requête. La base de données ne sait plus distinguer ce que
+    le développeur a écrit de ce que l'attaquant a tapé : les données deviennent du **code**.
+
+    Imaginez un guichet où l'on remplit un formulaire : « Remettre le colis à : ______ ». Si vous écrivez
+    « Bob », tout va bien. Si vous écrivez « Bob, et donner aussi le contenu du coffre », un employé qui lit
+    la phrase d'un bloc obéit. Une requête paramétrée, c'est un formulaire dont la case ne peut contenir
+    **qu'un nom**, jamais un ordre.
+
+    Dans cette leçon, vous exécutez l'attaque sur une base SQLite locale, puis vous comparez le code
+    **vulnérable** et le code **corrigé** dans quatre langages : Python, Node.js, PHP et Java. La correction
+    est la même partout, seule la syntaxe change.
+  en: |
+    A **SQL injection** (SQLi) happens when an application builds a SQL query by **gluing** user-supplied
+    text into the query. The database can no longer tell what the developer wrote from what the attacker
+    typed: data becomes **code**.
+
+    Picture a counter where you fill in a form: "Hand the parcel to: ______". If you write "Bob", all is
+    well. If you write "Bob, and also hand over the content of the safe", a clerk who reads the sentence as
+    a whole obeys. A parameterized query is a form whose box can hold **a name only**, never an order.
+
+    In this lesson you run the attack against a local SQLite database, then compare the **vulnerable** and
+    the **fixed** code in four languages: Python, Node.js, PHP and Java. The fix is the same everywhere,
+    only the syntax changes.
+
+sections:
+  - heading:
+      fr: "Comment l'attaque fonctionne"
+      en: "How the attack works"
+    body:
+      fr: |
+        Le code vulnérable construit la requête par concaténation :
+
+        ```sql
+        SELECT email, role FROM users WHERE email = '<saisie>' AND password_hash = '<saisie>'
+        ```
+
+        L'attaquant saisit `alice@example.com' --` comme e-mail. L'apostrophe **ferme** la chaîne, et `--`
+        met le reste de la ligne en commentaire. La base reçoit :
+
+        ```sql
+        SELECT email, role FROM users WHERE email = 'alice@example.com' --' AND password_hash = 'anything'
+        ```
+
+        Le contrôle du mot de passe a disparu. Les grandes familles d'injection :
+
+        | Technique | Principe | Exemple de charge utile (labo local) |
+        |---|---|---|
+        | Contournement | Modifier la condition `WHERE` | `' OR '1'='1` |
+        | `UNION` | Ajouter les lignes d'une autre table au résultat | `' UNION SELECT email, password_hash FROM users --` |
+        | Aveugle (*blind*) | Déduire les données d'une réponse vrai/faux ou d'un délai | `' AND (SELECT 1 FROM users WHERE role='admin')=1 --` |
+        | Requêtes empilées | Enchaîner une deuxième instruction | `'; DROP TABLE users; --` |
+
+        Ces charges utiles ne se testent que sur **votre** environnement : une base locale, un conteneur,
+        une application volontairement vulnérable.
+      en: |
+        The vulnerable code builds the query by concatenation:
+
+        ```sql
+        SELECT email, role FROM users WHERE email = '<input>' AND password_hash = '<input>'
+        ```
+
+        The attacker types `alice@example.com' --` as the e-mail. The quote **closes** the string, and `--`
+        turns the rest of the line into a comment. The database receives:
+
+        ```sql
+        SELECT email, role FROM users WHERE email = 'alice@example.com' --' AND password_hash = 'anything'
+        ```
+
+        The password check is gone. The main injection families:
+
+        | Technique | Principle | Example payload (local lab) |
+        |---|---|---|
+        | Bypass | Change the `WHERE` condition | `' OR '1'='1` |
+        | `UNION` | Append rows from another table to the result | `' UNION SELECT email, password_hash FROM users --` |
+        | Blind | Infer data from a true/false answer or a delay | `' AND (SELECT 1 FROM users WHERE role='admin')=1 --` |
+        | Stacked queries | Chain a second statement | `'; DROP TABLE users; --` |
+
+        These payloads are only ever tested against **your own** environment: a local database, a
+        container, a deliberately vulnerable application.
+  - heading:
+      fr: "La correction : la requête paramétrée, dans chaque langage"
+      en: "The fix: the parameterized query, in every language"
+    body:
+      fr: |
+        Avec une **requête paramétrée** (ou *prepared statement*), le texte SQL et les valeurs voyagent
+        **séparément**. Le moteur analyse d'abord la requête, avec ses marqueurs, puis reçoit les valeurs :
+        elles ne peuvent plus changer la structure de la requête, quel que soit leur contenu.
+
+        | Langage | Bibliothèque | Marqueur | Appel sûr |
+        |---|---|---|---|
+        | Python | `sqlite3` | `?` | `db.execute(sql, (email,))` |
+        | Python | `psycopg` (PostgreSQL) | `%s` | `cur.execute(sql, (email,))` |
+        | Node.js | `pg` (PostgreSQL) | `$1`, `$2` | `pool.query(sql, [email])` |
+        | Node.js | `mysql2` | `?` | `pool.execute(sql, [email])` |
+        | PHP | PDO | `?` ou `:email` | `$stmt = $pdo->prepare($sql); $stmt->execute([...])` |
+        | Java | JDBC | `?` | `PreparedStatement` + `setString(1, email)` |
+
+        Attention au piège de `psycopg` : `cur.execute(sql % email)` ou `cur.execute(f"...{email}")` sont
+        des concaténations. Le `%s` n'est un marqueur que si les valeurs sont passées en **deuxième argument**.
+
+        Échapper les apostrophes à la main (`replace("'", "''")`, `addslashes`) n'est **pas** une
+        correction : il existe toujours un encodage ou un contexte (nombre sans guillemets, `LIKE`,
+        jeu de caractères) qui passe à travers.
+      en: |
+        With a **parameterized query** (or *prepared statement*), the SQL text and the values travel
+        **separately**. The engine first parses the query with its placeholders, then receives the values:
+        they can no longer change the structure of the query, whatever they contain.
+
+        | Language | Library | Placeholder | Safe call |
+        |---|---|---|---|
+        | Python | `sqlite3` | `?` | `db.execute(sql, (email,))` |
+        | Python | `psycopg` (PostgreSQL) | `%s` | `cur.execute(sql, (email,))` |
+        | Node.js | `pg` (PostgreSQL) | `$1`, `$2` | `pool.query(sql, [email])` |
+        | Node.js | `mysql2` | `?` | `pool.execute(sql, [email])` |
+        | PHP | PDO | `?` or `:email` | `$stmt = $pdo->prepare($sql); $stmt->execute([...])` |
+        | Java | JDBC | `?` | `PreparedStatement` + `setString(1, email)` |
+
+        Beware of the `psycopg` trap: `cur.execute(sql % email)` or `cur.execute(f"...{email}")` are
+        concatenations. `%s` is only a placeholder when the values are passed as the **second argument**.
+
+        Escaping quotes by hand (`replace("'", "''")`, `addslashes`) is **not** a fix: there is always an
+        encoding or a context (unquoted number, `LIKE`, character set) that slips through.
+  - heading:
+      fr: "Ce qu'un marqueur ne peut pas remplacer"
+      en: "What a placeholder cannot replace"
+    body:
+      fr: |
+        Un marqueur remplace une **valeur**, jamais un morceau de syntaxe. On ne peut pas paramétrer :
+
+        - un **nom de table ou de colonne** (`ORDER BY ?` trie sur une constante, pas sur la colonne) ;
+        - un **mot-clé** (`ASC` / `DESC`) ;
+        - une **liste de taille variable** (`IN (?)` ne reçoit qu'une valeur).
+
+        La solution est une **liste d'autorisation** (*allow-list*) : le client envoie une clé (`"price"`),
+        le serveur choisit lui-même le fragment SQL dans un dictionnaire. Pour `IN`, on génère autant de
+        marqueurs que de valeurs (`IN (?, ?, ?)`).
+
+        Les ORM (SQLAlchemy, Sequelize, Prisma, Eloquent, Hibernate) paramètrent pour vous, **tant que
+        vous n'utilisez pas leurs fonctions de SQL brut** avec une chaîne concaténée : `text(f"...")`,
+        `sequelize.query("..." + x)`, `$queryRawUnsafe`, `DB::raw`, ou une requête JPQL construite avec `+`
+        restent injectables.
+      en: |
+        A placeholder stands for a **value**, never for a piece of syntax. You cannot parameterize:
+
+        - a **table or column name** (`ORDER BY ?` sorts on a constant, not on the column);
+        - a **keyword** (`ASC` / `DESC`);
+        - a **variable-length list** (`IN (?)` receives a single value).
+
+        The answer is an **allow-list**: the client sends a key (`"price"`), the server itself picks the
+        SQL fragment from a dictionary. For `IN`, generate as many placeholders as there are values
+        (`IN (?, ?, ?)`).
+
+        ORMs (SQLAlchemy, Sequelize, Prisma, Eloquent, Hibernate) parameterize for you, **as long as you
+        do not use their raw SQL functions** with a concatenated string: `text(f"...")`,
+        `sequelize.query("..." + x)`, `$queryRawUnsafe`, `DB::raw`, or a JPQL query built with `+` are
+        still injectable.
+  - heading:
+      fr: "Détection dans le pipeline DevSecOps"
+      en: "Detection in the DevSecOps pipeline"
+    body:
+      fr: |
+        L'injection SQL est l'une des failles que les outils automatiques détectent le mieux :
+
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST (analyse statique) | Semgrep (`semgrep scan --config p/owasp-top-ten`), Bandit (règle `B608`), CodeQL (`py/sql-injection`, `js/sql-injection`, `java/sql-injection`) | Une entrée utilisateur qui atteint une requête construite par concaténation |
+        | DAST (analyse dynamique) | OWASP ZAP (scan actif), sqlmap | L'application en marche répond différemment aux charges utiles |
+        | Revue de code | Recherche de `createStatement()`, des f-strings et des gabarits de chaîne contenant du SQL | Les motifs à risque que l'outil aurait ignorés |
+        | Exécution | Compte SQL à privilèges minimaux, WAF | Limite les dégâts si une injection passe |
+
+        sqlmap automatise l'exploitation : `sqlmap -u "http://localhost:5000/products?q=test" --batch`.
+        Ne le lancez **que** sur une application que vous êtes autorisé à tester.
+      en: |
+        SQL injection is one of the flaws automated tools detect best:
+
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | SAST (static analysis) | Semgrep (`semgrep scan --config p/owasp-top-ten`), Bandit (rule `B608`), CodeQL (`py/sql-injection`, `js/sql-injection`, `java/sql-injection`) | User input reaching a query built by concatenation |
+        | DAST (dynamic analysis) | OWASP ZAP (active scan), sqlmap | The running application answers differently to payloads |
+        | Code review | Searching for `createStatement()`, f-strings and template literals containing SQL | Risky patterns the tool may have missed |
+        | Runtime | Least-privilege SQL account, WAF | Limits the damage if an injection gets through |
+
+        sqlmap automates exploitation: `sqlmap -u "http://localhost:5000/products?q=test" --batch`.
+        Run it **only** against an application you are authorised to test.
+
+examples:
+  - title:
+      fr: "Python (sqlite3) - vulnérable : contournement de login et extraction par UNION"
+      en: "Python (sqlite3) - vulnerable: login bypass and UNION extraction"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.executescript("""
+          CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT);
+          INSERT INTO users (email, password_hash, role) VALUES
+              ('alice@example.com', 'hash-of-alice', 'admin'),
+              ('bob@example.com',   'hash-of-bob',   'user');
+          CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL);
+          INSERT INTO products (name, price) VALUES ('Keyboard', 49.9), ('Mouse', 19.9);
+      """)
+
+
+      def login(email, password_hash):
+          # VULNERABLE: both values are concatenated into the SQL text
+          sql = ("SELECT email, role FROM users WHERE email = '" + email +
+                 "' AND password_hash = '" + password_hash + "'")
+          return db.execute(sql).fetchone()
+
+
+      def search_products(term):
+          # VULNERABLE: an f-string is still concatenation
+          sql = f"SELECT name, price FROM products WHERE name LIKE '%{term}%'"
+          return db.execute(sql).fetchall()
+
+
+      print("1. Normal login     :", login("bob@example.com", "hash-of-bob"))
+      print("2. Wrong password   :", login("bob@example.com", "wrong"))
+      # Payload 1: the quote closes the string, -- turns the password check into a comment
+      print("3. Login bypass     :", login("alice@example.com' --", "anything"))
+      print("4. Normal search    :", search_products("Key"))
+      # Payload 2: UNION appends the rows of another table to the result
+      print("5. UNION extraction :", search_products("zzz' UNION SELECT email, password_hash FROM users --"))
+    output: |
+      1. Normal login     : ('bob@example.com', 'user')
+      2. Wrong password   : None
+      3. Login bypass     : ('alice@example.com', 'admin')
+      4. Normal search    : [('Keyboard', 49.9)]
+      5. UNION extraction : [('alice@example.com', 'hash-of-alice'), ('bob@example.com', 'hash-of-bob')]
+    note:
+      fr: "Cliquez sur Run. Ligne 3 : l'attaquant est connecté comme **admin** sans mot de passe. Ligne 5 : une simple recherche de produits renvoie les e-mails et les hachés de la table `users`."
+      en: "Press Run. Line 3: the attacker is logged in as **admin** without a password. Line 5: a plain product search returns the e-mails and hashes of the `users` table."
+
+  - title:
+      fr: "Python (sqlite3) - corrigé : marqueurs `?` et liste d'autorisation pour le tri"
+      en: "Python (sqlite3) - fixed: `?` placeholders and an allow-list for sorting"
+    file: app_fixed.py
+    lang: python
+    kind: secure
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.executescript("""
+          CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT);
+          INSERT INTO users (email, password_hash, role) VALUES
+              ('alice@example.com', 'hash-of-alice', 'admin'),
+              ('bob@example.com',   'hash-of-bob',   'user');
+          CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL);
+          INSERT INTO products (name, price) VALUES ('Keyboard', 49.9), ('Mouse', 19.9);
+      """)
+
+      # Column names cannot be bound as parameters: they go through an allow-list
+      SORTABLE = {"name": "name", "price": "price"}
+
+
+      def login(email, password_hash):
+          # FIXED: the SQL text is constant, the values travel separately
+          sql = "SELECT email, role FROM users WHERE email = ? AND password_hash = ?"
+          return db.execute(sql, (email, password_hash)).fetchone()
+
+
+      def search_products(term, sort="name"):
+          column = SORTABLE.get(sort, "name")  # unknown value -> safe default
+          # The % wildcards belong to the VALUE, not to the SQL text
+          sql = f"SELECT name, price FROM products WHERE name LIKE ? ORDER BY {column}"
+          return db.execute(sql, (f"%{term}%",)).fetchall()
+
+
+      print("1. Normal login     :", login("bob@example.com", "hash-of-bob"))
+      print("2. Wrong password   :", login("bob@example.com", "wrong"))
+      print("3. Login bypass     :", login("alice@example.com' --", "anything"))
+      print("4. Normal search    :", search_products("Key"))
+      print("5. UNION extraction :", search_products("zzz' UNION SELECT email, password_hash FROM users --"))
+      print("6. Sort injection   :", search_products("o", sort="price; DROP TABLE users"))
+
+      # With PostgreSQL and psycopg 3 the idea is identical, only the placeholder changes:
+      #   cur.execute("SELECT email, role FROM users WHERE email = %s", (email,))
+    output: |
+      1. Normal login     : ('bob@example.com', 'user')
+      2. Wrong password   : None
+      3. Login bypass     : None
+      4. Normal search    : [('Keyboard', 49.9)]
+      5. UNION extraction : []
+      6. Sort injection   : [('Keyboard', 49.9), ('Mouse', 19.9)]
+    note:
+      fr: "Les mêmes charges utiles sont maintenant de simples chaînes : la base cherche un e-mail qui s'appelle littéralement `alice@example.com' --`. Le f-string restant ne contient que `column`, une valeur choisie par le serveur dans `SORTABLE`."
+      en: "The same payloads are now plain strings: the database looks for an e-mail literally named `alice@example.com' --`. The remaining f-string only contains `column`, a value picked by the server from `SORTABLE`."
+
+  - title:
+      fr: "Node.js (Express + pg) - vulnérable puis corrigé"
+      en: "Node.js (Express + pg) - vulnerable then fixed"
+    file: server.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const { Pool } = require("pg");
+
+      const app = express();
+      // Connection settings come from PGHOST, PGUSER, PGPASSWORD, PGDATABASE
+      const pool = new Pool();
+
+      // ---------- VULNERABLE ----------
+      // A template literal is concatenation: ?email=x' OR '1'='1 returns every user
+      app.get("/vulnerable/users", async (req, res) => {
+        const sql = `SELECT id, email FROM users WHERE email = '${req.query.email}'`;
+        const { rows } = await pool.query(sql);
+        res.json(rows);
+      });
+
+      // ---------- FIXED ----------
+      const SORTABLE = { email: "email", created: "created_at" };
+
+      app.get("/users", async (req, res) => {
+        // ?email[]=a&email[]=b would give an array: accept strings only
+        if (typeof req.query.email !== "string") {
+          return res.status(400).json({ error: "email must be a string" });
+        }
+        const column = SORTABLE[req.query.sort] ?? "email"; // allow-list for identifiers
+
+        // $1 is a bind parameter: pg sends the SQL text and the value separately
+        const { rows } = await pool.query(
+          `SELECT id, email FROM users WHERE email = $1 ORDER BY ${column}`,
+          [req.query.email],
+        );
+        res.json(rows);
+      });
+
+      // Same fix with MySQL and the mysql2 driver (placeholder ?):
+      //   const [rows] = await pool.execute("SELECT id, email FROM users WHERE email = ?", [email]);
+
+      app.listen(3000);
+    output: |
+      $ curl "http://localhost:3000/vulnerable/users?email=x'%20OR%20'1'='1"
+      [{"id":1,"email":"alice@example.com"},{"id":2,"email":"bob@example.com"}]
+
+      $ curl "http://localhost:3000/users?email=x'%20OR%20'1'='1"
+      []
+    note:
+      fr: "Avec `pg`, le marqueur est `$1`, `$2`... et les valeurs sont dans un tableau. Le contrôle `typeof` compte aussi : Express transforme `?email[]=a` en tableau, et certains pilotes (comme `mysql2` avec `query()`) développent les objets en fragments SQL."
+      en: "With `pg`, the placeholder is `$1`, `$2`... and the values go in an array. The `typeof` check matters too: Express turns `?email[]=a` into an array, and some drivers (such as `mysql2` with `query()`) expand objects into SQL fragments."
+
+  - title:
+      fr: "PHP (PDO) - vulnérable puis corrigé"
+      en: "PHP (PDO) - vulnerable then fixed"
+    file: users.php
+    lang: php
+    kind: secure
+    code: |
+      <?php
+      declare(strict_types=1);
+
+      $pdo = new PDO(
+          'mysql:host=127.0.0.1;dbname=shop;charset=utf8mb4',
+          getenv('DB_USER'),
+          getenv('DB_PASSWORD'),
+          [
+              PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+              PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+              // Real server-side prepared statements instead of client-side emulation
+              PDO::ATTR_EMULATE_PREPARES => false,
+          ]
+      );
+
+      // ---------- VULNERABLE ----------
+      // The variable is interpolated inside the double-quoted SQL string
+      function findUserVulnerable(PDO $pdo, string $email): array
+      {
+          return $pdo->query("SELECT id, email FROM users WHERE email = '$email'")->fetchAll();
+      }
+
+      // ---------- FIXED ----------
+      function findUser(PDO $pdo, string $email): array
+      {
+          // prepare() sends the query with a named placeholder, execute() sends the value
+          $stmt = $pdo->prepare('SELECT id, email FROM users WHERE email = :email');
+          $stmt->execute(['email' => $email]);
+          return $stmt->fetchAll();
+      }
+
+      function listUsers(PDO $pdo, string $sort): array
+      {
+          // Identifiers cannot be bound: map the request value to a known column
+          $columns = ['email' => 'email', 'created' => 'created_at'];
+          $column = $columns[$sort] ?? 'email';
+          return $pdo->query("SELECT id, email FROM users ORDER BY $column")->fetchAll();
+      }
+
+      $email = $_GET['email'] ?? '';
+      if (!is_string($email)) {
+          http_response_code(400);
+          exit('email must be a string');
+      }
+
+      header('Content-Type: application/json');
+      echo json_encode(findUser($pdo, $email));
+    note:
+      fr: "`prepare()` + `execute()` remplace `query()` avec interpolation. `addslashes()` ou `mysqli_real_escape_string()` ne sont pas des corrections fiables : seule la séparation requête / valeurs l'est. Les frameworks (Laravel Eloquent, Doctrine) utilisent PDO de cette façon."
+      en: "`prepare()` + `execute()` replaces `query()` with interpolation. `addslashes()` or `mysqli_real_escape_string()` are not reliable fixes: only separating the query from the values is. Frameworks (Laravel Eloquent, Doctrine) use PDO this way."
+
+  - title:
+      fr: "Java (JDBC) - `Statement` vulnérable puis `PreparedStatement`"
+      en: "Java (JDBC) - vulnerable `Statement` then `PreparedStatement`"
+    file: UserRepository.java
+    lang: java
+    kind: secure
+    code: |
+      import java.sql.Connection;
+      import java.sql.PreparedStatement;
+      import java.sql.ResultSet;
+      import java.sql.SQLException;
+      import java.sql.Statement;
+      import java.util.ArrayList;
+      import java.util.List;
+
+      public class UserRepository {
+
+          private final Connection connection;
+
+          public UserRepository(Connection connection) {
+              this.connection = connection;
+          }
+
+          // ---------- VULNERABLE ----------
+          // String concatenation + Statement: the input is parsed as SQL
+          public List<String> findByEmailVulnerable(String email) throws SQLException {
+              String sql = "SELECT email FROM users WHERE email = '" + email + "'";
+              List<String> result = new ArrayList<>();
+              try (Statement st = connection.createStatement();
+                   ResultSet rs = st.executeQuery(sql)) {
+                  while (rs.next()) {
+                      result.add(rs.getString("email"));
+                  }
+              }
+              return result;
+          }
+
+          // ---------- FIXED ----------
+          // PreparedStatement: the query is compiled first, the value is bound afterwards
+          public List<String> findByEmail(String email) throws SQLException {
+              String sql = "SELECT email FROM users WHERE email = ?";
+              List<String> result = new ArrayList<>();
+              try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                  ps.setString(1, email); // parameter indexes start at 1
+                  try (ResultSet rs = ps.executeQuery()) {
+                      while (rs.next()) {
+                          result.add(rs.getString("email"));
+                      }
+                  }
+              }
+              return result;
+          }
+      }
+    note:
+      fr: "Un `PreparedStatement` construit avec `+` reste vulnérable : c'est le `?` et `setString()` qui protègent, pas le nom de la classe. Avec JPA, utilisez de même `:email` et `setParameter(\"email\", email)` au lieu de concaténer dans la requête JPQL."
+      en: "A `PreparedStatement` built with `+` is still vulnerable: the `?` and `setString()` protect you, not the class name. With JPA, likewise use `:email` and `setParameter(\"email\", email)` instead of concatenating into the JPQL query."
+
+mistake:
+  fr: |
+    **Croire qu'un filtre ou un ORM suffit, et concaténer « juste cette fois ».**
+
+    Les injections qui arrivent en production ne sont presque jamais dans le formulaire de connexion,
+    déjà relu dix fois. Elles sont dans le `ORDER BY` d'un tableau, dans un export CSV, dans une requête
+    de reporting écrite en SQL brut « parce que l'ORM ne savait pas le faire ». Supprimer les apostrophes,
+    bloquer le mot `UNION` ou compter sur un WAF ne corrige rien : la règle est **zéro concaténation de
+    donnée externe dans du SQL**, y compris pour les valeurs venant de votre propre base (injection de
+    second ordre).
+  en: |
+    **Believing a filter or an ORM is enough, and concatenating "just this once".**
+
+    Injections that reach production are almost never in the login form, already reviewed ten times.
+    They are in the `ORDER BY` of a table, in a CSV export, in a reporting query written in raw SQL
+    "because the ORM could not do it". Stripping quotes, blocking the word `UNION` or relying on a WAF
+    fixes nothing: the rule is **zero concatenation of external data into SQL**, including for values
+    that come from your own database (second-order injection).
+
+bestPractice:
+  fr: |
+    - **Requêtes paramétrées partout**, sans exception, y compris dans les scripts internes et les tâches planifiées.
+    - **Liste d'autorisation** pour tout ce qui n'est pas une valeur : colonnes de tri, noms de table, sens du tri.
+    - **Moindre privilège** : le compte SQL de l'application n'a ni `DROP`, ni `GRANT`, ni accès aux autres schémas.
+    - **SAST bloquant** dans la CI (Semgrep, Bandit `B608`, CodeQL) : une concaténation SQL fait échouer la pull request.
+    - **DAST** sur l'environnement de test (ZAP, sqlmap) pour vérifier ce que l'analyse statique n'a pas vu.
+    - **Messages d'erreur génériques** : jamais d'erreur SQL brute renvoyée au client, elle guide l'attaquant.
+  en: |
+    - **Parameterized queries everywhere**, no exception, including internal scripts and scheduled jobs.
+    - **Allow-list** for everything that is not a value: sort columns, table names, sort direction.
+    - **Least privilege**: the application's SQL account has no `DROP`, no `GRANT`, no access to other schemas.
+    - **Blocking SAST** in CI (Semgrep, Bandit `B608`, CodeQL): a SQL concatenation fails the pull request.
+    - **DAST** on the test environment (ZAP, sqlmap) to verify what static analysis did not see.
+    - **Generic error messages**: never return a raw SQL error to the client, it guides the attacker.
+
+exercise:
+  statement:
+    fr: |
+      La fonction ci-dessous liste les commandes d'un client. Elle contient **trois** points d'injection.
+
+      ```python
+      def list_orders(db, customer, sort="date", direction="asc"):
+          sql = ("SELECT id, total, created_at FROM orders WHERE customer = '" + customer +
+                 "' ORDER BY " + sort + " " + direction)
+          return db.execute(sql).fetchall()
+      ```
+
+      1. Identifiez les trois points d'injection et dites lesquels peuvent être corrigés par un marqueur `?`.
+      2. Réécrivez la fonction : `sort` n'accepte que `date` (colonne `created_at`) ou `total`,
+         `direction` n'accepte que `asc` ou `desc`.
+      3. Vérifiez que `alice' OR '1'='1` ne renvoie plus rien.
+    en: |
+      The function below lists a customer's orders. It contains **three** injection points.
+
+      ```python
+      def list_orders(db, customer, sort="date", direction="asc"):
+          sql = ("SELECT id, total, created_at FROM orders WHERE customer = '" + customer +
+                 "' ORDER BY " + sort + " " + direction)
+          return db.execute(sql).fetchall()
+      ```
+
+      1. Identify the three injection points and say which ones can be fixed with a `?` placeholder.
+      2. Rewrite the function: `sort` only accepts `date` (column `created_at`) or `total`,
+         `direction` only accepts `asc` or `desc`.
+      3. Check that `alice' OR '1'='1` no longer returns anything.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.executescript("""
+          CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, total REAL, created_at TEXT);
+          INSERT INTO orders (customer, total, created_at) VALUES
+              ('alice', 120.0, '2026-01-10'),
+              ('alice',  35.5, '2026-02-02'),
+              ('bob',   999.0, '2026-01-15');
+      """)
+
+      # Allow-lists: the client sends a key, the server chooses the SQL fragment
+      SORT_COLUMNS = {"date": "created_at", "total": "total"}
+      DIRECTIONS = {"asc": "ASC", "desc": "DESC"}
+
+
+      def list_orders(customer, sort="date", direction="asc"):
+          column = SORT_COLUMNS.get(sort, "created_at")
+          order = DIRECTIONS.get(direction.lower(), "ASC")
+          # Value -> placeholder. Identifier and keyword -> allow-list.
+          sql = f"SELECT id, total, created_at FROM orders WHERE customer = ? ORDER BY {column} {order}"
+          return db.execute(sql, (customer,)).fetchall()
+
+
+      print(list_orders("alice", "total", "desc"))
+      print(list_orders("alice' OR '1'='1"))
+      print(list_orders("alice", "total; DROP TABLE orders", "desc"))
+    note:
+      fr: "`customer` est une valeur : marqueur `?`. `sort` (nom de colonne) et `direction` (mot-clé) ne peuvent pas être paramétrés : liste d'autorisation. Résultat attendu : les deux commandes d'Alice triées par total, puis `[]`, puis un tri par défaut sur `created_at`."
+      en: "`customer` is a value: `?` placeholder. `sort` (column name) and `direction` (keyword) cannot be parameterized: allow-list. Expected result: Alice's two orders sorted by total, then `[]`, then a default sort on `created_at`."
+
+quiz:
+  - q:
+      fr: "Pourquoi une requête paramétrée neutralise-t-elle l'injection SQL ?"
+      en: "Why does a parameterized query neutralise SQL injection?"
+    options:
+      fr:
+        - "Elle chiffre les valeurs avant de les envoyer à la base"
+        - "Le texte SQL et les valeurs sont transmis séparément : une valeur ne peut plus modifier la structure de la requête"
+        - "Elle supprime les apostrophes et les mots-clés dangereux de la saisie"
+        - "Elle exécute la requête avec un compte en lecture seule"
+      en:
+        - "It encrypts the values before sending them to the database"
+        - "The SQL text and the values are sent separately: a value can no longer change the structure of the query"
+        - "It strips quotes and dangerous keywords from the input"
+        - "It runs the query with a read-only account"
+    answer: 1
+    why:
+      fr: "La requête est analysée avec ses marqueurs avant que les valeurs n'arrivent : la saisie reste une donnée, quel que soit son contenu."
+      en: "The query is parsed with its placeholders before the values arrive: the input stays data, whatever it contains."
+  - q:
+      fr: "Quel est le marqueur de paramètre du pilote `pg` pour Node.js ?"
+      en: "What is the parameter placeholder of the `pg` driver for Node.js?"
+    options:
+      fr:
+        - "`?`"
+        - "`%s`"
+        - "`:name`"
+        - "`$1`, `$2`..."
+      en:
+        - "`?`"
+        - "`%s`"
+        - "`:name`"
+        - "`$1`, `$2`..."
+    answer: 3
+    why:
+      fr: "`pg` utilise les marqueurs numérotés de PostgreSQL (`$1`, `$2`) avec un tableau de valeurs ; `?` est celui de sqlite3, mysql2, PDO et JDBC, `%s` celui de psycopg."
+      en: "`pg` uses PostgreSQL's numbered placeholders (`$1`, `$2`) with an array of values; `?` is used by sqlite3, mysql2, PDO and JDBC, `%s` by psycopg."
+  - q:
+      fr: "Un utilisateur choisit la colonne de tri d'un tableau. Comment construire le `ORDER BY` sans risque ?"
+      en: "A user chooses the sort column of a table. How do you build the `ORDER BY` safely?"
+    options:
+      fr:
+        - "Avec une liste d'autorisation qui associe la valeur reçue à un nom de colonne connu"
+        - "Avec un marqueur : `ORDER BY ?`"
+        - "En supprimant les espaces et les points-virgules de la valeur"
+        - "En mettant la valeur entre apostrophes"
+      en:
+        - "With an allow-list that maps the received value to a known column name"
+        - "With a placeholder: `ORDER BY ?`"
+        - "By removing spaces and semicolons from the value"
+        - "By wrapping the value in quotes"
+    answer: 0
+    why:
+      fr: "Un marqueur ne remplace qu'une valeur : `ORDER BY ?` trierait sur une constante. Pour un identifiant, c'est le serveur qui choisit le fragment SQL dans une liste fermée."
+      en: "A placeholder only stands for a value: `ORDER BY ?` would sort on a constant. For an identifier, the server picks the SQL fragment from a closed list."
+  - q:
+      fr: "Laquelle de ces lignes Python (psycopg) est vulnérable ?"
+      en: "Which of these Python (psycopg) lines is vulnerable?"
+    options:
+      fr:
+        - "`cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,))`"
+        - "`cur.execute(\"SELECT * FROM users WHERE email = %s AND role = %s\", (email, role))`"
+        - "`cur.execute(\"SELECT * FROM users WHERE id = %s\" % user_id)`"
+        - "`cur.execute(\"SELECT * FROM users WHERE id = %(id)s\", {\"id\": user_id})`"
+      en:
+        - "`cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,))`"
+        - "`cur.execute(\"SELECT * FROM users WHERE email = %s AND role = %s\", (email, role))`"
+        - "`cur.execute(\"SELECT * FROM users WHERE id = %s\" % user_id)`"
+        - "`cur.execute(\"SELECT * FROM users WHERE id = %(id)s\", {\"id\": user_id})`"
+    answer: 2
+    why:
+      fr: "L'opérateur `%` de Python formate la chaîne **avant** l'appel : c'est une concaténation. Le `%s` n'est un marqueur que si les valeurs sont passées en deuxième argument de `execute()`."
+      en: "Python's `%` operator formats the string **before** the call: it is concatenation. `%s` is only a placeholder when the values are passed as the second argument of `execute()`."
+  - q:
+      fr: "Dans un pipeline CI, quel type d'outil signale une concaténation SQL sans lancer l'application ?"
+      en: "In a CI pipeline, which kind of tool reports a SQL concatenation without running the application?"
+    options:
+      fr:
+        - "Un scanner d'images de conteneurs"
+        - "Un outil DAST comme OWASP ZAP"
+        - "Un outil SAST comme Semgrep, Bandit ou CodeQL"
+        - "Un outil SCA comme Dependabot"
+      en:
+        - "A container image scanner"
+        - "A DAST tool such as OWASP ZAP"
+        - "A SAST tool such as Semgrep, Bandit or CodeQL"
+        - "An SCA tool such as Dependabot"
+    answer: 2
+    why:
+      fr: "Le SAST lit le code source et suit les données de l'entrée utilisateur jusqu'à la requête. Le DAST, lui, a besoin de l'application en marche ; le SCA analyse les dépendances."
+      en: "SAST reads the source code and follows data from user input to the query. DAST needs the running application; SCA analyses dependencies."

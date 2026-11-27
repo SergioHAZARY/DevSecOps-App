@@ -1,0 +1,576 @@
+description:
+  fr: "Décrire une application multi-conteneurs dans un fichier compose.yaml : services, réseaux, volumes, secrets, healthchecks, profils et commandes docker compose."
+  en: "Describe a multi-container application in a compose.yaml file: services, networks, volumes, secrets, healthchecks, profiles and the docker compose commands."
+duration: 35
+
+intro:
+  fr: |
+    À la leçon précédente, lancer une base et un client demandait déjà cinq commandes `docker run` pleines
+    d'options à ne pas oublier. Avec une API, une base, un cache et un proxy, cela devient ingérable.
+    **Docker Compose** résout ce problème : vous décrivez toute l'application dans **un fichier YAML**, et
+    une seule commande la démarre, toujours de la même manière.
+
+    C'est la différence entre dicter un plat à un cuisinier, geste après geste, et lui remettre une
+    **fiche recette** : la fiche se relit, se corrige, se partage, et se range dans Git avec le code.
+
+    Vous allez écrire un `compose.yaml` pour une API Python et sa base PostgreSQL, d'abord avec les erreurs
+    classiques, puis proprement : mot de passe fourni comme **secret**, base isolée sur un réseau interne,
+    démarrage ordonné grâce aux **healthchecks**, et outil d'administration activable par **profil**.
+  en: |
+    In the previous lesson, starting a database and a client already took five `docker run` commands full
+    of options not to forget. With an API, a database, a cache and a proxy, it becomes unmanageable.
+    **Docker Compose** solves this: you describe the whole application in **one YAML file**, and a single
+    command starts it, always the same way.
+
+    It is the difference between dictating a dish to a cook, one gesture at a time, and handing over a
+    **recipe card**: the card can be reread, fixed, shared, and stored in Git next to the code.
+
+    You will write a `compose.yaml` for a Python API and its PostgreSQL database, first with the classic
+    mistakes, then properly: password supplied as a **secret**, database isolated on an internal network,
+    ordered start-up thanks to **healthchecks**, and an administration tool enabled through a **profile**.
+
+sections:
+  - heading:
+      fr: "Anatomie d'un compose.yaml"
+      en: "Anatomy of a compose.yaml"
+    body:
+      fr: |
+        Le fichier s'appelle **`compose.yaml`** (l'ancien nom `docker-compose.yml` reste accepté) et la
+        commande est **`docker compose`**, avec une espace : c'est Compose v2, un plugin de la CLI Docker.
+        L'ancien binaire `docker-compose` (v1, en Python) n'est plus maintenu.
+
+        | Clé de premier niveau | Rôle |
+        |---|---|
+        | `name` | Nom du projet, préfixe des conteneurs, réseaux et volumes |
+        | `services` | Les conteneurs à lancer : un service = une image + sa configuration |
+        | `networks` | Les réseaux définis par l'utilisateur |
+        | `volumes` | Les volumes nommés |
+        | `secrets` | Les données sensibles, montées en fichiers dans `/run/secrets/` |
+
+        La ligne `version: "3.8"` que l'on trouve dans d'anciens tutoriels est **obsolète** : Compose v2
+        l'ignore et affiche un avertissement. Ne l'écrivez plus.
+
+        Chaque service est joignable par les autres sous son **nom de service** (`db`, `api`) : Compose
+        crée automatiquement un réseau avec DNS, comme vous l'avez fait à la main à la leçon 3.
+      en: |
+        The file is called **`compose.yaml`** (the older name `docker-compose.yml` is still accepted) and
+        the command is **`docker compose`**, with a space: this is Compose v2, a plugin of the Docker CLI.
+        The old `docker-compose` binary (v1, written in Python) is no longer maintained.
+
+        | Top-level key | Purpose |
+        |---|---|
+        | `name` | Project name, prefix of containers, networks and volumes |
+        | `services` | The containers to run: one service = one image + its configuration |
+        | `networks` | User-defined networks |
+        | `volumes` | Named volumes |
+        | `secrets` | Sensitive data, mounted as files under `/run/secrets/` |
+
+        The `version: "3.8"` line found in old tutorials is **obsolete**: Compose v2 ignores it and prints a
+        warning. Do not write it any more.
+
+        Every service is reachable by the others under its **service name** (`db`, `api`): Compose
+        automatically creates a network with DNS, as you did by hand in lesson 3.
+  - heading:
+      fr: "Configuration : variables, env_file et secrets"
+      en: "Configuration: variables, env_file and secrets"
+    body:
+      fr: |
+        Trois mécanismes se ressemblent mais ne servent pas à la même chose :
+
+        | Mécanisme | Ce qu'il fait | À utiliser pour |
+        |---|---|---|
+        | Fichier `.env` à côté du `compose.yaml` | Remplace les `${VARIABLE}` **dans le fichier Compose** | Versions d'images, ports, nom du projet |
+        | `environment:` / `env_file:` | Injecte des variables **dans le conteneur** | Configuration non sensible |
+        | `secrets:` | Monte un **fichier** dans `/run/secrets/NOM` | Mots de passe, clés, jetons |
+
+        Pourquoi un fichier plutôt qu'une variable d'environnement pour un mot de passe ? Parce que les
+        variables apparaissent dans `docker inspect`, sont héritées par tous les processus enfants, et
+        finissent régulièrement dans les journaux d'erreurs ou les rapports de plantage. Beaucoup d'images
+        officielles lisent un secret-fichier grâce au suffixe `_FILE` : `POSTGRES_PASSWORD_FILE`.
+      en: |
+        Three mechanisms look alike but do not serve the same purpose:
+
+        | Mechanism | What it does | Use it for |
+        |---|---|---|
+        | `.env` file next to `compose.yaml` | Replaces the `${VARIABLE}` placeholders **in the Compose file** | Image versions, ports, project name |
+        | `environment:` / `env_file:` | Injects variables **into the container** | Non-sensitive configuration |
+        | `secrets:` | Mounts a **file** under `/run/secrets/NAME` | Passwords, keys, tokens |
+
+        Why a file rather than an environment variable for a password? Because variables show up in
+        `docker inspect`, are inherited by every child process, and regularly end up in error logs or crash
+        reports. Many official images read a file-based secret thanks to the `_FILE` suffix:
+        `POSTGRES_PASSWORD_FILE`.
+  - heading:
+      fr: "Ordre de démarrage, healthchecks et profils"
+      en: "Start-up order, healthchecks and profiles"
+    body:
+      fr: |
+        `depends_on: [db]` garantit seulement que le conteneur `db` est **lancé** avant `api`, pas que
+        PostgreSQL est **prêt** à accepter des connexions. La forme longue règle ce problème :
+
+        | Condition | Compose attend que la dépendance... |
+        |---|---|
+        | `service_started` | ...soit démarrée (comportement par défaut) |
+        | `service_healthy` | ...ait un `healthcheck` au vert |
+        | `service_completed_successfully` | ...se soit terminée avec le code 0 (migrations, initialisation) |
+
+        Les **profils** rendent un service optionnel : un service marqué `profiles: ["tools"]` n'est pas
+        démarré par `docker compose up`, sauf si l'on ajoute `--profile tools` ou qu'on le lance
+        explicitement avec `docker compose run`.
+
+        | Commande | Rôle |
+        |---|---|
+        | `docker compose config` | Valider le fichier et afficher la configuration résolue |
+        | `docker compose up -d --wait` | Créer et démarrer, puis attendre que tout soit sain |
+        | `docker compose ps` / `logs -f` / `exec` | État, journaux, commande dans un service |
+        | `docker compose down` | Arrêter et supprimer conteneurs et réseaux (les volumes restent) |
+        | `docker compose down -v` | Idem **et supprime les volumes** : données perdues |
+      en: |
+        `depends_on: [db]` only guarantees that the `db` container is **started** before `api`, not that
+        PostgreSQL is **ready** to accept connections. The long form solves this:
+
+        | Condition | Compose waits until the dependency... |
+        |---|---|
+        | `service_started` | ...is started (default behaviour) |
+        | `service_healthy` | ...has a passing `healthcheck` |
+        | `service_completed_successfully` | ...has exited with code 0 (migrations, initialisation) |
+
+        **Profiles** make a service optional: a service marked `profiles: ["tools"]` is not started by
+        `docker compose up`, unless you add `--profile tools` or start it explicitly with
+        `docker compose run`.
+
+        | Command | Purpose |
+        |---|---|
+        | `docker compose config` | Validate the file and print the resolved configuration |
+        | `docker compose up -d --wait` | Create and start, then wait until everything is healthy |
+        | `docker compose ps` / `logs -f` / `exec` | Status, logs, command inside a service |
+        | `docker compose down` | Stop and remove containers and networks (volumes stay) |
+        | `docker compose down -v` | Same **and deletes the volumes**: data is lost |
+
+examples:
+  - title:
+      fr: "Un fichier Compose comme on en voit trop"
+      en: "A Compose file like too many out there"
+    file: compose.vulnerable.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # Problem 1: obsolete "version" key, ignored by Compose v2
+      version: "3"
+
+      services:
+        api:
+          # Problem 2: "latest" -> nobody knows which build is running
+          image: demo-api:latest
+          ports:
+            # Problem 3: published on 0.0.0.0, reachable from the whole network
+            - "8000:8000"
+          environment:
+            # Problem 4: the password is committed to Git with this file
+            DB_PASSWORD: SuperSecret123!
+          # Problem 5: only waits for the container to start, not for PostgreSQL to be ready
+          depends_on:
+            - db
+
+        db:
+          image: postgres
+          ports:
+            # Problem 6: the database is exposed to the Internet for no reason
+            - "5432:5432"
+          environment:
+            POSTGRES_PASSWORD: SuperSecret123!
+          # Problem 7: no volume -> "docker compose down" erases the data
+    note:
+      fr: "Sept défauts en vingt lignes, et pourtant `docker compose up` démarre sans erreur. L'API plantera une fois sur deux au démarrage parce que la base n'est pas encore prête."
+      en: "Seven flaws in twenty lines, and yet `docker compose up` starts without an error. The API will crash every other start because the database is not ready yet."
+
+  - title:
+      fr: "L'API : lire le mot de passe dans un fichier-secret"
+      en: "The API: reading the password from a secret file"
+    file: app.py
+    lang: python
+    kind: secure
+    code: |
+      # requirements.txt: flask==3.1.0, gunicorn==23.0.0, psycopg[binary]==3.2.3
+      import os
+      from pathlib import Path
+
+      import psycopg
+      from flask import Flask
+
+      app = Flask(__name__)
+
+
+      def db_password() -> str:
+          # The secret is a file mounted by Compose under /run/secrets, not an environment variable
+          return Path(os.environ["DB_PASSWORD_FILE"]).read_text(encoding="utf-8").strip()
+
+
+      def connect() -> psycopg.Connection:
+          return psycopg.connect(
+              host=os.environ["DB_HOST"],  # the Compose service name: "db"
+              dbname=os.environ["DB_NAME"],
+              user=os.environ["DB_USER"],
+              password=db_password(),
+              connect_timeout=3,
+          )
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"status": "ok"}
+
+
+      @app.get("/")
+      def index():
+          with connect() as conn:
+              version = conn.execute("SELECT version()").fetchone()[0]
+          return {"database": version}
+    note:
+      fr: "Le code ne contient ni mot de passe ni adresse IP : tout vient de l'environnement préparé par Compose. Le Dockerfile est celui de la leçon 2, avec `psycopg` ajouté dans `requirements.txt`."
+      en: "The code contains neither a password nor an IP address: everything comes from the environment prepared by Compose. The Dockerfile is the one from lesson 2, with `psycopg` added to `requirements.txt`."
+
+  - title:
+      fr: "Le compose.yaml corrigé"
+      en: "The fixed compose.yaml"
+    file: compose.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      name: demo
+
+      services:
+        api:
+          build: .
+          # ${APP_VERSION} is replaced from the .env file; ":?" makes Compose fail if it is missing
+          image: demo-api:${APP_VERSION:?set APP_VERSION in .env}
+          env_file:
+            - app.env # non-sensitive settings only: DB_HOST, DB_NAME, DB_USER
+          environment:
+            DB_PASSWORD_FILE: /run/secrets/db_password
+          secrets:
+            - db_password
+          ports:
+            - "127.0.0.1:8000:8000" # loopback only
+          depends_on:
+            db:
+              condition: service_healthy # wait for PostgreSQL to accept connections
+          networks:
+            - frontend
+            - backend
+          restart: unless-stopped
+
+        db:
+          image: postgres:17-alpine
+          environment:
+            POSTGRES_USER: app
+            POSTGRES_DB: app
+            POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+          secrets:
+            - db_password
+          volumes:
+            - pgdata:/var/lib/postgresql/data
+          healthcheck:
+            test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U app -d app"]
+            interval: 5s
+            timeout: 3s
+            retries: 10
+            start_period: 10s
+          networks:
+            - backend # no "ports:" at all: only the api can reach the database
+          restart: unless-stopped
+
+        psql:
+          image: postgres:17-alpine
+          profiles: ["tools"] # not started by "up": run it on demand
+          entrypoint: ["psql", "-h", "db", "-U", "app", "app"]
+          networks:
+            - backend
+
+      networks:
+        frontend:
+        backend:
+          internal: true # no route to the outside world
+
+      volumes:
+        pgdata:
+
+      secrets:
+        db_password:
+          file: ./secrets/db_password.txt # listed in .gitignore and .dockerignore
+    note:
+      fr: "Comparez avec la version vulnérable : plus de `version:`, des tags précis, un seul port publié et sur `127.0.0.1`, un secret-fichier, un volume, et une base placée sur un réseau `internal` que seule l'API peut atteindre."
+      en: "Compare with the vulnerable version: no more `version:`, precise tags, a single published port and on `127.0.0.1`, a file-based secret, a volume, and a database placed on an `internal` network only the API can reach."
+
+  - title:
+      fr: "Préparer la configuration et démarrer la stack"
+      en: "Prepare the configuration and start the stack"
+    file: up.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # .env: read by Compose itself to fill ${APP_VERSION} in compose.yaml
+      echo 'APP_VERSION=1.1.0' > .env
+
+      # app.env: injected into the api container by "env_file:" (nothing secret in here)
+      printf 'DB_HOST=db\nDB_NAME=app\nDB_USER=app\n' > app.env
+
+      # The secret: generated, never typed, never committed.
+      # Compose bind-mounts the file with its host permissions: the container user (UID 10001) must be
+      # able to read it, and the 0700 directory keeps the other users of the host out.
+      install -d -m 700 secrets
+      openssl rand -base64 24 > secrets/db_password.txt
+      chmod 644 secrets/db_password.txt
+      printf 'secrets/\n.env\n' >> .gitignore
+
+      # Validate the file before starting anything
+      docker compose config --quiet && echo "compose.yaml is valid"
+
+      # Build the image, start everything in the background and wait for the healthchecks
+      docker compose up -d --build --wait
+
+      docker compose ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}'
+      curl -s http://127.0.0.1:8000/
+    output: |
+      compose.yaml is valid
+      [+] Running 5/5
+       ✔ Network demo_frontend  Created
+       ✔ Network demo_backend   Created
+       ✔ Volume "demo_pgdata"   Created
+       ✔ Container demo-db-1    Healthy
+       ✔ Container demo-api-1   Healthy
+      SERVICE   STATUS                    PORTS
+      api       Up 14 seconds (healthy)   127.0.0.1:8000->8000/tcp
+      db        Up 20 seconds (healthy)   5432/tcp
+      {"database":"PostgreSQL 17.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 14.2.0) 14.2.0, 64-bit"}
+    note:
+      fr: "La base affiche `5432/tcp` sans flèche : le port existe dans le réseau Docker mais n'est pas publié sur l'hôte. Le service `psql` n'apparaît pas : son profil n'est pas activé."
+      en: "The database shows `5432/tcp` without an arrow: the port exists inside the Docker network but is not published on the host. The `psql` service does not appear: its profile is not enabled."
+
+  - title:
+      fr: "Exploiter la stack au quotidien"
+      en: "Operating the stack day to day"
+    file: operate.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Follow the logs of one service (Ctrl+C to quit); without a name: all services
+      docker compose logs --tail 20 -f api
+
+      # Run a command in a running service
+      docker compose exec db pg_isready -U app -d app
+
+      # Start the on-demand tool from the "tools" profile (asks for the password, \q to quit)
+      docker compose run --rm psql
+
+      # After editing compose.yaml or the code: only the changed services are recreated
+      docker compose up -d --build --wait
+
+      # Stop and remove containers and networks; the pgdata volume is kept
+      docker compose down
+
+      # DANGER: -v also deletes the named volumes, i.e. the database content
+      # docker compose down -v
+    note:
+      fr: "`docker compose up -d` est **idempotent** : relancé sans changement, il ne fait rien ; relancé après une modification, il ne recrée que ce qui a changé. Réservez `down -v` aux environnements de test."
+      en: "`docker compose up -d` is **idempotent**: run again with no change, it does nothing; run after a modification, it only recreates what changed. Keep `down -v` for test environments."
+
+mistake:
+  fr: |
+    **Mettre les mots de passe dans `compose.yaml` ou dans un fichier `.env` versionné.**
+
+    Le fichier Compose vit dans Git : tout secret qui y figure est lisible par chaque personne ayant accès
+    au dépôt, et reste dans l'historique même après correction. Le fichier `.env` n'est pas plus sûr s'il
+    est commité, ce qui arrive très souvent par un simple `git add .`.
+
+    Séparez clairement : la configuration **non sensible** dans `compose.yaml`, `.env` ou `env_file` ; les
+    **secrets** dans des fichiers hors de Git (ou fournis par un coffre-fort), déclarés dans `secrets:`.
+    Et si un secret a été commité une fois, considérez-le comme compromis : changez-le.
+  en: |
+    **Putting passwords in `compose.yaml` or in a versioned `.env` file.**
+
+    The Compose file lives in Git: any secret in it is readable by everyone with access to the repository,
+    and stays in the history even after a fix. The `.env` file is no safer when committed, which happens
+    very often through a simple `git add .`.
+
+    Separate clearly: **non-sensitive** configuration in `compose.yaml`, `.env` or `env_file`; **secrets**
+    in files kept out of Git (or supplied by a vault), declared under `secrets:`. And if a secret was
+    committed once, treat it as compromised: rotate it.
+
+bestPractice:
+  fr: |
+    - **`compose.yaml` sans clé `version:`**, et la commande `docker compose` (v2).
+    - **Tags précis** pour toutes les images, y compris la vôtre (`${APP_VERSION}`).
+    - **`secrets:`** pour tout ce qui est sensible ; `.env` et `secrets/` dans `.gitignore`.
+    - **`healthcheck` + `depends_on: condition: service_healthy`** au lieu de `sleep 10` dans un script.
+    - **Aucun `ports:` sur les services internes** ; un réseau `internal: true` pour les données.
+    - **`docker compose config --quiet`** dans la CI pour valider le fichier à chaque modification.
+    - **Profils** pour les outils d'administration : ils ne tournent pas en permanence.
+  en: |
+    - **`compose.yaml` without a `version:` key**, and the `docker compose` command (v2).
+    - **Precise tags** for every image, yours included (`${APP_VERSION}`).
+    - **`secrets:`** for anything sensitive; `.env` and `secrets/` in `.gitignore`.
+    - **`healthcheck` + `depends_on: condition: service_healthy`** instead of `sleep 10` in a script.
+    - **No `ports:` on internal services**; an `internal: true` network for data.
+    - **`docker compose config --quiet`** in CI to validate the file on every change.
+    - **Profiles** for administration tools: they do not run all the time.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez un cache Redis à la stack de la leçon. Écrivez un fichier `compose.yaml` **complet** qui
+      contient :
+
+      1. Un service `cache` basé sur `redis:7.4-alpine`, sans port publié, sur le réseau `backend`,
+         avec un volume `redis-data` monté sur `/data`.
+      2. Un `healthcheck` qui utilise `redis-cli ping`.
+      3. Un service `api` (image `demo-api:1.1.0`) qui ne démarre que lorsque `cache` est sain, publié sur
+         `127.0.0.1:8000`, avec la variable `REDIS_HOST=cache`.
+      4. Un réseau `backend` interne et un réseau `frontend`.
+    en: |
+      Add a Redis cache to the lesson's stack. Write a **complete** `compose.yaml` file containing:
+
+      1. A `cache` service based on `redis:7.4-alpine`, with no published port, on the `backend` network,
+         with a `redis-data` volume mounted on `/data`.
+      2. A `healthcheck` that uses `redis-cli ping`.
+      3. An `api` service (image `demo-api:1.1.0`) that only starts once `cache` is healthy, published on
+         `127.0.0.1:8000`, with the variable `REDIS_HOST=cache`.
+      4. An internal `backend` network and a `frontend` network.
+  solution:
+    file: compose.yaml
+    lang: yaml
+    code: |
+      name: demo-cache
+
+      services:
+        api:
+          image: demo-api:1.1.0
+          environment:
+            REDIS_HOST: cache # the service name is the DNS name
+          ports:
+            - "127.0.0.1:8000:8000"
+          depends_on:
+            cache:
+              condition: service_healthy
+          networks:
+            - frontend
+            - backend
+          restart: unless-stopped
+
+        cache:
+          image: redis:7.4-alpine
+          command: ["redis-server", "--appendonly", "yes"]
+          volumes:
+            - redis-data:/data
+          healthcheck:
+            # redis-cli prints PONG and exits 0 when the server answers
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+          networks:
+            - backend # no "ports:": reachable from the api only
+          restart: unless-stopped
+
+      networks:
+        frontend:
+        backend:
+          internal: true
+
+      volumes:
+        redis-data:
+    note:
+      fr: "Vérifiez avec `docker compose config --quiet`, puis `docker compose up -d --wait` : la commande ne rend la main que lorsque `cache` est `healthy` et `api` démarrée."
+      en: "Check with `docker compose config --quiet`, then `docker compose up -d --wait`: the command only returns once `cache` is `healthy` and `api` is started."
+
+quiz:
+  - q:
+      fr: "Que faut-il faire de la ligne `version: \"3.8\"` en tête d'un fichier Compose ?"
+      en: "What should be done with the `version: \"3.8\"` line at the top of a Compose file?"
+    options:
+      fr:
+        - "La supprimer : elle est obsolète et ignorée par Compose v2"
+        - "La passer à `version: \"4\"`"
+        - "La garder, elle est obligatoire"
+        - "La déplacer à la fin du fichier"
+      en:
+        - "Remove it: it is obsolete and ignored by Compose v2"
+        - "Bump it to `version: \"4\"`"
+        - "Keep it, it is mandatory"
+        - "Move it to the end of the file"
+    answer: 0
+    why:
+      fr: "La spécification Compose actuelle n'utilise plus de numéro de version ; Compose v2 affiche un avertissement lorsqu'il rencontre cette clé."
+      en: "The current Compose specification no longer uses a version number; Compose v2 prints a warning when it meets this key."
+  - q:
+      fr: "Que garantit `depends_on` avec `condition: service_healthy` ?"
+      en: "What does `depends_on` with `condition: service_healthy` guarantee?"
+    options:
+      fr:
+        - "Que les deux services partagent le même volume"
+        - "Que la dépendance redémarre en même temps que le service"
+        - "Que le service ne démarre qu'une fois le healthcheck de la dépendance réussi"
+        - "Que la dépendance est sur le même réseau"
+      en:
+        - "That both services share the same volume"
+        - "That the dependency restarts together with the service"
+        - "That the service only starts once the dependency's healthcheck passes"
+        - "That the dependency is on the same network"
+    answer: 2
+    why:
+      fr: "La forme courte attend seulement le lancement du conteneur ; `service_healthy` attend que l'application réponde réellement."
+      en: "The short form only waits for the container to start; `service_healthy` waits until the application actually answers."
+  - q:
+      fr: "Où un secret déclaré dans `secrets:` apparaît-il dans le conteneur ?"
+      en: "Where does a secret declared under `secrets:` appear inside the container?"
+    options:
+      fr:
+        - "Dans une variable d'environnement du même nom"
+        - "Dans un fichier sous `/run/secrets/`"
+        - "Dans les étiquettes (labels) de l'image"
+        - "Dans le fichier `/etc/passwd`"
+      en:
+        - "In an environment variable of the same name"
+        - "In a file under `/run/secrets/`"
+        - "In the image labels"
+        - "In the `/etc/passwd` file"
+    answer: 1
+    why:
+      fr: "Compose monte chaque secret comme un fichier `/run/secrets/NOM`, ce qui évite de l'exposer dans `docker inspect` ou les journaux."
+      en: "Compose mounts each secret as a file `/run/secrets/NAME`, which avoids exposing it in `docker inspect` or in logs."
+  - q:
+      fr: "Quelle commande supprime aussi les données de la base ?"
+      en: "Which command also deletes the database data?"
+    options:
+      fr:
+        - "`docker compose stop`"
+        - "`docker compose down`"
+        - "`docker compose restart`"
+        - "`docker compose down -v`"
+      en:
+        - "`docker compose stop`"
+        - "`docker compose down`"
+        - "`docker compose restart`"
+        - "`docker compose down -v`"
+    answer: 3
+    why:
+      fr: "L'option `-v` supprime les volumes nommés déclarés dans le fichier ; sans elle, `down` conserve les données."
+      en: "The `-v` option removes the named volumes declared in the file; without it, `down` keeps the data."
+  - q:
+      fr: "À quoi sert le fichier `.env` placé à côté de `compose.yaml` ?"
+      en: "What is the `.env` file next to `compose.yaml` for?"
+    options:
+      fr:
+        - "À stocker les secrets de production"
+        - "À remplacer les `${VARIABLE}` dans le fichier Compose"
+        - "À définir les healthchecks"
+        - "À lister les images à télécharger"
+      en:
+        - "Storing production secrets"
+        - "Replacing the `${VARIABLE}` placeholders in the Compose file"
+        - "Defining the healthchecks"
+        - "Listing the images to download"
+    answer: 1
+    why:
+      fr: "Compose lit `.env` pour l'interpolation des variables du fichier lui-même ; ce n'est ni un coffre à secrets ni, par défaut, un moyen d'injecter des variables dans les conteneurs."
+      en: "Compose reads `.env` to interpolate variables in the file itself; it is neither a secret store nor, by default, a way to inject variables into containers."

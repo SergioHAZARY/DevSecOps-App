@@ -1,0 +1,360 @@
+description:
+  fr: "Comprendre ce qu'est le DevSecOps, d'où il vient et pourquoi la sécurité doit être intégrée à chaque étape du cycle de développement."
+  en: "Understand what DevSecOps is, where it comes from and why security must be built into every step of the development lifecycle."
+duration: 15
+
+intro:
+  fr: |
+    **DevSecOps** est la contraction de **Dev**eloppement, **Sec**urité et **Op**ération**s**.
+    L'idée tient en une phrase : *la sécurité est l'affaire de tous, tout le temps*, et non le travail
+    d'une équipe isolée qui contrôle l'application juste avant la mise en production.
+
+    Imaginez la construction d'une maison. Dans le modèle classique, l'inspecteur passe quand la maison est
+    terminée : s'il découvre que les fondations sont fragiles, il faut tout casser. Avec DevSecOps, l'inspecteur
+    travaille **avec** les maçons, dès le premier jour, et la plupart des contrôles sont **automatisés**.
+
+    Dans cette leçon, vous allez voir la différence concrète entre un code livré « sans sécurité » et le même
+    code protégé par des contrôles automatiques.
+  en: |
+    **DevSecOps** is short for **Dev**elopment, **Sec**urity and **Op**eration**s**.
+    The idea fits in one sentence: *security is everyone's job, all the time*, not the task of an isolated
+    team that inspects the application right before it goes to production.
+
+    Picture building a house. In the classic model, the inspector shows up when the house is finished: if
+    the foundations turn out to be weak, everything must be torn down. With DevSecOps, the inspector works
+    **with** the builders from day one, and most checks are **automated**.
+
+    In this lesson you will see the concrete difference between code shipped "without security" and the same
+    code protected by automatic checks.
+
+sections:
+  - heading:
+      fr: "D'où vient le DevSecOps ?"
+      en: "Where does DevSecOps come from?"
+    body:
+      fr: |
+        L'informatique a connu trois grandes façons de livrer du logiciel :
+
+        | Époque | Modèle | Livraisons | Place de la sécurité |
+        |---|---|---|---|
+        | Années 1990-2000 | Cycle en V / Waterfall | 1 à 2 par an | Audit final, avant la production |
+        | Années 2010 | DevOps | Plusieurs par jour | Souvent oubliée : elle « ralentit » |
+        | Aujourd'hui | DevSecOps | Plusieurs par jour | Automatisée à chaque étape |
+
+        Le mouvement **DevOps** a rapproché développeurs et administrateurs système pour livrer plus vite.
+        Mais livrer 50 fois par jour avec un audit de sécurité manuel de deux semaines est impossible :
+        soit on contourne la sécurité, soit on bloque les livraisons. **DevSecOps** résout ce conflit en
+        transformant les contrôles de sécurité en **code** exécuté automatiquement dans le pipeline.
+      en: |
+        Software delivery has gone through three major models:
+
+        | Era | Model | Releases | Where security sits |
+        |---|---|---|---|
+        | 1990s-2000s | V-model / Waterfall | 1 to 2 per year | Final audit, before production |
+        | 2010s | DevOps | Several per day | Often forgotten: it "slows things down" |
+        | Today | DevSecOps | Several per day | Automated at every step |
+
+        The **DevOps** movement brought developers and system administrators together to ship faster.
+        But shipping 50 times a day with a two-week manual security audit is impossible: either security
+        gets bypassed, or releases get blocked. **DevSecOps** resolves that conflict by turning security
+        checks into **code** that runs automatically in the pipeline.
+  - heading:
+      fr: "Les trois piliers"
+      en: "The three pillars"
+    body:
+      fr: |
+        1. **Culture** : chaque membre de l'équipe est responsable de la sécurité de ce qu'il livre.
+        2. **Automatisation** : les contrôles (secrets, dépendances, analyse de code, scan d'images) tournent
+           à chaque `git push`, sans intervention humaine.
+        3. **Mesure** : on suit des indicateurs (nombre de vulnérabilités, délai de correction) pour s'améliorer.
+
+        Plus une faille est détectée tard, plus elle coûte cher : corriger une ligne pendant le développement
+        prend quelques minutes, alors que gérer une fuite de données en production mobilise toute l'entreprise.
+      en: |
+        1. **Culture**: every team member is responsible for the security of what they ship.
+        2. **Automation**: the checks (secrets, dependencies, code analysis, image scanning) run on every
+           `git push`, without human intervention.
+        3. **Measurement**: metrics (number of vulnerabilities, time to fix) are tracked in order to improve.
+
+        The later a flaw is found, the more it costs: fixing one line during development takes minutes,
+        whereas handling a data leak in production mobilises the whole company.
+
+examples:
+  - title:
+      fr: "Sans DevSecOps : un code qui « marche » mais qui est dangereux"
+      en: "Without DevSecOps: code that \"works\" but is dangerous"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import sqlite3
+
+      # Problem 1: a secret written in the source code ends up in Git forever
+      API_KEY = "sk_live_51H8xQ2LkP0aBcD3eFgH"
+
+      db = sqlite3.connect(":memory:")
+      db.execute("CREATE TABLE users (name TEXT, role TEXT)")
+      db.execute("INSERT INTO users VALUES ('alice', 'admin'), ('bob', 'user')")
+
+
+      def find_user(name):
+          # Problem 2: user input is glued into the SQL query (SQL injection)
+          query = "SELECT name, role FROM users WHERE name = '" + name + "'"
+          return db.execute(query).fetchall()
+
+
+      print("Normal request :", find_user("bob"))
+      print("Attack         :", find_user("x' OR '1'='1"))
+    output: |
+      Normal request : [('bob', 'user')]
+      Attack         : [('alice', 'admin'), ('bob', 'user')]
+    note:
+      fr: "Le programme fonctionne et passe les tests fonctionnels. Pourtant, il contient un secret en clair et une injection SQL : l'attaquant récupère **tous** les utilisateurs. Sans contrôle automatique, ces deux failles partent en production."
+      en: "The program works and passes functional tests. Yet it contains a clear-text secret and a SQL injection: the attacker retrieves **all** users. Without automated checks, both flaws go to production."
+
+  - title:
+      fr: "Avec DevSecOps : le même code, corrigé"
+      en: "With DevSecOps: the same code, fixed"
+    file: app_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+      import sqlite3
+
+      # Fix 1: the secret comes from the environment (injected by a vault or the CI)
+      API_KEY = os.environ.get("API_KEY", "")
+
+      db = sqlite3.connect(":memory:")
+      db.execute("CREATE TABLE users (name TEXT, role TEXT)")
+      db.execute("INSERT INTO users VALUES ('alice', 'admin'), ('bob', 'user')")
+
+
+      def find_user(name):
+          # Fix 2: parameterized query, the input is never interpreted as SQL
+          query = "SELECT name, role FROM users WHERE name = ?"
+          return db.execute(query, (name,)).fetchall()
+
+
+      print("Normal request :", find_user("bob"))
+      print("Attack         :", find_user("x' OR '1'='1"))
+    output: |
+      Normal request : [('bob', 'user')]
+      Attack         : []
+    note:
+      fr: "Deux lignes ont changé. Le secret n'est plus dans le code et la requête paramétrée (`?`) rend l'injection inoffensive : l'attaque ne renvoie plus rien."
+      en: "Two lines changed. The secret is no longer in the code and the parameterized query (`?`) makes the injection harmless: the attack now returns nothing."
+
+  - title:
+      fr: "L'automatisation : un pipeline qui bloque les failles à chaque push"
+      en: "Automation: a pipeline that blocks flaws on every push"
+    file: .github/workflows/security.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: security
+
+      on: [push, pull_request]
+
+      # Least privilege: the workflow can only read the repository
+      permissions:
+        contents: read
+
+      jobs:
+        secrets:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0 # full history, to find secrets in old commits
+            - name: Detect hard-coded secrets
+              uses: gitleaks/gitleaks-action@v2
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        sast:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - name: Static analysis with Bandit
+              run: |
+                pip install bandit
+                bandit -r . --severity-level medium
+    output: |
+      Run bandit -r . --severity-level medium
+      >> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+         Severity: Medium   Confidence: Low
+         Location: ./app_vulnerable.py:14:12
+      Error: Process completed with exit code 1.
+    note:
+      fr: "Ce workflow GitHub Actions s'exécute à chaque `push`. Gitleaks repère la clé d'API, Bandit repère l'injection SQL : le pipeline échoue et le code vulnérable ne peut pas être fusionné. C'est le cœur du DevSecOps."
+      en: "This GitHub Actions workflow runs on every `push`. Gitleaks spots the API key, Bandit spots the SQL injection: the pipeline fails and the vulnerable code cannot be merged. This is the heart of DevSecOps."
+
+mistake:
+  fr: |
+    **Croire que DevSecOps = acheter un outil.**
+
+    Installer un scanner ne suffit pas. Si personne ne lit les résultats, si le pipeline est configuré pour
+    « ne jamais échouer » ou si les développeurs n'ont pas été formés à corriger les alertes, la sécurité ne
+    progresse pas. DevSecOps est d'abord une **façon de travailler** ; les outils viennent ensuite.
+  en: |
+    **Believing that DevSecOps = buying a tool.**
+
+    Installing a scanner is not enough. If nobody reads the results, if the pipeline is configured to
+    "never fail", or if developers were never trained to fix the alerts, security does not improve.
+    DevSecOps is first a **way of working**; tools come second.
+
+bestPractice:
+  fr: |
+    - **Commencez petit** : un seul contrôle (la détection de secrets) vaut mieux que dix outils mal réglés.
+    - **Faites échouer le pipeline** sur les failles critiques, sinon les alertes seront ignorées.
+    - **Donnez un retour rapide** : un contrôle doit répondre en quelques minutes, directement dans la pull request.
+    - **Traitez la sécurité comme du code** : règles, politiques et configurations sont versionnées dans Git.
+  en: |
+    - **Start small**: a single check (secret detection) beats ten badly tuned tools.
+    - **Fail the pipeline** on critical flaws, otherwise alerts will be ignored.
+    - **Give fast feedback**: a check must answer within minutes, right inside the pull request.
+    - **Treat security as code**: rules, policies and configurations are versioned in Git.
+
+exercise:
+  statement:
+    fr: |
+      Le script ci-dessous contient **deux** problèmes de sécurité du même type que ceux vus dans la leçon.
+
+      ```python
+      import sqlite3
+
+      DB_PASSWORD = "SuperSecret123!"
+
+      def delete_user(db, user_id):
+          db.execute("DELETE FROM users WHERE id = " + user_id)
+      ```
+
+      1. Identifiez les deux problèmes.
+      2. Réécrivez le script pour les corriger.
+    en: |
+      The script below contains **two** security problems of the same kind as those seen in the lesson.
+
+      ```python
+      import sqlite3
+
+      DB_PASSWORD = "SuperSecret123!"
+
+      def delete_user(db, user_id):
+          db.execute("DELETE FROM users WHERE id = " + user_id)
+      ```
+
+      1. Identify both problems.
+      2. Rewrite the script to fix them.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import os
+      import sqlite3
+
+      # 1. The password is read from the environment instead of being hard-coded
+      DB_PASSWORD = os.environ["DB_PASSWORD"]
+
+
+      def delete_user(db, user_id):
+          # 2. Parameterized query: user_id can no longer change the SQL statement
+          db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    note:
+      fr: "Problème 1 : mot de passe en clair dans le code. Problème 2 : injection SQL par concaténation (avec `1 OR 1=1`, toute la table serait supprimée)."
+      en: "Problem 1: clear-text password in the code. Problem 2: SQL injection through concatenation (with `1 OR 1=1`, the whole table would be deleted)."
+
+quiz:
+  - q:
+      fr: "Que signifie DevSecOps ?"
+      en: "What does DevSecOps stand for?"
+    options:
+      fr:
+        - "Development, Security, Operations"
+        - "Developer Secure Options"
+        - "Device Security Operations"
+        - "Development Secrets Optimization"
+      en:
+        - "Development, Security, Operations"
+        - "Developer Secure Options"
+        - "Device Security Operations"
+        - "Development Secrets Optimization"
+    answer: 0
+    why:
+      fr: "DevSecOps réunit le développement, la sécurité et les opérations dans un même flux de travail."
+      en: "DevSecOps brings development, security and operations together in a single workflow."
+  - q:
+      fr: "Dans un modèle DevSecOps, qui est responsable de la sécurité ?"
+      en: "In a DevSecOps model, who is responsible for security?"
+    options:
+      fr:
+        - "Uniquement l'équipe sécurité"
+        - "Uniquement les administrateurs système"
+        - "Toute l'équipe, à chaque étape"
+        - "Le client final"
+      en:
+        - "Only the security team"
+        - "Only the system administrators"
+        - "The whole team, at every step"
+        - "The end customer"
+    answer: 2
+    why:
+      fr: "La sécurité devient une responsabilité partagée : développeurs, ops et sécurité y contribuent en continu."
+      en: "Security becomes a shared responsibility: developers, ops and security all contribute continuously."
+  - q:
+      fr: "Pourquoi un audit de sécurité uniquement manuel est-il incompatible avec DevOps ?"
+      en: "Why is a purely manual security audit incompatible with DevOps?"
+    options:
+      fr:
+        - "Parce que les auditeurs ne connaissent pas Linux"
+        - "Parce qu'il est trop lent face à des livraisons quotidiennes"
+        - "Parce qu'il coûte moins cher que les outils"
+        - "Parce qu'il est interdit par la loi"
+      en:
+        - "Because auditors do not know Linux"
+        - "Because it is too slow for daily releases"
+        - "Because it is cheaper than tools"
+        - "Because it is forbidden by law"
+    answer: 1
+    why:
+      fr: "On ne peut pas livrer plusieurs fois par jour avec un contrôle qui prend des semaines : il faut automatiser."
+      en: "You cannot ship several times a day with a check that takes weeks: it has to be automated."
+  - q:
+      fr: "Dans l'exemple corrigé, comment l'injection SQL est-elle neutralisée ?"
+      en: "In the fixed example, how is the SQL injection neutralised?"
+    options:
+      fr:
+        - "En chiffrant la base de données"
+        - "En supprimant la fonction de recherche"
+        - "En mettant le mot de passe dans une variable d'environnement"
+        - "En utilisant une requête paramétrée"
+      en:
+        - "By encrypting the database"
+        - "By removing the search function"
+        - "By putting the password in an environment variable"
+        - "By using a parameterized query"
+    answer: 3
+    why:
+      fr: "Avec le marqueur `?`, la valeur fournie par l'utilisateur est transmise séparément et n'est jamais interprétée comme du SQL."
+      en: "With the `?` placeholder, the user-supplied value is sent separately and is never interpreted as SQL."
+  - q:
+      fr: "Quelle affirmation décrit le mieux DevSecOps ?"
+      en: "Which statement best describes DevSecOps?"
+    options:
+      fr:
+        - "Un outil à installer sur le serveur de production"
+        - "Une certification obligatoire pour les développeurs"
+        - "Une culture soutenue par l'automatisation et la mesure"
+        - "Un remplacement de l'équipe sécurité par des robots"
+      en:
+        - "A tool to install on the production server"
+        - "A mandatory certification for developers"
+        - "A culture supported by automation and measurement"
+        - "A replacement of the security team by robots"
+    answer: 2
+    why:
+      fr: "DevSecOps est avant tout une façon de travailler ; les outils servent cette culture, ils ne la remplacent pas."
+      en: "DevSecOps is above all a way of working; tools serve that culture, they do not replace it."

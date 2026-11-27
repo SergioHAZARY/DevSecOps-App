@@ -1,0 +1,580 @@
+description:
+  fr: "Calculer des valeurs en HCL : opérateurs, conditions, fonctions intégrées, expressions `for`, `count`, `for_each` et blocs `dynamic`."
+  en: "Compute values in HCL: operators, conditionals, built-in functions, `for` expressions, `count`, `for_each` and `dynamic` blocks."
+duration: 30
+
+intro:
+  fr: |
+    Jusqu'ici, chaque argument recevait une valeur fixe. En réalité, on **calcule** presque tout : un nom
+    à partir d'un environnement, dix sous-réseaux à partir d'une seule plage d'adresses, une règle de
+    pare-feu par service. La partie droite d'un `=` s'appelle une **expression**.
+
+    HCL n'est pas un langage de programmation complet : pas de `while`, pas de fonctions à écrire
+    soi-même dans le langage. C'est plutôt un **tableur** : vous écrivez des formules (`=SOMME(...)`), le
+    tableur décide de l'ordre de calcul. Les « boucles » de HCL ne répètent pas des instructions, elles
+    **produisent des collections** ou **multiplient des blocs**.
+
+    Dans cette leçon vous allez tester des expressions dans `terraform console`, transformer des listes
+    avec `for`, créer plusieurs ressources avec `for_each`, et comprendre pourquoi `count` sur une liste
+    peut **détruire les mauvaises ressources**.
+  en: |
+    So far every argument received a fixed value. In practice, almost everything is **computed**: a name
+    from an environment, ten subnets from a single address range, one firewall rule per service. The
+    right-hand side of an `=` is called an **expression**.
+
+    HCL is not a full programming language: no `while`, no functions that you write yourself in the
+    language. It is closer to a **spreadsheet**: you write formulas (`=SUM(...)`) and the spreadsheet
+    decides the order of computation. HCL "loops" do not repeat instructions, they **produce
+    collections** or **multiply blocks**.
+
+    In this lesson you will try expressions in `terraform console`, transform lists with `for`, create
+    several resources with `for_each`, and understand why `count` over a list can **destroy the wrong
+    resources**.
+
+sections:
+  - heading:
+      fr: "Opérateurs, condition et fonctions intégrées"
+      en: "Operators, conditional and built-in functions"
+    body:
+      fr: |
+        Les opérateurs sont classiques : `+ - * / %`, `== != < <= > >=`, `&& || !`. La **condition**
+        s'écrit `condition ? valeur_si_vrai : valeur_si_faux`.
+
+        Les fonctions s'appellent par `nom(arguments)`. Les plus utiles :
+
+        | Famille | Fonctions | Exemple |
+        |---|---|---|
+        | Chaînes | `format`, `join`, `split`, `lower`, `replace`, `startswith` | `join("-", ["shop", "prod"])` donne `"shop-prod"` |
+        | Collections | `length`, `merge`, `concat`, `contains`, `lookup`, `keys`, `flatten`, `toset` | `merge(local.tags, { Tier = "db" })` |
+        | Réseau | `cidrsubnet`, `cidrhost`, `cidrnetmask` | `cidrsubnet("10.0.0.0/16", 8, 2)` donne `"10.0.2.0/24"` |
+        | Encodage | `jsonencode`, `jsondecode`, `yamldecode`, `base64encode` | `jsonencode({ a = 1 })` |
+        | Fichiers | `file`, `templatefile`, `filesha256` | `file("${path.module}/banner.txt")` |
+        | Erreurs | `try`, `can` | `try(var.settings.port, 443)` |
+
+        `jsonencode` mérite une mention spéciale : il produit toujours du JSON **valide** à partir d'une
+        structure HCL, ce qui évite les politiques IAM cassées par une virgule ou un guillemet mal échappé.
+      en: |
+        Operators are the usual ones: `+ - * / %`, `== != < <= > >=`, `&& || !`. The **conditional** is
+        written `condition ? value_if_true : value_if_false`.
+
+        Functions are called as `name(arguments)`. The most useful ones:
+
+        | Family | Functions | Example |
+        |---|---|---|
+        | Strings | `format`, `join`, `split`, `lower`, `replace`, `startswith` | `join("-", ["shop", "prod"])` gives `"shop-prod"` |
+        | Collections | `length`, `merge`, `concat`, `contains`, `lookup`, `keys`, `flatten`, `toset` | `merge(local.tags, { Tier = "db" })` |
+        | Network | `cidrsubnet`, `cidrhost`, `cidrnetmask` | `cidrsubnet("10.0.0.0/16", 8, 2)` gives `"10.0.2.0/24"` |
+        | Encoding | `jsonencode`, `jsondecode`, `yamldecode`, `base64encode` | `jsonencode({ a = 1 })` |
+        | Files | `file`, `templatefile`, `filesha256` | `file("${path.module}/banner.txt")` |
+        | Errors | `try`, `can` | `try(var.settings.port, 443)` |
+
+        `jsonencode` deserves a special mention: it always produces **valid** JSON from an HCL structure,
+        which avoids IAM policies broken by a comma or a badly escaped quote.
+  - heading:
+      fr: "Les expressions `for` et l'opérateur splat"
+      en: "`for` expressions and the splat operator"
+    body:
+      fr: |
+        Une expression `for` transforme une collection en une autre. Les crochets ou accolades qui
+        l'entourent décident du résultat :
+
+        - `[for x in liste : expression]` produit une **liste** ;
+        - `{for k, v in map : clé => valeur}` produit une **map** ;
+        - un `if` final **filtre** : `[for u in users : u.name if u.admin]`.
+
+        Sur une liste, `for index, valeur in liste` donne aussi la position. L'opérateur **splat** `[*]`
+        est un raccourci : `aws_subnet.private[*].id` équivaut à `[for s in aws_subnet.private : s.id]`.
+        Il ne fonctionne que sur les listes, donc avec `count` ; pour une ressource créée par `for_each`
+        (une map), on écrit `[for s in aws_subnet.private : s.id]` ou `values(aws_subnet.private)[*].id`.
+      en: |
+        A `for` expression turns one collection into another. The surrounding brackets or braces decide
+        the result:
+
+        - `[for x in list : expression]` produces a **list**;
+        - `{for k, v in map : key => value}` produces a **map**;
+        - a trailing `if` **filters**: `[for u in users : u.name if u.admin]`.
+
+        On a list, `for index, value in list` also gives the position. The **splat** operator `[*]` is a
+        shortcut: `aws_subnet.private[*].id` is equivalent to `[for s in aws_subnet.private : s.id]`.
+        It only works on lists, hence with `count`; for a resource created with `for_each` (a map), write
+        `[for s in aws_subnet.private : s.id]` or `values(aws_subnet.private)[*].id`.
+  - heading:
+      fr: "`count`, `for_each` et `dynamic` : multiplier des blocs"
+      en: "`count`, `for_each` and `dynamic`: multiplying blocks"
+    body:
+      fr: |
+        | | `count` | `for_each` | `dynamic` |
+        |---|---|---|---|
+        | Multiplie | une ressource ou un module | une ressource ou un module | un **bloc imbriqué** |
+        | Valeur attendue | un nombre | une map ou un `set` de chaînes | une liste, un set ou une map |
+        | Dans le bloc | `count.index` | `each.key`, `each.value` | `<nom>.key`, `<nom>.value` |
+        | Adresse des instances | `aws_x.y[0]` | `aws_x.y["api"]` | sans objet |
+        | Usage typique | « 0 ou 1 » (ressource optionnelle) | une instance par élément nommé | règles répétées dans une ressource |
+
+        La différence d'adresse est capitale. Avec `count`, une instance est identifiée par sa
+        **position** : retirer le premier élément d'une liste décale toutes les autres. Avec `for_each`,
+        elle est identifiée par sa **clé** : retirer un élément ne touche que lui. `for_each` n'accepte
+        pas une liste : convertissez-la avec `toset(var.liste)`.
+      en: |
+        | | `count` | `for_each` | `dynamic` |
+        |---|---|---|---|
+        | Multiplies | a resource or a module | a resource or a module | a **nested block** |
+        | Expected value | a number | a map or a `set` of strings | a list, a set or a map |
+        | Inside the block | `count.index` | `each.key`, `each.value` | `<name>.key`, `<name>.value` |
+        | Instance address | `aws_x.y[0]` | `aws_x.y["api"]` | not applicable |
+        | Typical use | "0 or 1" (optional resource) | one instance per named element | repeated rules inside a resource |
+
+        The address difference is crucial. With `count`, an instance is identified by its **position**:
+        removing the first element of a list shifts all the others. With `for_each`, it is identified by
+        its **key**: removing one element only affects that one. `for_each` does not accept a list:
+        convert it with `toset(var.list)`.
+
+examples:
+  - title:
+      fr: "Tester des expressions dans `terraform console`"
+      en: "Trying expressions in `terraform console`"
+    file: console.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Interactive mode: type an expression, read the result, quit with "exit".
+      # Works in an empty directory: no provider and no cloud account needed.
+      terraform console
+
+      # Non-interactive mode: handy in scripts
+      echo 'cidrsubnet("10.0.0.0/16", 8, 2)' | terraform console
+    output: |
+      > 5 + 3 * 2
+      11
+      > "prod" == "prod" ? "m7g.large" : "t4g.micro"
+      "m7g.large"
+      > upper(join("-", ["shop", "prod"]))
+      "SHOP-PROD"
+      > cidrsubnet("10.0.0.0/16", 8, 2)
+      "10.0.2.0/24"
+      > cidrhost("10.0.2.0/24", 5)
+      "10.0.2.5"
+      > merge({ Team = "ops" }, { Env = "prod" })
+      {
+        "Env" = "prod"
+        "Team" = "ops"
+      }
+      > [for port in [80, 443] : "tcp/${port}"]
+      [
+        "tcp/80",
+        "tcp/443",
+      ]
+      > contains(["dev", "staging", "prod"], "qa")
+      false
+      > try(tonumber("abc"), 0)
+      0
+      > exit
+    note:
+      fr: "La console est le meilleur outil pour apprendre : chaque fonction se teste en une ligne. `cidrsubnet(\"10.0.0.0/16\", 8, 2)` ajoute 8 bits au masque (/16 devient /24) et prend le réseau numéro 2."
+      en: "The console is the best learning tool: every function can be tried in one line. `cidrsubnet(\"10.0.0.0/16\", 8, 2)` adds 8 bits to the mask (/16 becomes /24) and takes network number 2."
+
+  - title:
+      fr: "Expressions `for` : calculer des sous-réseaux et filtrer des comptes à risque"
+      en: "`for` expressions: computing subnets and filtering risky accounts"
+    file: locals.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      locals {
+        vpc_cidr = "10.20.0.0/16"
+        azs      = ["eu-west-3a", "eu-west-3b", "eu-west-3c"]
+
+        # List -> map: one /24 per availability zone, no address typed by hand
+        private_subnets = {
+          for index, az in local.azs : az => cidrsubnet(local.vpc_cidr, 8, index + 10)
+        }
+
+        users = {
+          alice = { role = "admin", mfa = true }
+          bob   = { role = "developer", mfa = false }
+          carol = { role = "admin", mfa = false }
+        }
+
+        # Map -> list with a filter: administrators without multi-factor authentication
+        admins_without_mfa = [
+          for name, user in local.users : name if user.role == "admin" && !user.mfa
+        ]
+
+        # Map -> map: keep only the role of each user, in upper case
+        roles = { for name, user in local.users : name => upper(user.role) }
+      }
+
+      output "private_subnets" {
+        value = local.private_subnets
+      }
+
+      output "admins_without_mfa" {
+        value = local.admins_without_mfa
+      }
+    output: |
+      $ terraform apply -auto-approve
+
+      Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+
+      Outputs:
+
+      admins_without_mfa = [
+        "carol",
+      ]
+      private_subnets = {
+        "eu-west-3a" = "10.20.10.0/24"
+        "eu-west-3b" = "10.20.11.0/24"
+        "eu-west-3c" = "10.20.12.0/24"
+      }
+    note:
+      fr: "Les crochets `[ ]` produisent une liste, les accolades `{ }` avec `=>` produisent une map, et `if` filtre. Ce fichier ne contient que des `locals` et des `output` : vous pouvez l'exécuter sans compte cloud."
+      en: "Brackets `[ ]` produce a list, braces `{ }` with `=>` produce a map, and `if` filters. This file only holds `locals` and `output` blocks: you can run it without a cloud account."
+
+  - title:
+      fr: "Dangereux : `count` sur une liste, puis on retire un élément"
+      en: "Dangerous: `count` over a list, then one element is removed"
+    file: logs_count.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      variable "services" {
+        type = list(string)
+        # Before: ["api", "billing", "worker"]. The "api" service was just retired.
+        default = ["billing", "worker"]
+      }
+
+      resource "aws_cloudwatch_log_group" "service" {
+        # Instances are identified by their POSITION: service[0], service[1], service[2]
+        count = length(var.services)
+
+        name              = "/shop/${var.services[count.index]}"
+        retention_in_days = 365
+      }
+    output: |
+      $ terraform plan
+
+        # aws_cloudwatch_log_group.service[0] must be replaced
+      -/+ resource "aws_cloudwatch_log_group" "service" {
+            ~ name = "/shop/api" -> "/shop/billing" # forces replacement
+          }
+
+        # aws_cloudwatch_log_group.service[1] must be replaced
+      -/+ resource "aws_cloudwatch_log_group" "service" {
+            ~ name = "/shop/billing" -> "/shop/worker" # forces replacement
+          }
+
+        # aws_cloudwatch_log_group.service[2] will be destroyed
+        # (because index [2] is out of range for count)
+        - resource "aws_cloudwatch_log_group" "service" {
+            - name = "/shop/worker" -> null
+          }
+
+      Plan: 2 to add, 0 to change, 3 to destroy.
+    note:
+      fr: "On voulait supprimer **un** groupe de journaux ; le plan en détruit **trois**, dont un an de journaux de facturation. Tout s'est décalé d'un cran parce que `count` identifie chaque instance par son index. (Sortie abrégée.)"
+      en: "The intent was to delete **one** log group; the plan destroys **three**, including a year of billing logs. Everything shifted by one because `count` identifies each instance by its index. (Abridged output.)"
+
+  - title:
+      fr: "Sûr : `for_each`, chaque instance a une clé stable"
+      en: "Safe: `for_each`, each instance has a stable key"
+    file: logs_for_each.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "services" {
+        type    = set(string) # a set: no order, no duplicates
+        default = ["billing", "worker"]
+      }
+
+      variable "enable_debug_logs" {
+        type    = bool
+        default = false
+      }
+
+      resource "aws_cloudwatch_log_group" "service" {
+        # Instances are identified by their KEY: service["billing"], service["worker"]
+        for_each = var.services
+
+        name              = "/shop/${each.key}"
+        retention_in_days = 365
+      }
+
+      # The legitimate use of count: an optional resource, 0 or 1 instance
+      resource "aws_cloudwatch_log_group" "debug" {
+        count = var.enable_debug_logs ? 1 : 0
+
+        name              = "/shop/debug"
+        retention_in_days = 7
+      }
+
+      output "log_group_arns" {
+        # for_each resources are maps: build the result with a for expression
+        value = { for name, group in aws_cloudwatch_log_group.service : name => group.arn }
+      }
+    output: |
+      $ terraform plan
+
+        # aws_cloudwatch_log_group.service["api"] will be destroyed
+        # (because key ["api"] is not in for_each map)
+        - resource "aws_cloudwatch_log_group" "service" {
+            - name = "/shop/api" -> null
+          }
+
+      Plan: 0 to add, 0 to change, 1 to destroy.
+    note:
+      fr: "Même changement, mais une seule destruction : celle qui était voulue. Gardez `count` pour le cas « 0 ou 1 » avec une condition, et utilisez `for_each` dès que les instances correspondent à des éléments nommés. (Sortie abrégée.)"
+      en: "Same change, but a single destruction: the intended one. Keep `count` for the \"0 or 1\" case with a conditional, and use `for_each` as soon as instances map to named elements. (Abridged output.)"
+
+  - title:
+      fr: "Bloc `dynamic` : générer les règles d'un groupe de sécurité"
+      en: "`dynamic` block: generating the rules of a security group"
+    file: security_group.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      variable "vpc_id" {
+        type        = string
+        description = "VPC hosting the web servers"
+      }
+
+      variable "ingress_rules" {
+        type = list(object({
+          description = string
+          port        = number
+          cidr_blocks = list(string)
+        }))
+        default = [
+          { description = "HTTPS from the Internet", port = 443, cidr_blocks = ["0.0.0.0/0"] },
+          { description = "SSH from the VPN only", port = 22, cidr_blocks = ["10.8.0.0/24"] },
+        ]
+      }
+
+      resource "aws_security_group" "web" {
+        name        = "web"
+        description = "Inbound rules of the web servers"
+        vpc_id      = var.vpc_id
+
+        # One nested "ingress" block is generated per element of the list
+        dynamic "ingress" {
+          for_each = var.ingress_rules
+
+          content {
+            # The iterator is named after the block: ingress.value
+            description = ingress.value.description
+            from_port   = ingress.value.port
+            to_port     = ingress.value.port
+            protocol    = "tcp"
+            cidr_blocks = ingress.value.cidr_blocks
+          }
+        }
+      }
+    note:
+      fr: "`dynamic` répète un **bloc imbriqué** (ici `ingress`), là où `for_each` répète une ressource entière. À utiliser avec modération : trois blocs écrits en toutes lettres sont souvent plus lisibles en revue de sécurité qu'une boucle."
+      en: "`dynamic` repeats a **nested block** (here `ingress`), where `for_each` repeats a whole resource. Use it sparingly: three blocks written out in full are often easier to read in a security review than a loop."
+
+mistake:
+  fr: |
+    **Utiliser `count` avec `length(liste)` pour créer des ressources « nommées ».**
+
+    C'est le réflexe de tout débutant (`count.index` ressemble à une boucle `for` classique), et cela
+    fonctionne... jusqu'au jour où quelqu'un retire ou insère un élément au milieu de la liste. Toutes les
+    instances suivantes changent d'index : Terraform les **détruit et les recrée**, ce qui peut effacer des
+    données ou couper la production.
+
+    Deux autres pièges fréquents :
+
+    - passer une liste à `for_each` : il faut une map ou un set, donc `for_each = toset(var.names)` ;
+    - utiliser dans `for_each` ou `count` une valeur connue seulement **après** l'apply (l'identifiant
+      d'une ressource pas encore créée) : les clés doivent être connues dès le `plan`.
+  en: |
+    **Using `count` with `length(list)` to create "named" resources.**
+
+    It is every beginner's reflex (`count.index` looks like a classic `for` loop), and it works... until
+    the day someone removes or inserts an element in the middle of the list. Every following instance
+    gets a new index: Terraform **destroys and recreates** them, which can wipe data or take production
+    down.
+
+    Two other frequent traps:
+
+    - passing a list to `for_each`: it needs a map or a set, hence `for_each = toset(var.names)`;
+    - using in `for_each` or `count` a value only known **after** apply (the identifier of a resource not
+      yet created): keys must be known at `plan` time.
+
+bestPractice:
+  fr: |
+    - **`for_each` par défaut**, `count` uniquement pour une ressource optionnelle (`condition ? 1 : 0`).
+    - **Générez les politiques avec `jsonencode`** plutôt qu'avec une chaîne JSON écrite à la main.
+    - **Calculez les plages réseau avec `cidrsubnet`** : fini les chevauchements dus à une faute de frappe.
+    - **Gardez les expressions lisibles** : une expression compliquée va dans un `local` au nom explicite.
+      Une règle de sécurité que personne ne sait relire est une règle que personne ne vérifie.
+    - **Lisez toujours le plan** après avoir modifié une boucle : le nombre de destructions annoncé doit
+      correspondre à votre intention.
+  en: |
+    - **`for_each` by default**, `count` only for an optional resource (`condition ? 1 : 0`).
+    - **Generate policies with `jsonencode`** rather than a hand-written JSON string.
+    - **Compute network ranges with `cidrsubnet`**: no more overlaps caused by a typo.
+    - **Keep expressions readable**: a complicated expression goes into a `local` with an explicit name.
+      A security rule nobody can read is a rule nobody checks.
+    - **Always read the plan** after changing a loop: the announced number of destructions must match
+      your intent.
+
+exercise:
+  statement:
+    fr: |
+      La politique IAM ci-dessous est écrite à la main dans une chaîne, et elle est beaucoup trop large.
+
+      ```hcl
+      resource "aws_iam_policy" "reader" {
+        name   = "invoice-reader"
+        policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:*\",\"Resource\":\"*\"}]}"
+      }
+      ```
+
+      Réécrivez-la :
+
+      1. Déclarez une variable `buckets` (ensemble de chaînes) valant `["shop-invoices", "shop-exports"]`.
+      2. Avec deux expressions `for`, calculez dans des `locals` la liste des ARN des buckets
+         (`arn:aws:s3:::<nom>`) et celle de leurs objets (`arn:aws:s3:::<nom>/*`).
+      3. Générez la politique avec `jsonencode` : `s3:ListBucket` sur les buckets et `s3:GetObject` sur
+         les objets, rien d'autre.
+    en: |
+      The IAM policy below is hand-written inside a string, and it is far too broad.
+
+      ```hcl
+      resource "aws_iam_policy" "reader" {
+        name   = "invoice-reader"
+        policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:*\",\"Resource\":\"*\"}]}"
+      }
+      ```
+
+      Rewrite it:
+
+      1. Declare a `buckets` variable (set of strings) equal to `["shop-invoices", "shop-exports"]`.
+      2. With two `for` expressions, compute in `locals` the list of bucket ARNs (`arn:aws:s3:::<name>`)
+         and the list of their objects (`arn:aws:s3:::<name>/*`).
+      3. Generate the policy with `jsonencode`: `s3:ListBucket` on the buckets and `s3:GetObject` on the
+         objects, nothing else.
+  solution:
+    file: iam_reader.tf
+    lang: hcl
+    code: |
+      variable "buckets" {
+        type        = set(string)
+        description = "Buckets the reader role may read"
+        default     = ["shop-invoices", "shop-exports"]
+      }
+
+      locals {
+        bucket_arns = [for name in var.buckets : "arn:aws:s3:::${name}"]
+        object_arns = [for name in var.buckets : "arn:aws:s3:::${name}/*"]
+      }
+
+      resource "aws_iam_policy" "reader" {
+        name = "invoice-reader"
+
+        # jsonencode always produces valid JSON: no quote to escape by hand
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [
+            {
+              Sid      = "ListBuckets"
+              Effect   = "Allow"
+              Action   = ["s3:ListBucket"]
+              Resource = local.bucket_arns # the buckets themselves
+            },
+            {
+              Sid      = "ReadObjects"
+              Effect   = "Allow"
+              Action   = ["s3:GetObject"] # read-only: no Put, no Delete
+              Resource = local.object_arns
+            },
+          ]
+        })
+      }
+    note:
+      fr: "On passe de « toutes les actions S3 sur tous les buckets du compte » à « lecture seule sur deux buckets ». Ajouter un bucket se fait désormais en modifiant une seule variable."
+      en: "We go from \"every S3 action on every bucket of the account\" to \"read-only on two buckets\". Adding a bucket now only takes a change to one variable."
+
+quiz:
+  - q:
+      fr: "Que renvoie `cidrsubnet(\"10.0.0.0/16\", 8, 2)` ?"
+      en: "What does `cidrsubnet(\"10.0.0.0/16\", 8, 2)` return?"
+    options:
+      fr: ["`\"10.0.0.2/16\"`", "`\"10.2.0.0/16\"`", "`\"10.0.2.0/24\"`", "`\"10.0.8.0/18\"`"]
+      en: ["`\"10.0.0.2/16\"`", "`\"10.2.0.0/16\"`", "`\"10.0.2.0/24\"`", "`\"10.0.8.0/18\"`"]
+    answer: 2
+    why:
+      fr: "Le deuxième argument ajoute 8 bits au préfixe (/16 devient /24) et le troisième choisit le sous-réseau numéro 2 : 10.0.2.0/24."
+      en: "The second argument adds 8 bits to the prefix (/16 becomes /24) and the third picks subnet number 2: 10.0.2.0/24."
+  - q:
+      fr: "Pourquoi `for_each` est-il plus sûr que `count` pour créer une ressource par élément d'une liste ?"
+      en: "Why is `for_each` safer than `count` to create one resource per element of a list?"
+    options:
+      fr:
+        - "Parce que chaque instance est identifiée par une clé stable et non par sa position"
+        - "Parce que `for_each` est plus rapide à l'exécution"
+        - "Parce que `count` ne peut pas dépasser 10 instances"
+        - "Parce que `for_each` chiffre les ressources créées"
+      en:
+        - "Because each instance is identified by a stable key instead of its position"
+        - "Because `for_each` runs faster"
+        - "Because `count` cannot exceed 10 instances"
+        - "Because `for_each` encrypts the created resources"
+    answer: 0
+    why:
+      fr: "Avec `count`, retirer un élément décale les index et provoque des destructions en cascade. Avec `for_each`, seule l'instance dont la clé disparaît est supprimée."
+      en: "With `count`, removing an element shifts the indexes and triggers cascading destructions. With `for_each`, only the instance whose key disappears is removed."
+  - q:
+      fr: "Quelle expression produit une **map** ?"
+      en: "Which expression produces a **map**?"
+    options:
+      fr:
+        - "`[for s in var.services : upper(s)]`"
+        - "`{for s in var.services : s => upper(s)}`"
+        - "`var.services[*]`"
+        - "`toset(var.services)`"
+      en:
+        - "`[for s in var.services : upper(s)]`"
+        - "`{for s in var.services : s => upper(s)}`"
+        - "`var.services[*]`"
+        - "`toset(var.services)`"
+    answer: 1
+    why:
+      fr: "Des accolades et la flèche `=>` (clé => valeur) produisent une map ; des crochets produisent une liste."
+      en: "Braces and the `=>` arrow (key => value) produce a map; brackets produce a list."
+  - q:
+      fr: "À quoi sert un bloc `dynamic` ?"
+      en: "What is a `dynamic` block for?"
+    options:
+      fr:
+        - "À créer plusieurs exemplaires d'une ressource entière"
+        - "À déclarer une variable calculée"
+        - "À exécuter un script pendant l'apply"
+        - "À générer plusieurs blocs imbriqués à l'intérieur d'une ressource"
+      en:
+        - "To create several copies of a whole resource"
+        - "To declare a computed variable"
+        - "To run a script during apply"
+        - "To generate several nested blocks inside a resource"
+    answer: 3
+    why:
+      fr: "`dynamic \"ingress\" { for_each = ... content { ... } }` répète le bloc imbriqué `ingress`. Pour répéter la ressource elle-même, on utilise `for_each` ou `count`."
+      en: "`dynamic \"ingress\" { for_each = ... content { ... } }` repeats the nested `ingress` block. To repeat the resource itself, use `for_each` or `count`."
+  - q:
+      fr: "Quel est l'usage recommandé de `count` ?"
+      en: "What is the recommended use of `count`?"
+    options:
+      fr:
+        - "Créer une ressource par utilisateur d'une liste"
+        - "Remplacer toutes les expressions `for`"
+        - "Rendre une ressource optionnelle avec `condition ? 1 : 0`"
+        - "Compter les ressources présentes dans le state"
+      en:
+        - "Creating one resource per user of a list"
+        - "Replacing every `for` expression"
+        - "Making a resource optional with `condition ? 1 : 0`"
+        - "Counting the resources present in the state"
+    answer: 2
+    why:
+      fr: "Pour « 0 ou 1 instance », `count` avec une condition est idiomatique. Pour des éléments nommés, `for_each` évite les décalages d'index."
+      en: "For \"0 or 1 instance\", `count` with a conditional is idiomatic. For named elements, `for_each` avoids index shifts."

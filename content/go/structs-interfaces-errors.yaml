@@ -1,0 +1,699 @@
+description:
+  fr: "Modéliser des données avec les structs, écrire du code extensible avec les interfaces et gérer les erreurs Go sans jamais échouer en silence."
+  en: "Model data with structs, write extensible code with interfaces and handle Go errors without ever failing silently."
+duration: 35
+
+intro:
+  fr: |
+    Vous savez manipuler des nombres, des chaînes, des slices et des maps. Un vrai outil de sécurité
+    manipule des objets plus riches : une *vulnérabilité* (identifiant, gravité, paquet concerné), une
+    *règle de contrôle*, une *configuration*. En Go, on les décrit avec des **structs**, on leur ajoute des
+    comportements avec des **méthodes**, et on les rend interchangeables grâce aux **interfaces**.
+
+    Une interface fonctionne comme une prise électrique : peu importe la marque de l'appareil, s'il a la bonne
+    fiche, il se branche. Un scanner peut ainsi exécuter 50 contrôles différents sans connaître le détail de
+    chacun.
+
+    Enfin, Go n'a **pas d'exceptions** : une erreur est une valeur renvoyée par la fonction. Vous allez voir
+    pourquoi une erreur ignorée transforme un contrôle de sécurité en passoire (*fail open*), et comment
+    écrire du code qui échoue de façon sûre (*fail closed*).
+  en: |
+    You can handle numbers, strings, slices and maps. A real security tool handles richer objects: a
+    *vulnerability* (identifier, severity, affected package), a *check rule*, a *configuration*. In Go you
+    describe them with **structs**, give them behaviour with **methods**, and make them interchangeable
+    with **interfaces**.
+
+    An interface works like a power socket: whatever the brand of the appliance, if it has the right plug,
+    it fits. A scanner can therefore run 50 different checks without knowing the details of any of them.
+
+    Finally, Go has **no exceptions**: an error is a value returned by the function. You will see why an
+    ignored error turns a security control into a sieve (*fail open*), and how to write code that fails
+    safely (*fail closed*).
+
+sections:
+  - heading:
+      fr: "Structs et méthodes"
+      en: "Structs and methods"
+    body:
+      fr: |
+        Une **struct** regroupe des champs nommés et typés. Une **méthode** est une fonction attachée à un
+        type grâce à un *receveur* placé avant son nom.
+
+        | Receveur | Syntaxe | Quand l'utiliser |
+        |---|---|---|
+        | Par valeur | `func (f Finding) IsBlocking() bool` | La méthode **lit** seulement ; elle reçoit une copie |
+        | Par pointeur | `func (f *Finding) MarkFixed()` | La méthode **modifie** la struct, ou la struct est volumineuse |
+
+        Points à retenir :
+
+        - Un nom qui commence par une **majuscule** est **exporté** (visible depuis les autres paquets) ; une
+          minuscule le rend privé au paquet. Il n'y a pas de mots-clés `public` / `private`.
+        - Les *struct tags* comme `` `json:"id"` `` indiquent au paquet `encoding/json` le nom du champ en JSON.
+          Seuls les champs exportés sont sérialisés.
+        - Go n'a pas de classes ni d'héritage : on **compose** en plaçant une struct dans une autre.
+      en: |
+        A **struct** groups named, typed fields. A **method** is a function attached to a type through a
+        *receiver* placed before its name.
+
+        | Receiver | Syntax | When to use it |
+        |---|---|---|
+        | Value | `func (f Finding) IsBlocking() bool` | The method only **reads**; it receives a copy |
+        | Pointer | `func (f *Finding) MarkFixed()` | The method **modifies** the struct, or the struct is large |
+
+        Key points:
+
+        - A name starting with an **upper-case** letter is **exported** (visible from other packages); a
+          lower-case letter makes it private to the package. There are no `public` / `private` keywords.
+        - *Struct tags* such as `` `json:"id"` `` tell the `encoding/json` package the JSON name of the field.
+          Only exported fields are serialised.
+        - Go has no classes and no inheritance: you **compose** by placing a struct inside another one.
+  - heading:
+      fr: "Interfaces : un contrat implicite"
+      en: "Interfaces: an implicit contract"
+    body:
+      fr: |
+        Une **interface** liste des méthodes. Tout type qui possède ces méthodes satisfait l'interface
+        **automatiquement** : il n'y a pas de mot-clé `implements`.
+
+        ```go
+        type Check interface {
+            Name() string
+            Run(cfg Config) error
+        }
+        ```
+
+        Quelques interfaces de la bibliothèque standard que vous croiserez partout :
+
+        | Interface | Méthode | Utilité |
+        |---|---|---|
+        | `error` | `Error() string` | Représenter une erreur |
+        | `fmt.Stringer` | `String() string` | Contrôler l'affichage d'un type (masquer un secret !) |
+        | `io.Reader` | `Read(p []byte) (int, error)` | Lire depuis un fichier, une socket, une requête HTTP |
+        | `io.Writer` | `Write(p []byte) (int, error)` | Écrire vers un fichier, la sortie standard, un hash |
+
+        Gardez vos interfaces **petites** (une ou deux méthodes) : elles sont plus faciles à implémenter et à
+        remplacer par une fausse implémentation dans les tests.
+      en: |
+        An **interface** lists methods. Any type that has those methods satisfies the interface
+        **automatically**: there is no `implements` keyword.
+
+        ```go
+        type Check interface {
+            Name() string
+            Run(cfg Config) error
+        }
+        ```
+
+        A few standard library interfaces you will meet everywhere:
+
+        | Interface | Method | Purpose |
+        |---|---|---|
+        | `error` | `Error() string` | Represent an error |
+        | `fmt.Stringer` | `String() string` | Control how a type is printed (hide a secret!) |
+        | `io.Reader` | `Read(p []byte) (int, error)` | Read from a file, a socket, an HTTP request |
+        | `io.Writer` | `Write(p []byte) (int, error)` | Write to a file, standard output, a hash |
+
+        Keep your interfaces **small** (one or two methods): they are easier to implement and to replace
+        with a fake implementation in tests.
+  - heading:
+      fr: "Les erreurs sont des valeurs"
+      en: "Errors are values"
+    body:
+      fr: |
+        | Outil | Rôle | Exemple |
+        |---|---|---|
+        | `errors.New("msg")` | Créer une erreur simple | `var ErrDenied = errors.New("access denied")` |
+        | `fmt.Errorf("ctx: %w", err)` | **Envelopper** une erreur en ajoutant du contexte | `fmt.Errorf("read %q: %w", path, err)` |
+        | `errors.Is(err, cible)` | Tester si la chaîne d'erreurs contient une erreur précise | `errors.Is(err, fs.ErrNotExist)` |
+        | `errors.As(err, &cible)` | Récupérer une erreur d'un **type** précis | `var ve *ValidationError` |
+        | `errors.Join(e1, e2)` | Fusionner plusieurs erreurs | Rapport de validation complet |
+        | `defer f.Close()` | Exécuter un nettoyage à la sortie de la fonction | Fermer un fichier, déverrouiller un mutex |
+
+        `panic` arrête brutalement le programme : réservez-le aux bugs impossibles à rattraper. Une entrée
+        invalide, un fichier absent ou un réseau coupé sont des situations **normales** : renvoyez une `error`.
+
+        Règle de sécurité : quand un contrôle ne peut pas s'exécuter (fichier de politique illisible,
+        service d'autorisation injoignable), le programme doit **refuser** l'action (*fail closed*), jamais
+        l'accepter par défaut.
+      en: |
+        | Tool | Role | Example |
+        |---|---|---|
+        | `errors.New("msg")` | Create a simple error | `var ErrDenied = errors.New("access denied")` |
+        | `fmt.Errorf("ctx: %w", err)` | **Wrap** an error while adding context | `fmt.Errorf("read %q: %w", path, err)` |
+        | `errors.Is(err, target)` | Test whether the error chain contains a specific error | `errors.Is(err, fs.ErrNotExist)` |
+        | `errors.As(err, &target)` | Extract an error of a specific **type** | `var ve *ValidationError` |
+        | `errors.Join(e1, e2)` | Merge several errors | Full validation report |
+        | `defer f.Close()` | Run a clean-up when the function returns | Close a file, unlock a mutex |
+
+        `panic` stops the program abruptly: keep it for bugs that cannot be recovered from. Invalid input,
+        a missing file or a broken network are **normal** situations: return an `error`.
+
+        Security rule: when a control cannot run (unreadable policy file, unreachable authorisation
+        service), the program must **deny** the action (*fail closed*), never allow it by default.
+
+examples:
+  - title:
+      fr: "Une struct, deux méthodes et une sortie JSON"
+      en: "A struct, two methods and JSON output"
+    file: finding.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import (
+      	"encoding/json"
+      	"fmt"
+      	"os"
+      )
+
+      // Finding describes one vulnerability. Struct tags set the JSON field names.
+      type Finding struct {
+      	ID       string  `json:"id"`
+      	Package  string  `json:"package"`
+      	Severity string  `json:"severity"`
+      	CVSS     float64 `json:"cvss"`
+      	Fixed    bool    `json:"fixed"`
+      }
+
+      // IsBlocking has a value receiver: it only reads the struct
+      func (f Finding) IsBlocking() bool {
+      	return !f.Fixed && f.CVSS >= 7.0
+      }
+
+      // MarkFixed has a pointer receiver: it modifies the original struct
+      func (f *Finding) MarkFixed() {
+      	f.Fixed = true
+      }
+
+      func main() {
+      	findings := []Finding{
+      		{ID: "CVE-2024-3094", Package: "xz-utils", Severity: "CRITICAL", CVSS: 10.0},
+      		{ID: "CVE-2023-44487", Package: "golang.org/x/net", Severity: "HIGH", CVSS: 7.5},
+      		{ID: "CVE-2023-2650", Package: "openssl", Severity: "MEDIUM", CVSS: 6.5},
+      	}
+
+      	// findings[1] is the real element of the slice, so the change is kept
+      	findings[1].MarkFixed()
+
+      	blocking := 0
+      	for _, f := range findings {
+      		if f.IsBlocking() {
+      			blocking++
+      		}
+      	}
+      	fmt.Println("blocking findings:", blocking)
+
+      	// Encode the first finding as indented JSON on standard output
+      	enc := json.NewEncoder(os.Stdout)
+      	enc.SetIndent("", "  ")
+      	if err := enc.Encode(findings[0]); err != nil {
+      		fmt.Fprintln(os.Stderr, "encode:", err)
+      		os.Exit(1)
+      	}
+      }
+    output: |
+      blocking findings: 1
+      {
+        "id": "CVE-2024-3094",
+        "package": "xz-utils",
+        "severity": "CRITICAL",
+        "cvss": 10,
+        "fixed": false
+      }
+    note:
+      fr: "Dans la boucle `for _, f := range findings`, `f` est une **copie** : appeler `f.MarkFixed()` à cet endroit ne modifierait pas le slice. C'est pour cela que la correction passe par `findings[1]`."
+      en: "Inside the `for _, f := range findings` loop, `f` is a **copy**: calling `f.MarkFixed()` there would not change the slice. That is why the fix goes through `findings[1]`."
+
+  - title:
+      fr: "Une interface Check : un moteur d'audit extensible"
+      en: "A Check interface: an extensible audit engine"
+    file: checks.go
+    lang: go
+    kind: neutral
+    code: |
+      package main
+
+      import (
+      	"errors"
+      	"fmt"
+      	"slices"
+      )
+
+      // Config is the server configuration under audit
+      type Config struct {
+      	SSHRootLogin  bool
+      	TLSMinVersion string
+      	OpenPorts     []int
+      }
+
+      // Check is satisfied by ANY type that has these two methods.
+      // There is no "implements" keyword in Go.
+      type Check interface {
+      	Name() string
+      	Run(cfg Config) error
+      }
+
+      type rootLoginCheck struct{}
+
+      func (rootLoginCheck) Name() string { return "ssh-root-login" }
+      func (rootLoginCheck) Run(cfg Config) error {
+      	if cfg.SSHRootLogin {
+      		return errors.New("root login over SSH is enabled")
+      	}
+      	return nil
+      }
+
+      type tlsCheck struct{ minimum string }
+
+      func (c tlsCheck) Name() string { return "tls-min-version" }
+      func (c tlsCheck) Run(cfg Config) error {
+      	// String comparison is enough for "1.0", "1.1", "1.2", "1.3"
+      	if cfg.TLSMinVersion < c.minimum {
+      		return fmt.Errorf("TLS %s is accepted, want at least %s", cfg.TLSMinVersion, c.minimum)
+      	}
+      	return nil
+      }
+
+      type forbiddenPortCheck struct{ forbidden []int }
+
+      func (c forbiddenPortCheck) Name() string { return "forbidden-ports" }
+      func (c forbiddenPortCheck) Run(cfg Config) error {
+      	for _, port := range cfg.OpenPorts {
+      		if slices.Contains(c.forbidden, port) {
+      			return fmt.Errorf("port %d must be closed", port)
+      		}
+      	}
+      	return nil
+      }
+
+      func main() {
+      	cfg := Config{SSHRootLogin: true, TLSMinVersion: "1.2", OpenPorts: []int{22, 23, 443}}
+
+      	// The engine only knows the interface, not the concrete types
+      	checks := []Check{
+      		rootLoginCheck{},
+      		tlsCheck{minimum: "1.2"},
+      		forbiddenPortCheck{forbidden: []int{21, 23, 3389}},
+      	}
+
+      	failed := 0
+      	for _, c := range checks {
+      		if err := c.Run(cfg); err != nil {
+      			failed++
+      			fmt.Printf("FAIL %-16s %v\n", c.Name(), err)
+      			continue
+      		}
+      		fmt.Printf("PASS %s\n", c.Name())
+      	}
+      	fmt.Printf("%d/%d checks failed\n", failed, len(checks))
+      }
+    output: |
+      FAIL ssh-root-login   root login over SSH is enabled
+      PASS tls-min-version
+      FAIL forbidden-ports  port 23 must be closed
+      2/3 checks failed
+    note:
+      fr: "Pour ajouter un contrôle, il suffit d'écrire un nouveau type avec `Name()` et `Run()` puis de l'ajouter au slice : la boucle ne change pas. C'est exactement l'architecture des scanners comme Trivy ou kube-bench."
+      en: "To add a check, just write a new type with `Name()` and `Run()` and append it to the slice: the loop does not change. This is exactly the architecture of scanners such as Trivy or kube-bench."
+
+  - title:
+      fr: "Erreurs ignorées : la politique de sécurité disparaît en silence"
+      en: "Ignored errors: the security policy silently disappears"
+    file: policy_vulnerable.go
+    lang: go
+    kind: vulnerable
+    code: |
+      package main
+
+      import (
+      	"encoding/json"
+      	"fmt"
+      	"os"
+      )
+
+      type Policy struct {
+      	RequireMFA       bool `json:"require_mfa"`
+      	MaxLoginAttempts int  `json:"max_login_attempts"`
+      }
+
+      func loadPolicy(path string) Policy {
+      	var p Policy
+      	data, _ := os.ReadFile(path) // error discarded: a missing file gives empty data
+      	json.Unmarshal(data, &p)     // error discarded: p keeps its zero values
+      	return p
+      }
+
+      func main() {
+      	p := loadPolicy("policy.json")
+      	// File missing or corrupted => RequireMFA=false and MaxLoginAttempts=0 (no limit)
+      	fmt.Printf("MFA required: %t, max attempts: %d\n", p.RequireMFA, p.MaxLoginAttempts)
+      }
+    output: |
+      MFA required: false, max attempts: 0
+    note:
+      fr: "Le fichier `policy.json` n'existe pas, pourtant le programme démarre « normalement » avec la valeur zéro de chaque champ : MFA désactivé et aucune limite de tentatives. C'est un *fail open* : il suffit à un attaquant de supprimer ou de corrompre le fichier pour désactiver la politique."
+      en: "The `policy.json` file does not exist, yet the program starts \"normally\" with the zero value of every field: MFA disabled and no attempt limit. This is a *fail open*: an attacker only has to delete or corrupt the file to switch the policy off."
+
+  - title:
+      fr: "Erreurs traitées : enveloppées, inspectées, et refus par défaut"
+      en: "Handled errors: wrapped, inspected, and deny by default"
+    file: policy_secure.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"encoding/json"
+      	"errors"
+      	"fmt"
+      	"io/fs"
+      	"os"
+      )
+
+      type Policy struct {
+      	RequireMFA       bool `json:"require_mfa"`
+      	MaxLoginAttempts int  `json:"max_login_attempts"`
+      }
+
+      // ErrInvalidPolicy is a sentinel error: callers test it with errors.Is
+      var ErrInvalidPolicy = errors.New("invalid policy")
+
+      func loadPolicy(path string) (Policy, error) {
+      	var p Policy
+      	data, err := os.ReadFile(path)
+      	if err != nil {
+      		// %w wraps the original error: context is added, nothing is lost
+      		return p, fmt.Errorf("read policy %q: %w", path, err)
+      	}
+      	if err := json.Unmarshal(data, &p); err != nil {
+      		return p, fmt.Errorf("parse policy %q: %w", path, err)
+      	}
+      	// Validate the content: valid JSON does not mean a sane policy
+      	if p.MaxLoginAttempts < 1 || p.MaxLoginAttempts > 10 {
+      		return p, fmt.Errorf("%w: max_login_attempts must be 1-10, got %d",
+      			ErrInvalidPolicy, p.MaxLoginAttempts)
+      	}
+      	return p, nil
+      }
+
+      func main() {
+      	p, err := loadPolicy("policy.json")
+      	switch {
+      	case errors.Is(err, fs.ErrNotExist):
+      		// Fail closed: without a policy, the service refuses to start
+      		fmt.Fprintln(os.Stderr, "fatal: no policy file, refusing to start:", err)
+      		os.Exit(1)
+      	case errors.Is(err, ErrInvalidPolicy):
+      		fmt.Fprintln(os.Stderr, "fatal: policy rejected:", err)
+      		os.Exit(1)
+      	case err != nil:
+      		fmt.Fprintln(os.Stderr, "fatal:", err)
+      		os.Exit(1)
+      	}
+      	fmt.Printf("MFA required: %t, max attempts: %d\n", p.RequireMFA, p.MaxLoginAttempts)
+      }
+    output: |
+      fatal: no policy file, refusing to start: read policy "policy.json": open policy.json: no such file or directory
+      exit status 1
+    note:
+      fr: "`errors.Is` retrouve `fs.ErrNotExist` même à travers l'enveloppe ajoutée par `%w`. Le message final se lit de gauche à droite comme une trace : *quoi* a échoué, puis *pourquoi*. Le code de sortie `1` fait échouer le pipeline ou le démarrage du conteneur."
+      en: "`errors.Is` finds `fs.ErrNotExist` even through the wrapper added by `%w`. The final message reads left to right like a trace: *what* failed, then *why*. Exit code `1` makes the pipeline or the container start-up fail."
+
+  - title:
+      fr: "Cas réel : valider les cibles d'un scanner avec un type d'erreur personnalisé"
+      en: "Real case: validating scanner targets with a custom error type"
+    file: targets.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"errors"
+      	"fmt"
+      	"net"
+      	"strconv"
+      )
+
+      // ValidationError is a custom error type carrying structured details
+      type ValidationError struct {
+      	Target string
+      	Reason string
+      }
+
+      // Having an Error() string method is all it takes to be an error
+      func (e *ValidationError) Error() string {
+      	return fmt.Sprintf("invalid target %q: %s", e.Target, e.Reason)
+      }
+
+      // parseTarget accepts only "IP:port". Hostnames and shell characters are rejected.
+      func parseTarget(target string) (string, int, error) {
+      	host, portStr, err := net.SplitHostPort(target)
+      	if err != nil {
+      		return "", 0, &ValidationError{Target: target, Reason: "expected host:port"}
+      	}
+      	if net.ParseIP(host) == nil {
+      		return "", 0, &ValidationError{Target: target, Reason: "host is not an IP address"}
+      	}
+      	port, err := strconv.Atoi(portStr)
+      	if err != nil || port < 1 || port > 65535 {
+      		return "", 0, &ValidationError{Target: target, Reason: "port must be between 1 and 65535"}
+      	}
+      	return host, port, nil
+      }
+
+      func main() {
+      	targets := []string{"127.0.0.1:22", "127.0.0.1:99999", "localhost;rm -rf /:80", "10.0.0.5"}
+
+      	for _, t := range targets {
+      		host, port, err := parseTarget(t)
+
+      		// errors.As extracts the custom type to read its fields
+      		var ve *ValidationError
+      		if errors.As(err, &ve) {
+      			fmt.Printf("SKIP %q: %s\n", ve.Target, ve.Reason)
+      			continue
+      		}
+      		if err != nil {
+      			fmt.Println("ERROR", err)
+      			continue
+      		}
+      		fmt.Printf("OK   %s port %d\n", host, port)
+      	}
+      }
+    output: |
+      OK   127.0.0.1 port 22
+      SKIP "127.0.0.1:99999": port must be between 1 and 65535
+      SKIP "localhost;rm -rf /:80": host is not an IP address
+      SKIP "10.0.0.5": expected host:port
+    note:
+      fr: "La troisième cible contient une tentative d'**injection de commande**. Comme la validation n'accepte qu'une adresse IP analysée par `net.ParseIP`, la chaîne est rejetée avant d'atteindre le moindre appel système. Valider par liste d'autorisation (*allowlist*) est toujours plus sûr que chercher les caractères dangereux."
+      en: "The third target contains a **command injection** attempt. Because validation only accepts an IP address parsed by `net.ParseIP`, the string is rejected before it reaches any system call. Validating with an allowlist is always safer than hunting for dangerous characters."
+
+mistake:
+  fr: |
+    **Écrire le secret dans le message d'erreur ou dans les logs.**
+
+    ```go
+    return fmt.Errorf("login failed for %s with password %s", user, password)
+    ```
+
+    Les messages d'erreur remontent dans les journaux, les outils de supervision, parfois jusqu'à la réponse
+    HTTP. Un mot de passe, un jeton ou une chaîne de connexion placé dans une erreur finit donc lisible par
+    beaucoup trop de monde. Ajoutez du **contexte** (quel utilisateur, quel fichier, quelle étape), jamais la
+    **donnée sensible** elle-même.
+
+    Autre erreur fréquente : comparer les erreurs avec `==` (`if err == fs.ErrNotExist`). Dès qu'une erreur est
+    enveloppée par `%w`, la comparaison échoue. Utilisez `errors.Is` et `errors.As`.
+  en: |
+    **Writing the secret into the error message or the logs.**
+
+    ```go
+    return fmt.Errorf("login failed for %s with password %s", user, password)
+    ```
+
+    Error messages travel to log files, monitoring tools, sometimes all the way to the HTTP response. A
+    password, a token or a connection string placed in an error therefore ends up readable by far too many
+    people. Add **context** (which user, which file, which step), never the **sensitive data** itself.
+
+    Another frequent mistake: comparing errors with `==` (`if err == fs.ErrNotExist`). As soon as an error is
+    wrapped with `%w`, the comparison fails. Use `errors.Is` and `errors.As`.
+
+bestPractice:
+  fr: |
+    - **Échouez fermé** (*fail closed*) : si la politique, le certificat ou le service d'autorisation est indisponible, refusez l'action.
+    - **Enveloppez avec `%w`** et un contexte court : `fmt.Errorf("load policy: %w", err)`.
+    - **Validez après avoir décodé** : un JSON syntaxiquement correct peut contenir des valeurs absurdes ou dangereuses.
+    - **Masquez les secrets par le type** : un type `Secret` dont la méthode `String()` renvoie `[REDACTED]` ne fuit pas par accident dans `fmt.Println`.
+    - **Gardez les interfaces petites** et définissez-les là où elles sont utilisées, pas là où elles sont implémentées.
+    - **Utilisez `defer`** juste après avoir ouvert une ressource (`defer f.Close()`), pour ne jamais l'oublier sur un chemin d'erreur.
+  en: |
+    - **Fail closed**: if the policy, the certificate or the authorisation service is unavailable, deny the action.
+    - **Wrap with `%w`** and a short context: `fmt.Errorf("load policy: %w", err)`.
+    - **Validate after decoding**: syntactically correct JSON can hold absurd or dangerous values.
+    - **Hide secrets with the type system**: a `Secret` type whose `String()` method returns `[REDACTED]` does not leak by accident through `fmt.Println`.
+    - **Keep interfaces small** and define them where they are used, not where they are implemented.
+    - **Use `defer`** right after opening a resource (`defer f.Close()`), so it is never forgotten on an error path.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue a affiché une configuration dans les logs et le mot de passe de la base est parti dans
+      l'outil de supervision. Empêchez que cela se reproduise grâce au système de types.
+
+      1. Créez un type `Secret` basé sur `string`, avec une méthode `String() string` qui renvoie toujours
+         `[REDACTED]` (vous implémentez ainsi l'interface `fmt.Stringer`).
+      2. Créez une struct `DBConfig` avec les champs `Host string`, `User string` et `Password Secret`.
+      3. Ajoutez une méthode `Validate() error` qui renvoie une erreur si `Host` est vide ou si le mot de
+         passe fait moins de 16 caractères. Le message d'erreur ne doit **jamais** contenir le mot de passe.
+      4. Dans `main`, affichez la configuration avec `fmt.Printf("%+v\n", cfg)` puis le résultat de
+         `Validate()` pour un mot de passe trop court.
+    en: |
+      A colleague printed a configuration to the logs and the database password ended up in the monitoring
+      tool. Use the type system to make sure it cannot happen again.
+
+      1. Create a `Secret` type based on `string`, with a `String() string` method that always returns
+         `[REDACTED]` (this implements the `fmt.Stringer` interface).
+      2. Create a `DBConfig` struct with the fields `Host string`, `User string` and `Password Secret`.
+      3. Add a `Validate() error` method that returns an error when `Host` is empty or when the password is
+         shorter than 16 characters. The error message must **never** contain the password.
+      4. In `main`, print the configuration with `fmt.Printf("%+v\n", cfg)` and then the result of
+         `Validate()` for a password that is too short.
+  solution:
+    file: secret.go
+    lang: go
+    code: |
+      package main
+
+      import (
+      	"errors"
+      	"fmt"
+      )
+
+      // Secret hides its value whenever it is printed with %v, %+v or %s
+      type Secret string
+
+      func (Secret) String() string { return "[REDACTED]" }
+
+      type DBConfig struct {
+      	Host     string
+      	User     string
+      	Password Secret
+      }
+
+      // Validate reports problems without ever echoing the secret itself
+      func (c DBConfig) Validate() error {
+      	if c.Host == "" {
+      		return errors.New("db config: host is empty")
+      	}
+      	if len(c.Password) < 16 {
+      		return fmt.Errorf("db config: password too short (%d chars, want 16+)", len(c.Password))
+      	}
+      	return nil
+      }
+
+      func main() {
+      	cfg := DBConfig{Host: "db.internal", User: "app", Password: "changeme"}
+
+      	fmt.Printf("%+v\n", cfg)
+      	if err := cfg.Validate(); err != nil {
+      		fmt.Println("error:", err)
+      	}
+      }
+    note:
+      fr: "Le programme affiche `{Host:db.internal User:app Password:[REDACTED]}` puis `error: db config: password too short (8 chars, want 16+)`. Attention : le verbe `%#v` contourne `String()` ; pour le couvrir aussi, ajoutez une méthode `GoString() string`."
+      en: "The program prints `{Host:db.internal User:app Password:[REDACTED]}` then `error: db config: password too short (8 chars, want 16+)`. Beware: the `%#v` verb bypasses `String()`; to cover it too, add a `GoString() string` method."
+
+quiz:
+  - q:
+      fr: "Quand faut-il utiliser un receveur par pointeur (`func (f *Finding) ...`) ?"
+      en: "When should you use a pointer receiver (`func (f *Finding) ...`)?"
+    options:
+      fr:
+        - "Quand la méthode doit modifier la struct"
+        - "Quand la méthode ne renvoie rien"
+        - "Uniquement pour les types exportés"
+        - "Jamais : les pointeurs sont interdits en Go"
+      en:
+        - "When the method must modify the struct"
+        - "When the method returns nothing"
+        - "Only for exported types"
+        - "Never: pointers are forbidden in Go"
+    answer: 0
+    why:
+      fr: "Un receveur par valeur travaille sur une copie ; seul un receveur par pointeur modifie la struct d'origine."
+      en: "A value receiver works on a copy; only a pointer receiver modifies the original struct."
+  - q:
+      fr: "Comment un type déclare-t-il qu'il implémente une interface en Go ?"
+      en: "How does a type declare that it implements an interface in Go?"
+    options:
+      fr:
+        - "Avec le mot-clé `implements`"
+        - "Avec une annotation `@Override`"
+        - "En héritant de l'interface avec `extends`"
+        - "Il ne déclare rien : il lui suffit de posséder les méthodes"
+      en:
+        - "With the `implements` keyword"
+        - "With an `@Override` annotation"
+        - "By inheriting from the interface with `extends`"
+        - "It declares nothing: having the methods is enough"
+    answer: 3
+    why:
+      fr: "Les interfaces Go sont satisfaites implicitement : tout type possédant les méthodes requises convient."
+      en: "Go interfaces are satisfied implicitly: any type that has the required methods fits."
+  - q:
+      fr: "À quoi sert le verbe `%w` dans `fmt.Errorf` ?"
+      en: "What is the `%w` verb used for in `fmt.Errorf`?"
+    options:
+      fr:
+        - "À écrire l'erreur dans un fichier"
+        - "À transformer l'erreur en avertissement"
+        - "À envelopper l'erreur d'origine pour qu'elle reste inspectable"
+        - "À masquer les secrets contenus dans l'erreur"
+      en:
+        - "To write the error to a file"
+        - "To turn the error into a warning"
+        - "To wrap the original error so that it stays inspectable"
+        - "To hide the secrets contained in the error"
+    answer: 2
+    why:
+      fr: "`%w` conserve l'erreur d'origine dans la chaîne : `errors.Is` et `errors.As` peuvent encore la retrouver."
+      en: "`%w` keeps the original error in the chain: `errors.Is` and `errors.As` can still find it."
+  - q:
+      fr: "Dans l'exemple vulnérable, pourquoi le programme démarre-t-il sans MFA ?"
+      en: "In the vulnerable example, why does the program start without MFA?"
+    options:
+      fr:
+        - "Parce que le fichier JSON contenait `require_mfa: false`"
+        - "Parce que les erreurs sont ignorées et la struct garde ses valeurs zéro"
+        - "Parce que `encoding/json` ne sait pas lire les booléens"
+        - "Parce que Go désactive le MFA par défaut"
+      en:
+        - "Because the JSON file contained `require_mfa: false`"
+        - "Because errors are ignored and the struct keeps its zero values"
+        - "Because `encoding/json` cannot read booleans"
+        - "Because Go disables MFA by default"
+    answer: 1
+    why:
+      fr: "Le fichier est absent, les deux erreurs sont jetées avec `_`, et `Policy` reste à `false` / `0` : un fail open."
+      en: "The file is missing, both errors are thrown away with `_`, and `Policy` stays at `false` / `0`: a fail open."
+  - q:
+      fr: "Que signifie « fail closed » ?"
+      en: "What does \"fail closed\" mean?"
+    options:
+      fr:
+        - "Fermer le programme sans afficher de message"
+        - "Autoriser l'action quand le contrôle est indisponible"
+        - "Refuser l'action quand le contrôle ne peut pas s'exécuter"
+        - "Fermer tous les fichiers avec `defer`"
+      en:
+        - "Closing the program without printing a message"
+        - "Allowing the action when the control is unavailable"
+        - "Denying the action when the control cannot run"
+        - "Closing all files with `defer`"
+    answer: 2
+    why:
+      fr: "Un système qui échoue fermé refuse par défaut : une panne du contrôle ne devient pas une porte ouverte."
+      en: "A system that fails closed denies by default: a failure of the control does not become an open door."

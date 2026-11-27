@@ -1,0 +1,517 @@
+description:
+  fr: "Découvrir les étapes d'un pipeline DevSecOps, du commit à la production, et le contrôle de sécurité placé à chacune d'elles."
+  en: "Discover the stages of a DevSecOps pipeline, from commit to production, and the security check placed at each of them."
+duration: 20
+
+intro:
+  fr: |
+    Un **pipeline** est une suite d'étapes automatiques qui transforme votre code en application en
+    production. On parle de **CI/CD** : *Continuous Integration* (intégration continue : tester et
+    construire à chaque modification) et *Continuous Delivery* (livraison continue : déployer
+    automatiquement ce qui a été validé).
+
+    Imaginez une **chaîne de montage** dans une usine automobile. À chaque poste, une pièce est ajoutée,
+    puis un contrôle qualité vérifie le travail. Si un contrôle échoue, la chaîne s'arrête : la voiture
+    défectueuse ne sort jamais de l'usine. Un pipeline DevSecOps fonctionne de la même façon, avec des
+    contrôles de **sécurité** à chaque poste.
+
+    Dans cette leçon, vous allez parcourir la chaîne poste par poste, puis lire un pipeline complet.
+  en: |
+    A **pipeline** is a series of automatic steps that turns your code into an application running in
+    production. The term is **CI/CD**: *Continuous Integration* (test and build on every change) and
+    *Continuous Delivery* (automatically deploy what has been validated).
+
+    Picture an **assembly line** in a car factory. At each station a part is added, then a quality
+    check verifies the work. If a check fails, the line stops: the faulty car never leaves the factory.
+    A DevSecOps pipeline works the same way, with **security** checks at every station.
+
+    In this lesson you will walk along the line station by station, then read a complete pipeline.
+
+sections:
+  - heading:
+      fr: "Les postes de la chaîne"
+      en: "The stations of the line"
+    body:
+      fr: |
+        | Étape | Ce qui se passe | Contrôle de sécurité | Outils (exemples) |
+        |---|---|---|---|
+        | **1. Code** | Le développeur pousse un commit | Détection de secrets | Gitleaks |
+        | **2. Build** | On installe les dépendances, on lance les tests | Analyse du code (SAST) et des dépendances (SCA) | Semgrep, Bandit, pip-audit |
+        | **3. Package** | On construit l'image de conteneur | Scan de l'image, inventaire (SBOM), signature | Trivy, Syft, Cosign |
+        | **4. Test** | L'application tourne dans un environnement de test | Attaque simulée de l'application (DAST) | ZAP |
+        | **5. Deploy** | On crée l'infrastructure et on déploie | Scan de l'infrastructure en code, règles de conformité | Checkov, Trivy, OPA |
+        | **6. Run** | L'application sert les utilisateurs | Supervision et détection d'intrusion | Falco, Wazuh |
+
+        Vous n'avez pas besoin de connaître ces outils aujourd'hui : chacun a son cours plus loin sur ce site.
+        Retenez la logique : **une étape, un contrôle**, et le contrôle le plus rapide en premier.
+      en: |
+        | Stage | What happens | Security check | Tools (examples) |
+        |---|---|---|---|
+        | **1. Code** | The developer pushes a commit | Secret detection | Gitleaks |
+        | **2. Build** | Dependencies are installed, tests run | Code analysis (SAST) and dependency analysis (SCA) | Semgrep, Bandit, pip-audit |
+        | **3. Package** | The container image is built | Image scan, inventory (SBOM), signature | Trivy, Syft, Cosign |
+        | **4. Test** | The application runs in a test environment | Simulated attack on the application (DAST) | ZAP |
+        | **5. Deploy** | Infrastructure is created and the app deployed | Infrastructure-as-code scan, compliance rules | Checkov, Trivy, OPA |
+        | **6. Run** | The application serves users | Monitoring and intrusion detection | Falco, Wazuh |
+
+        You do not need to know these tools today: each has its own course later on this site. Remember
+        the logic: **one stage, one check**, and the fastest check first.
+  - heading:
+      fr: "Le vocabulaire à connaître"
+      en: "The vocabulary to know"
+    body:
+      fr: |
+        | Sigle | Signification | En une phrase |
+        |---|---|---|
+        | **SAST** | *Static Application Security Testing* | On lit le code source sans l'exécuter pour y trouver des failles. |
+        | **SCA** | *Software Composition Analysis* | On vérifie si les bibliothèques utilisées ont des vulnérabilités connues. |
+        | **DAST** | *Dynamic Application Security Testing* | On attaque l'application en fonctionnement, comme le ferait un pirate. |
+        | **IaC** | *Infrastructure as Code* | L'infrastructure (serveurs, réseaux) est décrite dans des fichiers, donc analysable. |
+        | **SBOM** | *Software Bill of Materials* | La liste complète des composants d'un logiciel, comme la liste d'ingrédients d'un plat. |
+        | **CVE** | *Common Vulnerabilities and Exposures* | L'identifiant public d'une vulnérabilité connue, par exemple `CVE-2021-44228`. |
+
+        SAST regarde **votre** code, SCA regarde le code **des autres** que vous utilisez, DAST regarde
+        le **résultat** en fonctionnement. Les trois se complètent.
+      en: |
+        | Acronym | Meaning | In one sentence |
+        |---|---|---|
+        | **SAST** | *Static Application Security Testing* | The source code is read, without running it, to find flaws. |
+        | **SCA** | *Software Composition Analysis* | The libraries in use are checked for known vulnerabilities. |
+        | **DAST** | *Dynamic Application Security Testing* | The running application is attacked the way a hacker would. |
+        | **IaC** | *Infrastructure as Code* | Infrastructure (servers, networks) is described in files, so it can be analysed. |
+        | **SBOM** | *Software Bill of Materials* | The complete list of components of a piece of software, like a dish's ingredient list. |
+        | **CVE** | *Common Vulnerabilities and Exposures* | The public identifier of a known vulnerability, for example `CVE-2021-44228`. |
+
+        SAST looks at **your** code, SCA looks at the code **of others** that you use, DAST looks at the
+        running **result**. The three complement each other.
+  - heading:
+      fr: "Les portes de sécurité"
+      en: "Security gates"
+    body:
+      fr: |
+        Une **porte de sécurité** (*security gate*) est une règle qui décide si le pipeline continue ou
+        s'arrête. Techniquement, c'est très simple : chaque outil se termine avec un **code de sortie**.
+        `0` signifie « tout va bien », toute autre valeur fait échouer l'étape.
+
+        | Type de porte | Comportement | Quand l'utiliser |
+        |---|---|---|
+        | **Bloquante** | Le pipeline s'arrête | Failles critiques ou élevées, secrets détectés |
+        | **Informative** | Un avertissement s'affiche, le pipeline continue | Failles faibles, nouvelles règles en rodage |
+
+        Une bonne politique tient en une phrase, par exemple : « aucune vulnérabilité **critique ou élevée**
+        ayant un correctif disponible ne part en production ». Elle est écrite dans le pipeline, donc
+        appliquée à tout le monde de la même façon.
+      en: |
+        A **security gate** is a rule that decides whether the pipeline continues or stops. Technically it
+        is very simple: every tool ends with an **exit code**. `0` means "all good", any other value makes
+        the step fail.
+
+        | Type of gate | Behaviour | When to use it |
+        |---|---|---|
+        | **Blocking** | The pipeline stops | Critical or high flaws, detected secrets |
+        | **Informative** | A warning is shown, the pipeline continues | Low flaws, new rules being tuned |
+
+        A good policy fits in one sentence, for example: "no **critical or high** vulnerability with an
+        available fix goes to production". It is written in the pipeline, so it applies to everyone in
+        the same way.
+
+examples:
+  - title:
+      fr: "Étape Package : l'image que le pipeline construit"
+      en: "Package stage: the image the pipeline builds"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # Pinned base image: the same build gives the same result tomorrow
+      FROM python:3.12-slim
+
+      WORKDIR /app
+
+      # Dependencies first: this layer is reused while requirements.txt is unchanged
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+
+      COPY app.py .
+
+      # Never run the application as root inside the container
+      RUN useradd --create-home --uid 10001 appuser
+      USER appuser
+
+      EXPOSE 8000
+      CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
+    note:
+      fr: "Un `Dockerfile` est la recette de l'image. Deux réflexes de sécurité sont déjà là : une image de base à version fixée et un utilisateur non-root. Le scanner d'image du pipeline vérifiera ensuite les paquets installés."
+      en: "A `Dockerfile` is the recipe of the image. Two security reflexes are already there: a pinned base image and a non-root user. The pipeline's image scanner will then check the installed packages."
+
+  - title:
+      fr: "Le pipeline en local : les mêmes étapes avec make"
+      en: "The pipeline on your laptop: the same stages with make"
+    file: Makefile
+    lang: makefile
+    kind: neutral
+    code: |
+      # Run the same stages locally before pushing:  make pipeline
+      IMAGE := shop-api:local
+
+      .PHONY: pipeline test sast sca image scan
+
+      # Stages run from left to right; make stops at the first failure
+      pipeline: test sast sca image scan
+      	@echo "Pipeline OK: $(IMAGE) is ready"
+
+      test:
+      	pytest -q
+
+      sast:
+      	bandit -r . --severity-level medium
+
+      sca:
+      	pip-audit -r requirements.txt
+
+      image:
+      	docker build -t $(IMAGE) .
+
+      scan:
+      	trivy image --severity HIGH,CRITICAL --exit-code 1 $(IMAGE)
+    output: |
+      $ make pipeline
+      pytest -q
+      ....                                                                     [100%]
+      4 passed in 0.21s
+      bandit -r . --severity-level medium
+      >> Issue: [B602:subprocess_popen_with_shell_equals_true] subprocess call with shell=True identified, security issue.
+         Severity: High   Confidence: High
+      make: *** [Makefile:14: sast] Error 1
+    note:
+      fr: "Un pipeline n'a rien de magique : c'est une liste de commandes lancées dans l'ordre. Ici Bandit trouve une faille, renvoie un code de sortie différent de 0, et `make` s'arrête : l'image n'est jamais construite. C'est une porte bloquante."
+      en: "There is nothing magical about a pipeline: it is a list of commands run in order. Here Bandit finds a flaw, returns a non-zero exit code, and `make` stops: the image is never built. That is a blocking gate."
+
+  - title:
+      fr: "Le pipeline complet dans GitHub Actions"
+      en: "The complete pipeline in GitHub Actions"
+    file: .github/workflows/pipeline.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: pipeline
+
+      on:
+        push:
+          branches: [main]
+        pull_request:
+
+      permissions:
+        contents: read
+
+      jobs:
+        # --- Stage 2: build and test -------------------------------------
+        test:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - run: pip install -r requirements.txt pytest
+            - run: pytest -q
+
+        # SAST and SCA run in parallel with the tests: faster feedback
+        sast:
+          runs-on: ubuntu-latest
+          container:
+            image: semgrep/semgrep
+          steps:
+            - uses: actions/checkout@v4
+            - run: semgrep scan --config p/default --error
+
+        sca:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - run: pip install pip-audit && pip-audit -r requirements.txt
+
+        # --- Stage 3: package, only if everything above is green ---------
+        image:
+          needs: [test, sast, sca]
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Build the image
+              run: docker build -t shop-api:${{ github.sha }} .
+            - name: Scan the image (blocking gate on HIGH and CRITICAL)
+              run: |
+                docker run --rm \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  aquasec/trivy:0.65.0 image \
+                  --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+                  shop-api:${{ github.sha }}
+
+        # --- Stage 5: deploy, main branch only ---------------------------
+        deploy:
+          needs: image
+          if: github.ref == 'refs/heads/main'
+          runs-on: ubuntu-latest
+          environment: production # can require a human approval
+          steps:
+            - name: Deploy the validated image
+              run: echo "Deploying shop-api:${{ github.sha }} to production"
+    note:
+      fr: "Lisez les `needs` : ils dessinent la chaîne. `test`, `sast` et `sca` tournent en parallèle ; `image` attend les trois ; `deploy` attend `image` et ne tourne que sur `main`. L'option `--exit-code 1` transforme le scan Trivy en porte bloquante, et `--ignore-unfixed` ignore les failles sans correctif disponible."
+      en: "Read the `needs` keys: they draw the line. `test`, `sast` and `sca` run in parallel; `image` waits for all three; `deploy` waits for `image` and only runs on `main`. The `--exit-code 1` option turns the Trivy scan into a blocking gate, and `--ignore-unfixed` skips flaws that have no fix available yet."
+
+  - title:
+      fr: "La logique d'une porte de sécurité"
+      en: "The logic of a security gate"
+    file: gate.py
+    lang: python
+    kind: neutral
+    code: |
+      # A security gate: decide whether the pipeline may continue.
+
+      findings = [
+          {"tool": "sast", "id": "sql-injection", "severity": "CRITICAL"},
+          {"tool": "sca", "id": "flask PYSEC-2023-62", "severity": "HIGH"},
+          {"tool": "sast", "id": "hardcoded-tmp-directory", "severity": "MEDIUM"},
+          {"tool": "image", "id": "missing-healthcheck", "severity": "LOW"},
+      ]
+
+      # The policy, written once and applied to everyone
+      BLOCKING = {"CRITICAL", "HIGH"}
+
+      blocking = [f for f in findings if f["severity"] in BLOCKING]
+      tolerated = [f for f in findings if f["severity"] not in BLOCKING]
+
+      for f in blocking:
+          print(f"BLOCK {f['severity']:<8} {f['tool']:<5} {f['id']}")
+      for f in tolerated:
+          print(f"warn  {f['severity']:<8} {f['tool']:<5} {f['id']}")
+
+      # 0 = the pipeline continues, anything else = the pipeline stops
+      exit_code = 1 if blocking else 0
+      print(f"{len(blocking)} blocking, {len(tolerated)} tolerated -> exit code {exit_code}")
+    output: |
+      BLOCK CRITICAL sast  sql-injection
+      BLOCK HIGH     sca   flask PYSEC-2023-62
+      warn  MEDIUM   sast  hardcoded-tmp-directory
+      warn  LOW      image missing-healthcheck
+      2 blocking, 2 tolerated -> exit code 1
+    note:
+      fr: "Tous les outils du pipeline appliquent cette logique : comparer la sévérité de chaque résultat à un seuil, puis renvoyer un code de sortie. Passez `BLOCKING` à `{\"CRITICAL\"}` et relancez pour voir la porte devenir plus tolérante."
+      en: "Every tool in the pipeline applies this logic: compare the severity of each finding with a threshold, then return an exit code. Set `BLOCKING` to `{\"CRITICAL\"}` and run again to watch the gate become more tolerant."
+
+mistake:
+  fr: |
+    **Configurer les contrôles pour qu'ils n'échouent jamais.**
+
+    Par peur de « bloquer les livraisons », beaucoup d'équipes ajoutent `--exit-code 0`, `|| true` ou
+    `continue-on-error: true` à leurs étapes de sécurité. Le pipeline reste vert, les rapports
+    s'accumulent, et plus personne ne les lit : c'est un détecteur de fumée sans sirène. Autre piège
+    classique : une étape de déploiement qui ne dépend pas (`needs`) des étapes de sécurité, et qui
+    déploie donc même quand elles échouent.
+  en: |
+    **Configuring the checks so that they never fail.**
+
+    For fear of "blocking releases", many teams add `--exit-code 0`, `|| true` or
+    `continue-on-error: true` to their security steps. The pipeline stays green, reports pile up, and
+    nobody reads them any more: it is a smoke detector without a siren. Another classic trap: a deploy
+    step that does not depend (`needs`) on the security steps, and therefore deploys even when they fail.
+
+bestPractice:
+  fr: |
+    - **Le plus rapide d'abord** : secrets et analyse de code en quelques minutes, scans longs ensuite.
+    - **Bloquez sur critique et élevé**, affichez le reste en avertissement, puis durcissez progressivement.
+    - **Le déploiement dépend de tout** : aucune image non scannée ne doit pouvoir atteindre la production.
+    - **Même pipeline pour tous** : la règle est dans le dépôt, pas dans la tête d'une personne.
+    - **Fixez les versions** des outils et des images de base pour des résultats reproductibles.
+    - **Permissions minimales** : un pipeline a accès aux secrets de production, c'est une cible de choix.
+  en: |
+    - **Fastest first**: secrets and code analysis within minutes, long scans afterwards.
+    - **Block on critical and high**, show the rest as warnings, then tighten gradually.
+    - **Deployment depends on everything**: no unscanned image must be able to reach production.
+    - **Same pipeline for everyone**: the rule lives in the repository, not in someone's head.
+    - **Pin the versions** of tools and base images to get reproducible results.
+    - **Minimal permissions**: a pipeline has access to production secrets, which makes it a prime target.
+
+exercise:
+  statement:
+    fr: |
+      Le pipeline ci-dessous « marche », mais il contient **trois erreurs** qui rendent sa sécurité inutile.
+
+      ```yaml
+      name: pipeline
+      on: [push]
+
+      jobs:
+        image:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - run: docker build -t shop-api:${{ github.sha }} .
+            - run: |
+                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                  aquasec/trivy:0.65.0 image --severity HIGH,CRITICAL \
+                  --exit-code 0 shop-api:${{ github.sha }}
+
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            - run: echo "Deploying to production"
+      ```
+
+      1. Trouvez les trois erreurs.
+      2. Réécrivez le pipeline corrigé.
+    en: |
+      The pipeline below "works", but it contains **three mistakes** that make its security useless.
+
+      ```yaml
+      name: pipeline
+      on: [push]
+
+      jobs:
+        image:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - run: docker build -t shop-api:${{ github.sha }} .
+            - run: |
+                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                  aquasec/trivy:0.65.0 image --severity HIGH,CRITICAL \
+                  --exit-code 0 shop-api:${{ github.sha }}
+
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            - run: echo "Deploying to production"
+      ```
+
+      1. Find the three mistakes.
+      2. Rewrite the fixed pipeline.
+  solution:
+    file: .github/workflows/pipeline.yml
+    lang: yaml
+    code: |
+      name: pipeline
+      on: [push]
+
+      # Fix 1: least privilege instead of the default token permissions
+      permissions:
+        contents: read
+
+      jobs:
+        image:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - run: docker build -t shop-api:${{ github.sha }} .
+            # Fix 2: --exit-code 1 makes the job fail when a flaw is found
+            - run: |
+                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                  aquasec/trivy:0.65.0 image --severity HIGH,CRITICAL \
+                  --exit-code 1 shop-api:${{ github.sha }}
+
+        deploy:
+          # Fix 3: deploy only if the image job succeeded, and only from main
+          needs: image
+          if: github.ref == 'refs/heads/main'
+          runs-on: ubuntu-latest
+          steps:
+            - run: echo "Deploying to production"
+    note:
+      fr: "Erreurs : (1) aucune permission minimale ; (2) `--exit-code 0` : Trivy affiche les failles mais ne bloque rien ; (3) `deploy` n'a pas de `needs`, il tourne en parallèle et déploie même si le scan échoue."
+      en: "Mistakes: (1) no minimal permissions; (2) `--exit-code 0`: Trivy prints the flaws but blocks nothing; (3) `deploy` has no `needs`, so it runs in parallel and deploys even if the scan fails."
+
+quiz:
+  - q:
+      fr: "Que vérifie un outil de SCA (Software Composition Analysis) ?"
+      en: "What does an SCA (Software Composition Analysis) tool check?"
+    options:
+      fr:
+        - "Les vulnérabilités connues dans les bibliothèques utilisées"
+        - "La vitesse d'exécution des tests unitaires"
+        - "L'orthographe des commentaires du code"
+        - "La disponibilité du site en production"
+      en:
+        - "Known vulnerabilities in the libraries in use"
+        - "The execution speed of unit tests"
+        - "The spelling of code comments"
+        - "The availability of the site in production"
+    answer: 0
+    why:
+      fr: "SCA analyse les dépendances (le code des autres) et les compare aux bases de vulnérabilités connues."
+      en: "SCA analyses the dependencies (other people's code) and compares them with databases of known vulnerabilities."
+  - q:
+      fr: "Quelle est la différence entre SAST et DAST ?"
+      en: "What is the difference between SAST and DAST?"
+    options:
+      fr:
+        - "SAST est payant, DAST est gratuit"
+        - "SAST analyse les images Docker, DAST analyse Terraform"
+        - "SAST se fait en production, DAST sur le poste du développeur"
+        - "SAST lit le code sans l'exécuter, DAST teste l'application en fonctionnement"
+      en:
+        - "SAST is paid, DAST is free"
+        - "SAST analyses Docker images, DAST analyses Terraform"
+        - "SAST happens in production, DAST on the developer's machine"
+        - "SAST reads the code without running it, DAST tests the running application"
+    answer: 3
+    why:
+      fr: "Statique = lecture du code source ; dynamique = attaque de l'application qui tourne."
+      en: "Static = reading the source code; dynamic = attacking the running application."
+  - q:
+      fr: "Comment un outil indique-t-il au pipeline qu'il doit s'arrêter ?"
+      en: "How does a tool tell the pipeline that it must stop?"
+    options:
+      fr:
+        - "En envoyant un e-mail à l'équipe sécurité"
+        - "En se terminant avec un code de sortie différent de 0"
+        - "En supprimant la branche Git"
+        - "En écrivant le mot STOP dans un fichier"
+      en:
+        - "By sending an e-mail to the security team"
+        - "By ending with a non-zero exit code"
+        - "By deleting the Git branch"
+        - "By writing the word STOP into a file"
+    answer: 1
+    why:
+      fr: "Un code de sortie 0 signifie succès ; toute autre valeur fait échouer l'étape, donc le pipeline."
+      en: "Exit code 0 means success; any other value fails the step, and therefore the pipeline."
+  - q:
+      fr: "Dans le pipeline complet, que garantit `needs: [test, sast, sca]` sur le job `image` ?"
+      en: "In the complete pipeline, what does `needs: [test, sast, sca]` on the `image` job guarantee?"
+    options:
+      fr:
+        - "Que les trois jobs tournent sur la même machine"
+        - "Que l'image est construite avant les tests"
+        - "Que l'image n'est construite que si les trois jobs ont réussi"
+        - "Que les trois jobs sont ignorés sur la branche main"
+      en:
+        - "That the three jobs run on the same machine"
+        - "That the image is built before the tests"
+        - "That the image is only built if the three jobs succeeded"
+        - "That the three jobs are skipped on the main branch"
+    answer: 2
+    why:
+      fr: "`needs` crée une dépendance : le job attend la réussite des jobs cités avant de démarrer."
+      en: "`needs` creates a dependency: the job waits for the listed jobs to succeed before starting."
+  - q:
+      fr: "Pourquoi `continue-on-error: true` sur une étape de sécurité est-il dangereux ?"
+      en: "Why is `continue-on-error: true` on a security step dangerous?"
+    options:
+      fr:
+        - "Il ralentit fortement le pipeline"
+        - "Il publie les secrets dans les journaux"
+        - "Il supprime les rapports de scan"
+        - "Le pipeline reste vert même quand une faille est détectée"
+      en:
+        - "It slows the pipeline down a lot"
+        - "It publishes secrets in the logs"
+        - "It deletes the scan reports"
+        - "The pipeline stays green even when a flaw is detected"
+    answer: 3
+    why:
+      fr: "L'échec du contrôle est ignoré : la faille est signalée dans un rapport que personne ne lit et part en production."
+      en: "The failure of the check is ignored: the flaw is reported in a report nobody reads and goes to production."

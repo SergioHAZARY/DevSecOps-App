@@ -1,0 +1,643 @@
+description:
+  fr: "Concevoir un réseau cloud sûr : VPC à sous-réseaux publics et privés, Security Groups contre NACL, ports d'administration fermés, VPC endpoints et flow logs."
+  en: "Design a safe cloud network: VPC with public and private subnets, Security Groups versus NACLs, closed admin ports, VPC endpoints and flow logs."
+duration: 30
+
+intro:
+  fr: |
+    Un **VPC** (*Virtual Private Cloud*) est votre réseau privé chez le fournisseur cloud : vous choisissez
+    sa plage d'adresses, vous le découpez en **sous-réseaux** et vous décidez qui peut parler à qui.
+
+    Imaginez un immeuble de bureaux. Le hall d'accueil est ouvert au public (sous-réseau **public**), les
+    étages sont réservés au personnel (sous-réseaux **privés**) et la salle des coffres n'est accessible
+    que depuis un seul bureau. Deux contrôles se complètent : le vigile à l'entrée de chaque étage (la
+    **NACL**, *Network Access Control List*) et la serrure de chaque porte de bureau (le **Security Group**).
+
+    Dans cette leçon, vous allez dessiner un VPC à trois niveaux, écrire des groupes de sécurité qui se
+    référencent entre eux, fermer les ports d'administration et journaliser le trafic. Les exemples
+    utilisent AWS ; les mêmes principes s'appliquent aux NSG d'Azure et aux règles de pare-feu de GCP,
+    vus dans les leçons suivantes.
+  en: |
+    A **VPC** (*Virtual Private Cloud*) is your private network at the cloud provider: you choose its
+    address range, split it into **subnets** and decide who may talk to whom.
+
+    Picture an office building. The lobby is open to the public (**public** subnet), the floors are for
+    staff only (**private** subnets) and the vault can be reached from a single office. Two controls work
+    together: the guard at the entrance of each floor (the **NACL**, *Network Access Control List*) and
+    the lock on each office door (the **Security Group**).
+
+    In this lesson you will draw a three-tier VPC, write security groups that reference each other, close
+    admin ports and log traffic. The examples use AWS; the same principles apply to Azure NSGs and GCP
+    firewall rules, covered in the next lessons.
+
+sections:
+  - heading:
+      fr: "Un VPC à trois niveaux"
+      en: "A three-tier VPC"
+    body:
+      fr: |
+        Un sous-réseau est **public** si sa table de routage contient une route `0.0.0.0/0` vers une
+        **Internet Gateway**. Sinon il est **privé** : ses machines ne sont pas joignables depuis Internet,
+        même si quelqu'un ouvre un port par erreur.
+
+        | Niveau | Sous-réseau | Contenu | Joignable depuis |
+        |---|---|---|---|
+        | Entrée | Public | Load balancer, NAT Gateway | Internet, sur 443 uniquement |
+        | Application | Privé | Serveurs, conteneurs | Le load balancer uniquement |
+        | Données | Privé, sans route vers Internet | Bases de données, caches | Le niveau application uniquement |
+
+        Répartissez chaque niveau sur au moins deux zones de disponibilité. Les serveurs privés sortent
+        vers Internet par une **NAT Gateway** (mises à jour, API externes), jamais avec une adresse IP
+        publique. Et n'utilisez pas le **VPC par défaut** : tous ses sous-réseaux sont publics.
+      en: |
+        A subnet is **public** if its route table contains a `0.0.0.0/0` route to an **Internet Gateway**.
+        Otherwise it is **private**: its machines cannot be reached from the Internet, even if someone
+        opens a port by mistake.
+
+        | Tier | Subnet | Contents | Reachable from |
+        |---|---|---|---|
+        | Entry | Public | Load balancer, NAT Gateway | The Internet, on 443 only |
+        | Application | Private | Servers, containers | The load balancer only |
+        | Data | Private, no route to the Internet | Databases, caches | The application tier only |
+
+        Spread each tier over at least two availability zones. Private servers reach the Internet through
+        a **NAT Gateway** (updates, external APIs), never with a public IP address. And do not use the
+        **default VPC**: all of its subnets are public.
+  - heading:
+      fr: "Security Groups contre NACL"
+      en: "Security Groups versus NACLs"
+    body:
+      fr: |
+        | | Security Group | NACL |
+        |---|---|---|
+        | S'applique à | Une interface réseau (instance, load balancer, base RDS) | Un sous-réseau entier |
+        | État | **Stateful** : la réponse à un flux autorisé passe automatiquement | **Stateless** : il faut autoriser l'aller *et* le retour (ports éphémères) |
+        | Types de règles | Autorisations uniquement | Autorisations **et** refus |
+        | Évaluation | Toutes les règles sont évaluées ensemble | Par numéro croissant, la première qui correspond gagne |
+        | Source possible | Un CIDR **ou un autre Security Group** | Un CIDR uniquement |
+        | Par défaut | Tout entrant refusé, tout sortant autorisé | NACL par défaut : tout autorisé |
+
+        Le **Security Group** est votre outil principal : précis, au plus près de la ressource. Sa grande
+        force est de pouvoir désigner comme source **un autre groupe** plutôt qu'une plage d'adresses :
+        « la base accepte le port 5432 depuis les membres du groupe *app* », quelles que soient leurs IP.
+        La **NACL** sert de filet de sécurité grossier : bloquer une plage d'adresses malveillante ou
+        isoler complètement un sous-réseau.
+      en: |
+        | | Security Group | NACL |
+        |---|---|---|
+        | Applies to | A network interface (instance, load balancer, RDS database) | A whole subnet |
+        | State | **Stateful**: the reply to an allowed flow passes automatically | **Stateless**: you must allow both directions (ephemeral ports) |
+        | Rule types | Allow only | Allow **and** deny |
+        | Evaluation | All rules are evaluated together | In ascending number order, first match wins |
+        | Possible source | A CIDR **or another Security Group** | A CIDR only |
+        | Default | All inbound denied, all outbound allowed | Default NACL: everything allowed |
+
+        The **Security Group** is your main tool: precise, right next to the resource. Its great strength
+        is that the source can be **another group** instead of an address range: "the database accepts
+        port 5432 from members of the *app* group", whatever their IPs. The **NACL** is a coarse safety
+        net: blocking a malicious address range or fully isolating a subnet.
+  - heading:
+      fr: "Ports d'administration, VPC endpoints et flow logs"
+      en: "Admin ports, VPC endpoints and flow logs"
+    body:
+      fr: |
+        **Jamais `0.0.0.0/0` sur un port d'administration.** SSH (22), RDP (3389) et les ports de bases de
+        données (3306, 5432, 6379, 27017) sont scannés en permanence. La notation `0.0.0.0/0` (et `::/0`
+        en IPv6) signifie « toute la planète ». Pour administrer une machine privée, utilisez
+        **AWS Systems Manager Session Manager** : aucune règle entrante, aucun bastion à maintenir, et
+        chaque session est journalisée.
+
+        **VPC endpoints.** Sans eux, un serveur privé qui écrit dans S3 passe par la NAT Gateway et
+        Internet. Un *gateway endpoint* (S3, DynamoDB) ou un *interface endpoint* (PrivateLink, pour la
+        plupart des autres services) garde ce trafic sur le réseau d'AWS, et sa politique peut limiter les
+        buckets accessibles : un moyen de freiner l'exfiltration de données.
+
+        **VPC Flow Logs.** Ils enregistrent les métadonnées de chaque flux (source, destination, port,
+        `ACCEPT` ou `REJECT`), pas le contenu. Sans eux, impossible de répondre à la question « avec qui
+        cette machine compromise a-t-elle communiqué ? ». GuardDuty s'appuie aussi sur ces données.
+      en: |
+        **Never `0.0.0.0/0` on an admin port.** SSH (22), RDP (3389) and database ports (3306, 5432, 6379,
+        27017) are scanned around the clock. The notation `0.0.0.0/0` (and `::/0` in IPv6) means "the
+        whole planet". To administer a private machine use **AWS Systems Manager Session Manager**: no
+        inbound rule, no bastion to maintain, and every session is logged.
+
+        **VPC endpoints.** Without them, a private server writing to S3 goes through the NAT Gateway and
+        the Internet. A *gateway endpoint* (S3, DynamoDB) or an *interface endpoint* (PrivateLink, for
+        most other services) keeps that traffic on the AWS network, and its policy can restrict which
+        buckets are reachable: a way to slow down data exfiltration.
+
+        **VPC Flow Logs.** They record the metadata of every flow (source, destination, port, `ACCEPT` or
+        `REJECT`), not the content. Without them you cannot answer "who did this compromised machine talk
+        to?". GuardDuty relies on this data as well.
+
+examples:
+  - title:
+      fr: "Un groupe de sécurité « ça marche » : tout est ouvert au monde"
+      en: "An \"it works\" security group: everything open to the world"
+    file: sg_vulnerable.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      variable "vpc_id" {
+        type = string
+      }
+
+      # One group for everything, opened wide "until we have time to do it properly"
+      resource "aws_security_group" "everything" {
+        name   = "everything"
+        vpc_id = var.vpc_id
+
+        ingress {
+          description = "SSH from anywhere: brute-forced within minutes"
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+
+        ingress {
+          description = "RDP from anywhere, IPv6 included"
+          from_port        = 3389
+          to_port          = 3389
+          protocol         = "tcp"
+          cidr_blocks      = ["0.0.0.0/0"]
+          ipv6_cidr_blocks = ["::/0"]
+        }
+
+        ingress {
+          description = "PostgreSQL exposed directly to the Internet"
+          from_port   = 5432
+          to_port     = 5432
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+
+        egress {
+          description = "Any protocol, to anywhere: ideal for exfiltration"
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+    note:
+      fr: "Trois ports d'administration ouverts à `0.0.0.0/0`. Si ce groupe est attaché à une machine dotée d'une IP publique, la base de données est directement attaquable depuis n'importe où dans le monde."
+      en: "Three admin ports open to `0.0.0.0/0`. If this group is attached to a machine with a public IP, the database can be attacked directly from anywhere in the world."
+
+  - title:
+      fr: "Trois groupes chaînés : Internet -> load balancer -> application -> base"
+      en: "Three chained groups: Internet -> load balancer -> application -> database"
+    file: sg_secure.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "vpc_id" {
+        type = string
+      }
+
+      resource "aws_security_group" "alb" {
+        name   = "alb"
+        vpc_id = var.vpc_id
+      }
+
+      resource "aws_security_group" "app" {
+        name   = "app"
+        vpc_id = var.vpc_id
+      }
+
+      resource "aws_security_group" "db" {
+        name   = "db"
+        vpc_id = var.vpc_id
+      }
+
+      # Only the load balancer faces the Internet, and only on HTTPS
+      resource "aws_vpc_security_group_ingress_rule" "alb_https" {
+        security_group_id = aws_security_group.alb.id
+        description       = "HTTPS from the Internet"
+        cidr_ipv4         = "0.0.0.0/0"
+        ip_protocol       = "tcp"
+        from_port         = 443
+        to_port           = 443
+      }
+
+      resource "aws_vpc_security_group_egress_rule" "alb_to_app" {
+        security_group_id            = aws_security_group.alb.id
+        description                  = "Forward requests to the application tier only"
+        referenced_security_group_id = aws_security_group.app.id
+        ip_protocol                  = "tcp"
+        from_port                    = 8080
+        to_port                      = 8080
+      }
+
+      # The source is a security group, not a CIDR: only the load balancer can reach the app
+      resource "aws_vpc_security_group_ingress_rule" "app_from_alb" {
+        security_group_id            = aws_security_group.app.id
+        description                  = "HTTP from the load balancer"
+        referenced_security_group_id = aws_security_group.alb.id
+        ip_protocol                  = "tcp"
+        from_port                    = 8080
+        to_port                      = 8080
+      }
+
+      resource "aws_vpc_security_group_egress_rule" "app_to_db" {
+        security_group_id            = aws_security_group.app.id
+        description                  = "PostgreSQL to the database tier"
+        referenced_security_group_id = aws_security_group.db.id
+        ip_protocol                  = "tcp"
+        from_port                    = 5432
+        to_port                      = 5432
+      }
+
+      resource "aws_vpc_security_group_egress_rule" "app_https_out" {
+        security_group_id = aws_security_group.app.id
+        description       = "HTTPS out through the NAT Gateway (updates, external APIs)"
+        cidr_ipv4         = "0.0.0.0/0"
+        ip_protocol       = "tcp"
+        from_port         = 443
+        to_port           = 443
+      }
+
+      # The database accepts PostgreSQL from the application group and nothing else.
+      # No egress rule: the database never initiates a connection.
+      resource "aws_vpc_security_group_ingress_rule" "db_from_app" {
+        security_group_id            = aws_security_group.db.id
+        description                  = "PostgreSQL from the application tier"
+        referenced_security_group_id = aws_security_group.app.id
+        ip_protocol                  = "tcp"
+        from_port                    = 5432
+        to_port                      = 5432
+      }
+    note:
+      fr: "Aucun port 22 ni 3389 nulle part, et `0.0.0.0/0` n'apparaît en entrée que sur le 443 du load balancer. Un attaquant qui compromet l'application ne peut joindre la base que sur 5432, et la base ne peut rien émettre."
+      en: "No port 22 or 3389 anywhere, and `0.0.0.0/0` appears inbound only on port 443 of the load balancer. An attacker who compromises the application can reach the database on 5432 only, and the database cannot send anything out."
+
+  - title:
+      fr: "VPC avec sous-réseaux public et privé, endpoint S3 et flow logs"
+      en: "VPC with public and private subnets, S3 endpoint and flow logs"
+    file: vpc.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "flow_logs_bucket_arn" {
+        type        = string
+        description = "Bucket of the log-archive account that receives the flow logs"
+      }
+
+      resource "aws_vpc" "main" {
+        cidr_block           = "10.0.0.0/16"
+        enable_dns_support   = true
+        enable_dns_hostnames = true
+      }
+
+      resource "aws_internet_gateway" "main" {
+        vpc_id = aws_vpc.main.id
+      }
+
+      # Public subnet: only the load balancer and the NAT Gateway live here
+      resource "aws_subnet" "public" {
+        vpc_id                  = aws_vpc.main.id
+        cidr_block              = "10.0.0.0/24"
+        availability_zone       = "eu-west-1a"
+        map_public_ip_on_launch = false # no instance gets a public IP by accident
+      }
+
+      resource "aws_route_table" "public" {
+        vpc_id = aws_vpc.main.id
+
+        route {
+          cidr_block = "0.0.0.0/0"
+          gateway_id = aws_internet_gateway.main.id # this route is what makes the subnet public
+        }
+      }
+
+      resource "aws_route_table_association" "public" {
+        subnet_id      = aws_subnet.public.id
+        route_table_id = aws_route_table.public.id
+      }
+
+      # Private subnet: its route table has no route to the Internet Gateway
+      resource "aws_subnet" "private" {
+        vpc_id            = aws_vpc.main.id
+        cidr_block        = "10.0.10.0/24"
+        availability_zone = "eu-west-1a"
+      }
+
+      resource "aws_route_table" "private" {
+        vpc_id = aws_vpc.main.id
+      }
+
+      resource "aws_route_table_association" "private" {
+        subnet_id      = aws_subnet.private.id
+        route_table_id = aws_route_table.private.id
+      }
+
+      # Gateway endpoint: private instances reach S3 without crossing the Internet
+      resource "aws_vpc_endpoint" "s3" {
+        vpc_id            = aws_vpc.main.id
+        service_name      = "com.amazonaws.eu-west-1.s3"
+        vpc_endpoint_type = "Gateway"
+        route_table_ids   = [aws_route_table.private.id]
+      }
+
+      # Flow logs: accepted AND rejected flows, kept for investigations
+      resource "aws_flow_log" "main" {
+        vpc_id               = aws_vpc.main.id
+        traffic_type         = "ALL"
+        log_destination_type = "s3"
+        log_destination      = var.flow_logs_bucket_arn
+      }
+    note:
+      fr: "La seule différence entre les deux sous-réseaux est la route `0.0.0.0/0` vers l'Internet Gateway. Avec `traffic_type = \"ALL\"`, les flux refusés sont aussi journalisés : ce sont eux qui révèlent un scan ou une tentative de déplacement latéral."
+      en: "The only difference between the two subnets is the `0.0.0.0/0` route to the Internet Gateway. With `traffic_type = \"ALL\"`, rejected flows are logged too: they are the ones that reveal a scan or a lateral movement attempt."
+
+  - title:
+      fr: "Auditer des règles entrantes en Python"
+      en: "Auditing inbound rules in Python"
+    file: audit_rules.py
+    lang: python
+    kind: neutral
+    code: |
+      import ipaddress
+
+      ADMIN_PORTS = {22: "SSH", 3389: "RDP", 5432: "PostgreSQL", 3306: "MySQL", 6379: "Redis"}
+
+      # Inbound rules as you would export them from a security group
+      rules = [
+          {"sg": "web-sg", "port": 443, "cidr": "0.0.0.0/0"},
+          {"sg": "web-sg", "port": 22, "cidr": "0.0.0.0/0"},
+          {"sg": "bastion-sg", "port": 22, "cidr": "203.0.113.10/32"},
+          {"sg": "db-sg", "port": 5432, "cidr": "10.0.0.0/8"},
+          {"sg": "db-sg", "port": 5432, "cidr": "::/0"},
+          {"sg": "cache-sg", "port": 6379, "cidr": "10.0.20.0/24"},
+      ]
+
+
+      def is_whole_internet(cidr):
+          # A prefix length of 0 means "every address", in IPv4 (0.0.0.0/0) and IPv6 (::/0)
+          return ipaddress.ip_network(cidr).prefixlen == 0
+
+
+      findings = 0
+      for r in rules:
+          net = ipaddress.ip_network(r["cidr"])
+          if is_whole_internet(r["cidr"]) and r["port"] in ADMIN_PORTS:
+              findings += 1
+              print(f"FAIL {r['sg']:<11} {ADMIN_PORTS[r['port']]} ({r['port']}) open to the Internet ({r['cidr']})")
+          else:
+              print(f"ok   {r['sg']:<11} port {r['port']:<5} from {r['cidr']} ({net.num_addresses} addresses)")
+
+      print(f"\n{findings} critical finding(s)")
+    output: |
+      ok   web-sg      port 443   from 0.0.0.0/0 (4294967296 addresses)
+      FAIL web-sg      SSH (22) open to the Internet (0.0.0.0/0)
+      ok   bastion-sg  port 22    from 203.0.113.10/32 (1 addresses)
+      ok   db-sg       port 5432  from 10.0.0.0/8 (16777216 addresses)
+      FAIL db-sg       PostgreSQL (5432) open to the Internet (::/0)
+      ok   cache-sg    port 6379  from 10.0.20.0/24 (256 addresses)
+
+      2 critical finding(s)
+    note:
+      fr: "C'est, en miniature, ce que fait un outil de CSPM. Remarquez la règle IPv6 `::/0` : on l'oublie souvent alors qu'elle expose autant que `0.0.0.0/0`. Modifiez les règles et relancez pour voir le résultat changer."
+      en: "This is, in miniature, what a CSPM tool does. Notice the IPv6 rule `::/0`: it is often forgotten although it exposes just as much as `0.0.0.0/0`. Edit the rules and run again to see the result change."
+
+  - title:
+      fr: "Trouver les SSH ouverts et administrer sans port entrant"
+      en: "Finding open SSH and administering without an inbound port"
+    file: audit-and-connect.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. Which security groups allow SSH from the whole Internet?
+      aws ec2 describe-security-groups \
+        --filters Name=ip-permission.from-port,Values=22 \
+                  Name=ip-permission.to-port,Values=22 \
+                  Name=ip-permission.cidr,Values=0.0.0.0/0 \
+        --query 'SecurityGroups[].[GroupId,GroupName]' --output table
+
+      # 2. Remove the offending rule
+      aws ec2 revoke-security-group-ingress \
+        --group-id sg-0123456789abcdef0 \
+        --protocol tcp --port 22 --cidr 0.0.0.0/0
+
+      # 3. Open a shell without any inbound port: the SSM agent on the instance
+      #    calls out to AWS over HTTPS, and the session is recorded in CloudTrail
+      aws ssm start-session --target i-0abc123def4567890
+    output: |
+      ----------------------------------------
+      |        DescribeSecurityGroups        |
+      +-----------------------+--------------+
+      |  sg-0123456789abcdef0 |  everything  |
+      +-----------------------+--------------+
+
+      Starting session with SessionId: alice-0f1e2d3c4b5a69788
+      sh-5.2$
+    note:
+      fr: "Session Manager exige l'agent SSM sur l'instance, un rôle IAM incluant la politique `AmazonSSMManagedInstanceCore` et, côté poste de travail, le plugin Session Manager de l'AWS CLI. En échange, plus aucun port 22 à exposer ni de clés SSH à distribuer."
+      en: "Session Manager needs the SSM agent on the instance, an IAM role that includes the `AmazonSSMManagedInstanceCore` policy and, on the workstation, the Session Manager plugin for the AWS CLI. In exchange there is no port 22 to expose and no SSH keys to hand out."
+
+mistake:
+  fr: |
+    **Ouvrir « temporairement » un port à `0.0.0.0/0` pour déboguer.**
+
+    Le temporaire devient permanent : personne ne se souvient de refermer la règle, et elle est copiée dans
+    le projet suivant. Une variante fréquente consiste à restreindre le SSH à « l'adresse IP du bureau »
+    puis à l'élargir le jour où quelqu'un travaille depuis chez lui. La bonne réponse n'est pas une
+    meilleure liste d'adresses, c'est **l'absence de port d'administration** : Session Manager, Azure
+    Bastion ou IAP chez GCP authentifient l'utilisateur par son identité, pas par son adresse IP.
+  en: |
+    **Opening a port to `0.0.0.0/0` "temporarily" to debug.**
+
+    Temporary becomes permanent: nobody remembers to close the rule, and it gets copied into the next
+    project. A frequent variant is restricting SSH to "the office IP address" and then widening it the day
+    someone works from home. The right answer is not a better address list, it is **having no admin port
+    at all**: Session Manager, Azure Bastion or IAP on GCP authenticate users by identity, not by IP
+    address.
+
+bestPractice:
+  fr: |
+    - **Tout est privé par défaut** : seuls les load balancers et les NAT Gateways vivent en sous-réseau public.
+    - **Un Security Group par rôle** (alb, app, db), avec des sources de type *groupe* plutôt que des CIDR.
+    - **Aucune règle entrante `0.0.0.0/0` ou `::/0`** hors 443 (et 80 pour la redirection) sur un load balancer.
+    - **Filtrez aussi la sortie** : une base de données n'a aucune raison d'initier une connexion.
+    - **Flow logs activés** sur chaque VPC, en mode `ALL`, vers un compte d'archivage.
+    - **VPC endpoints** pour S3 et les services AWS utilisés, avec une politique restrictive.
+    - **Une description sur chaque règle** : une règle que personne ne sait expliquer doit être supprimée.
+  en: |
+    - **Private by default**: only load balancers and NAT Gateways live in a public subnet.
+    - **One Security Group per role** (alb, app, db), with *group* sources rather than CIDRs.
+    - **No inbound `0.0.0.0/0` or `::/0` rule** except 443 (and 80 for the redirect) on a load balancer.
+    - **Filter egress too**: a database has no reason to initiate a connection.
+    - **Flow logs enabled** on every VPC, in `ALL` mode, to an archive account.
+    - **VPC endpoints** for S3 and the AWS services you use, with a restrictive policy.
+    - **A description on every rule**: a rule nobody can explain must be deleted.
+
+exercise:
+  statement:
+    fr: |
+      Un cache **Redis** (port 6379) tourne dans un sous-réseau privé. Il est protégé par le groupe de
+      sécurité suivant :
+
+      ```hcl
+      resource "aws_security_group" "cache" {
+        name   = "cache"
+        vpc_id = var.vpc_id
+
+        ingress {
+          from_port   = 0
+          to_port     = 65535
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+      ```
+
+      Seuls les serveurs d'application, membres du groupe `aws_security_group.app`, doivent pouvoir
+      joindre Redis.
+
+      1. Citez les deux problèmes de cette règle.
+      2. Réécrivez le groupe pour n'autoriser que le strict nécessaire.
+      3. Avec le calculateur CIDR ci-dessous, combien d'adresses couvre `10.0.0.0/16` ? Et `0.0.0.0/0` ?
+    en: |
+      A **Redis** cache (port 6379) runs in a private subnet. It is protected by the following security
+      group:
+
+      ```hcl
+      resource "aws_security_group" "cache" {
+        name   = "cache"
+        vpc_id = var.vpc_id
+
+        ingress {
+          from_port   = 0
+          to_port     = 65535
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+      ```
+
+      Only the application servers, members of the `aws_security_group.app` group, must be able to reach
+      Redis.
+
+      1. Name the two problems with this rule.
+      2. Rewrite the group to allow only what is strictly needed.
+      3. With the CIDR calculator below, how many addresses does `10.0.0.0/16` cover? And `0.0.0.0/0`?
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      # Problem 1: every TCP port (0-65535) is open, not just 6379.
+      # Problem 2: the source is the whole Internet (0.0.0.0/0) instead of the application tier.
+
+      resource "aws_security_group" "cache" {
+        name   = "cache"
+        vpc_id = var.vpc_id
+      }
+
+      # One port, one source: the members of the application security group
+      resource "aws_vpc_security_group_ingress_rule" "cache_from_app" {
+        security_group_id            = aws_security_group.cache.id
+        description                  = "Redis from the application tier"
+        referenced_security_group_id = aws_security_group.app.id
+        ip_protocol                  = "tcp"
+        from_port                    = 6379
+        to_port                      = 6379
+      }
+
+      # 3. 10.0.0.0/16 covers 65,536 addresses; 0.0.0.0/0 covers 4,294,967,296 (all of IPv4).
+    note:
+      fr: "Le sous-réseau privé limitait déjà l'exposition, mais la défense en profondeur veut que chaque couche soit correcte seule : le jour où quelqu'un attache ce groupe à une machine publique, la règle d'origine devient catastrophique."
+      en: "The private subnet already limited exposure, but defence in depth requires each layer to be correct on its own: the day someone attaches this group to a public machine, the original rule becomes catastrophic."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qui rend un sous-réseau « public » dans un VPC AWS ?"
+      en: "What makes a subnet \"public\" in an AWS VPC?"
+    options:
+      fr:
+        - "Son nom contient le mot public"
+        - "Sa table de routage contient une route vers une Internet Gateway"
+        - "Il utilise une plage d'adresses en 10.0.0.0/8"
+        - "Ses groupes de sécurité autorisent le port 443"
+      en:
+        - "Its name contains the word public"
+        - "Its route table contains a route to an Internet Gateway"
+        - "It uses an address range in 10.0.0.0/8"
+        - "Its security groups allow port 443"
+    answer: 1
+    why:
+      fr: "C'est la route `0.0.0.0/0` vers l'Internet Gateway qui fait la différence ; sans elle, les machines du sous-réseau ne sont pas joignables depuis Internet."
+      en: "The `0.0.0.0/0` route to the Internet Gateway makes the difference; without it the machines in the subnet cannot be reached from the Internet."
+  - q:
+      fr: "Quelle différence fondamentale sépare un Security Group d'une NACL ?"
+      en: "What fundamental difference separates a Security Group from a NACL?"
+    options:
+      fr:
+        - "Le Security Group est stateless, la NACL est stateful"
+        - "La NACL s'applique à une interface réseau, le Security Group à un sous-réseau"
+        - "Le Security Group peut contenir des règles de refus, pas la NACL"
+        - "Le Security Group est stateful et n'a que des autorisations ; la NACL est stateless et peut refuser"
+      en:
+        - "The Security Group is stateless, the NACL is stateful"
+        - "The NACL applies to a network interface, the Security Group to a subnet"
+        - "The Security Group can contain deny rules, the NACL cannot"
+        - "The Security Group is stateful and allow-only; the NACL is stateless and can deny"
+    answer: 3
+    why:
+      fr: "Le Security Group suit les connexions (la réponse passe d'office) et ne contient que des autorisations ; la NACL filtre chaque sens séparément au niveau du sous-réseau et accepte des règles de refus."
+      en: "The Security Group tracks connections (replies pass automatically) and contains allow rules only; the NACL filters each direction separately at subnet level and accepts deny rules."
+  - q:
+      fr: "Pourquoi utiliser un autre Security Group comme source d'une règle plutôt qu'un CIDR ?"
+      en: "Why use another Security Group as the source of a rule rather than a CIDR?"
+    options:
+      fr:
+        - "La règle suit les membres du groupe, quelles que soient leurs adresses IP"
+        - "Cela chiffre le trafic entre les deux groupes"
+        - "Cela rend la règle stateless"
+        - "C'est obligatoire pour le port 443"
+      en:
+        - "The rule follows the group's members, whatever their IP addresses"
+        - "It encrypts traffic between the two groups"
+        - "It makes the rule stateless"
+        - "It is mandatory for port 443"
+    answer: 0
+    why:
+      fr: "Les adresses IP changent avec l'autoscaling ; l'appartenance à un groupe, elle, exprime le rôle de la machine et reste exacte."
+      en: "IP addresses change with autoscaling; group membership expresses the machine's role and stays accurate."
+  - q:
+      fr: "Comment administrer une instance privée sans exposer le port 22 ?"
+      en: "How do you administer a private instance without exposing port 22?"
+    options:
+      fr:
+        - "En lui donnant une adresse IP publique"
+        - "En ouvrant le port 22 à `0.0.0.0/0` seulement la nuit"
+        - "Avec AWS Systems Manager Session Manager"
+        - "En déplaçant SSH sur le port 2222"
+      en:
+        - "By giving it a public IP address"
+        - "By opening port 22 to `0.0.0.0/0` at night only"
+        - "With AWS Systems Manager Session Manager"
+        - "By moving SSH to port 2222"
+    answer: 2
+    why:
+      fr: "Avec Session Manager, c'est l'agent sur l'instance qui appelle AWS en HTTPS sortant : aucune règle entrante, authentification IAM et sessions journalisées."
+      en: "With Session Manager the agent on the instance calls AWS over outbound HTTPS: no inbound rule, IAM authentication and logged sessions."
+  - q:
+      fr: "Que contiennent les VPC Flow Logs ?"
+      en: "What do VPC Flow Logs contain?"
+    options:
+      fr:
+        - "Le contenu complet des paquets, en clair"
+        - "Les métadonnées des flux : adresses, ports, protocole, accepté ou rejeté"
+        - "Les appels d'API effectués dans le compte"
+        - "Les mots de passe saisis sur les instances"
+      en:
+        - "The full packet content, in clear text"
+        - "Flow metadata: addresses, ports, protocol, accepted or rejected"
+        - "The API calls made in the account"
+        - "The passwords typed on the instances"
+    answer: 1
+    why:
+      fr: "Les flow logs ne capturent pas le contenu, seulement qui a parlé à qui et si le flux a été accepté. Les appels d'API, eux, sont dans CloudTrail."
+      en: "Flow logs do not capture content, only who talked to whom and whether the flow was accepted. API calls are in CloudTrail."
+
+widgets: [cidr-calculator]
