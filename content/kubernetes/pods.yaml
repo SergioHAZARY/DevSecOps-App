@@ -1,0 +1,501 @@
+description:
+  fr: "Maîtriser le Pod, la plus petite unité de Kubernetes : conteneurs multiples, sondes de santé, requests/limits, labels et un securityContext durci."
+  en: "Master the Pod, Kubernetes' smallest unit: multiple containers, health probes, requests/limits, labels and a hardened securityContext."
+duration: 35
+
+intro:
+  fr: |
+    Le **Pod** est la plus petite chose que Kubernetes sache exécuter. Ce n'est pas tout à fait un
+    conteneur : c'est une **enveloppe** autour d'un ou plusieurs conteneurs qui partagent la même adresse
+    réseau et les mêmes volumes. La plupart du temps, un Pod contient un seul conteneur ; parfois deux, dont
+    un petit assistant (*sidecar*).
+
+    Imaginez une capsule spatiale : à l'intérieur, un ou deux astronautes partagent le même air et la même
+    radio, et la capsule entière est lancée ou récupérée d'un bloc. Le Pod, c'est la capsule ; les
+    conteneurs, les astronautes.
+
+    Vous allez écrire des Pods avec plusieurs conteneurs, ajouter des **sondes** (*probes*) qui disent à
+    Kubernetes si l'application est vivante et prête, réserver des ressources avec `requests`/`limits`,
+    organiser avec des **labels**, et surtout durcir le Pod avec un `securityContext` : non-root, système de
+    fichiers en lecture seule, zéro privilège.
+  en: |
+    The **Pod** is the smallest thing Kubernetes can run. It is not quite a container: it is an **envelope**
+    around one or more containers that share the same network address and the same volumes. Most of the
+    time a Pod holds a single container; sometimes two, one being a small helper (*sidecar*).
+
+    Picture a space capsule: inside, one or two astronauts share the same air and radio, and the whole
+    capsule is launched or recovered as one. The Pod is the capsule; the containers are the astronauts.
+
+    You will write Pods with several containers, add **probes** that tell Kubernetes whether the app is
+    alive and ready, reserve resources with `requests`/`limits`, organise with **labels**, and above all
+    harden the Pod with a `securityContext`: non-root, read-only filesystem, zero privilege.
+
+sections:
+  - heading:
+      fr: "Un Pod, un ou plusieurs conteneurs"
+      en: "A Pod, one or more containers"
+    body:
+      fr: |
+        Un Pod est décrit en YAML avec `apiVersion: v1` et `kind: Pod`. Sa `spec` contient une liste
+        `containers`. Tous les conteneurs d'un même Pod partagent :
+
+        - la même **adresse IP** (ils se parlent via `localhost`) ;
+        - les mêmes **volumes** montés ;
+        - le même cycle de vie (lancés et arrêtés ensemble).
+
+        On met rarement deux applications distinctes dans un Pod. Le motif courant est le **sidecar** : un
+        conteneur principal + un assistant (collecteur de logs, proxy). En pratique, on ne crée presque
+        jamais un Pod « nu » : on le laisse gérer par un **Deployment** (leçon suivante), qui le recrée s'il
+        meurt. Un Pod seul supprimé n'est **pas** recréé.
+
+        | Niveau | Ce que c'est |
+        |---|---|
+        | Conteneur | Un processus isolé (une image) |
+        | Pod | Une enveloppe autour d'un ou plusieurs conteneurs |
+        | Deployment | Un gestionnaire qui maintient N Pods identiques |
+      en: |
+        A Pod is described in YAML with `apiVersion: v1` and `kind: Pod`. Its `spec` holds a `containers`
+        list. All containers in one Pod share:
+
+        - the same **IP address** (they talk via `localhost`);
+        - the same mounted **volumes**;
+        - the same lifecycle (started and stopped together).
+
+        You rarely put two distinct applications in one Pod. The common pattern is the **sidecar**: a main
+        container + a helper (log collector, proxy). In practice you almost never create a "bare" Pod: you
+        let a **Deployment** (next lesson) manage it, which recreates it if it dies. A lone deleted Pod is
+        **not** recreated.
+
+        | Level | What it is |
+        |---|---|
+        | Container | An isolated process (one image) |
+        | Pod | An envelope around one or more containers |
+        | Deployment | A manager keeping N identical Pods |
+  - heading:
+      fr: "Sondes et ressources"
+      en: "Probes and resources"
+    body:
+      fr: |
+        Kubernetes a besoin de savoir si votre application va bien. Trois **sondes** répondent à des
+        questions différentes :
+
+        | Sonde | Question | Si elle échoue |
+        |---|---|---|
+        | `livenessProbe` | L'appli est-elle vivante ? | Kubernetes redémarre le conteneur |
+        | `readinessProbe` | Est-elle prête à recevoir du trafic ? | Le Pod est retiré du Service |
+        | `startupProbe` | A-t-elle fini de démarrer ? | Laisse plus de temps au démarrage |
+
+        Les **ressources** réservent et plafonnent CPU et mémoire :
+
+        - `requests` : ce que le Pod *réserve* (le scheduler s'en sert pour le placer).
+        - `limits` : le *maximum* autorisé (dépasser la mémoire fait tuer le conteneur, *OOMKilled*).
+
+        Sans `requests`, le scheduler place à l'aveugle ; sans `limits`, un conteneur emballé peut asphyxier
+        le nœud entier. Les deux sont indispensables en production, et obligatoires sous la politique de
+        sécurité `restricted`.
+      en: |
+        Kubernetes needs to know whether your application is healthy. Three **probes** answer different
+        questions:
+
+        | Probe | Question | On failure |
+        |---|---|---|
+        | `livenessProbe` | Is the app alive? | Kubernetes restarts the container |
+        | `readinessProbe` | Is it ready for traffic? | The Pod is pulled from the Service |
+        | `startupProbe` | Has it finished starting? | Gives start-up more time |
+
+        **Resources** reserve and cap CPU and memory:
+
+        - `requests`: what the Pod *reserves* (the scheduler uses it to place the Pod).
+        - `limits`: the *maximum* allowed (exceeding memory kills the container, *OOMKilled*).
+
+        Without `requests` the scheduler places blindly; without `limits` a runaway container can suffocate
+        the whole node. Both are essential in production, and mandatory under the `restricted` security
+        policy.
+  - heading:
+      fr: "Labels et securityContext"
+      en: "Labels and securityContext"
+    body:
+      fr: |
+        Les **labels** sont des étiquettes clé-valeur (`app: api`, `tier: backend`) attachées aux objets.
+        Ils sont le ciment de Kubernetes : les Services et les Deployments retrouvent leurs Pods grâce à un
+        **sélecteur** de labels. On les pose dès la création.
+
+        Le **`securityContext`** est le cœur de la sécurité d'un Pod. Par défaut, un conteneur tourne en
+        root avec trop de droits. On le durcit :
+
+        | Réglage | Valeur durcie | Effet |
+        |---|---|---|
+        | `runAsNonRoot` | `true` | Refuse de démarrer si l'image tourne en root |
+        | `runAsUser` | `10001` | UID non privilégié explicite |
+        | `allowPrivilegeEscalation` | `false` | Bloque l'escalade via setuid |
+        | `readOnlyRootFilesystem` | `true` | Système de fichiers immuable |
+        | `capabilities.drop` | `[ALL]` | Retire toutes les capabilities Linux |
+        | `seccompProfile.type` | `RuntimeDefault` | Filtre les appels système dangereux |
+
+        Ce bloc est le même sur chaque Pod de production. Le mémoriser, c'est la moitié de la sécurité des
+        charges de travail Kubernetes.
+      en: |
+        **Labels** are key-value tags (`app: api`, `tier: backend`) attached to objects. They are the glue
+        of Kubernetes: Services and Deployments find their Pods through a label **selector**. You set them
+        from creation.
+
+        The **`securityContext`** is the heart of a Pod's security. By default a container runs as root with
+        too many rights. You harden it:
+
+        | Setting | Hardened value | Effect |
+        |---|---|---|
+        | `runAsNonRoot` | `true` | Refuses to start if the image runs as root |
+        | `runAsUser` | `10001` | Explicit unprivileged UID |
+        | `allowPrivilegeEscalation` | `false` | Blocks setuid escalation |
+        | `readOnlyRootFilesystem` | `true` | Immutable filesystem |
+        | `capabilities.drop` | `[ALL]` | Removes all Linux capabilities |
+        | `seccompProfile.type` | `RuntimeDefault` | Filters dangerous system calls |
+
+        This block is the same on every production Pod. Memorising it is half the security of Kubernetes
+        workloads.
+
+examples:
+  - title:
+      fr: "VULNÉRABLE : un Pod sans aucune protection"
+      en: "VULNERABLE: a Pod with no protection"
+    file: pod-bad.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: web
+        # Problem 1: no labels -> no Service or Deployment can select it
+      spec:
+        containers:
+          - name: web
+            image: nginx:latest     # Problem 2: moving tag
+            # Problem 3: no securityContext -> runs as root
+            # Problem 4: no resources -> can starve the node
+            # Problem 5: no probes -> Kubernetes cannot tell if it is healthy
+            ports:
+              - containerPort: 80
+    note:
+      fr: "Ce Pod démarre, mais tourne en root, sans limites, sans sondes et sans labels : impossible à superviser, à cibler ou à contenir. La version suivante corrige chaque défaut."
+      en: "This Pod starts, but runs as root, with no limits, no probes and no labels: impossible to monitor, target or contain. The next version fixes each flaw."
+
+  - title:
+      fr: "SÉCURISÉ : Pod durci avec sondes et ressources"
+      en: "SECURE: hardened Pod with probes and resources"
+    file: pod-good.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: web
+        labels:
+          app: web      # labels let Services and Deployments find this Pod
+          tier: frontend
+      spec:
+        securityContext:
+          runAsNonRoot: true   # refuse to run if the image would be root
+          runAsUser: 10001
+          seccompProfile:
+            type: RuntimeDefault # filter dangerous syscalls
+        containers:
+          - name: web
+            image: nginxinc/nginx-unprivileged:1.27-alpine # listens on 8080 as non-root
+            ports:
+              - containerPort: 8080
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:        # reserved for scheduling
+                cpu: "50m"
+                memory: "64Mi"
+              limits:          # hard ceiling; exceeding memory -> OOMKilled
+                cpu: "250m"
+                memory: "128Mi"
+            livenessProbe:     # restart the container if this fails
+              httpGet:
+                path: /
+                port: 8080
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            readinessProbe:    # remove from Service until this passes
+              httpGet:
+                path: /
+                port: 8080
+              initialDelaySeconds: 3
+              periodSeconds: 5
+            volumeMounts:
+              - name: cache
+                mountPath: /tmp
+        volumes:
+          - name: cache
+            emptyDir: {}       # a writable scratch dir, needed because FS is read-only
+    note:
+      fr: "Tout y est : labels, `securityContext` complet (non-root, zéro capability, FS en lecture seule), requests/limits, et deux sondes. Le `emptyDir` fournit un `/tmp` inscriptible malgré le FS en lecture seule."
+      en: "Everything is here: labels, a full `securityContext` (non-root, zero capabilities, read-only FS), requests/limits, and two probes. The `emptyDir` provides a writable `/tmp` despite the read-only FS."
+
+  - title:
+      fr: "Un Pod multi-conteneurs : sidecar de logs"
+      en: "A multi-container Pod: a logging sidecar"
+    file: pod-sidecar.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: app-with-logger
+        labels:
+          app: shop
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+        volumes:
+          - name: logs
+            emptyDir: {}       # shared between both containers
+        containers:
+          # Main container: writes its logs to the shared volume
+          - name: app
+            image: ghcr.io/acme/shop:1.2.0
+            volumeMounts:
+              - name: logs
+                mountPath: /var/log/app
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+          # Sidecar: reads the same volume and ships the logs elsewhere
+          - name: log-shipper
+            image: grafana/promtail:3.2.0
+            args: ["-config.file=/etc/promtail/config.yml"]
+            volumeMounts:
+              - name: logs
+                mountPath: /var/log/app
+                readOnly: true  # the sidecar only reads
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+    note:
+      fr: "Les deux conteneurs partagent le volume `logs` : l'appli écrit, le sidecar lit (`readOnly: true`) et expédie. Ils partagent aussi l'IP du Pod. Chacun a son propre `securityContext` durci."
+      en: "Both containers share the `logs` volume: the app writes, the sidecar reads (`readOnly: true`) and ships. They also share the Pod's IP. Each has its own hardened `securityContext`."
+
+  - title:
+      fr: "Inspecter et diagnostiquer un Pod"
+      en: "Inspect and diagnose a Pod"
+    file: inspect.sh
+    lang: bash
+    kind: neutral
+    code: |
+      kubectl apply -f pod-good.yaml
+
+      # Status, restarts, readiness at a glance
+      kubectl get pod web -o wide
+
+      # Full detail + the events that explain scheduling, pulls, probe results
+      kubectl describe pod web
+
+      # Follow the container logs
+      kubectl logs -f web
+
+      # Filter Pods by label (the same selectors Services use)
+      kubectl get pods -l app=web
+    output: |
+      NAME   READY   STATUS    RESTARTS   AGE   IP           NODE
+      web    1/1     Running   0          12s   10.244.1.7   lab-worker
+    note:
+      fr: "`kubectl describe` est l'outil de diagnostic n°1 : sa section `Events` explique pourquoi un Pod est en attente, pourquoi une image ne se télécharge pas, ou pourquoi une sonde échoue."
+      en: "`kubectl describe` is the number one diagnostic tool: its `Events` section explains why a Pod is pending, why an image will not pull, or why a probe fails."
+
+mistake:
+  fr: |
+    **Déployer des Pods sans `securityContext`, sans `resources` et sans sondes.**
+
+    Un Pod « nu » démarre et semble fonctionner, mais il tourne en root avec toutes les capabilities : si
+    l'application est compromise, l'attaquant hérite de ces droits et peut tenter de s'échapper du
+    conteneur. Sans `limits`, un bug de fuite mémoire emporte le nœud entier (*OOMKilled* du voisin
+    innocent). Sans sondes, Kubernetes ne sait pas que l'appli est figée et continue de lui envoyer du
+    trafic. Le trio `securityContext` durci + `requests`/`limits` + `liveness`/`readiness` n'est pas
+    optionnel en production : c'est le socle. Appliquez-le sur chaque charge de travail.
+  en: |
+    **Deploying Pods with no `securityContext`, no `resources` and no probes.**
+
+    A "bare" Pod starts and seems to work, but it runs as root with all capabilities: if the application is
+    compromised, the attacker inherits those rights and can try to break out of the container. Without
+    `limits`, a memory-leak bug takes down the whole node (an innocent neighbour *OOMKilled*). Without
+    probes, Kubernetes does not know the app is stuck and keeps sending it traffic. The trio hardened
+    `securityContext` + `requests`/`limits` + `liveness`/`readiness` is not optional in production: it is
+    the foundation. Apply it to every workload.
+
+bestPractice:
+  fr: |
+    - **`securityContext` durci** sur chaque Pod : `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`.
+    - **`requests` ET `limits`** CPU/mémoire : placement correct et contention évitée.
+    - **`livenessProbe` + `readinessProbe`** pour que Kubernetes connaisse la santé réelle de l'appli.
+    - **Labels dès la création** (`app`, `tier`) : ils relient Pods, Services et Deployments.
+    - **`emptyDir` pour les dossiers inscriptibles** quand le système de fichiers est en lecture seule.
+    - **Gérez les Pods via un Deployment**, pas de Pod « nu » en production.
+  en: |
+    - **Hardened `securityContext`** on every Pod: `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`.
+    - **`requests` AND `limits`** CPU/memory: correct placement and avoided contention.
+    - **`livenessProbe` + `readinessProbe`** so Kubernetes knows the app's real health.
+    - **Labels from creation** (`app`, `tier`): they tie Pods, Services and Deployments together.
+    - **`emptyDir` for writable folders** when the filesystem is read-only.
+    - **Manage Pods through a Deployment**, no "bare" Pod in production.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un manifeste de Pod nommé `cache` qui :
+
+      1. Porte le label `app: cache`.
+      2. Exécute l'image `redis:7.4-alpine` sur le port 6379.
+      3. Tourne avec un `securityContext` durci : utilisateur non-root (UID 999), pas d'escalade de
+         privilèges, et suppression de toutes les capabilities.
+      4. Réserve 32Mi de mémoire (`requests`) et la plafonne à 64Mi (`limits`).
+      5. Possède une `readinessProbe` TCP sur le port 6379.
+    en: |
+      Write a Pod manifest named `cache` that:
+
+      1. Carries the label `app: cache`.
+      2. Runs the image `redis:7.4-alpine` on port 6379.
+      3. Runs with a hardened `securityContext`: non-root user (UID 999), no privilege escalation, and all
+         capabilities dropped.
+      4. Reserves 32Mi of memory (`requests`) and caps it at 64Mi (`limits`).
+      5. Has a TCP `readinessProbe` on port 6379.
+  solution:
+    file: cache-pod.yaml
+    lang: yaml
+    code: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: cache
+        labels:
+          app: cache
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+        containers:
+          - name: redis
+            image: redis:7.4-alpine
+            ports:
+              - containerPort: 6379
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                memory: "32Mi"
+              limits:
+                memory: "64Mi"
+            readinessProbe:
+              tcpSocket:
+                port: 6379
+              initialDelaySeconds: 3
+              periodSeconds: 5
+    note:
+      fr: "Le `securityContext` combine non-root (UID 999), pas d'escalade et zéro capability. La `readinessProbe` TCP vérifie que Redis accepte les connexions avant de le déclarer prêt."
+      en: "The `securityContext` combines non-root (UID 999), no escalation and zero capabilities. The TCP `readinessProbe` checks Redis accepts connections before marking it ready."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'un Pod exactement ?"
+      en: "What exactly is a Pod?"
+    options:
+      fr:
+        - "Un synonyme de nœud"
+        - "Une enveloppe autour d'un ou plusieurs conteneurs partageant réseau et volumes"
+        - "Une base de données"
+        - "Un pare-feu réseau"
+      en:
+        - "A synonym for node"
+        - "An envelope around one or more containers sharing network and volumes"
+        - "A database"
+        - "A network firewall"
+    answer: 1
+    why:
+      fr: "Le Pod est la plus petite unité déployable : ses conteneurs partagent la même IP, les mêmes volumes et le même cycle de vie."
+      en: "The Pod is the smallest deployable unit: its containers share the same IP, the same volumes and the same lifecycle."
+  - q:
+      fr: "Que fait Kubernetes quand une `livenessProbe` échoue ?"
+      en: "What does Kubernetes do when a `livenessProbe` fails?"
+    options:
+      fr:
+        - "Il redémarre le conteneur"
+        - "Il supprime le nœud"
+        - "Il chiffre le Pod"
+        - "Il augmente les limites de ressources"
+      en:
+        - "It restarts the container"
+        - "It deletes the node"
+        - "It encrypts the Pod"
+        - "It raises the resource limits"
+    answer: 0
+    why:
+      fr: "La `livenessProbe` détecte une appli figée : en cas d'échec, Kubernetes redémarre le conteneur. La `readinessProbe`, elle, retire le Pod du Service."
+      en: "The `livenessProbe` detects a stuck app: on failure Kubernetes restarts the container. The `readinessProbe` instead pulls the Pod from the Service."
+  - q:
+      fr: "Quelle est la différence entre `requests` et `limits` ?"
+      en: "What is the difference between `requests` and `limits`?"
+    options:
+      fr:
+        - "`requests` est le maximum, `limits` la réservation"
+        - "Les deux sont identiques"
+        - "`requests` est la réservation pour le placement, `limits` le plafond maximum autorisé"
+        - "`limits` ne concerne que le réseau"
+      en:
+        - "`requests` is the maximum, `limits` is the reservation"
+        - "The two are identical"
+        - "`requests` is the reservation for scheduling, `limits` is the maximum ceiling allowed"
+        - "`limits` only concerns the network"
+    answer: 2
+    why:
+      fr: "`requests` sert au scheduler pour placer le Pod ; `limits` borne la consommation : dépasser la mémoire déclenche un OOMKilled."
+      en: "`requests` helps the scheduler place the Pod; `limits` bounds consumption: exceeding memory triggers an OOMKilled."
+  - q:
+      fr: "Quel réglage du `securityContext` empêche un conteneur de tourner en root ?"
+      en: "Which `securityContext` setting prevents a container from running as root?"
+    options:
+      fr:
+        - "`readOnlyRootFilesystem: true`"
+        - "`runAsNonRoot: true`"
+        - "`seccompProfile: RuntimeDefault`"
+        - "`allowPrivilegeEscalation: true`"
+      en:
+        - "`readOnlyRootFilesystem: true`"
+        - "`runAsNonRoot: true`"
+        - "`seccompProfile: RuntimeDefault`"
+        - "`allowPrivilegeEscalation: true`"
+    answer: 1
+    why:
+      fr: "`runAsNonRoot: true` refuse de démarrer le Pod si l'image s'exécuterait en root : la garantie d'un processus non privilégié."
+      en: "`runAsNonRoot: true` refuses to start the Pod if the image would run as root: the guarantee of an unprivileged process."
+  - q:
+      fr: "Pourquoi ajouter un volume `emptyDir` quand `readOnlyRootFilesystem` est activé ?"
+      en: "Why add an `emptyDir` volume when `readOnlyRootFilesystem` is enabled?"
+    options:
+      fr:
+        - "Pour chiffrer le disque"
+        - "Pour exposer un port réseau"
+        - "Pour signer l'image"
+        - "Pour fournir un dossier inscriptible (ex. /tmp) malgré le système de fichiers en lecture seule"
+      en:
+        - "To encrypt the disk"
+        - "To expose a network port"
+        - "To sign the image"
+        - "To provide a writable folder (e.g. /tmp) despite the read-only filesystem"
+    answer: 3
+    why:
+      fr: "Avec le FS racine en lecture seule, l'appli a besoin d'un emplacement inscriptible pour ses fichiers temporaires : `emptyDir` le fournit sans ouvrir tout le système."
+      en: "With the root FS read-only, the app needs a writable place for its temporary files: `emptyDir` provides it without opening the whole system."

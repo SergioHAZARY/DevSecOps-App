@@ -1,0 +1,379 @@
+description:
+  fr: "JSON dans les API web : requêtes, réponses et pièges de sécurité comme la sur-exposition de données et le mass assignment."
+  en: "JSON in web APIs: requests, responses and security pitfalls like over-exposing data and mass assignment."
+duration: 24
+
+intro:
+  fr: |
+    Presque toutes les API modernes échangent du **JSON** : l'application envoie une requête JSON, le serveur
+    répond en JSON. Tant que les données sont bien formées et de confiance, tout va bien. Mais une API reçoit du
+    JSON écrit par **n'importe qui**, y compris un attaquant. C'est là que les ennuis commencent.
+
+    Deux grandes catégories de failles tournent autour du JSON dans les API : **trop en recevoir** sans le
+    contrôler (un client glisse des champs inattendus pour s'octroyer des droits) et **trop en renvoyer** (la
+    réponse contient des champs sensibles comme un hash de mot de passe ou un flag interne).
+
+    Imaginez un guichet : vous ne devez accepter que les formulaires remplis correctement, et ne jamais rendre au
+    client la fiche interne du dossier. Dans cette dernière leçon du cours JSON, vous verrez les pièges les plus
+    fréquents - *mass assignment*, sur-exposition de données, absence de limites - et comment les éviter avec une
+    liste blanche de champs et une validation stricte.
+  en: |
+    Almost every modern API exchanges **JSON**: the application sends a JSON request, the server answers in JSON.
+    As long as the data is well-formed and trusted, all is well. But an API receives JSON written by **anyone**,
+    including an attacker. That is where trouble starts.
+
+    Two broad families of flaws revolve around JSON in APIs: **receiving too much** without checking it (a client
+    slips in unexpected fields to grant itself rights) and **returning too much** (the response contains
+    sensitive fields such as a password hash or an internal flag).
+
+    Picture a service desk: you should accept only correctly filled forms, and never hand the client the internal
+    case file. In this final lesson of the JSON course you will see the most common pitfalls - mass assignment,
+    data over-exposure, missing limits - and how to avoid them with a field allowlist and strict validation.
+
+sections:
+  - heading:
+      fr: "Recevoir du JSON : mass assignment et validation"
+      en: "Receiving JSON: mass assignment and validation"
+    body:
+      fr: |
+        Le **mass assignment** survient quand le serveur copie **tel quel** l'objet JSON reçu dans son modèle de
+        données. Si le client envoie un champ qu'il ne devrait pas pouvoir contrôler, il le modifie quand même :
+
+        ```json
+        { "username": "mallory", "role": "admin" }
+        ```
+
+        Si le code fait `user.update(request_json)`, Mallory devient administrateur. La parade : **n'accepter que
+        les champs attendus** (liste blanche) et **ignorer tout le reste**.
+
+        Trois règles pour recevoir du JSON en sécurité :
+
+        1. **Valider** contre un schéma (types, champs requis, `additionalProperties: false`).
+        2. **Filtrer** : ne garder explicitement que les champs autorisés, jamais l'objet brut.
+        3. **Limiter** : refuser les charges utiles trop grandes ou trop profondes (une imbrication extrême peut
+           épuiser la mémoire du parseur - un déni de service).
+      en: |
+        **Mass assignment** happens when the server copies the received JSON object **as-is** into its data model.
+        If the client sends a field it should not control, it changes it anyway:
+
+        ```json
+        { "username": "mallory", "role": "admin" }
+        ```
+
+        If the code does `user.update(request_json)`, Mallory becomes an administrator. The defence: **accept only
+        the expected fields** (allowlist) and **ignore everything else**.
+
+        Three rules for receiving JSON safely:
+
+        1. **Validate** against a schema (types, required fields, `additionalProperties: false`).
+        2. **Filter**: explicitly keep only the allowed fields, never the raw object.
+        3. **Limit**: reject payloads that are too large or too deeply nested (extreme nesting can exhaust the
+           parser's memory - a denial of service).
+  - heading:
+      fr: "Renvoyer du JSON : ne pas trop en dire"
+      en: "Returning JSON: do not say too much"
+    body:
+      fr: |
+        Le symétrique du problème : la **sur-exposition de données**. Beaucoup d'API sérialisent un objet complet
+        de la base et le renvoient tel quel, embarquant des champs qui ne devraient jamais sortir :
+
+        | Champ renvoyé par erreur | Risque |
+        |---|---|
+        | `password_hash` | Permet une attaque par force brute hors ligne |
+        | `is_admin`, `internal_notes` | Révèle la logique interne |
+        | `reset_token`, `api_key` | Prise de contrôle du compte |
+        | Message d'erreur avec *stack trace* | Fuite de chemins, versions, requêtes SQL |
+
+        La bonne pratique est la **liste blanche en sortie** : construire explicitement l'objet de réponse avec
+        les seuls champs publics. De même, un message d'erreur renvoyé au client doit rester **générique**
+        (« Identifiants invalides »), les détails techniques allant uniquement dans les logs serveur.
+
+        Enfin, répondez toujours avec l'en-tête `Content-Type: application/json` et ne faites jamais confiance au
+        `Content-Type` annoncé par le client sans le vérifier.
+      en: |
+        The mirror image of the problem: **data over-exposure**. Many APIs serialize a whole database object and
+        return it as-is, carrying fields that should never leave:
+
+        | Field returned by mistake | Risk |
+        |---|---|
+        | `password_hash` | Enables an offline brute-force attack |
+        | `is_admin`, `internal_notes` | Reveals internal logic |
+        | `reset_token`, `api_key` | Account takeover |
+        | Error message with a stack trace | Leaks paths, versions, SQL queries |
+
+        The good practice is the **output allowlist**: explicitly build the response object with only the public
+        fields. Likewise, an error message returned to the client must stay **generic** ("Invalid credentials"),
+        with the technical details going only into the server logs.
+
+        Finally, always answer with the `Content-Type: application/json` header, and never trust the
+        `Content-Type` announced by the client without checking it.
+
+examples:
+  - title:
+      fr: "API vulnérable : mass assignment et fuite de données"
+      en: "Vulnerable API: mass assignment and data leak"
+    file: api_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      from flask import Flask, request, jsonify
+
+      app = Flask(__name__)
+      users = {"mallory": {"role": "user", "password_hash": "$2b$12$abc...", "email": "m@example.com"}}
+
+      @app.post("/users/<name>")
+      def update_user(name):
+          # BUG 1 (mass assignment): the raw JSON is merged in, so the client
+          # can send {"role": "admin"} and escalate privileges.
+          users[name].update(request.get_json())
+          # BUG 2 (over-exposure): the whole record is returned, including the
+          # password hash and any internal field.
+          return jsonify(users[name])
+
+      # POST /users/mallory  {"role": "admin"}
+      # -> mallory is now admin AND the response leaks password_hash
+    output: |
+      {
+        "role": "admin",
+        "password_hash": "$2b$12$abc...",
+        "email": "m@example.com"
+      }
+    note:
+      fr: "Code volontairement faible (`kind: vulnerable`) : `update(request.get_json())` copie le champ `role` interdit, et la réponse divulgue le hash du mot de passe."
+      en: "Intentionally weak code (`kind: vulnerable`): `update(request.get_json())` copies the forbidden `role` field, and the response leaks the password hash."
+
+  - title:
+      fr: "API corrigée : liste blanche en entrée et en sortie"
+      en: "Fixed API: allowlist on input and output"
+    file: api_secure.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, request, jsonify
+
+      app = Flask(__name__)
+      users = {"mallory": {"role": "user", "password_hash": "$2b$12$abc...", "email": "m@example.com"}}
+
+      # Fields the client is allowed to change, and fields safe to return
+      WRITABLE = {"email", "display_name"}
+      PUBLIC = {"email", "display_name", "role"}
+
+      @app.post("/users/<name>")
+      def update_user(name):
+          payload = request.get_json(silent=True) or {}
+          # Input allowlist: keep only writable fields, drop 'role' and anything else
+          for key in WRITABLE & payload.keys():
+              users[name][key] = payload[key]
+          # Output allowlist: build the response from public fields only
+          safe = {k: users[name][k] for k in PUBLIC if k in users[name]}
+          return jsonify(safe)
+
+      # POST /users/mallory  {"role": "admin", "email": "new@example.com"}
+      # -> 'role' is ignored, email is updated, hash is never returned
+    output: |
+      {
+        "email": "new@example.com",
+        "role": "user"
+      }
+    note:
+      fr: "`WRITABLE` bloque le mass assignment (le champ `role` est ignoré) ; `PUBLIC` empêche la fuite (le `password_hash` n'est jamais sérialisé)."
+      en: "`WRITABLE` blocks mass assignment (the `role` field is ignored); `PUBLIC` prevents the leak (the `password_hash` is never serialized)."
+
+  - title:
+      fr: "Parser du JSON non fiable sans stdlib piège"
+      en: "Parsing untrusted JSON without the stdlib trap"
+    file: safe_parse.py
+    lang: python
+    kind: secure
+    code: |
+      import json
+
+      # Reject payloads that are too large BEFORE parsing (DoS protection)
+      MAX_BYTES = 10_000
+
+      def parse_request(raw: str) -> dict:
+          if len(raw.encode("utf-8")) > MAX_BYTES:
+              raise ValueError("payload too large")
+          data = json.loads(raw)             # json.loads never executes code (unlike eval)
+          if not isinstance(data, dict):     # enforce the expected top-level type
+              raise ValueError("expected a JSON object")
+          return data
+
+      print(parse_request('{"email": "a@example.com"}'))  # ok
+      try:
+          parse_request('["not", "an", "object"]')        # wrong shape
+      except ValueError as e:
+          print("rejected:", e)
+    output: |
+      {'email': 'a@example.com'}
+      rejected: expected a JSON object
+    note:
+      fr: "On limite la taille **avant** de parser et on vérifie le type racine. Utilisez `json.loads`, jamais `eval` : `eval` exécuterait du code arbitraire."
+      en: "Limit the size **before** parsing and check the root type. Use `json.loads`, never `eval`: `eval` would run arbitrary code."
+
+mistake:
+  fr: |
+    **Copier l'objet JSON reçu tel quel, et renvoyer l'objet de la base tel quel.**
+
+    Ces deux raccourcis - `model.update(request_json)` en entrée, `jsonify(db_object)` en sortie - sont les
+    causes les plus fréquentes de *mass assignment* et de fuite de données. En entrée, un attaquant ajoute un
+    champ (`"role": "admin"`, `"verified": true`) et s'octroie des privilèges. En sortie, des champs sensibles
+    (hash, jetons, notes internes) partent chez le client. La règle absolue : **liste blanche explicite** des
+    deux côtés. Ne jamais faire confiance à la forme des données ni au `Content-Type` annoncé par le client.
+  en: |
+    **Copying the received JSON object as-is, and returning the database object as-is.**
+
+    These two shortcuts - `model.update(request_json)` on input, `jsonify(db_object)` on output - are the most
+    common causes of mass assignment and data leaks. On input, an attacker adds a field (`"role": "admin"`,
+    `"verified": true`) and grants themselves privileges. On output, sensitive fields (hashes, tokens, internal
+    notes) go to the client. The absolute rule: **explicit allowlist** on both sides. Never trust the shape of
+    the data nor the `Content-Type` the client announces.
+
+bestPractice:
+  fr: |
+    - **Liste blanche en entrée** : ne copiez que les champs explicitement autorisés, jamais l'objet brut.
+    - **Liste blanche en sortie** : construisez la réponse avec les seuls champs publics.
+    - **Validez** chaque requête contre un schéma (`additionalProperties: false`).
+    - **Limitez** la taille et la profondeur des charges utiles pour éviter les dénis de service.
+    - **Renvoyez des erreurs génériques** au client ; gardez les *stack traces* dans les logs serveur.
+  en: |
+    - **Input allowlist**: copy only the explicitly allowed fields, never the raw object.
+    - **Output allowlist**: build the response from public fields only.
+    - **Validate** each request against a schema (`additionalProperties: false`).
+    - **Limit** payload size and depth to prevent denial of service.
+    - **Return generic errors** to the client; keep stack traces in the server logs.
+
+exercise:
+  statement:
+    fr: |
+      L'endpoint suivant crée un compte en copiant directement le JSON reçu, et renvoie l'objet complet.
+      Identifiez les deux failles, puis réécrivez-le avec une liste blanche en entrée (`email`, `display_name`)
+      et en sortie (`id`, `email`, `display_name`).
+
+      ```python
+      @app.post("/signup")
+      def signup():
+          user = db.create(request.get_json())
+          return jsonify(user)   # returns password_hash, is_admin, etc.
+      ```
+    en: |
+      The following endpoint creates an account by directly copying the received JSON, and returns the whole
+      object. Identify the two flaws, then rewrite it with an input allowlist (`email`, `display_name`) and an
+      output allowlist (`id`, `email`, `display_name`).
+
+      ```python
+      @app.post("/signup")
+      def signup():
+          user = db.create(request.get_json())
+          return jsonify(user)   # returns password_hash, is_admin, etc.
+      ```
+  solution:
+    file: signup_secure.py
+    lang: python
+    code: |
+      WRITABLE = {"email", "display_name"}
+      PUBLIC = {"id", "email", "display_name"}
+
+      @app.post("/signup")
+      def signup():
+          payload = request.get_json(silent=True) or {}
+          # Input allowlist: ignore role, is_admin, verified, etc.
+          fields = {k: payload[k] for k in WRITABLE & payload.keys()}
+          user = db.create(fields)
+          # Output allowlist: never serialize password_hash or internal flags
+          return jsonify({k: user[k] for k in PUBLIC if k in user})
+    note:
+      fr: "Faille 1 : mass assignment (le client pouvait envoyer `is_admin`). Faille 2 : sur-exposition (le hash partait au client). Les deux listes blanches corrigent les deux."
+      en: "Flaw 1: mass assignment (the client could send `is_admin`). Flaw 2: over-exposure (the hash went to the client). The two allowlists fix both."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que le mass assignment ?"
+      en: "What is mass assignment?"
+    options:
+      fr:
+        - "Envoyer beaucoup de requêtes d'un coup"
+        - "Copier l'objet JSON reçu tel quel, laissant le client modifier des champs interdits"
+        - "Chiffrer tous les champs"
+        - "Compresser le JSON"
+      en:
+        - "Sending many requests at once"
+        - "Copying the received JSON object as-is, letting the client set forbidden fields"
+        - "Encrypting all fields"
+        - "Compressing the JSON"
+    answer: 1
+    why:
+      fr: "En copiant l'objet brut, le serveur laisse le client fixer des champs comme `role` ou `is_admin` qu'il ne devrait pas contrôler."
+      en: "By copying the raw object, the server lets the client set fields like `role` or `is_admin` it should not control."
+  - q:
+      fr: "Comment se protéger du mass assignment ?"
+      en: "How do you protect against mass assignment?"
+    options:
+      fr:
+        - "En acceptant uniquement une liste blanche de champs autorisés"
+        - "En augmentant la taille maximale des requêtes"
+        - "En renvoyant plus de champs"
+        - "En désactivant HTTPS"
+      en:
+        - "By accepting only an allowlist of permitted fields"
+        - "By increasing the maximum request size"
+        - "By returning more fields"
+        - "By disabling HTTPS"
+    answer: 0
+    why:
+      fr: "Une liste blanche ne retient que les champs attendus et ignore tout le reste, dont `role` ou `is_admin`."
+      en: "An allowlist keeps only the expected fields and ignores everything else, including `role` or `is_admin`."
+  - q:
+      fr: "Pourquoi ne jamais renvoyer l'objet complet de la base au client ?"
+      en: "Why should you never return the full database object to the client?"
+    options:
+      fr:
+        - "Parce que c'est plus lent"
+        - "Parce qu'il peut contenir des champs sensibles (hash, jetons, flags internes)"
+        - "Parce que JSON ne supporte pas les objets"
+        - "Parce que le client ne lit pas le JSON"
+      en:
+        - "Because it is slower"
+        - "Because it may contain sensitive fields (hashes, tokens, internal flags)"
+        - "Because JSON does not support objects"
+        - "Because the client cannot read JSON"
+    answer: 1
+    why:
+      fr: "Sérialiser tout l'objet expose des champs comme `password_hash` ou `reset_token` : on construit une réponse avec une liste blanche."
+      en: "Serializing the whole object exposes fields like `password_hash` or `reset_token`: build the response from an allowlist."
+  - q:
+      fr: "Pourquoi limiter la taille d'une charge utile JSON avant de la parser ?"
+      en: "Why limit a JSON payload's size before parsing it?"
+    options:
+      fr:
+        - "Pour économiser de la bande passante uniquement"
+        - "Pour éviter qu'une charge énorme ou très imbriquée n'épuise la mémoire (déni de service)"
+        - "Parce que JSON a une taille maximale légale"
+        - "Pour forcer le chiffrement"
+      en:
+        - "Only to save bandwidth"
+        - "To stop a huge or deeply nested payload from exhausting memory (denial of service)"
+        - "Because JSON has a legal maximum size"
+        - "To force encryption"
+    answer: 1
+    why:
+      fr: "Une charge démesurée ou profondément imbriquée peut saturer le parseur : on la rejette avant de parser."
+      en: "An oversized or deeply nested payload can overwhelm the parser: reject it before parsing."
+  - q:
+      fr: "Quel message d'erreur renvoyer au client après un échec de connexion ?"
+      en: "Which error message should you return to the client after a failed login?"
+    options:
+      fr:
+        - "La stack trace complète"
+        - "La requête SQL qui a échoué"
+        - "Le chemin du fichier serveur"
+        - "Un message générique comme « Identifiants invalides »"
+      en:
+        - "The full stack trace"
+        - "The SQL query that failed"
+        - "The server file path"
+        - "A generic message like \"Invalid credentials\""
+    answer: 3
+    why:
+      fr: "Un message générique évite de divulguer des détails techniques ; la stack trace reste dans les logs serveur."
+      en: "A generic message avoids disclosing technical details; the stack trace stays in the server logs."

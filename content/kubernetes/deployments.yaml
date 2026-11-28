@@ -1,0 +1,483 @@
+description:
+  fr: "Gérer des Pods à l'échelle avec les Deployments : ReplicaSets, mises à jour progressives sans coupure, rollback et mise à l'échelle automatique avec le HPA."
+  en: "Manage Pods at scale with Deployments: ReplicaSets, zero-downtime rolling updates, rollback and autoscaling with the HPA."
+duration: 40
+
+intro:
+  fr: |
+    Un Pod seul est fragile : s'il tombe, il reste par terre ; si vous en voulez cinq copies, vous devez
+    les créer à la main. Le **Deployment** résout tout cela. Vous lui dites « je veux 3 copies de cette
+    application, toujours », et il s'en charge : il recrée un Pod qui meurt, en ajoute si vous montez à 5,
+    et déploie une nouvelle version sans jamais couper le service.
+
+    Pensez au gérant d'un restaurant qui garde toujours trois serveurs en salle : si l'un part, il en
+    appelle un autre ; pour le coup de feu, il en ajoute ; pour changer d'uniforme, il remplace les
+    serveurs un par un sans vider la salle. Le Deployment est ce gérant.
+
+    Vous allez créer un Deployment, comprendre le **ReplicaSet** qu'il gère en coulisses, réaliser une
+    **mise à jour progressive** (*rolling update*) sans coupure, revenir en arrière avec `rollout undo`, et
+    activer la **mise à l'échelle automatique** (*HPA*) selon la charge CPU.
+  en: |
+    A lone Pod is fragile: if it falls, it stays down; if you want five copies, you create them by hand.
+    The **Deployment** solves all of this. You tell it "I want 3 copies of this application, always", and
+    it handles it: it recreates a Pod that dies, adds more if you scale to 5, and rolls out a new version
+    without ever cutting the service.
+
+    Think of a restaurant manager who always keeps three waiters on the floor: if one leaves, they call
+    another; for the rush they add some; to change uniforms they swap waiters one at a time without
+    emptying the room. The Deployment is that manager.
+
+    You will create a Deployment, understand the **ReplicaSet** it manages behind the scenes, perform a
+    **rolling update** with no downtime, roll back with `rollout undo`, and enable **autoscaling** (*HPA*)
+    based on CPU load.
+
+sections:
+  - heading:
+      fr: "Deployment, ReplicaSet et sélecteurs"
+      en: "Deployment, ReplicaSet and selectors"
+    body:
+      fr: |
+        Trois objets s'emboîtent :
+
+        | Objet | Rôle |
+        |---|---|
+        | `Deployment` | Déclare l'état voulu : image, nombre de copies, stratégie de mise à jour |
+        | `ReplicaSet` | Maintient exactement N Pods identiques (géré par le Deployment) |
+        | `Pod` | L'exécution réelle de l'application |
+
+        Vous écrivez un Deployment (`apiVersion: apps/v1`). Il crée un ReplicaSet, qui crée les Pods. Le
+        lien entre eux est le **sélecteur de labels** : `spec.selector.matchLabels` doit correspondre aux
+        labels du `template` de Pod. Si les deux ne concordent pas, l'API rejette l'objet.
+
+        Le champ `replicas` fixe le nombre de copies. On ne touche jamais aux Pods ni au ReplicaSet
+        directement : on modifie le Deployment, et la boucle de réconciliation fait le reste. Supprimer un
+        Pod géré par un Deployment ? Il réapparaît aussitôt.
+      en: |
+        Three objects nest together:
+
+        | Object | Role |
+        |---|---|
+        | `Deployment` | Declares the desired state: image, number of copies, update strategy |
+        | `ReplicaSet` | Keeps exactly N identical Pods (managed by the Deployment) |
+        | `Pod` | The actual running application |
+
+        You write a Deployment (`apiVersion: apps/v1`). It creates a ReplicaSet, which creates the Pods. The
+        link between them is the **label selector**: `spec.selector.matchLabels` must match the Pod
+        `template`'s labels. If the two disagree, the API rejects the object.
+
+        The `replicas` field sets the number of copies. You never touch the Pods or the ReplicaSet directly:
+        you change the Deployment, and the reconciliation loop does the rest. Delete a Pod managed by a
+        Deployment? It reappears at once.
+  - heading:
+      fr: "Mise à jour progressive et rollback"
+      en: "Rolling update and rollback"
+    body:
+      fr: |
+        Changer l'image d'un Deployment déclenche une **mise à jour progressive** : Kubernetes crée les
+        nouveaux Pods, attend qu'ils soient *prêts* (readinessProbe !), puis supprime les anciens, par
+        petits lots. Le service n'est jamais coupé.
+
+        Deux réglages contrôlent le rythme dans `strategy.rollingUpdate` :
+
+        | Réglage | Signification |
+        |---|---|
+        | `maxUnavailable` | Combien de Pods peuvent manquer pendant la bascule |
+        | `maxSurge` | Combien de Pods supplémentaires peuvent être créés temporairement |
+
+        Chaque mise à jour crée un **nouveau ReplicaSet** et conserve les anciens (vides) : c'est
+        l'historique des révisions. Si la nouvelle version est mauvaise, `kubectl rollout undo` revient à la
+        précédente en quelques secondes. Et c'est précisément là que la `readinessProbe` est vitale : sans
+        elle, Kubernetes croit les nouveaux Pods prêts et route du trafic vers une application qui plante.
+      en: |
+        Changing a Deployment's image triggers a **rolling update**: Kubernetes creates the new Pods, waits
+        until they are *ready* (readinessProbe!), then removes the old ones, in small batches. The service
+        is never cut.
+
+        Two settings control the pace in `strategy.rollingUpdate`:
+
+        | Setting | Meaning |
+        |---|---|
+        | `maxUnavailable` | How many Pods may be missing during the switch |
+        | `maxSurge` | How many extra Pods may be created temporarily |
+
+        Each update creates a **new ReplicaSet** and keeps the old (empty) ones: that is the revision
+        history. If the new version is bad, `kubectl rollout undo` reverts to the previous one in seconds.
+        And this is exactly where the `readinessProbe` is vital: without it, Kubernetes thinks the new Pods
+        are ready and routes traffic to a crashing application.
+  - heading:
+      fr: "Mise à l'échelle et HPA"
+      en: "Scaling and the HPA"
+    body:
+      fr: |
+        Monter en charge se fait de deux façons :
+
+        - **Manuellement** : `kubectl scale deployment api --replicas=5`, ou en changeant `replicas` dans
+          le YAML.
+        - **Automatiquement** : le **HPA** (*Horizontal Pod Autoscaler*, `apiVersion:
+          autoscaling/v2`) ajuste le nombre de replicas selon une métrique, typiquement l'usage CPU.
+
+        Le HPA observe la consommation moyenne et compare à une cible (par ex. 70 % du CPU *requesté*). Si
+        la charge monte, il ajoute des Pods ; si elle baisse, il en retire, entre un `minReplicas` et un
+        `maxReplicas`.
+
+        Point crucial : le HPA ne peut calculer un pourcentage de CPU que si les Pods déclarent des
+        `resources.requests`. Sans `requests`, pas de HPA basé sur le CPU. C'est pourquoi les bonnes
+        pratiques de la leçon Pods (requests/limits) sont le préalable à la mise à l'échelle automatique.
+        Un *metrics-server* doit aussi tourner dans le cluster pour fournir les métriques.
+      en: |
+        Scaling up is done two ways:
+
+        - **Manually**: `kubectl scale deployment api --replicas=5`, or by changing `replicas` in the YAML.
+        - **Automatically**: the **HPA** (*Horizontal Pod Autoscaler*, `apiVersion: autoscaling/v2`) adjusts
+          the replica count based on a metric, typically CPU usage.
+
+        The HPA watches the average consumption and compares it to a target (e.g. 70% of *requested* CPU).
+        If load rises it adds Pods; if it falls it removes some, between a `minReplicas` and a
+        `maxReplicas`.
+
+        Crucial point: the HPA can only compute a CPU percentage if the Pods declare
+        `resources.requests`. Without `requests`, no CPU-based HPA. That is why the Pod lesson's best
+        practices (requests/limits) are the prerequisite to autoscaling. A *metrics-server* must also run in
+        the cluster to provide the metrics.
+
+examples:
+  - title:
+      fr: "Un Deployment complet et durci"
+      en: "A complete, hardened Deployment"
+    file: deployment.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+        labels:
+          app: api
+      spec:
+        replicas: 3                 # desired number of identical Pods
+        selector:
+          matchLabels:
+            app: api                # MUST match the template labels below
+        strategy:
+          type: RollingUpdate
+          rollingUpdate:
+            maxUnavailable: 0       # never drop below 3 ready Pods
+            maxSurge: 1             # add at most 1 extra Pod during the rollout
+        template:
+          metadata:
+            labels:
+              app: api              # selected by the Deployment and by Services
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 10001
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: api
+                image: ghcr.io/acme/api:1.4.2 # pinned, never latest
+                ports:
+                  - containerPort: 8080
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]
+                resources:
+                  requests:         # required for the HPA to work later
+                    cpu: "100m"
+                    memory: "128Mi"
+                  limits:
+                    cpu: "500m"
+                    memory: "256Mi"
+                readinessProbe:     # gate the rolling update on real readiness
+                  httpGet:
+                    path: /healthz
+                    port: 8080
+                  initialDelaySeconds: 3
+                  periodSeconds: 5
+    note:
+      fr: "`maxUnavailable: 0` + `maxSurge: 1` garantit zéro coupure : on ajoute un Pod neuf et prêt avant d'en retirer un ancien. Le `selector` correspond aux labels du `template`, sinon l'API refuse l'objet."
+      en: "`maxUnavailable: 0` + `maxSurge: 1` guarantees zero downtime: a fresh, ready Pod is added before an old one is removed. The `selector` matches the `template` labels, otherwise the API rejects the object."
+
+  - title:
+      fr: "Déployer, mettre à jour, revenir en arrière"
+      en: "Deploy, update, roll back"
+    file: rollout.sh
+    lang: bash
+    kind: neutral
+    code: |
+      kubectl apply -f deployment.yaml
+
+      # See the Deployment, its ReplicaSet and the 3 Pods it created
+      kubectl get deployment,replicaset,pods -l app=api
+
+      # Trigger a rolling update by changing the image to a new version
+      kubectl set image deployment/api api=ghcr.io/acme/api:1.5.0
+
+      # Watch the rollout progress Pod by Pod (no downtime)
+      kubectl rollout status deployment/api
+
+      # The new version is broken -> revert to the previous revision in seconds
+      kubectl rollout undo deployment/api
+
+      # Inspect the revision history
+      kubectl rollout history deployment/api
+    output: |
+      deployment "api" successfully rolled out
+      Waiting for deployment "api" rollout to finish: 2 of 3 updated replicas are available...
+      deployment "api" successfully rolled out
+    note:
+      fr: "`set image` déclenche la mise à jour progressive ; `rollout status` la suit. Si la version 1.5.0 est mauvaise, `rollout undo` restaure l'ancien ReplicaSet, conservé dans l'historique."
+      en: "`set image` triggers the rolling update; `rollout status` follows it. If 1.5.0 is bad, `rollout undo` restores the previous ReplicaSet, kept in the history."
+
+  - title:
+      fr: "Mise à l'échelle automatique avec le HPA"
+      en: "Autoscaling with the HPA"
+    file: hpa.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: api
+      spec:
+        scaleTargetRef:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: api              # the Deployment to scale
+        minReplicas: 3
+        maxReplicas: 10
+        metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                # Target 70% of the CPU each Pod REQUESTED (100m here)
+                averageUtilization: 70
+    output: |
+      $ kubectl get hpa api
+      NAME   REFERENCE        TARGETS       MINPODS   MAXPODS   REPLICAS
+      api    Deployment/api   42%/70%       3         10        3
+      # Under load the TARGETS column rises and REPLICAS grows toward 10
+    note:
+      fr: "Le HPA vise 70 % du CPU *requesté* : il n'a de sens que parce que le Deployment déclare `requests.cpu`. Sans cela, le pourcentage ne peut pas être calculé et le HPA reste inopérant."
+      en: "The HPA targets 70% of the *requested* CPU: it only makes sense because the Deployment declares `requests.cpu`. Without that, the percentage cannot be computed and the HPA stays inert."
+
+  - title:
+      fr: "VULNÉRABLE : un Deployment sans sonde ni limites"
+      en: "VULNERABLE: a Deployment with no probe or limits"
+    file: deployment-bad.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+      spec:
+        replicas: 3
+        selector:
+          matchLabels:
+            app: api
+        template:
+          metadata:
+            labels:
+              app: api
+          spec:
+            containers:
+              - name: api
+                image: ghcr.io/acme/api:latest # Problem 1: moving tag
+                # Problem 2: no readinessProbe -> rolling updates route traffic
+                #            to Pods that are not actually ready yet
+                # Problem 3: no resources.requests -> the HPA cannot scale on CPU
+                # Problem 4: no securityContext -> runs as root
+                ports:
+                  - containerPort: 8080
+    note:
+      fr: "Sans `readinessProbe`, la mise à jour progressive envoie du trafic vers des Pods qui plantent : la « sans coupure » devient « coupure généralisée ». Sans `requests`, le HPA est impuissant."
+      en: "Without a `readinessProbe`, the rolling update sends traffic to crashing Pods: the \"zero downtime\" becomes \"total outage\". Without `requests`, the HPA is powerless."
+
+mistake:
+  fr: |
+    **Faire une mise à jour progressive sans `readinessProbe`.**
+
+    C'est le piège le plus coûteux. Sans sonde de disponibilité, Kubernetes considère un nouveau Pod comme
+    « prêt » dès que son conteneur démarre, bien avant que l'application n'accepte réellement des requêtes.
+    Pendant une mise à jour, il supprime alors les anciens Pods qui fonctionnaient pour les remplacer par de
+    nouveaux qui ne répondent pas encore : le service tombe, alors même que le tableau de bord affiche
+    « rollout réussi ». La `readinessProbe` est ce qui rend la mise à jour réellement sans coupure : elle
+    retient le trafic jusqu'à ce que le Pod soit vraiment prêt, et bloque la bascule si la nouvelle version
+    ne démarre pas.
+  en: |
+    **Doing a rolling update with no `readinessProbe`.**
+
+    This is the costliest trap. Without a readiness probe, Kubernetes considers a new Pod "ready" as soon as
+    its container starts, long before the application actually accepts requests. During an update it then
+    removes the old, working Pods to replace them with new ones that do not answer yet: the service goes
+    down, even as the dashboard shows "rollout succeeded". The `readinessProbe` is what makes the update
+    truly zero-downtime: it holds back traffic until the Pod is genuinely ready, and blocks the switch if
+    the new version will not start.
+
+bestPractice:
+  fr: |
+    - **Gérez toujours les Pods via un Deployment** : auto-réparation et mise à l'échelle.
+    - **`selector.matchLabels` = labels du `template`**, sinon l'API rejette l'objet.
+    - **`readinessProbe` obligatoire** : c'est elle qui garantit une mise à jour sans coupure.
+    - **`maxUnavailable: 0` + `maxSurge: 1`** pour zéro indisponibilité pendant la bascule.
+    - **Images épinglées** (version précise), jamais `latest`, pour pouvoir faire un rollback fiable.
+    - **`resources.requests`** sur chaque conteneur : préalable indispensable au HPA basé sur le CPU.
+    - **`kubectl rollout undo`** connu et testé : savoir revenir en arrière vite.
+  en: |
+    - **Always manage Pods through a Deployment**: self-healing and scaling.
+    - **`selector.matchLabels` = `template` labels**, otherwise the API rejects the object.
+    - **Mandatory `readinessProbe`**: it is what guarantees a zero-downtime update.
+    - **`maxUnavailable: 0` + `maxSurge: 1`** for zero unavailability during the switch.
+    - **Pinned images** (precise version), never `latest`, so rollback is reliable.
+    - **`resources.requests`** on each container: an essential prerequisite for the CPU-based HPA.
+    - **`kubectl rollout undo`** known and tested: knowing how to revert fast.
+
+exercise:
+  statement:
+    fr: |
+      1. Donnez la commande qui met à l'échelle le Deployment `web` à 5 replicas, de façon impérative.
+      2. Donnez la commande qui met à jour l'image du Deployment `web` vers `nginx:1.27-alpine`.
+      3. Donnez la commande qui annule le dernier déploiement du Deployment `web`.
+      4. Écrivez un HorizontalPodAutoscaler qui maintient entre 2 et 8 replicas du Deployment `web`, visant
+         une utilisation CPU moyenne de 60 %.
+    en: |
+      1. Give the command that scales the `web` Deployment to 5 replicas, imperatively.
+      2. Give the command that updates the `web` Deployment's image to `nginx:1.27-alpine`.
+      3. Give the command that undoes the last rollout of the `web` Deployment.
+      4. Write a HorizontalPodAutoscaler keeping between 2 and 8 replicas of the `web` Deployment, targeting
+         60% average CPU utilization.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # 1. Scale to 5 replicas:
+      #      kubectl scale deployment web --replicas=5
+      #
+      # 2. Update the image (triggers a rolling update):
+      #      kubectl set image deployment/web nginx=nginx:1.27-alpine
+      #
+      # 3. Roll back the last rollout:
+      #      kubectl rollout undo deployment/web
+      #
+      # 4. The HorizontalPodAutoscaler:
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: web
+      spec:
+        scaleTargetRef:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: web
+        minReplicas: 2
+        maxReplicas: 8
+        metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 60
+    note:
+      fr: "Le HPA cible 60 % du CPU requesté entre 2 et 8 replicas. Il ne fonctionnera que si le Deployment `web` déclare `resources.requests.cpu` et qu'un metrics-server tourne."
+      en: "The HPA targets 60% of requested CPU between 2 and 8 replicas. It only works if the `web` Deployment declares `resources.requests.cpu` and a metrics-server is running."
+
+quiz:
+  - q:
+      fr: "Quel objet le Deployment crée-t-il pour maintenir N Pods identiques ?"
+      en: "Which object does the Deployment create to keep N identical Pods?"
+    options:
+      fr:
+        - "Un ReplicaSet"
+        - "Un Service"
+        - "Un ConfigMap"
+        - "Un namespace"
+      en:
+        - "A ReplicaSet"
+        - "A Service"
+        - "A ConfigMap"
+        - "A namespace"
+    answer: 0
+    why:
+      fr: "Le Deployment gère un ReplicaSet, qui maintient exactement le nombre voulu de Pods ; on ne manipule jamais le ReplicaSet directement."
+      en: "The Deployment manages a ReplicaSet, which keeps exactly the desired number of Pods; you never manipulate the ReplicaSet directly."
+  - q:
+      fr: "Pourquoi la `readinessProbe` est-elle essentielle lors d'une mise à jour progressive ?"
+      en: "Why is the `readinessProbe` essential during a rolling update?"
+    options:
+      fr:
+        - "Elle chiffre le trafic"
+        - "Elle empêche d'envoyer du trafic vers des Pods pas encore réellement prêts"
+        - "Elle accélère le téléchargement des images"
+        - "Elle double le nombre de replicas"
+      en:
+        - "It encrypts the traffic"
+        - "It prevents sending traffic to Pods that are not actually ready yet"
+        - "It speeds up image pulls"
+        - "It doubles the replica count"
+    answer: 1
+    why:
+      fr: "Sans elle, Kubernetes supprime les anciens Pods et route vers de nouveaux qui plantent : la sonde garantit que la bascule reste sans coupure."
+      en: "Without it, Kubernetes removes the old Pods and routes to new ones that crash: the probe guarantees the switch stays zero-downtime."
+  - q:
+      fr: "Que fait `kubectl rollout undo deployment/api` ?"
+      en: "What does `kubectl rollout undo deployment/api` do?"
+    options:
+      fr:
+        - "Il supprime le Deployment"
+        - "Il double les replicas"
+        - "Il revient à la révision précédente du Deployment"
+        - "Il chiffre les Pods"
+      en:
+        - "It deletes the Deployment"
+        - "It doubles the replicas"
+        - "It reverts to the Deployment's previous revision"
+        - "It encrypts the Pods"
+    answer: 2
+    why:
+      fr: "Chaque mise à jour conserve l'ancien ReplicaSet ; `rollout undo` le réactive, restaurant la version précédente en quelques secondes."
+      en: "Each update keeps the old ReplicaSet; `rollout undo` reactivates it, restoring the previous version in seconds."
+  - q:
+      fr: "De quoi le HPA basé sur le CPU a-t-il absolument besoin pour fonctionner ?"
+      en: "What does the CPU-based HPA absolutely need to work?"
+    options:
+      fr:
+        - "Que les Pods déclarent `resources.requests` et qu'un metrics-server tourne"
+        - "Que l'image soit taguée `latest`"
+        - "Que le Deployment n'ait qu'un seul replica"
+        - "Que le readOnlyRootFilesystem soit désactivé"
+      en:
+        - "That the Pods declare `resources.requests` and a metrics-server runs"
+        - "That the image is tagged `latest`"
+        - "That the Deployment has a single replica"
+        - "That readOnlyRootFilesystem is disabled"
+    answer: 0
+    why:
+      fr: "Le HPA calcule un pourcentage du CPU *requesté* : sans `requests` ni metrics-server, il ne peut rien mesurer ni ajuster."
+      en: "The HPA computes a percentage of *requested* CPU: without `requests` or a metrics-server, it can measure and adjust nothing."
+  - q:
+      fr: "Que doit respecter `spec.selector.matchLabels` d'un Deployment ?"
+      en: "What must a Deployment's `spec.selector.matchLabels` respect?"
+    options:
+      fr:
+        - "Il doit être vide"
+        - "Il doit correspondre aux labels du `template` de Pod"
+        - "Il doit contenir le nom du nœud"
+        - "Il doit être différent des labels du template"
+      en:
+        - "It must be empty"
+        - "It must match the Pod `template`'s labels"
+        - "It must contain the node name"
+        - "It must differ from the template labels"
+    answer: 1
+    why:
+      fr: "Le sélecteur relie le Deployment à ses Pods ; s'il ne correspond pas aux labels du template, l'API rejette l'objet."
+      en: "The selector ties the Deployment to its Pods; if it does not match the template labels, the API rejects the object."

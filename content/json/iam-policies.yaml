@@ -1,0 +1,357 @@
+description:
+  fr: "Lire et écrire des politiques AWS IAM en JSON : structure, Effect/Action/Resource et moindre privilège contre les jokers."
+  en: "Read and write AWS IAM policies in JSON: structure, Effect/Action/Resource and least privilege versus wildcards."
+duration: 25
+
+intro:
+  fr: |
+    Dans le cloud AWS, **qui a le droit de faire quoi** est décidé par des politiques **IAM** (*Identity and
+    Access Management*), écrites en **JSON**. Une politique mal rédigée est l'une des premières causes de fuites
+    de données cloud : un simple `"*"` de trop peut donner à un service compromis les clés de tout le compte.
+
+    Savoir lire et écrire ces politiques est donc une compétence de sécurité centrale. La structure est toujours
+    la même : une liste de déclarations (`Statement`) qui disent, pour chacune, s'il faut **autoriser** ou
+    **refuser** (`Effect`) telle **action** (`Action`) sur telle **ressource** (`Resource`).
+
+    Imaginez un trousseau de clés : la bonne pratique n'est pas de donner le passe-partout à tout le monde, mais
+    de remettre à chacun uniquement les clés des portes dont il a besoin. C'est le **moindre privilège**. Dans
+    cette leçon vous comparerez une politique « joker » dangereuse à une politique au plus juste, et apprendrez
+    à restreindre finement les accès.
+  en: |
+    In the AWS cloud, **who is allowed to do what** is decided by **IAM** (*Identity and Access Management*)
+    policies, written in **JSON**. A badly written policy is one of the leading causes of cloud data leaks: a
+    single extra `"*"` can hand a compromised service the keys to the entire account.
+
+    Being able to read and write these policies is therefore a central security skill. The structure is always
+    the same: a list of statements (`Statement`) that each say whether to **allow** or **deny** (`Effect`) a
+    given **action** (`Action`) on a given **resource** (`Resource`).
+
+    Picture a keyring: the good practice is not to give the master key to everyone, but to hand each person only
+    the keys to the doors they need. That is **least privilege**. In this lesson you will compare a dangerous
+    "wildcard" policy with a tightly scoped one, and learn to restrict access precisely.
+
+sections:
+  - heading:
+      fr: "Anatomie d'une politique IAM"
+      en: "Anatomy of an IAM policy"
+    body:
+      fr: |
+        Une politique IAM est un objet JSON avec un `Version` et un tableau `Statement` :
+
+        | Clé | Rôle |
+        |---|---|
+        | `Version` | Toujours `"2012-10-17"` (version du langage de politique) |
+        | `Statement` | Liste de déclarations |
+        | `Sid` | Identifiant lisible d'une déclaration (facultatif) |
+        | `Effect` | `"Allow"` ou `"Deny"` |
+        | `Action` | L'action autorisée, ex. `"s3:GetObject"` |
+        | `Resource` | L'ARN de la ressource concernée |
+        | `Condition` | Conditions supplémentaires (IP, MFA, chiffrement...) |
+
+        Une **action** suit le format `service:Opération` (`s3:GetObject`, `ec2:StartInstances`). Une
+        **ressource** est identifiée par un **ARN** (*Amazon Resource Name*) comme
+        `arn:aws:s3:::mon-bucket/*`. En cas de conflit, un `Deny` l'emporte toujours sur un `Allow`.
+      en: |
+        An IAM policy is a JSON object with a `Version` and a `Statement` array:
+
+        | Key | Role |
+        |---|---|
+        | `Version` | Always `"2012-10-17"` (policy language version) |
+        | `Statement` | List of statements |
+        | `Sid` | Human-readable statement identifier (optional) |
+        | `Effect` | `"Allow"` or `"Deny"` |
+        | `Action` | The allowed action, e.g. `"s3:GetObject"` |
+        | `Resource` | The ARN of the resource concerned |
+        | `Condition` | Extra conditions (IP, MFA, encryption...) |
+
+        An **action** follows the `service:Operation` format (`s3:GetObject`, `ec2:StartInstances`). A
+        **resource** is identified by an **ARN** (*Amazon Resource Name*) such as `arn:aws:s3:::my-bucket/*`. In
+        a conflict, a `Deny` always beats an `Allow`.
+  - heading:
+      fr: "Le danger des jokers et le moindre privilège"
+      en: "The danger of wildcards and least privilege"
+    body:
+      fr: |
+        Le caractère `*` est un **joker** : `"Action": "*"` signifie « toutes les actions », `"Resource": "*"`
+        signifie « toutes les ressources ». La politique `{ "Effect": "Allow", "Action": "*", "Resource": "*" }`
+        donne un **accès administrateur total**. Si l'identité qui la porte est compromise, tout le compte l'est.
+
+        Le **moindre privilège** consiste à n'accorder que ce qui est strictement nécessaire :
+
+        | Approche | Action | Resource | Risque |
+        |---|---|---|---|
+        | Joker (à éviter) | `"*"` | `"*"` | Compromission totale |
+        | Large | `"s3:*"` | `"arn:aws:s3:::*"` | Tout S3 exposé |
+        | Au plus juste | `"s3:GetObject"` | `"arn:aws:s3:::app-data/*"` | Un seul bucket, lecture seule |
+
+        On renforce encore avec une **`Condition`** : exiger du chiffrement, une connexion MFA, ou une plage
+        d'adresses IP. Les scanners comme Prowler, Checkov ou IAM Access Analyzer signalent automatiquement les
+        politiques trop permissives.
+      en: |
+        The `*` character is a **wildcard**: `"Action": "*"` means "all actions", `"Resource": "*"` means "all
+        resources". The policy `{ "Effect": "Allow", "Action": "*", "Resource": "*" }` grants **full
+        administrator access**. If the identity holding it is compromised, so is the whole account.
+
+        **Least privilege** means granting only what is strictly necessary:
+
+        | Approach | Action | Resource | Risk |
+        |---|---|---|---|
+        | Wildcard (avoid) | `"*"` | `"*"` | Total compromise |
+        | Broad | `"s3:*"` | `"arn:aws:s3:::*"` | All of S3 exposed |
+        | Tightly scoped | `"s3:GetObject"` | `"arn:aws:s3:::app-data/*"` | One bucket, read-only |
+
+        You strengthen it further with a **`Condition`**: require encryption, an MFA session, or an IP range.
+        Scanners like Prowler, Checkov or IAM Access Analyzer automatically flag overly permissive policies.
+
+examples:
+  - title:
+      fr: "Politique dangereuse : accès administrateur par joker"
+      en: "Dangerous policy: wildcard administrator access"
+    file: admin_wildcard.json
+    lang: json
+    kind: vulnerable
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "FullAdminDoNotUse",
+            "Effect": "Allow",
+            "Action": "*",
+            "Resource": "*"
+          }
+        ]
+      }
+    output: |
+      Prowler: CRITICAL  policy allows "*" on "*" (full administrative privileges)
+      IAM Access Analyzer: policy grants access to every service and resource
+    note:
+      fr: "Politique volontairement dangereuse (`kind: vulnerable`) : `Action: *` sur `Resource: *` donne tous les droits. Une seule clé fuitée compromet le compte entier."
+      en: "Intentionally dangerous policy (`kind: vulnerable`): `Action: *` on `Resource: *` grants every right. One leaked key compromises the whole account."
+
+  - title:
+      fr: "Politique au plus juste : lecture seule d'un bucket"
+      en: "Tightly scoped policy: read-only access to one bucket"
+    file: s3_readonly.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "ListTheBucket",
+            "Effect": "Allow",
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::app-data"
+          },
+          {
+            "Sid": "ReadObjectsOnly",
+            "Effect": "Allow",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::app-data/*"
+          }
+        ]
+      }
+    output: |
+      Prowler: PASS  no wildcard actions, resources are scoped
+      Effective rights: list + read on app-data only; no write, no delete
+    note:
+      fr: "Seules deux actions de lecture sont permises, et uniquement sur le bucket `app-data`. Aucune écriture ni suppression : exactement le besoin, rien de plus."
+      en: "Only two read actions are allowed, and only on the `app-data` bucket. No write, no delete: exactly the need, nothing more."
+
+  - title:
+      fr: "Renforcer avec une condition : exiger le chiffrement"
+      en: "Harden with a condition: require encryption"
+    file: s3_put_encrypted.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "AllowEncryptedUploadsOnly",
+            "Effect": "Allow",
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::app-data/*",
+            "Condition": {
+              "StringEquals": {
+                "s3:x-amz-server-side-encryption": "AES256"
+              }
+            }
+          },
+          {
+            "Sid": "DenyUnencryptedUploads",
+            "Effect": "Deny",
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::app-data/*",
+            "Condition": {
+              "Null": {
+                "s3:x-amz-server-side-encryption": "true"
+              }
+            }
+          }
+        ]
+      }
+    output: |
+      PutObject with SSE=AES256  -> allowed
+      PutObject without encryption -> explicitly denied
+    note:
+      fr: "La première déclaration autorise l'envoi chiffré ; la seconde refuse explicitement tout envoi non chiffré. Comme `Deny` l'emporte, aucun objet en clair ne peut être déposé."
+      en: "The first statement allows encrypted uploads; the second explicitly denies any unencrypted upload. Since `Deny` wins, no clear-text object can be stored."
+
+mistake:
+  fr: |
+    **Accorder `"Action": "*"` ou `"Resource": "*"` « pour que ça marche ».**
+
+    C'est l'erreur la plus répandue et la plus coûteuse du cloud. Mettre un joker parce qu'on ne sait pas
+    exactement quelles permissions sont nécessaires revient à donner le passe-partout du compte à un service qui
+    n'a besoin que d'une porte. Si ce service est compromis (clé fuitée, dépendance vérolée), l'attaquant hérite
+    de **tous** les droits. Partez toujours de zéro permission et ajoutez les actions une à une, sur des ARN
+    précis. En cas de doute, utilisez IAM Access Analyzer pour générer une politique à partir de l'usage réel.
+  en: |
+    **Granting `"Action": "*"` or `"Resource": "*"` "to make it work".**
+
+    This is the most common and most costly cloud mistake. Adding a wildcard because you are unsure which
+    permissions are needed is like giving the account's master key to a service that only needs one door. If
+    that service is compromised (leaked key, poisoned dependency), the attacker inherits **all** the rights.
+    Always start from zero permissions and add actions one by one, on precise ARNs. When in doubt, use IAM
+    Access Analyzer to generate a policy from real usage.
+
+bestPractice:
+  fr: |
+    - **Bannissez les jokers** `"*"` sur `Action` et `Resource` dans les politiques d'autorisation.
+    - **Partez de zéro** et ajoutez les actions une par une, au plus juste (`s3:GetObject`, pas `s3:*`).
+    - **Ciblez des ARN précis** plutôt que `"*"` pour les ressources.
+    - **Ajoutez des `Condition`** : MFA, chiffrement, plage d'IP, pour durcir encore l'accès.
+    - **Scannez vos politiques** avec Prowler, Checkov ou IAM Access Analyzer avant de les appliquer.
+  en: |
+    - **Ban wildcards** `"*"` on `Action` and `Resource` in permission policies.
+    - **Start from zero** and add actions one by one, as tight as possible (`s3:GetObject`, not `s3:*`).
+    - **Target precise ARNs** rather than `"*"` for resources.
+    - **Add `Condition` blocks**: MFA, encryption, IP range, to harden access further.
+    - **Scan your policies** with Prowler, Checkov or IAM Access Analyzer before applying them.
+
+exercise:
+  statement:
+    fr: |
+      Un développeur a écrit cette politique pour permettre à une application de lire des messages dans une file
+      SQS. Elle est beaucoup trop large. Réécrivez-la selon le moindre privilège pour qu'elle n'autorise que
+      l'action `sqs:ReceiveMessage` sur la file `arn:aws:sqs:eu-west-1:123456789012:orders`.
+
+      ```json
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          { "Effect": "Allow", "Action": "sqs:*", "Resource": "*" }
+        ]
+      }
+      ```
+    en: |
+      A developer wrote this policy to let an application read messages from an SQS queue. It is far too broad.
+      Rewrite it following least privilege so it allows only the `sqs:ReceiveMessage` action on the queue
+      `arn:aws:sqs:eu-west-1:123456789012:orders`.
+
+      ```json
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          { "Effect": "Allow", "Action": "sqs:*", "Resource": "*" }
+        ]
+      }
+      ```
+  solution:
+    file: sqs_least_privilege.json
+    lang: json
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "ReceiveFromOrdersQueueOnly",
+            "Effect": "Allow",
+            "Action": "sqs:ReceiveMessage",
+            "Resource": "arn:aws:sqs:eu-west-1:123456789012:orders"
+          }
+        ]
+      }
+    note:
+      fr: "On remplace `sqs:*` par la seule action nécessaire et `*` par l'ARN exact de la file : l'application ne peut plus ni supprimer la file ni lire les autres."
+      en: "`sqs:*` becomes the single needed action and `*` becomes the queue's exact ARN: the app can no longer delete the queue nor read any other."
+
+quiz:
+  - q:
+      fr: "Quelle valeur prend toujours le champ `Version` d'une politique IAM ?"
+      en: "What value does an IAM policy's `Version` field always take?"
+    options:
+      fr: ["\"2012-10-17\"", "\"1.0\"", "\"latest\"", "\"2024\""]
+      en: ["\"2012-10-17\"", "\"1.0\"", "\"latest\"", "\"2024\""]
+    answer: 0
+    why:
+      fr: "La version du langage de politique IAM est `\"2012-10-17\"` ; ce n'est pas une date à mettre à jour."
+      en: "The IAM policy language version is `\"2012-10-17\"`; it is not a date you update."
+  - q:
+      fr: "Que signifie `\"Action\": \"*\"` dans une déclaration Allow ?"
+      en: "What does `\"Action\": \"*\"` mean in an Allow statement?"
+    options:
+      fr:
+        - "Aucune action"
+        - "Seulement les actions de lecture"
+        - "Toutes les actions possibles"
+        - "Les actions programmées"
+      en:
+        - "No action"
+        - "Only read actions"
+        - "Every possible action"
+        - "Scheduled actions"
+    answer: 2
+    why:
+      fr: "Le joker `*` autorise toutes les actions ; combiné à `Resource: *`, c'est un accès administrateur complet."
+      en: "The `*` wildcard allows every action; combined with `Resource: *`, it is full administrator access."
+  - q:
+      fr: "En cas de conflit, qui l'emporte entre Allow et Deny ?"
+      en: "In a conflict, which one wins between Allow and Deny?"
+    options:
+      fr: ["Allow", "Deny", "Le plus récent", "Celui avec un Sid"]
+      en: ["Allow", "Deny", "The most recent", "The one with a Sid"]
+    answer: 1
+    why:
+      fr: "Un `Deny` explicite l'emporte toujours sur un `Allow` : c'est ce qui permet de verrouiller une exception."
+      en: "An explicit `Deny` always overrides an `Allow`: this is what lets you lock down an exception."
+  - q:
+      fr: "Comment appliquer le moindre privilège pour l'accès en lecture à un bucket S3 ?"
+      en: "How do you apply least privilege for read access to an S3 bucket?"
+    options:
+      fr:
+        - "Action s3:* sur Resource *"
+        - "Action s3:GetObject sur l'ARN précis du bucket"
+        - "Effect Deny sur tout"
+        - "Version 2024 avec joker"
+      en:
+        - "Action s3:* on Resource *"
+        - "Action s3:GetObject on the bucket's exact ARN"
+        - "Effect Deny on everything"
+        - "Version 2024 with a wildcard"
+    answer: 1
+    why:
+      fr: "On n'autorise que l'action nécessaire (`s3:GetObject`) sur l'ARN précis, sans joker : exactement le besoin."
+      en: "You allow only the needed action (`s3:GetObject`) on the exact ARN, with no wildcard: exactly the need."
+  - q:
+      fr: "À quoi sert le bloc `Condition` dans une déclaration IAM ?"
+      en: "What is the `Condition` block for in an IAM statement?"
+    options:
+      fr:
+        - "À nommer la politique"
+        - "À chiffrer la politique"
+        - "À augmenter les droits"
+        - "À restreindre l'accès (MFA, chiffrement, plage d'IP...)"
+      en:
+        - "To name the policy"
+        - "To encrypt the policy"
+        - "To increase the rights"
+        - "To restrict access (MFA, encryption, IP range...)"
+    answer: 3
+    why:
+      fr: "`Condition` ajoute des contraintes supplémentaires qui doivent être vraies pour que la déclaration s'applique."
+      en: "`Condition` adds extra constraints that must be true for the statement to apply."

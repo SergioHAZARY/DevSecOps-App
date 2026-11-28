@@ -1,0 +1,464 @@
+description:
+  fr: "Outiller la sécurité d'un projet Go : go vet, staticcheck, gosec, govulncheck, build reproductible avec -trimpath et binaire statique dans une image distroless."
+  en: "Tool a Go project's security: go vet, staticcheck, gosec, govulncheck, reproducible builds with -trimpath and a static binary in a distroless image."
+duration: 40
+
+intro:
+  fr: |
+    Écrire du code Go correct ne suffit pas : il faut des **outils** qui vérifient automatiquement que le
+    code est sûr, que les dépendances n'ont pas de faille connue, et que le binaire livré est minimal et
+    reproductible. C'est exactement le travail du DevSecOps : transformer ces contrôles en étapes de
+    pipeline.
+
+    Pensez à la chaîne de montage d'une voiture : un robot vérifie les soudures (`go vet`), un autre les
+    défauts de style qui cachent des bugs (`staticcheck`), un troisième les pièces dangereuses (`gosec`),
+    un dernier rappelle les pièces sous rappel constructeur (`govulncheck`). Aucun humain ne pourrait tout
+    contrôler à chaque livraison.
+
+    Vous allez découvrir ces quatre outils, puis compiler un **binaire statique** sans informations de build
+    locales (`-trimpath`, `CGO_ENABLED=0`) et l'emballer dans une image **distroless** quasi vide, pour
+    réduire au maximum la surface d'attaque.
+  en: |
+    Writing correct Go code is not enough: you need **tools** that automatically verify the code is safe,
+    that dependencies have no known flaw, and that the shipped binary is minimal and reproducible. This is
+    exactly the DevSecOps job: turning these checks into pipeline steps.
+
+    Think of a car assembly line: one robot checks the welds (`go vet`), another the style defects that hide
+    bugs (`staticcheck`), a third the dangerous parts (`gosec`), a last one flags parts under manufacturer
+    recall (`govulncheck`). No human could check everything on every release.
+
+    You will discover these four tools, then build a **static binary** with no local build information
+    (`-trimpath`, `CGO_ENABLED=0`) and package it in a near-empty **distroless** image, to cut the attack
+    surface to the minimum.
+
+sections:
+  - heading:
+      fr: "Les quatre outils du quotidien"
+      en: "The four everyday tools"
+    body:
+      fr: |
+        | Outil | Ce qu'il trouve | Installation | Faux positifs |
+        |---|---|---|---|
+        | `go vet` | Bugs évidents : format `Printf` erroné, verrou copié | Inclus dans Go | Très rares |
+        | `staticcheck` | Code mort, erreurs ignorées, bugs subtils | `go install honnef.co/go/tools/cmd/staticcheck@latest` | Rares |
+        | `gosec` | Patrons dangereux : `exec` avec entrée, TLS faible, secrets | `go install github.com/securego/gosec/v2/cmd/gosec@latest` | Modérés (à trier) |
+        | `govulncheck` | **Vulnérabilités connues** réellement atteignables dans votre code | `go install golang.org/x/vuln/cmd/govulncheck@latest` | Quasi nuls |
+
+        `go vet` et `staticcheck` font du **SAST** généraliste (qualité et bugs). `gosec` est un SAST
+        orienté **sécurité** : il repère par exemple `tls.Config{InsecureSkipVerify: true}` ou un
+        `os/exec` nourri par une entrée utilisateur. `govulncheck` est différent et très précis : il croise
+        la base officielle des vulnérabilités Go avec les fonctions que votre code **appelle vraiment**, donc
+        il signale beaucoup moins de bruit qu'un simple scan de versions.
+      en: |
+        | Tool | What it finds | Install | False positives |
+        |---|---|---|---|
+        | `go vet` | Obvious bugs: wrong `Printf` format, copied lock | Bundled with Go | Very rare |
+        | `staticcheck` | Dead code, ignored errors, subtle bugs | `go install honnef.co/go/tools/cmd/staticcheck@latest` | Rare |
+        | `gosec` | Dangerous patterns: `exec` with input, weak TLS, secrets | `go install github.com/securego/gosec/v2/cmd/gosec@latest` | Moderate (triage) |
+        | `govulncheck` | **Known vulnerabilities** actually reachable in your code | `go install golang.org/x/vuln/cmd/govulncheck@latest` | Near zero |
+
+        `go vet` and `staticcheck` do general-purpose **SAST** (quality and bugs). `gosec` is a
+        **security**-focused SAST: it flags, for example, `tls.Config{InsecureSkipVerify: true}` or an
+        `os/exec` call fed by user input. `govulncheck` is different and very precise: it cross-references
+        the official Go vulnerability database with the functions your code **actually calls**, so it reports
+        far less noise than a plain version scan.
+  - heading:
+      fr: "Binaire statique, -trimpath et image minimale"
+      en: "Static binary, -trimpath and a minimal image"
+    body:
+      fr: |
+        Go compile par défaut un binaire quasi autonome, mais deux réglages le rendent idéal pour un
+        conteneur sécurisé :
+
+        - `CGO_ENABLED=0` : désactive la liaison avec la libc du système. Le binaire devient **totalement
+          statique** et tourne même dans une image `scratch` (vide).
+        - `-trimpath` : retire les chemins absolus de votre machine (`/home/alice/...`) du binaire. Le build
+          devient **reproductible** et ne fuite pas l'arborescence du développeur.
+        - `-ldflags "-s -w"` : retire la table des symboles et les infos de debug ; le binaire est plus petit.
+
+        Ensuite, un **Dockerfile multi-stage** sépare la *compilation* (image lourde avec le compilateur) de
+        l'*exécution* (image minimale sans shell ni gestionnaire de paquets) :
+
+        | Image de base | Taille | Contenu | Surface d'attaque |
+        |---|---|---|---|
+        | `golang:1.23` | ~800 Mo | Compilateur, shell, outils | Grande |
+        | `debian:bookworm-slim` | ~75 Mo | Shell, apt, libc | Moyenne |
+        | `gcr.io/distroless/static` | ~2 Mo | Juste les certificats et fuseaux | Minime |
+        | `scratch` | 0 Mo | Rien du tout | Quasi nulle |
+
+        Moins il y a de binaires dans l'image, moins un attaquant a d'outils (`sh`, `curl`, `wget`) pour
+        rebondir s'il parvient à exécuter du code.
+      en: |
+        Go compiles a nearly self-contained binary by default, but two settings make it ideal for a secure
+        container:
+
+        - `CGO_ENABLED=0`: disables linking against the system libc. The binary becomes **fully static** and
+          runs even in a `scratch` (empty) image.
+        - `-trimpath`: strips the absolute paths of your machine (`/home/alice/...`) from the binary. The
+          build becomes **reproducible** and does not leak the developer's directory tree.
+        - `-ldflags "-s -w"`: removes the symbol table and debug info; the binary is smaller.
+
+        Then a **multi-stage Dockerfile** separates the *build* (heavy image with the compiler) from the
+        *runtime* (minimal image with no shell, no package manager):
+
+        | Base image | Size | Contents | Attack surface |
+        |---|---|---|---|
+        | `golang:1.23` | ~800 MB | Compiler, shell, tools | Large |
+        | `debian:bookworm-slim` | ~75 MB | Shell, apt, libc | Medium |
+        | `gcr.io/distroless/static` | ~2 MB | Just certificates and timezones | Minimal |
+        | `scratch` | 0 MB | Nothing at all | Near zero |
+
+        The fewer binaries in the image, the fewer tools (`sh`, `curl`, `wget`) an attacker has to pivot with
+        if they manage to execute code.
+
+examples:
+  - title:
+      fr: "Code que gosec signale : commande système et TLS désactivé"
+      en: "Code that gosec flags: system command and disabled TLS"
+    file: fetch_vulnerable.go
+    lang: go
+    kind: vulnerable
+    code: |
+      package main
+
+      import (
+      	"crypto/tls"
+      	"net/http"
+      	"os"
+      	"os/exec"
+      )
+
+      func main() {
+      	// G204: user-controlled input passed to a shell command (command injection)
+      	host := os.Args[1]
+      	out, _ := exec.Command("sh", "-c", "ping -c1 "+host).CombinedOutput()
+      	os.Stdout.Write(out)
+
+      	// G402: InsecureSkipVerify disables certificate checks (man-in-the-middle)
+      	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+      	client := &http.Client{Transport: tr}
+      	client.Get("https://example.com") // G104: error ignored
+      }
+    output: |
+      $ gosec ./...
+      [/app/fetch_vulnerable.go:14] - G204 (CWE-78): Subprocess launched with a potential tainted input
+      [/app/fetch_vulnerable.go:18] - G402 (CWE-295): TLS InsecureSkipVerify set true
+      [/app/fetch_vulnerable.go:20] - G104 (CWE-703): Errors unhandled
+      Summary: Issues: 3
+    note:
+      fr: "Trois failles classiques : `sh -c` avec une entrée utilisateur (injection de commande), `InsecureSkipVerify: true` (certificats TLS non vérifiés) et une erreur ignorée. `gosec` les détecte toutes par analyse statique, avant toute exécution."
+      en: "Three classic flaws: `sh -c` with user input (command injection), `InsecureSkipVerify: true` (TLS certificates not verified) and an ignored error. `gosec` detects all three through static analysis, before any execution."
+
+  - title:
+      fr: "La version corrigée que les outils acceptent"
+      en: "The fixed version the tools accept"
+    file: fetch_secure.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"fmt"
+      	"net"
+      	"net/http"
+      	"os"
+      	"os/exec"
+      	"time"
+      )
+
+      func main() {
+      	host := os.Args[1]
+
+      	// Validate as a real hostname/IP, then pass as a separate argument (no shell)
+      	if net.ParseIP(host) == nil && !isHostname(host) {
+      		fmt.Fprintln(os.Stderr, "invalid host")
+      		os.Exit(2)
+      	}
+      	// No "sh -c": the argument can never be interpreted as a command
+      	out, err := exec.Command("ping", "-c1", "--", host).CombinedOutput()
+      	if err != nil {
+      		fmt.Fprintln(os.Stderr, "ping failed:", err)
+      		os.Exit(1)
+      	}
+      	os.Stdout.Write(out)
+
+      	// Default TLS config: certificates ARE verified. Set a timeout too.
+      	client := &http.Client{Timeout: 10 * time.Second}
+      	resp, err := client.Get("https://example.com")
+      	if err != nil {
+      		fmt.Fprintln(os.Stderr, "get failed:", err)
+      		os.Exit(1)
+      	}
+      	defer resp.Body.Close()
+      	fmt.Println("status:", resp.Status)
+      }
+
+      func isHostname(s string) bool {
+      	if len(s) == 0 || len(s) > 253 {
+      		return false
+      	}
+      	for _, r := range s {
+      		ok := r == '.' || r == '-' ||
+      			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+      		if !ok {
+      			return false
+      		}
+      	}
+      	return true
+      }
+    output: |
+      $ gosec ./...
+      Summary: Issues: 0
+      $ go vet ./... && staticcheck ./...
+      $ echo $?
+      0
+    note:
+      fr: "`exec.Command(\"ping\", \"-c1\", \"--\", host)` passe l'hôte comme argument isolé, sans shell : l'injection est impossible. On retire `InsecureSkipVerify`, on vérifie l'erreur et on ajoute un `Timeout`. Les quatre outils passent au vert."
+      en: "`exec.Command(\"ping\", \"-c1\", \"--\", host)` passes the host as a separate argument, with no shell: injection is impossible. We drop `InsecureSkipVerify`, check the error and add a `Timeout`. All four tools come back green."
+
+  - title:
+      fr: "govulncheck : une faille dans une dépendance, réellement atteignable"
+      en: "govulncheck: a dependency flaw that is actually reachable"
+    file: scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # govulncheck cross-checks the Go vulnerability DB with the functions you really call
+      go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      # Scan source code (most precise: reports only reachable vulnerabilities)
+      govulncheck ./...
+
+      # Scan an already-built binary (useful when you only have the artifact)
+      govulncheck -mode=binary ./app
+    output: |
+      === Symbol Results ===
+
+      Vulnerability #1: GO-2024-2687
+          HTTP/2 CONTINUATION flood in net/http
+        More info: https://pkg.go.dev/vuln/GO-2024-2687
+        Standard library
+          Found in: net/http@go1.21.5
+          Fixed in: net/http@go1.21.9
+          Example traces found:
+            #1: main.go:31:24: main.main calls http.Client.Get
+
+      Your code is affected by 1 vulnerability from the Go standard library.
+      Fix: update the Go toolchain to 1.21.9 or later.
+    note:
+      fr: "`govulncheck` ne se contente pas de comparer des numéros de version : il montre la **trace d'appel** (`main.main calls http.Client.Get`) prouvant que la fonction vulnérable est atteignable. S'il n'y a pas de trace, la faille n'est pas exploitable dans votre code et n'est pas signalée - d'où très peu de bruit."
+      en: "`govulncheck` does more than compare version numbers: it shows the **call trace** (`main.main calls http.Client.Get`) proving the vulnerable function is reachable. If there is no trace, the flaw is not exploitable in your code and is not reported - hence very little noise."
+
+  - title:
+      fr: "Dockerfile multi-stage : binaire statique dans une image distroless"
+      en: "Multi-stage Dockerfile: static binary in a distroless image"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # ---- Build stage: full toolchain, never shipped ----
+      FROM golang:1.23 AS build
+      WORKDIR /src
+
+      # Copy go.mod/go.sum first so dependency layers are cached
+      COPY go.mod go.sum ./
+      RUN go mod download && go mod verify
+
+      COPY . .
+      # Run the security gate during the build: fail fast if a vuln is reachable
+      RUN go vet ./...
+      RUN go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      # CGO_ENABLED=0 -> fully static binary; -trimpath -> reproducible, no local paths
+      RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /app ./cmd/server
+
+      # ---- Runtime stage: distroless, no shell, no package manager ----
+      FROM gcr.io/distroless/static:nonroot
+      # Run as an unprivileged user (uid 65532) provided by the nonroot tag
+      USER nonroot:nonroot
+      COPY --from=build /app /app
+      ENTRYPOINT ["/app"]
+    output: |
+      $ docker build -t secure-svc .
+      $ docker run --rm secure-svc &
+      $ docker exec <id> sh
+      OCI runtime exec failed: exec: "sh": executable file not found in $PATH
+      $ docker images secure-svc
+      REPOSITORY   TAG      SIZE
+      secure-svc   latest   8.3MB
+    note:
+      fr: "L'image finale ne contient que le binaire statique : pas de `sh`, pas d'`apt`, donc un attaquant qui obtient une exécution de code n'a aucun outil pour rebondir (l'`exec sh` échoue). Les contrôles `go vet` et `govulncheck` tournent pendant le build et le font échouer en cas de faille. L'image fait quelques méga-octets au lieu de centaines."
+      en: "The final image holds only the static binary: no `sh`, no `apt`, so an attacker who gets code execution has no tool to pivot with (`exec sh` fails). The `go vet` and `govulncheck` checks run during the build and fail it on a flaw. The image is a few megabytes instead of hundreds."
+
+mistake:
+  fr: |
+    **Confondre « version à jour » et « code non vulnérable », et faire confiance à un scan de versions seul.**
+
+    Un scanner de dépendances classique signale *toutes* les CVE des versions que vous utilisez, même celles
+    qui touchent une fonction que votre code n'appelle jamais. Résultat : des centaines d'alertes, l'équipe
+    s'épuise, et les vraies failles se noient dans le bruit. `govulncheck` répond à la bonne question :
+    *cette vulnérabilité est-elle réellement atteignable dans mon code ?* Utilisez-le comme source de vérité,
+    et traitez en priorité les failles avec une trace d'appel. Inversement, ne désactivez jamais une alerte
+    `gosec` sans comprendre pourquoi : un `// #nosec` posé à la légère masque une vraie faille.
+  en: |
+    **Confusing "up to date" with "not vulnerable", and trusting a version scan alone.**
+
+    A classic dependency scanner flags *every* CVE of the versions you use, even ones that touch a function
+    your code never calls. The result: hundreds of alerts, the team burns out, and the real flaws drown in
+    noise. `govulncheck` answers the right question: *is this vulnerability actually reachable in my code?*
+    Use it as the source of truth, and prioritise flaws that have a call trace. Conversely, never silence a
+    `gosec` alert without understanding why: a carelessly placed `// #nosec` hides a real flaw.
+
+bestPractice:
+  fr: |
+    - **Enchaînez les quatre contrôles** en CI : `go vet ./...`, `staticcheck ./...`, `gosec ./...`, `govulncheck ./...`.
+    - **Faites échouer le pipeline** sur `govulncheck` et sur les alertes `gosec` de haute sévérité.
+    - **Compilez statique et reproductible** : `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`.
+    - **Vérifiez les dépendances** : `go mod verify` et versionnez `go.sum`.
+    - **Utilisez un Dockerfile multi-stage** vers `distroless/static:nonroot` ou `scratch`.
+    - **Tournez en non-root** dans le conteneur (`USER nonroot`), sans shell ni gestionnaire de paquets.
+    - **Mettez à jour la toolchain Go** : beaucoup de failles viennent de la bibliothèque standard elle-même.
+  en: |
+    - **Chain all four checks** in CI: `go vet ./...`, `staticcheck ./...`, `gosec ./...`, `govulncheck ./...`.
+    - **Fail the pipeline** on `govulncheck` and on high-severity `gosec` alerts.
+    - **Build static and reproducible**: `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`.
+    - **Verify dependencies**: `go mod verify` and commit `go.sum`.
+    - **Use a multi-stage Dockerfile** to `distroless/static:nonroot` or `scratch`.
+    - **Run as non-root** in the container (`USER nonroot`), with no shell and no package manager.
+    - **Keep the Go toolchain updated**: many flaws come from the standard library itself.
+
+exercise:
+  statement:
+    fr: |
+      Vous rejoignez un projet Go. Écrivez un script `security-check.sh` qui enchaîne les contrôles de
+      sécurité et **fait échouer** la CI dès qu'un contrôle échoue.
+
+      1. Installez puis exécutez `govulncheck` sur `./...`.
+      2. Exécutez `go vet ./...`.
+      3. Compilez un binaire **statique** et **reproductible** nommé `app`.
+      4. Le script doit s'arrêter au premier échec (indice : `set -e`).
+    en: |
+      You join a Go project. Write a `security-check.sh` script that chains the security checks and **fails**
+      CI as soon as one check fails.
+
+      1. Install and run `govulncheck` on `./...`.
+      2. Run `go vet ./...`.
+      3. Build a **static** and **reproducible** binary named `app`.
+      4. The script must stop at the first failure (hint: `set -e`).
+  solution:
+    file: security-check.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      # Stop at the first error and treat unset variables as errors
+      set -euo pipefail
+
+      echo "==> Dependency & reachable-vulnerability scan"
+      go install golang.org/x/vuln/cmd/govulncheck@latest
+      govulncheck ./...
+
+      echo "==> Static analysis"
+      go vet ./...
+
+      echo "==> Reproducible static build"
+      # CGO_ENABLED=0: static binary; -trimpath: no local paths; -s -w: smaller binary
+      CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o app ./...
+
+      echo "==> All security checks passed"
+    note:
+      fr: "`set -e` fait échouer le script au premier contrôle qui renvoie un code non nul, donc la CS échoue aussi. Chaque étape produit un code de sortie que le pipeline lit directement, sans analyser le texte."
+      en: "`set -e` makes the script fail at the first check that returns a non-zero code, so CI fails too. Each step produces an exit code the pipeline reads directly, without parsing text."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qui rend `govulncheck` moins bruyant qu'un simple scan de versions de dépendances ?"
+      en: "What makes `govulncheck` less noisy than a plain dependency version scan?"
+    options:
+      fr:
+        - "Il ne signale que les failles dont la fonction vulnérable est réellement appelée"
+        - "Il ignore complètement la bibliothèque standard"
+        - "Il ne regarde que les fichiers récemment modifiés"
+        - "Il désactive les alertes de faible sévérité"
+      en:
+        - "It only reports flaws whose vulnerable function is actually called"
+        - "It ignores the standard library entirely"
+        - "It only looks at recently changed files"
+        - "It silences low-severity alerts"
+    answer: 0
+    why:
+      fr: "`govulncheck` construit la trace d'appel : une vulnérabilité non atteignable dans votre code n'est pas signalée."
+      en: "`govulncheck` builds the call trace: a vulnerability not reachable in your code is not reported."
+  - q:
+      fr: "À quoi sert `CGO_ENABLED=0` lors d'un `go build` ?"
+      en: "What is `CGO_ENABLED=0` for during a `go build`?"
+    options:
+      fr:
+        - "À activer les tests unitaires"
+        - "À produire un binaire statique sans dépendance à la libc système"
+        - "À chiffrer le binaire"
+        - "À réduire le temps de compilation de moitié"
+      en:
+        - "To enable unit tests"
+        - "To produce a static binary with no dependency on the system libc"
+        - "To encrypt the binary"
+        - "To halve the compile time"
+
+    answer: 1
+    why:
+      fr: "Sans CGO, le binaire est totalement statique et peut tourner dans une image `scratch` ou `distroless/static`."
+      en: "Without CGO, the binary is fully static and can run in a `scratch` or `distroless/static` image."
+  - q:
+      fr: "Quel outil repère spécifiquement `tls.Config{InsecureSkipVerify: true}` et `os/exec` avec entrée utilisateur ?"
+      en: "Which tool specifically flags `tls.Config{InsecureSkipVerify: true}` and `os/exec` with user input?"
+    options:
+      fr:
+        - "`go fmt`"
+        - "`go mod tidy`"
+        - "`gosec`"
+        - "`go doc`"
+      en:
+        - "`go fmt`"
+        - "`go mod tidy`"
+        - "`gosec`"
+        - "`go doc`"
+    answer: 2
+    why:
+      fr: "`gosec` est un SAST orienté sécurité qui connaît ces patrons dangereux (règles G402, G204...)."
+      en: "`gosec` is a security-focused SAST that knows these dangerous patterns (rules G402, G204...)."
+  - q:
+      fr: "Pourquoi une image `distroless/static` réduit-elle la surface d'attaque ?"
+      en: "Why does a `distroless/static` image reduce the attack surface?"
+    options:
+      fr:
+        - "Parce qu'elle chiffre le système de fichiers"
+        - "Parce qu'elle contient un antivirus intégré"
+        - "Parce qu'elle bloque le réseau sortant"
+        - "Parce qu'elle ne contient ni shell ni gestionnaire de paquets pour rebondir"
+      en:
+        - "Because it encrypts the filesystem"
+        - "Because it ships a built-in antivirus"
+        - "Because it blocks outbound network"
+        - "Because it has no shell and no package manager to pivot with"
+    answer: 3
+    why:
+      fr: "Sans `sh`, `apt` ou `curl`, un attaquant qui obtient une exécution de code n'a presque aucun outil disponible."
+      en: "With no `sh`, `apt` or `curl`, an attacker who gets code execution has almost no tool available."
+  - q:
+      fr: "Que fait l'option `-trimpath` du compilateur Go ?"
+      en: "What does the Go compiler's `-trimpath` option do?"
+    options:
+      fr:
+        - "Elle retire les chemins absolus de la machine du binaire, pour un build reproductible"
+        - "Elle supprime les tests du binaire"
+        - "Elle compresse le binaire avec gzip"
+        - "Elle active le ramasse-miettes agressif"
+      en:
+        - "It removes the machine's absolute paths from the binary, for a reproducible build"
+        - "It strips tests from the binary"
+        - "It compresses the binary with gzip"
+        - "It enables aggressive garbage collection"
+    answer: 0
+    why:
+      fr: "`-trimpath` évite d'embarquer `/home/...` dans le binaire : le build devient reproductible et ne fuite pas l'arborescence."
+      en: "`-trimpath` avoids embedding `/home/...` in the binary: the build becomes reproducible and does not leak the directory tree."

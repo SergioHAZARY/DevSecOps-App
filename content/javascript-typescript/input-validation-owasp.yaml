@@ -1,0 +1,444 @@
+description:
+  fr: "Valider les entrées côté serveur en Node.js : validation par schéma avec Zod, injection NoSQL, XSS réfléchi, mass assignment et liste blanche plutôt que liste noire."
+  en: "Validate input server-side in Node.js: schema validation with Zod, NoSQL injection, reflected XSS, mass assignment and allow-list over deny-list."
+duration: 35
+
+intro:
+  fr: |
+    La règle de sécurité la plus rentable tient en une phrase : **ne jamais faire confiance à une entrée**.
+    Tout ce qui vient du client — corps JSON, paramètres d'URL, en-têtes, cookies — peut être forgé. La
+    moitié de l'OWASP Top 10 (injection, XSS, mauvaise validation) découle d'une entrée mal contrôlée.
+
+    Imaginez un guichet de banque. On ne tend pas de l'argent à quiconque tend un papier : on vérifie
+    l'identité, le format du formulaire, la cohérence du montant. Valider une entrée, c'est ce contrôle au
+    guichet, fait **systématiquement** et **côté serveur** — car un attaquant contourne facilement les
+    contrôles du navigateur.
+
+    Vous allez valider des entrées avec **Zod** (schémas typés), voir une **injection NoSQL** et sa
+    correction, le danger du **mass assignment**, et pourquoi la **liste blanche** bat toujours la liste
+    noire. Les fonctions de validation pure s'exécutent dans le navigateur ; les exemples Zod et base de
+    données visent un vrai Node.js LTS.
+  en: |
+    The highest-return security rule fits in one sentence: **never trust an input**. Everything from the
+    client — JSON body, URL parameters, headers, cookies — can be forged. Half of the OWASP Top 10
+    (injection, XSS, broken validation) stems from poorly controlled input.
+
+    Picture a bank counter. You do not hand money to anyone who holds out a piece of paper: you check the
+    identity, the form's format, the consistency of the amount. Validating an input is that counter check,
+    done **systematically** and **server-side** — because an attacker easily bypasses browser-side checks.
+
+    You will validate input with **Zod** (typed schemas), see a **NoSQL injection** and its fix, the danger
+    of **mass assignment**, and why the **allow-list** always beats the deny-list. The pure validation
+    functions run in the browser; the Zod and database examples target a real Node.js LTS.
+
+sections:
+  - heading:
+      fr: "Liste blanche, pas liste noire"
+      en: "Allow-list, not deny-list"
+    body:
+      fr: |
+        Il existe deux façons de filtrer une entrée :
+
+        - **Liste noire** (*deny-list*) : on énumère ce qui est interdit (`<script>`, `';`, `../`…). Problème :
+          on oublie toujours un cas, les encodages changent (`%3Cscript%3E`), et un nouvel exploit passe.
+        - **Liste blanche** (*allow-list*) : on définit précisément ce qui est **autorisé** (un entier de 1 à
+          1000, un e-mail valide, l'une de trois valeurs), et on rejette tout le reste.
+
+        La liste blanche gagne toujours : elle est plus courte à écrire, plus facile à raisonner, et sûre par
+        défaut. Tout ce qui n'est pas explicitement permis est refusé.
+
+        La validation doit porter sur : le **type** (chaîne, nombre, booléen), la **forme** (longueur, bornes,
+        format), et les **valeurs permises** (énumération). Elle se fait **côté serveur**, toujours : les
+        contrôles HTML ou JavaScript du navigateur améliorent l'expérience mais n'offrent **aucune** sécurité,
+        puisqu'un attaquant appelle l'API directement avec `curl`.
+      en: |
+        There are two ways to filter an input:
+
+        - **Deny-list**: you enumerate what is forbidden (`<script>`, `';`, `../`…). Problem: you always miss
+          a case, encodings change (`%3Cscript%3E`), and a new exploit slips through.
+        - **Allow-list**: you precisely define what is **allowed** (an integer from 1 to 1000, a valid email,
+          one of three values), and reject everything else.
+
+        The allow-list always wins: it is shorter to write, easier to reason about, and safe by default.
+        Anything not explicitly permitted is refused.
+
+        Validation must cover: the **type** (string, number, boolean), the **shape** (length, bounds, format),
+        and the **permitted values** (enumeration). It is done **server-side**, always: the browser's HTML or
+        JavaScript checks improve the experience but offer **no** security, since an attacker calls the API
+        directly with `curl`.
+  - heading:
+      fr: "Zod, injection NoSQL et mass assignment"
+      en: "Zod, NoSQL injection and mass assignment"
+    body:
+      fr: |
+        **Zod** est une bibliothèque de validation par **schéma** pour TypeScript/JavaScript. On décrit la
+        forme attendue une fois, et Zod valide **et** type l'entrée :
+
+        ```javascript
+        const schema = z.object({ age: z.number().int().min(0).max(120) });
+        const result = schema.safeParse(input); // { success, data } ou { success, error }
+        ```
+
+        L'**injection NoSQL** touche des bases comme MongoDB. Si on passe directement un objet JSON de
+        l'utilisateur dans une requête, un payload comme `{ "password": { "$ne": null } }` transforme
+        « mot de passe égal à X » en « mot de passe différent de null » — qui est toujours vrai. La parade :
+        valider que chaque champ est bien une **chaîne** (et non un objet), via un schéma.
+
+        Le **mass assignment** survient quand on copie tout le corps de la requête dans un enregistrement :
+        `User.create(req.body)`. Un attaquant ajoute `{"role":"admin","isVerified":true}` et s'octroie des
+        privilèges. La parade : ne retenir que les champs explicitement autorisés (ce que Zod fait avec
+        `.strict()`, qui rejette toute clé inconnue).
+      en: |
+        **Zod** is a **schema** validation library for TypeScript/JavaScript. You describe the expected shape
+        once, and Zod both validates **and** types the input:
+
+        ```javascript
+        const schema = z.object({ age: z.number().int().min(0).max(120) });
+        const result = schema.safeParse(input); // { success, data } or { success, error }
+        ```
+
+        **NoSQL injection** affects databases like MongoDB. If you pass the user's JSON object straight into a
+        query, a payload like `{ "password": { "$ne": null } }` turns "password equals X" into "password not
+        equal to null" — which is always true. The fix: validate that each field is indeed a **string** (not
+        an object), via a schema.
+
+        **Mass assignment** happens when you copy the whole request body into a record:
+        `User.create(req.body)`. An attacker adds `{"role":"admin","isVerified":true}` and grants themselves
+        privileges. The fix: keep only explicitly allowed fields (which Zod does with `.strict()`, rejecting
+        any unknown key).
+
+examples:
+  - title:
+      fr: "Liste noire vs liste blanche (navigateur)"
+      en: "Deny-list vs allow-list (browser)"
+    file: validation.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      // Runs in the browser: pure logic comparing the two approaches
+
+      // DENY-LIST: tries to strip "bad" substrings - easy to bypass
+      function denyList(input) {
+        return input.replace(/<script>/gi, ""); // misses <ScRiPt >, <img onerror>, etc.
+      }
+
+      // ALLOW-LIST: accept only what matches a known-good pattern
+      function allowList(input) {
+        // A username: 3-20 letters, digits or underscore, nothing else
+        return /^[a-zA-Z0-9_]{3,20}$/.test(input);
+      }
+
+      const attack = "<ScRiPt >alert(1)</ScRiPt >";
+      console.log("deny-list output:", denyList(attack)); // still dangerous
+      console.log("allow-list 'alice_42':", allowList("alice_42"));
+      console.log("allow-list attack   :", allowList(attack));
+    output: |
+      deny-list output: <ScRiPt >alert(1)</ScRiPt >
+      allow-list 'alice_42': true
+      allow-list attack   : false
+    note:
+      fr: "La liste noire laisse passer `<ScRiPt >` (casse et espace différents) : on oublie toujours un cas. La liste blanche n'accepte que le motif attendu et rejette l'attaque sans avoir à imaginer toutes les variantes malveillantes."
+      en: "The deny-list lets `<ScRiPt >` through (different case and spacing): you always miss a case. The allow-list accepts only the expected pattern and rejects the attack without having to imagine every malicious variant."
+
+  - title:
+      fr: "Validation par schéma avec Zod"
+      en: "Schema validation with Zod"
+    file: schema.js
+    lang: javascript
+    kind: secure
+    code: |
+      // target: real Node.js LTS, "npm i zod"
+      const { z } = require("zod");
+
+      // The schema is the single source of truth for a valid input.
+      // .strict() rejects any extra field -> defence against mass assignment.
+      const createUserSchema = z.object({
+        name: z.string().min(1).max(32),
+        email: z.string().email(),
+        age: z.number().int().min(0).max(120),
+        role: z.enum(["viewer", "editor"]), // 'admin' is NOT allowed here
+      }).strict();
+
+      function createUser(input) {
+        const result = createUserSchema.safeParse(input);
+        if (!result.success) {
+          // result.error holds a precise list of what is wrong
+          return { ok: false, errors: result.error.issues.map((i) => i.path.join(".") + ": " + i.message) };
+        }
+        return { ok: true, user: result.data }; // result.data is clean and typed
+      }
+
+      console.log(createUser({ name: "Carol", email: "carol@example.com", age: 30, role: "editor" }));
+      console.log(createUser({ name: "", email: "nope", age: 999, role: "admin", isAdmin: true }));
+    output: |
+      { ok: true, user: { name: 'Carol', email: 'carol@example.com', age: 30, role: 'editor' } }
+      {
+        ok: false,
+        errors: [
+          'name: String must contain at least 1 character(s)',
+          'email: Invalid email',
+          'age: Number must be less than or equal to 120',
+          "role: Invalid enum value. Expected 'viewer' | 'editor', received 'admin'",
+          "isAdmin: Unrecognized key(s) in object: 'isAdmin'"
+        ]
+      }
+    note:
+      fr: "Un seul schéma valide le type, la forme et les valeurs permises, et renvoie des erreurs précises. `.strict()` rejette le champ injecté `isAdmin` et la valeur `role: \"admin\"` non autorisée. `result.data` ne contient que des champs propres."
+      en: "A single schema validates the type, shape and permitted values, and returns precise errors. `.strict()` rejects the injected `isAdmin` field and the disallowed `role: \"admin\"` value. `result.data` contains only clean fields."
+
+  - title:
+      fr: "Injection NoSQL (MongoDB), puis la correction"
+      en: "NoSQL injection (MongoDB), then the fix"
+    file: login_nosql.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      // target: real Node.js LTS, "npm i mongodb zod"
+      const { z } = require("zod");
+
+      // VULNERABLE: the body is passed straight into the query.
+      // Payload { "username": "admin", "password": { "$ne": null } } logs in
+      // as admin WITHOUT knowing the password, because $ne null is always true.
+      async function loginVulnerable(users, body) {
+        return users.findOne({ username: body.username, password: body.password });
+      }
+
+      // SECURE: validate that both fields are plain strings before querying.
+      const loginSchema = z.object({
+        username: z.string().min(1).max(64),
+        password: z.string().min(1).max(200),
+      }).strict();
+
+      async function loginSecure(users, body) {
+        const parsed = loginSchema.safeParse(body);
+        if (!parsed.success) throw new Error("invalid credentials format");
+        // Now username/password are guaranteed strings, not operator objects
+        const { username, password } = parsed.data;
+        return users.findOne({ username, password }); // compare hashes in real code
+      }
+
+      module.exports = { loginVulnerable, loginSecure };
+    output: |
+      # loginVulnerable with { username: "admin", password: { "$ne": null } }
+      #   -> returns the admin document: authentication BYPASSED
+      # loginSecure with the same payload
+      #   -> throws "invalid credentials format": the object is rejected before the query
+    note:
+      fr: "L'injection NoSQL exploite le fait qu'un champ attendu comme chaîne reçoit un **objet** `{ \"$ne\": null }`, interprété comme un opérateur. Valider avec Zod que `password` est bien une `string` neutralise l'attaque avant même la requête."
+      en: "NoSQL injection exploits a field expected to be a string receiving an **object** `{ \"$ne\": null }`, interpreted as an operator. Validating with Zod that `password` is a `string` neutralises the attack before the query even runs."
+
+  - title:
+      fr: "Échapper une sortie pour prévenir le XSS réfléchi"
+      en: "Escaping output to prevent reflected XSS"
+    file: escape.js
+    lang: javascript
+    kind: secure
+    code: |
+      // Runs in the browser: pure logic for output encoding
+
+      // Validation protects the input; output encoding protects what you render back.
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      const userInput = '<script>alert(document.cookie)</script>';
+      // Without escaping, this string injected into HTML runs the script (XSS)
+      console.log("raw    :", userInput);
+      console.log("escaped:", escapeHtml(userInput));
+    output: |
+      raw    : <script>alert(document.cookie)</script>
+      escaped: &lt;script&gt;alert(document.cookie)&lt;/script&gt;
+    note:
+      fr: "La validation d'entrée et l'échappement de sortie sont complémentaires : on valide ce qui entre, et on **encode** ce qu'on renvoie dans du HTML. Une fois échappé, `<script>` devient du texte inoffensif. Les moteurs de templates (EJS, Handlebars) échappent par défaut."
+      en: "Input validation and output escaping are complementary: you validate what comes in, and **encode** what you send back into HTML. Once escaped, `<script>` becomes harmless text. Template engines (EJS, Handlebars) escape by default."
+
+mistake:
+  fr: |
+    **Filtrer par liste noire et faire confiance aux contrôles du navigateur.**
+
+    ```javascript
+    if (input.includes("<script>")) reject(); // misses <img onerror=...>, encodings, case
+    ```
+
+    Une liste noire est une course perdue d'avance : il existe une infinité de façons d'écrire une charge
+    malveillante (casse, encodage URL, HTML, Unicode, nouveaux vecteurs). Vous oublierez toujours un cas.
+    L'autre moitié de l'erreur consiste à croire que la validation côté client suffit : un attaquant ignore
+    votre page web et appelle l'API directement. La bonne approche est une **liste blanche** stricte,
+    appliquée **côté serveur**, idéalement via un schéma (Zod) qui valide type, forme et valeurs permises en
+    un seul endroit.
+  en: |
+    **Filtering with a deny-list and trusting the browser's checks.**
+
+    ```javascript
+    if (input.includes("<script>")) reject(); // misses <img onerror=...>, encodings, case
+    ```
+
+    A deny-list is a losing race: there are infinitely many ways to write a malicious payload (case, URL
+    encoding, HTML, Unicode, new vectors). You will always miss a case. The other half of the mistake is
+    believing client-side validation is enough: an attacker ignores your web page and calls the API directly.
+    The right approach is a strict **allow-list**, applied **server-side**, ideally via a schema (Zod) that
+    validates type, shape and permitted values in one place.
+
+bestPractice:
+  fr: |
+    - **Liste blanche, pas liste noire** : définissez ce qui est autorisé, rejetez tout le reste.
+    - **Validez côté serveur**, toujours : les contrôles du navigateur ne sont qu'un confort.
+    - **Validez par schéma** (Zod) : type, longueur, bornes, format et valeurs permises en un seul endroit.
+    - **`.strict()` contre le mass assignment** : rejetez toute clé non attendue plutôt que de l'ignorer.
+    - **Validez les types avant une requête** base de données pour bloquer l'injection NoSQL (champ chaîne, pas objet).
+    - **Encodez la sortie** (échappement HTML) en plus de valider l'entrée : les deux préviennent le XSS.
+    - **Renvoyez `400`** avec un message clair mais sans détail interne sensible.
+  en: |
+    - **Allow-list, not deny-list**: define what is permitted, reject everything else.
+    - **Validate server-side**, always: the browser's checks are only a convenience.
+    - **Validate with a schema** (Zod): type, length, bounds, format and permitted values in one place.
+    - **`.strict()` against mass assignment**: reject any unexpected key rather than ignoring it.
+    - **Validate types before a database query** to block NoSQL injection (string field, not object).
+    - **Encode the output** (HTML escaping) in addition to validating input: both prevent XSS.
+    - **Return `400`** with a clear message but no sensitive internal detail.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez une fonction de validation **exécutable dans le navigateur** pour un formulaire d'inscription.
+
+      1. `validateSignup(data)` reçoit un objet et renvoie `{ ok: true, value }` ou `{ ok: false, error }`.
+      2. Règles (liste blanche) : `username` est une chaîne de 3 à 20 caractères `[a-z0-9_]` ; `age` est un
+         entier entre 13 et 120. Toute autre clé est refusée (mass assignment).
+      3. Testez avec un objet valide, un `age` hors bornes, et un objet contenant une clé `isAdmin`.
+    en: |
+      Write a validation function that **runs in the browser** for a signup form.
+
+      1. `validateSignup(data)` receives an object and returns `{ ok: true, value }` or
+         `{ ok: false, error }`.
+      2. Rules (allow-list): `username` is a 3-to-20-character `[a-z0-9_]` string; `age` is an integer
+         between 13 and 120. Any other key is refused (mass assignment).
+      3. Test with a valid object, an out-of-range `age`, and an object containing an `isAdmin` key.
+  solution:
+    file: solution.js
+    lang: javascript
+    code: |
+      function validateSignup(data) {
+        if (typeof data !== "object" || data === null) {
+          return { ok: false, error: "body must be an object" };
+        }
+        // Allow-list of keys: reject anything unexpected (anti mass-assignment)
+        const allowedKeys = ["username", "age"];
+        const extra = Object.keys(data).filter((k) => !allowedKeys.includes(k));
+        if (extra.length > 0) {
+          return { ok: false, error: "unexpected field: " + extra.join(", ") };
+        }
+        // username: 3-20 chars, lowercase letters, digits, underscore
+        if (typeof data.username !== "string" || !/^[a-z0-9_]{3,20}$/.test(data.username)) {
+          return { ok: false, error: "invalid username" };
+        }
+        // age: integer within bounds
+        if (!Number.isInteger(data.age) || data.age < 13 || data.age > 120) {
+          return { ok: false, error: "age must be an integer 13-120" };
+        }
+        return { ok: true, value: { username: data.username, age: data.age } };
+      }
+
+      console.log(validateSignup({ username: "alice_42", age: 30 }));
+      console.log(validateSignup({ username: "alice_42", age: 200 }));
+      console.log(validateSignup({ username: "alice_42", age: 30, isAdmin: true }));
+    note:
+      fr: "On vérifie d'abord les clés (liste blanche) pour bloquer le `isAdmin` injecté, puis le type et la forme de chaque champ. La valeur renvoyée ne contient que `username` et `age` : aucun champ parasite ne peut se glisser plus loin."
+      en: "We first check the keys (allow-list) to block the injected `isAdmin`, then the type and shape of each field. The returned value contains only `username` and `age`: no stray field can slip further."
+
+quiz:
+  - q:
+      fr: "Pourquoi une liste blanche est-elle préférable à une liste noire pour valider une entrée ?"
+      en: "Why is an allow-list preferable to a deny-list for validating input?"
+    options:
+      fr:
+        - "Parce qu'elle est plus rapide à l'exécution"
+        - "Parce qu'elle n'autorise que ce qui est connu comme valide, et rejette tout le reste"
+        - "Parce qu'elle chiffre l'entrée"
+        - "Parce qu'elle fonctionne uniquement côté client"
+      en:
+        - "Because it runs faster"
+        - "Because it allows only what is known to be valid, and rejects the rest"
+        - "Because it encrypts the input"
+        - "Because it only works client-side"
+    answer: 1
+    why:
+      fr: "Une liste noire oublie toujours un cas ; une liste blanche est sûre par défaut : tout ce qui n'est pas explicitement permis est refusé."
+      en: "A deny-list always misses a case; an allow-list is safe by default: anything not explicitly permitted is refused."
+  - q:
+      fr: "Où la validation des entrées doit-elle obligatoirement avoir lieu ?"
+      en: "Where must input validation necessarily happen?"
+    options:
+      fr:
+        - "Uniquement dans le navigateur"
+        - "Uniquement dans la base de données"
+        - "Côté serveur (en plus, éventuellement, du client)"
+        - "Nulle part si on utilise HTTPS"
+      en:
+        - "Only in the browser"
+        - "Only in the database"
+        - "Server-side (in addition to, optionally, the client)"
+        - "Nowhere if you use HTTPS"
+    answer: 2
+    why:
+      fr: "Un attaquant appelle l'API directement sans passer par la page web ; seule la validation côté serveur est une vraie sécurité."
+      en: "An attacker calls the API directly without the web page; only server-side validation is real security."
+  - q:
+      fr: "Comment un payload `{ \"password\": { \"$ne\": null } }` provoque-t-il une injection NoSQL ?"
+      en: "How does a payload `{ \"password\": { \"$ne\": null } }` cause a NoSQL injection?"
+    options:
+      fr:
+        - "Un objet opérateur remplace la chaîne attendue et rend la condition toujours vraie"
+        - "Il chiffre le mot de passe"
+        - "Il dépasse la limite de taille"
+        - "Il force l'algorithme `alg:none`"
+      en:
+        - "An operator object replaces the expected string and makes the condition always true"
+        - "It encrypts the password"
+        - "It exceeds the size limit"
+        - "It forces the `alg:none` algorithm"
+    answer: 0
+    why:
+      fr: "`$ne: null` signifie « différent de null », toujours vrai ; valider que le champ est une chaîne bloque l'objet opérateur."
+      en: "`$ne: null` means 'not equal to null', always true; validating that the field is a string blocks the operator object."
+  - q:
+      fr: "Qu'est-ce que le mass assignment et comment Zod aide-t-il à l'éviter ?"
+      en: "What is mass assignment and how does Zod help avoid it?"
+    options:
+      fr:
+        - "Un dépassement mémoire ; Zod limite la taille"
+        - "Une attaque réseau ; Zod active le TLS"
+        - "L'injection de champs non prévus (ex. `role:admin`) ; `.strict()` rejette les clés inconnues"
+        - "Une fuite de secret ; Zod chiffre le payload"
+      en:
+        - "A memory overflow; Zod limits the size"
+        - "A network attack; Zod enables TLS"
+        - "Injecting unexpected fields (e.g. `role:admin`); `.strict()` rejects unknown keys"
+        - "A secret leak; Zod encrypts the payload"
+    answer: 2
+    why:
+      fr: "Le mass assignment ajoute des champs non prévus pour s'octroyer des droits ; `.strict()` fait échouer la validation si une clé inconnue est présente."
+      en: "Mass assignment adds unexpected fields to grant privileges; `.strict()` fails validation if an unknown key is present."
+  - q:
+      fr: "La validation d'entrée suffit-elle à elle seule à prévenir le XSS ?"
+      en: "Is input validation alone enough to prevent XSS?"
+    options:
+      fr:
+        - "Oui, toujours"
+        - "Non : il faut aussi encoder/échapper la sortie rendue en HTML"
+        - "Oui, si on utilise HTTPS"
+        - "Non : il faut désactiver JavaScript"
+      en:
+        - "Yes, always"
+        - "No: you must also encode/escape the output rendered in HTML"
+        - "Yes, if you use HTTPS"
+        - "No: you must disable JavaScript"
+    answer: 1
+    why:
+      fr: "La validation protège l'entrée, mais le XSS se produit à l'affichage ; il faut encoder la sortie (échappement HTML) en complément."
+      en: "Validation protects the input, but XSS happens at render time; you must encode the output (HTML escaping) as well."

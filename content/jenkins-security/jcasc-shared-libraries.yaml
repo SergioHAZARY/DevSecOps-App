@@ -1,0 +1,521 @@
+description:
+  fr: "Configurer Jenkins en code avec JCasC (jenkins.yaml), monter un lab Docker Compose, et factoriser les étapes de sécurité dans une shared library versionnée et épinglée."
+  en: "Configure Jenkins as code with JCasC (jenkins.yaml), spin up a Docker Compose lab, and factor security stages into a versioned, pinned shared library."
+duration: 30
+
+intro:
+  fr: |
+    Cliquer dans l'interface pour durcir Jenkins fonctionne une fois, puis la configuration **dérive** :
+    personne ne sait plus pourquoi tel réglage est ainsi, et restaurer le serveur après une panne est un
+    cauchemar. **JCasC** (*Jenkins Configuration as Code*) résout cela : toute la configuration — sécurité,
+    credentials, outils, nœuds — tient dans un fichier `jenkins.yaml` versionné dans Git.
+
+    En parallèle, copier-coller les mêmes dix étapes de sécurité dans chaque `Jenkinsfile` est une dette :
+    corriger un bug oblige à modifier cent dépôts. Une **shared library** (bibliothèque partagée) centralise
+    ce code : les pipelines l'appellent par une seule ligne, et une correction se déploie partout d'un coup.
+
+    Dans cette leçon vous allez écrire un `jenkins.yaml` complet (realm, autorisations, credentials), monter
+    un lab avec `docker compose` et l'image `jenkins/jenkins:lts`, puis créer une shared library
+    `securityScan.groovy` appelée depuis un `Jenkinsfile` avec une **version épinglée**.
+  en: |
+    Clicking through the UI to harden Jenkins works once, then the configuration **drifts**: nobody remembers
+    why a setting is the way it is, and restoring the server after a crash is a nightmare. **JCasC** (*Jenkins
+    Configuration as Code*) solves this: the whole configuration — security, credentials, tools, nodes —
+    lives in a `jenkins.yaml` file versioned in Git.
+
+    In parallel, copy-pasting the same ten security stages into every `Jenkinsfile` is debt: fixing a bug
+    means editing a hundred repositories. A **shared library** centralises that code: pipelines call it with
+    a single line, and a fix rolls out everywhere at once.
+
+    In this lesson you will write a complete `jenkins.yaml` (realm, authorization, credentials), spin up a lab
+    with `docker compose` and the `jenkins/jenkins:lts` image, then create a `securityScan.groovy` shared
+    library called from a `Jenkinsfile` with a **pinned version**.
+
+sections:
+  - heading:
+      fr: "JCasC : la configuration en un fichier"
+      en: "JCasC: the configuration in one file"
+    body:
+      fr: |
+        Le plugin **Configuration as Code** lit un fichier YAML au démarrage et configure Jenkins en
+        conséquence. La variable d'environnement `CASC_JENKINS_CONFIG` indique où le trouver. Le fichier a
+        quelques sections racines :
+
+        | Section | Contenu |
+        |---|---|
+        | `jenkins` | Realm de sécurité, autorisations, nœuds, exécuteurs |
+        | `credentials` | Les secrets (idéalement injectés par variables d'environnement) |
+        | `tool` | Emplacements des outils (JDK, Maven, sonar-scanner) |
+        | `unclassified` | Config des plugins (SonarQube, Git, URL Jenkins) |
+
+        L'intérêt est double. D'abord la **reproductibilité** : on reconstruit un Jenkins identique en
+        quelques minutes. Ensuite la **revue** : tout changement de sécurité passe par une pull request, donc
+        par une relecture, au lieu d'un clic silencieux. Règle d'or : **aucun secret en clair** dans
+        `jenkins.yaml`. On y met `${VAULT_TOKEN}` ou `${ADMIN_PASSWORD}`, et la vraie valeur vient de
+        l'environnement ou d'un coffre.
+      en: |
+        The **Configuration as Code** plugin reads a YAML file at startup and configures Jenkins accordingly.
+        The `CASC_JENKINS_CONFIG` environment variable tells it where to find the file. It has a few root
+        sections:
+
+        | Section | Content |
+        |---|---|
+        | `jenkins` | Security realm, authorization, nodes, executors |
+        | `credentials` | The secrets (ideally injected through environment variables) |
+        | `tool` | Tool locations (JDK, Maven, sonar-scanner) |
+        | `unclassified` | Plugin config (SonarQube, Git, Jenkins URL) |
+
+        The benefit is twofold. First, **reproducibility**: you rebuild an identical Jenkins in minutes.
+        Second, **review**: every security change goes through a pull request, hence a review, instead of a
+        silent click. Golden rule: **no clear-text secret** in `jenkins.yaml`. You put `${VAULT_TOKEN}` or
+        `${ADMIN_PASSWORD}` there, and the real value comes from the environment or a vault.
+  - heading:
+      fr: "Un lab reproductible avec Docker Compose"
+      en: "A reproducible lab with Docker Compose"
+    body:
+      fr: |
+        Pour tester JCasC sans risque, on lance Jenkins dans un conteneur. L'image officielle
+        `jenkins/jenkins:lts` (*Long-Term Support*) est la version recommandée en production. Trois réglages
+        rendent le lab propre :
+
+        1. monter `jenkins.yaml` dans le conteneur et pointer `CASC_JENKINS_CONFIG` dessus ;
+        2. préinstaller les plugins avec un fichier `plugins.txt` et l'utilitaire `jenkins-plugin-cli`, pour
+           ne pas dépendre de clics manuels ;
+        3. désactiver l'assistant d'installation initial
+           (`-Djenkins.install.runSetupWizard=false`) puisque JCasC fait tout.
+
+        Les secrets passent par des variables d'environnement (ou un fichier `.env` **non** versionné) :
+        `JENKINS_ADMIN_PASSWORD`, `DOCKER_REGISTRY_TOKEN`. On épingle toujours une **version précise** de
+        l'image plutôt que `latest`, pour que le lab soit identique d'une machine à l'autre. Un `volume`
+        persiste `$JENKINS_HOME` entre deux redémarrages.
+      en: |
+        To test JCasC safely, you run Jenkins in a container. The official `jenkins/jenkins:lts`
+        (*Long-Term Support*) image is the version recommended in production. Three settings make the lab
+        clean:
+
+        1. mount `jenkins.yaml` into the container and point `CASC_JENKINS_CONFIG` at it;
+        2. pre-install plugins with a `plugins.txt` file and the `jenkins-plugin-cli` tool, so you do not
+           depend on manual clicks;
+        3. disable the initial setup wizard (`-Djenkins.install.runSetupWizard=false`) since JCasC does
+           everything.
+
+        Secrets come through environment variables (or a **non**-versioned `.env` file):
+        `JENKINS_ADMIN_PASSWORD`, `DOCKER_REGISTRY_TOKEN`. Always pin a **precise version** of the image
+        rather than `latest`, so the lab is identical from one machine to the next. A `volume` persists
+        `$JENKINS_HOME` across restarts.
+  - heading:
+      fr: "Shared libraries : factoriser et épingler"
+      en: "Shared libraries: factor out and pin"
+    body:
+      fr: |
+        Une shared library est un dépôt Git avec une structure fixe :
+
+        - **`vars/`** : des fichiers `.groovy` qui définissent des « steps » globaux (`securityScan.groovy`
+          crée le step `securityScan`).
+        - **`src/`** : des classes Groovy pour la logique complexe.
+        - **`resources/`** : des fichiers statiques (templates, configs).
+
+        Le `Jenkinsfile` l'importe avec l'annotation `@Library`. Le point **critique de sécurité** est la
+        **version** : `@Library('sec-lib@v1.4.0')` épingle un tag Git immuable. Avec `@Library('sec-lib@main')`,
+        la bibliothèque change sous vos pieds — et comme son code **s'exécute dans vos pipelines**, un commit
+        malveillant ou bogué sur `main` se propage instantanément à tous les builds. Épinglez un **tag** ou
+        un **SHA** de commit, et exigez une revue sur le dépôt de la bibliothèque.
+
+        Côté administration, configurez la bibliothèque comme **Global Trusted** uniquement si vous
+        contrôlez son dépôt ; sinon, une bibliothèque « untrusted » s'exécute dans la sandbox Groovy. Ne
+        marquez jamais « trusted » une bibliothèque que des contributeurs externes peuvent modifier.
+      en: |
+        A shared library is a Git repository with a fixed structure:
+
+        - **`vars/`**: `.groovy` files that define global "steps" (`securityScan.groovy` creates the
+          `securityScan` step).
+        - **`src/`**: Groovy classes for complex logic.
+        - **`resources/`**: static files (templates, configs).
+
+        The `Jenkinsfile` imports it with the `@Library` annotation. The **critical security point** is the
+        **version**: `@Library('sec-lib@v1.4.0')` pins an immutable Git tag. With `@Library('sec-lib@main')`,
+        the library changes under your feet — and because its code **runs inside your pipelines**, a malicious
+        or buggy commit on `main` spreads instantly to every build. Pin a **tag** or a commit **SHA**, and
+        require review on the library repository.
+
+        On the admin side, configure the library as **Global Trusted** only if you control its repository;
+        otherwise an "untrusted" library runs in the Groovy sandbox. Never mark as "trusted" a library that
+        external contributors can modify.
+
+examples:
+  - title:
+      fr: "Un jenkins.yaml complet (realm, autorisations, credentials)"
+      en: "A complete jenkins.yaml (realm, authorization, credentials)"
+    file: jenkins.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      jenkins:
+        systemMessage: "Managed by JCasC - do not configure through the UI"
+        numExecutors: 0          # no builds on the controller
+        mode: EXCLUSIVE          # only jobs tied to a label run here
+
+        # WHO can log in: Jenkins' own user database, self sign-up disabled
+        securityRealm:
+          local:
+            allowsSignup: false
+            users:
+              - id: admin
+                # The real password is injected from the environment, never in Git
+                password: "${JENKINS_ADMIN_PASSWORD}"
+
+        # WHAT they can do: least privilege via the matrix
+        authorizationStrategy:
+          globalMatrix:
+            permissions:
+              - "Overall/Administer:admin"
+              - "Overall/Read:dev-team"
+              - "Job/Build:dev-team"
+              - "Job/Read:dev-team"
+
+        # Keep CSRF protection and agent-to-controller security enabled (defaults)
+        remotingSecurity:
+          enabled: true
+
+      credentials:
+        system:
+          domainCredentials:
+            - credentials:
+                - usernamePassword:
+                    scope: GLOBAL
+                    id: docker-registry
+                    username: ci
+                    password: "${DOCKER_REGISTRY_TOKEN}"   # from the environment
+
+      unclassified:
+        location:
+          url: "https://jenkins.example.com/"   # correct links and webhooks
+        sonarGlobalConfiguration:
+          installations:
+            - name: sonarqube
+              serverUrl: "https://sonar.example.com"
+              credentialsId: sonar-token
+    output: |
+      Configuration as Code: Configuration loaded from file:/var/jenkins_home/casc/jenkins.yaml
+      Setting class hudson.model.Hudson.numExecutors = 0
+      Setting security realm: HudsonPrivateSecurityRealm (signup disabled)
+      Setting authorization strategy: GlobalMatrixAuthorizationStrategy
+      Credentials 'docker-registry' loaded (scope GLOBAL)
+    note:
+      fr: "Tout le durcissement de la leçon précédente est ici, en code revu : 0 exécuteur, realm privé sans auto-inscription, matrice au moindre privilège. Les secrets sont des références `${...}` résolues depuis l'environnement — aucun mot de passe en clair ne part dans Git."
+      en: "All the hardening from the previous lesson is here, as reviewed code: 0 executors, private realm without self sign-up, least-privilege matrix. Secrets are `${...}` references resolved from the environment — no clear-text password ends up in Git."
+
+  - title:
+      fr: "Le lab Docker Compose avec jenkins/jenkins:lts"
+      en: "The Docker Compose lab with jenkins/jenkins:lts"
+    file: docker-compose.yml
+    lang: yaml
+    kind: secure
+    code: |
+      services:
+        jenkins:
+          # Pin a precise version, never :latest, so the lab is reproducible
+          image: jenkins/jenkins:2.504.1-lts
+          ports:
+            - "127.0.0.1:8080:8080"   # bound to localhost only, not the world
+          environment:
+            # Point the CasC plugin at our config and skip the setup wizard
+            CASC_JENKINS_CONFIG: /var/jenkins_home/casc/jenkins.yaml
+            JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+            # Secrets come from the shell / .env, never committed
+            JENKINS_ADMIN_PASSWORD: "${JENKINS_ADMIN_PASSWORD}"
+            DOCKER_REGISTRY_TOKEN: "${DOCKER_REGISTRY_TOKEN}"
+          volumes:
+            - jenkins_home:/var/jenkins_home
+            - ./jenkins.yaml:/var/jenkins_home/casc/jenkins.yaml:ro
+            - ./plugins.txt:/usr/share/jenkins/ref/plugins.txt:ro
+
+      volumes:
+        jenkins_home:
+    output: |
+      $ export JENKINS_ADMIN_PASSWORD='changeme-in-vault'
+      $ export DOCKER_REGISTRY_TOKEN='changeme-in-vault'
+      $ docker compose up -d
+      [+] Running 2/2
+       Network jcasc-lab_default  Created
+       Container jcasc-lab-jenkins-1  Started
+      $ docker exec jcasc-lab-jenkins-1 jenkins-plugin-cli --plugin-file \
+          /usr/share/jenkins/ref/plugins.txt
+      Done
+    note:
+      fr: "Le port n'est publié que sur `127.0.0.1` : le lab n'est pas exposé au réseau. Les secrets viennent de l'environnement du shell (ou d'un `.env` non versionné). `jenkins-plugin-cli` installe les plugins listés dans `plugins.txt` (dont `configuration-as-code`), sans aucun clic."
+      en: "The port is published only on `127.0.0.1`: the lab is not exposed to the network. Secrets come from the shell environment (or a non-versioned `.env`). `jenkins-plugin-cli` installs the plugins listed in `plugins.txt` (including `configuration-as-code`), with no clicks."
+
+  - title:
+      fr: "La shared library : vars/securityScan.groovy"
+      en: "The shared library: vars/securityScan.groovy"
+    file: securityScan.groovy
+    lang: groovy
+    kind: secure
+    code: |
+      // vars/securityScan.groovy -> defines a global step named securityScan.
+      // Centralises the security stages so every pipeline stays consistent.
+      def call(Map config = [:]) {
+          // Default threshold; a pipeline can override it: securityScan(severity: 'CRITICAL')
+          String severity = config.get('severity', 'HIGH,CRITICAL')
+
+          stage('Secret scan') {
+              sh '''
+                docker run --rm -v "$WORKSPACE:/repo" zricethezav/gitleaks:latest \
+                  detect --source=/repo --redact \
+                  --report-format=sarif --report-path=/repo/reports/gitleaks.sarif
+              '''
+          }
+
+          stage('Dependency scan') {
+              // Interpolating a non-secret config value is fine here
+              sh """
+                docker run --rm -v "\$WORKSPACE:/src" aquasec/trivy:latest fs /src \
+                  --scanners vuln --severity ${severity} --exit-code 1 \
+                  --format sarif --output /src/reports/trivy-fs.sarif
+              """
+          }
+
+          // Always archive, even if a scan above failed and threw
+          archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+      }
+    note:
+      fr: "Ce fichier crée un step `securityScan` réutilisable. La sévérité est un paramètre avec une valeur par défaut. Attention : on interpole `${severity}` (une valeur de config publique, pas un secret) avec des doubles guillemets, mais `$WORKSPACE` est échappé en `\\$WORKSPACE` pour être lu par le shell, pas par Groovy."
+      en: "This file creates a reusable `securityScan` step. Severity is a parameter with a default value. Note: we interpolate `${severity}` (a public config value, not a secret) with double quotes, but `$WORKSPACE` is escaped as `\\$WORKSPACE` so the shell reads it, not Groovy."
+
+  - title:
+      fr: "Le Jenkinsfile qui appelle la library avec une version épinglée"
+      en: "The Jenkinsfile calling the library with a pinned version"
+    file: Jenkinsfile
+    lang: groovy
+    kind: secure
+    code: |
+      // Pin an immutable tag: the library code runs INSIDE this pipeline,
+      // so never use @main (it could change under us without review).
+      @Library('sec-lib@v1.4.0') _
+
+      pipeline {
+          agent any
+          stages {
+              stage('Build') {
+                  steps { sh 'make build' }
+              }
+              stage('Security') {
+                  steps {
+                      // One line replaces a dozen copy-pasted stages.
+                      // A fix in the library (v1.4.1) rolls out by bumping the tag.
+                      securityScan(severity: 'CRITICAL')
+                  }
+              }
+          }
+      }
+    output: |
+      Loading library sec-lib@v1.4.0
+      Attempting to resolve v1.4.0 from remote references...
+       > git rev-parse refs/tags/v1.4.0^{commit}
+      [Pipeline] stage (Security)
+      [Pipeline] stage (Secret scan)      -> no leaks found
+      [Pipeline] stage (Dependency scan)  -> no CRITICAL findings
+      [Pipeline] archiveArtifacts reports/** -> 2 files archived
+      Finished: SUCCESS
+    note:
+      fr: "Le `@Library('sec-lib@v1.4.0')` charge une version figée et auditable. Les deux étapes de sécurité viennent de la bibliothèque : pour corriger ou renforcer un scan, on publie `v1.4.1` et on bascule le tag, sans toucher aux cent `Jenkinsfile` qui l'utilisent."
+      en: "The `@Library('sec-lib@v1.4.0')` loads a frozen, auditable version. Both security stages come from the library: to fix or strengthen a scan, you publish `v1.4.1` and bump the tag, without touching the hundred `Jenkinsfile`s that use it."
+
+mistake:
+  fr: |
+    **Importer une shared library avec `@Library('sec-lib@main')` et la marquer « trusted ».**
+
+    Le code d'une shared library s'exécute à l'intérieur de vos pipelines, souvent avec les droits du
+    contrôleur si elle est « trusted ». Pointer sur `main`, c'est accepter que n'importe quel commit poussé
+    sur cette branche s'exécute immédiatement dans tous vos builds, sans revue : un bug ou un commit
+    malveillant devient un incident généralisé. Épinglez toujours un tag immuable ou un SHA, exigez une
+    revue sur le dépôt de la bibliothèque, et ne réservez le statut « trusted » qu'aux dépôts que vous
+    contrôlez strictement.
+  en: |
+    **Importing a shared library with `@Library('sec-lib@main')` and marking it "trusted".**
+
+    A shared library's code runs inside your pipelines, often with controller rights if it is "trusted".
+    Pointing at `main` means accepting that any commit pushed to that branch runs immediately in every build,
+    with no review: a bug or a malicious commit becomes a widespread incident. Always pin an immutable tag or
+    a SHA, require review on the library repository, and reserve "trusted" status for repositories you
+    strictly control.
+
+bestPractice:
+  fr: |
+    - **Toute la config en JCasC** : realm, autorisations, credentials, outils, versionnés en Git.
+    - **Aucun secret en clair** dans `jenkins.yaml` : des références `${VAR}` résolues depuis l'environnement.
+    - **Épinglez les versions** : l'image `jenkins/jenkins:lts` par numéro, et les shared libraries par tag/SHA.
+    - **Préinstallez les plugins** via `plugins.txt` et `jenkins-plugin-cli`, pas de clics manuels.
+    - **Factorisez les étapes de sécurité** dans une shared library ; une correction se déploie partout.
+    - **Revue obligatoire** sur le dépôt de la bibliothèque et sur `jenkins.yaml`.
+  en: |
+    - **All config as JCasC**: realm, authorization, credentials, tools, versioned in Git.
+    - **No clear-text secret** in `jenkins.yaml`: `${VAR}` references resolved from the environment.
+    - **Pin versions**: the `jenkins/jenkins:lts` image by number, and shared libraries by tag/SHA.
+    - **Pre-install plugins** via `plugins.txt` and `jenkins-plugin-cli`, no manual clicks.
+    - **Factor security stages** into a shared library; a fix rolls out everywhere.
+    - **Mandatory review** on the library repository and on `jenkins.yaml`.
+
+exercise:
+  statement:
+    fr: |
+      Un `Jenkinsfile` d'équipe contient ceci :
+
+      ```groovy
+      @Library('company-ci@main') _
+      pipeline {
+          agent any
+          stages {
+              stage('Scan') { steps { runAllScans() } }
+          }
+      }
+      ```
+
+      Par ailleurs, le `jenkins.yaml` du serveur contient :
+
+      ```yaml
+      securityRealm:
+        local:
+          allowsSignup: true
+          users:
+            - id: admin
+              password: "Sup3rSecret!"
+      ```
+
+      Repérez les **deux** problèmes de sécurité (un dans chaque fichier) et proposez la correction.
+    en: |
+      A team `Jenkinsfile` contains this:
+
+      ```groovy
+      @Library('company-ci@main') _
+      pipeline {
+          agent any
+          stages {
+              stage('Scan') { steps { runAllScans() } }
+          }
+      }
+      ```
+
+      Separately, the server's `jenkins.yaml` contains:
+
+      ```yaml
+      securityRealm:
+        local:
+          allowsSignup: true
+          users:
+            - id: admin
+              password: "Sup3rSecret!"
+      ```
+
+      Spot the **two** security problems (one in each file) and propose the fix.
+  solution:
+    file: fixes.yaml
+    lang: yaml
+    code: |
+      # Fix 1 - Jenkinsfile: pin the library to an immutable tag, not a branch.
+      # @Library('company-ci@main') runs any new commit in every build with no review.
+      #   ->  @Library('company-ci@v2.1.0') _
+
+      # Fix 2 - jenkins.yaml: disable self sign-up and inject the password from the env.
+      securityRealm:
+        local:
+          allowsSignup: false                      # was true: anyone could register
+          users:
+            - id: admin
+              password: "${JENKINS_ADMIN_PASSWORD}"  # was a clear-text secret in Git
+    note:
+      fr: "Problème 1 : `@main` laisse la bibliothèque changer sans revue alors que son code tourne dans vos pipelines ; on épingle un tag (`v2.1.0`). Problème 2 : `allowsSignup: true` autorise l'inscription libre, et le mot de passe est en clair dans Git ; on désactive l'auto-inscription et on injecte le secret par variable d'environnement."
+      en: "Problem 1: `@main` lets the library change without review while its code runs in your pipelines; pin a tag (`v2.1.0`). Problem 2: `allowsSignup: true` allows free registration, and the password is in clear text in Git; disable self sign-up and inject the secret through an environment variable."
+
+quiz:
+  - q:
+      fr: "Que configure un fichier JCasC `jenkins.yaml` ?"
+      en: "What does a JCasC `jenkins.yaml` file configure?"
+    options:
+      fr:
+        - "Uniquement l'apparence de l'interface"
+        - "La configuration de Jenkins (sécurité, credentials, outils) au démarrage"
+        - "Le code source des applications à builder"
+        - "Les règles de pare-feu du serveur"
+      en:
+        - "Only the look of the UI"
+        - "The Jenkins configuration (security, credentials, tools) at startup"
+        - "The source code of the applications to build"
+        - "The server's firewall rules"
+    answer: 1
+    why:
+      fr: "Le plugin Configuration as Code lit ce YAML au démarrage et applique le realm, les autorisations, les credentials et les outils. La configuration devient reproductible et revue en pull request."
+      en: "The Configuration as Code plugin reads this YAML at startup and applies the realm, authorization, credentials and tools. The configuration becomes reproducible and reviewed in a pull request."
+  - q:
+      fr: "Comment référencer un secret dans jenkins.yaml sans l'exposer ?"
+      en: "How do you reference a secret in jenkins.yaml without exposing it?"
+    options:
+      fr:
+        - "En l'écrivant en clair, c'est chiffré automatiquement"
+        - "Avec une référence comme ${ADMIN_PASSWORD} résolue depuis l'environnement"
+        - "En base64 dans le fichier"
+        - "On ne peut pas, il faut cliquer dans l'interface"
+      en:
+        - "By writing it in clear text, it is encrypted automatically"
+        - "With a reference like ${ADMIN_PASSWORD} resolved from the environment"
+        - "In base64 in the file"
+        - "You cannot, you must click in the UI"
+    answer: 1
+    why:
+      fr: "JCasC résout `${VAR}` depuis l'environnement (ou un coffre). Le fichier versionné ne contient qu'une référence, jamais la vraie valeur du secret."
+      en: "JCasC resolves `${VAR}` from the environment (or a vault). The versioned file holds only a reference, never the real secret value."
+  - q:
+      fr: "Pourquoi épingler `@Library('sec-lib@v1.4.0')` plutôt que `@main` ?"
+      en: "Why pin `@Library('sec-lib@v1.4.0')` rather than `@main`?"
+    options:
+      fr:
+        - "Pour que la bibliothèque se charge plus vite"
+        - "Parce que le code de la library s'exécute dans vos pipelines : un tag immuable empêche un changement non revu"
+        - "Parce que les tags sont obligatoires"
+        - "Pour réduire la taille du dépôt"
+      en:
+        - "So the library loads faster"
+        - "Because the library code runs inside your pipelines: an immutable tag prevents an unreviewed change"
+        - "Because tags are mandatory"
+        - "To reduce the repository size"
+    answer: 1
+    why:
+      fr: "Une shared library exécute son code dans vos builds. Pointer sur `main` laisse tout commit non revu se propager à tous les pipelines. Un tag ou un SHA fige une version auditée."
+      en: "A shared library runs its code in your builds. Pointing at `main` lets any unreviewed commit spread to every pipeline. A tag or SHA freezes an audited version."
+  - q:
+      fr: "Dans une shared library, où placent-on un fichier définissant un step global comme `securityScan` ?"
+      en: "In a shared library, where do you put a file defining a global step like `securityScan`?"
+    options:
+      fr:
+        - "Dans le dossier src/"
+        - "Dans le dossier resources/"
+        - "Dans le dossier vars/"
+        - "À la racine du dépôt"
+      en:
+        - "In the src/ folder"
+        - "In the resources/ folder"
+        - "In the vars/ folder"
+        - "At the repository root"
+    answer: 2
+    why:
+      fr: "Les fichiers `.groovy` du dossier `vars/` deviennent des steps globaux : `vars/securityScan.groovy` crée le step `securityScan`. `src/` contient des classes, `resources/` des fichiers statiques."
+      en: "The `.groovy` files in the `vars/` folder become global steps: `vars/securityScan.groovy` creates the `securityScan` step. `src/` holds classes, `resources/` static files."
+  - q:
+      fr: "Pourquoi épingler une version précise de l'image jenkins/jenkins:lts dans le lab ?"
+      en: "Why pin a precise version of the jenkins/jenkins:lts image in the lab?"
+    options:
+      fr:
+        - "Pour que l'environnement soit identique et reproductible d'une machine à l'autre"
+        - "Parce que latest ne fonctionne pas avec Docker"
+        - "Pour désactiver les plugins"
+        - "Pour rendre Jenkins plus lent"
+      en:
+        - "So the environment is identical and reproducible across machines"
+        - "Because latest does not work with Docker"
+        - "To disable plugins"
+        - "To make Jenkins slower"
+    answer: 0
+    why:
+      fr: "Épingler un numéro de version garantit que chacun obtient exactement le même Jenkins. `latest` peut changer à tout moment et introduire une différence de comportement difficile à diagnostiquer."
+      en: "Pinning a version number guarantees everyone gets exactly the same Jenkins. `latest` can change at any time and introduce a behaviour difference that is hard to diagnose."

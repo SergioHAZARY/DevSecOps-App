@@ -1,0 +1,490 @@
+description:
+  fr: "Sécuriser une API Express : en-têtes avec Helmet, CORS correctement restreint, limite de débit avec express-rate-limit, taille du corps plafonnée et gestion d'erreur sans fuite."
+  en: "Securing an Express API: headers with Helmet, properly restricted CORS, rate limiting with express-rate-limit, capped body size and leak-free error handling."
+duration: 35
+
+intro:
+  fr: |
+    **Express** est le framework web le plus utilisé de Node.js : quelques lignes suffisent pour exposer une
+    API. Mais par défaut, Express ne pose **aucun** en-tête de sécurité, accepte des requêtes de
+    **n'importe quelle origine** si on configure mal CORS, et ne limite ni la taille des requêtes ni leur
+    fréquence. Une API Express « nue » est une porte grande ouverte.
+
+    Imaginez l'accueil d'une entreprise. Sans consignes, l'hôte laisse entrer tout le monde, accepte des
+    colis de taille illimitée et ne compte pas les visites. Helmet pose les panneaux de sécurité, CORS
+    décide qui a le droit d'entrer, et le rate limiting empêche qu'un seul visiteur monopolise le comptoir.
+
+    Vous allez transformer une API Express vulnérable en une API durcie : **Helmet** pour les en-têtes,
+    **CORS** restreint à une liste d'origines, **express-rate-limit** contre les abus, une taille de corps
+    plafonnée et une gestion d'erreur qui ne révèle rien. Les exemples visent un vrai Node.js LTS avec les
+    paquets réels.
+  en: |
+    **Express** is Node.js's most widely used web framework: a few lines expose an API. But by default,
+    Express sets **no** security headers, accepts requests from **any origin** if CORS is misconfigured, and
+    limits neither request size nor frequency. A "bare" Express API is a wide-open door.
+
+    Picture a company's reception desk. With no instructions, the host lets everyone in, accepts
+    unlimited-size parcels and does not count visits. Helmet puts up the safety signs, CORS decides who may
+    enter, and rate limiting prevents a single visitor from monopolising the desk.
+
+    You will turn a vulnerable Express API into a hardened one: **Helmet** for headers, **CORS** restricted
+    to an allow-list of origins, **express-rate-limit** against abuse, a capped body size and error handling
+    that reveals nothing. The examples target a real Node.js LTS with the actual packages.
+
+sections:
+  - heading:
+      fr: "Helmet et les en-têtes de sécurité"
+      en: "Helmet and security headers"
+    body:
+      fr: |
+        **Helmet** est un middleware qui pose en une ligne (`app.use(helmet())`) un ensemble d'en-têtes de
+        sécurité HTTP :
+
+        | En-tête | Rôle |
+        |---|---|
+        | `Content-Security-Policy` | Restreint les sources de scripts, limite le XSS |
+        | `X-Content-Type-Options: nosniff` | Empêche le navigateur de deviner le type d'un fichier |
+        | `X-Frame-Options: DENY` | Bloque l'inclusion dans une iframe (clickjacking) |
+        | `Strict-Transport-Security` | Force HTTPS pour les prochaines visites |
+        | `X-DNS-Prefetch-Control` | Réduit les fuites via le préchargement DNS |
+
+        Helmet ne remplace pas la validation ni l'authentification : il configure le **navigateur** du client
+        pour qu'il se protège. On l'applique tout en haut de la chaîne de middlewares, avant les routes, pour
+        qu'il couvre toutes les réponses. On désactive aussi l'en-tête `X-Powered-By: Express`, qui révèle
+        inutilement la technologie utilisée (`app.disable("x-powered-by")`, ce que Helmet fait déjà).
+      en: |
+        **Helmet** is a middleware that sets, in one line (`app.use(helmet())`), a set of HTTP security
+        headers:
+
+        | Header | Role |
+        |---|---|
+        | `Content-Security-Policy` | Restricts script sources, limits XSS |
+        | `X-Content-Type-Options: nosniff` | Stops the browser guessing a file's type |
+        | `X-Frame-Options: DENY` | Blocks embedding in an iframe (clickjacking) |
+        | `Strict-Transport-Security` | Forces HTTPS on future visits |
+        | `X-DNS-Prefetch-Control` | Reduces leaks via DNS prefetching |
+
+        Helmet replaces neither validation nor authentication: it configures the client's **browser** to
+        protect itself. Apply it at the very top of the middleware chain, before the routes, so it covers
+        every response. Also disable the `X-Powered-By: Express` header, which needlessly reveals the
+        technology used (`app.disable("x-powered-by")`, which Helmet already does).
+  - heading:
+      fr: "CORS et rate limiting"
+      en: "CORS and rate limiting"
+    body:
+      fr: |
+        **CORS** (*Cross-Origin Resource Sharing*, partage de ressources entre origines) contrôle quels sites
+        web ont le droit d'appeler votre API depuis un navigateur. L'erreur fréquente est d'autoriser **toutes**
+        les origines avec `origin: "*"`, surtout combiné à `credentials: true` : n'importe quel site peut
+        alors agir au nom de vos utilisateurs connectés. La bonne pratique est une **liste blanche**
+        d'origines de confiance.
+
+        | Configuration CORS | Qui peut appeler l'API ? | Sûr ? |
+        |---|---|---|
+        | `origin: "*"` | Tout le monde | Non pour une API authentifiée |
+        | `origin: "*"` + `credentials: true` | Tout le monde, avec les cookies | **Dangereux** |
+        | `origin: ["https://app.example.com"]` | Seulement ces origines | Oui |
+
+        Le **rate limiting** plafonne le nombre de requêtes par client et par fenêtre de temps. **express-rate-limit**
+        le fait en quelques lignes et renvoie un `429 Too Many Requests` au-delà du quota. C'est la défense de
+        base contre la force brute et le déni de service applicatif. En production, le compteur doit être
+        partagé entre instances (store Redis).
+      en: |
+        **CORS** (Cross-Origin Resource Sharing) controls which websites may call your API from a browser. The
+        common mistake is to allow **all** origins with `origin: "*"`, especially combined with
+        `credentials: true`: any website can then act on behalf of your logged-in users. The good practice is
+        an **allow-list** of trusted origins.
+
+        | CORS configuration | Who can call the API? | Safe? |
+        |---|---|---|
+        | `origin: "*"` | Everyone | No for an authenticated API |
+        | `origin: "*"` + `credentials: true` | Everyone, with cookies | **Dangerous** |
+        | `origin: ["https://app.example.com"]` | Only those origins | Yes |
+
+        **Rate limiting** caps the number of requests per client per time window. **express-rate-limit** does
+        it in a few lines and returns a `429 Too Many Requests` beyond the quota. It is the basic defence
+        against brute force and application-level denial of service. In production the counter must be shared
+        across instances (a Redis store).
+
+examples:
+  - title:
+      fr: "API Express vulnérable : aucun en-tête, CORS ouvert, pas de limite"
+      en: "Vulnerable Express API: no headers, open CORS, no limit"
+    file: app_vulnerable.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      // target: real Node.js LTS, "npm i express cors"
+      const express = require("express");
+      const cors = require("cors");
+
+      const app = express();
+
+      // Problem 1: CORS open to every origin, WITH credentials -> any site can act
+      // as your logged-in users
+      app.use(cors({ origin: "*", credentials: true }));
+
+      // Problem 2: no body size limit -> a huge JSON payload can exhaust memory
+      app.use(express.json());
+
+      app.get("/account", (req, res) => {
+        // Problem 3: no Helmet, no rate limit, and errors leak stack traces below
+        res.json({ balance: 1000 });
+      });
+
+      app.use((err, req, res, next) => {
+        // Problem 4: the stack trace is sent to the client
+        res.status(500).json({ error: err.stack });
+      });
+
+      app.listen(3000, () => console.log("listening on 3000"));
+    output: |
+      $ curl -i http://localhost:3000/account | grep -iE 'x-powered-by|x-frame'
+      X-Powered-By: Express
+      # No X-Frame-Options, no CSP, no nosniff. CORS allows any origin with credentials.
+    note:
+      fr: "Quatre failles : CORS ouvert avec `credentials`, aucun en-tête de sécurité (Helmet absent), aucune limite de débit ni de taille, et des traces d'erreur renvoyées au client. L'API répond pourtant parfaitement en test."
+      en: "Four flaws: open CORS with `credentials`, no security headers (no Helmet), no rate or size limit, and error stack traces returned to the client. Yet the API answers perfectly in testing."
+
+  - title:
+      fr: "API Express durcie : Helmet, CORS liste blanche, rate limit"
+      en: "Hardened Express API: Helmet, allow-list CORS, rate limit"
+    file: app_secure.js
+    lang: javascript
+    kind: secure
+    code: |
+      // target: real Node.js LTS, "npm i express helmet cors express-rate-limit"
+      const express = require("express");
+      const helmet = require("helmet");
+      const cors = require("cors");
+      const rateLimit = require("express-rate-limit");
+
+      const app = express();
+
+      // Fix 1: security headers on every response, and X-Powered-By removed
+      app.use(helmet());
+
+      // Fix 2: CORS restricted to an allow-list of trusted origins
+      const allowed = ["https://app.example.com"];
+      app.use(cors({
+        origin: (origin, cb) => {
+          // Allow same-origin / tools (no Origin header) and listed origins only
+          if (!origin || allowed.includes(origin)) return cb(null, true);
+          return cb(new Error("origin not allowed"));
+        },
+        credentials: true,
+      }));
+
+      // Fix 3: cap the JSON body so a giant payload cannot exhaust memory
+      app.use(express.json({ limit: "10kb" }));
+
+      // Fix 4: global rate limit (100 requests / 15 min / IP)
+      app.use(rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 100,
+        standardHeaders: true,
+        legacyHeaders: false,
+      }));
+
+      app.get("/account", (req, res) => {
+        res.json({ balance: 1000 });
+      });
+
+      // Fix 5: error handler that logs server-side but never leaks details
+      app.use((err, req, res, next) => {
+        console.error(err); // full detail stays in the server logs
+        res.status(500).json({ error: "internal error" });
+      });
+
+      app.listen(3000, () => console.log("listening on 3000"));
+    output: |
+      $ curl -i http://localhost:3000/account | grep -iE 'x-frame|content-security|x-content'
+      Content-Security-Policy: default-src 'self';base-uri 'self';...
+      X-Content-Type-Options: nosniff
+      X-Frame-Options: SAMEORIGIN
+      # X-Powered-By is gone; CORS rejects unknown origins; body is capped at 10kb.
+    note:
+      fr: "Helmet pose les en-têtes et retire `X-Powered-By`, CORS n'autorise que la liste blanche, `express.json({ limit })` plafonne le corps, `express-rate-limit` bloque les abus, et l'erreur générique ne fuit rien. Chaque middleware règle une des quatre failles précédentes."
+      en: "Helmet sets the headers and removes `X-Powered-By`, CORS allows only the allow-list, `express.json({ limit })` caps the body, `express-rate-limit` blocks abuse, and the generic error leaks nothing. Each middleware fixes one of the four previous flaws."
+
+  - title:
+      fr: "Limite stricte sur le login pour contrer la force brute"
+      en: "Stricter limit on login to counter brute force"
+    file: login_limit.js
+    lang: javascript
+    kind: secure
+    code: |
+      // target: real Node.js LTS, "npm i express express-rate-limit"
+      const express = require("express");
+      const rateLimit = require("express-rate-limit");
+
+      const app = express();
+      app.use(express.json({ limit: "5kb" }));
+
+      // A tight, route-specific limiter: 5 login attempts per 15 minutes per IP
+      const loginLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 5,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { error: "too many login attempts, try again later" },
+      });
+
+      // Apply the strict limiter ONLY to the login route
+      app.post("/login", loginLimiter, (req, res) => {
+        const { username, password } = req.body ?? {};
+        if (typeof username !== "string" || typeof password !== "string") {
+          return res.status(400).json({ error: "username and password required" });
+        }
+        // ... verify the password hash (argon2/bcrypt) here ...
+        res.json({ status: "ok" });
+      });
+
+      app.listen(3000);
+    output: |
+      $ for i in $(seq 1 6); do curl -s -o /dev/null -w "%{http_code}\n" \
+          -X POST localhost:3000/login -H 'Content-Type: application/json' \
+          -d '{"username":"alice","password":"x"}'; done
+      200
+      200
+      200
+      200
+      200
+      429
+    note:
+      fr: "On applique un limiteur **strict** (5 tentatives / 15 min) uniquement sur `/login`, en plus du limiteur global. La 6e tentative reçoit un `429`, ce qui ralentit fortement une attaque par force brute sans gêner les utilisateurs légitimes."
+      en: "A **strict** limiter (5 attempts / 15 min) is applied only to `/login`, on top of the global one. The 6th attempt gets a `429`, which heavily slows a brute-force attack without bothering legitimate users."
+
+  - title:
+      fr: "Pourquoi `origin: \"*\"` avec credentials est dangereux (logique)"
+      en: "Why `origin: \"*\"` with credentials is dangerous (logic)"
+    file: cors_check.js
+    lang: javascript
+    kind: neutral
+    code: |
+      // Runs in the browser: pure logic that mimics a CORS decision
+
+      const allowList = ["https://app.example.com", "https://admin.example.com"];
+
+      // Secure policy: only listed origins are reflected back as allowed
+      function isAllowed(origin) {
+        return allowList.includes(origin);
+      }
+
+      const requests = [
+        "https://app.example.com",   // trusted
+        "https://evil.example.net",  // attacker site
+        "https://admin.example.com", // trusted
+      ];
+
+      for (const origin of requests) {
+        console.log(origin, "->", isAllowed(origin) ? "ALLOW" : "BLOCK");
+      }
+    output: |
+      https://app.example.com -> ALLOW
+      https://evil.example.net -> BLOCK
+      https://admin.example.com -> ALLOW
+    note:
+      fr: "Avec `origin: \"*\"`, la fonction renverrait `ALLOW` pour `evil.example.net` aussi. Une liste blanche ne reflète que les origines de confiance, ce qui empêche un site malveillant d'appeler l'API avec les cookies de la victime."
+      en: "With `origin: \"*\"`, the function would return `ALLOW` for `evil.example.net` too. An allow-list reflects only trusted origins, which stops a malicious site from calling the API with the victim's cookies."
+
+mistake:
+  fr: |
+    **Configurer CORS avec `origin: \"*\"` et `credentials: true`.**
+
+    ```javascript
+    app.use(cors({ origin: "*", credentials: true })); // any site, with cookies
+    ```
+
+    Cette combinaison autorise **n'importe quel** site web à envoyer des requêtes authentifiées (avec les
+    cookies de session de la victime) vers votre API depuis le navigateur. Un site malveillant visité par un
+    utilisateur connecté peut alors agir en son nom. En réalité, les navigateurs rejettent `*` avec
+    `credentials`, ce qui pousse certains à renvoyer dynamiquement l'origine reçue — ce qui revient au même
+    danger. La seule configuration sûre est une **liste blanche** explicite d'origines de confiance.
+  en: |
+    **Configuring CORS with `origin: "*"` and `credentials: true`.**
+
+    ```javascript
+    app.use(cors({ origin: "*", credentials: true })); // any site, with cookies
+    ```
+
+    This combination lets **any** website send authenticated requests (with the victim's session cookies) to
+    your API from the browser. A malicious site visited by a logged-in user can then act on their behalf. In
+    reality, browsers reject `*` with `credentials`, which pushes some developers to dynamically reflect the
+    received origin — which amounts to the same danger. The only safe configuration is an explicit
+    **allow-list** of trusted origins.
+
+bestPractice:
+  fr: |
+    - **`app.use(helmet())` en tête de chaîne** pour poser les en-têtes de sécurité et retirer `X-Powered-By`.
+    - **CORS en liste blanche** d'origines de confiance, jamais `origin: "*"` sur une API authentifiée.
+    - **Plafonnez le corps** : `express.json({ limit: "10kb" })` pour éviter l'épuisement mémoire.
+    - **Rate limiting global** avec express-rate-limit, et un limiteur **strict** sur les routes sensibles (login).
+    - **Validez chaque entrée** avant traitement et renvoyez `400` sur une requête malformée.
+    - **Gestion d'erreur centralisée** : journalisez le détail côté serveur, renvoyez un message générique au client.
+    - **Servez derrière HTTPS** et activez `Strict-Transport-Security` (Helmet le fait).
+  en: |
+    - **`app.use(helmet())` at the top of the chain** to set security headers and remove `X-Powered-By`.
+    - **Allow-list CORS** of trusted origins, never `origin: "*"` on an authenticated API.
+    - **Cap the body**: `express.json({ limit: "10kb" })` to avoid memory exhaustion.
+    - **Global rate limiting** with express-rate-limit, and a **strict** limiter on sensitive routes (login).
+    - **Validate every input** before processing and return `400` on a malformed request.
+    - **Centralised error handling**: log the detail server-side, return a generic message to the client.
+    - **Serve behind HTTPS** and enable `Strict-Transport-Security` (Helmet does it).
+
+exercise:
+  statement:
+    fr: |
+      On vous donne le squelette d'une API Express. Ajoutez-y les protections de base.
+
+      ```javascript
+      const express = require("express");
+      const app = express();
+      app.use(express.json());
+      app.get("/ping", (req, res) => res.json({ pong: true }));
+      app.listen(3000);
+      ```
+
+      1. Ajoutez Helmet pour poser les en-têtes de sécurité.
+      2. Plafonnez le corps JSON à `10kb`.
+      3. Ajoutez un rate limiter global (par exemple 100 requêtes / 15 minutes / IP) avec express-rate-limit.
+
+      Indiquez les paquets à installer en commentaire.
+    en: |
+      You are given the skeleton of an Express API. Add the basic protections.
+
+      ```javascript
+      const express = require("express");
+      const app = express();
+      app.use(express.json());
+      app.get("/ping", (req, res) => res.json({ pong: true }));
+      app.listen(3000);
+      ```
+
+      1. Add Helmet to set the security headers.
+      2. Cap the JSON body at `10kb`.
+      3. Add a global rate limiter (for example 100 requests / 15 minutes / IP) with express-rate-limit.
+
+      State the packages to install in a comment.
+  solution:
+    file: app.js
+    lang: javascript
+    code: |
+      // npm i express helmet express-rate-limit
+      const express = require("express");
+      const helmet = require("helmet");
+      const rateLimit = require("express-rate-limit");
+
+      const app = express();
+
+      // 1. Security headers on every response (also removes X-Powered-By)
+      app.use(helmet());
+
+      // 2. Cap the JSON body to prevent memory-exhaustion payloads
+      app.use(express.json({ limit: "10kb" }));
+
+      // 3. Global rate limit against abuse and brute force
+      app.use(rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 100,
+        standardHeaders: true,
+        legacyHeaders: false,
+      }));
+
+      app.get("/ping", (req, res) => res.json({ pong: true }));
+      app.listen(3000);
+    note:
+      fr: "Trois middlewares, placés avant les routes, couvrent toutes les réponses : Helmet pour les en-têtes, la limite de taille du corps, et le rate limiter. L'ordre compte — ces protections doivent venir avant la définition des routes."
+      en: "Three middlewares, placed before the routes, cover every response: Helmet for headers, the body size limit, and the rate limiter. Order matters — these protections must come before the route definitions."
+
+quiz:
+  - q:
+      fr: "Que fait principalement le middleware Helmet dans une API Express ?"
+      en: "What does the Helmet middleware mainly do in an Express API?"
+    options:
+      fr:
+        - "Il pose un ensemble d'en-têtes de sécurité HTTP"
+        - "Il chiffre la base de données"
+        - "Il génère des jetons JWT"
+        - "Il remplace Express"
+      en:
+        - "It sets a set of HTTP security headers"
+        - "It encrypts the database"
+        - "It generates JWT tokens"
+        - "It replaces Express"
+    answer: 0
+    why:
+      fr: "Helmet configure des en-têtes comme `Content-Security-Policy`, `X-Frame-Options` et `nosniff`, et retire `X-Powered-By`."
+      en: "Helmet sets headers like `Content-Security-Policy`, `X-Frame-Options` and `nosniff`, and removes `X-Powered-By`."
+  - q:
+      fr: "Quelle configuration CORS est dangereuse pour une API authentifiée ?"
+      en: "Which CORS configuration is dangerous for an authenticated API?"
+    options:
+      fr:
+        - "Une liste blanche d'origines de confiance"
+        - "`origin: \"*\"` combiné à `credentials: true`"
+        - "Refuser toutes les origines inconnues"
+        - "Autoriser uniquement `https://app.example.com`"
+      en:
+        - "An allow-list of trusted origins"
+        - "`origin: \"*\"` combined with `credentials: true`"
+        - "Rejecting all unknown origins"
+        - "Allowing only `https://app.example.com`"
+    answer: 1
+    why:
+      fr: "Autoriser toutes les origines avec les credentials permet à n'importe quel site d'agir avec les cookies de la victime."
+      en: "Allowing all origins with credentials lets any website act with the victim's cookies."
+  - q:
+      fr: "À quoi sert `express.json({ limit: \"10kb\" })` ?"
+      en: "What is `express.json({ limit: \"10kb\" })` for?"
+    options:
+      fr:
+        - "À chiffrer le corps de la requête"
+        - "À valider le schéma JSON"
+        - "À plafonner la taille du corps, contre l'épuisement mémoire"
+        - "À activer CORS"
+      en:
+        - "To encrypt the request body"
+        - "To validate the JSON schema"
+        - "To cap the body size, against memory exhaustion"
+        - "To enable CORS"
+    answer: 2
+    why:
+      fr: "La limite rejette les corps trop volumineux, ce qui empêche un attaquant d'épuiser la mémoire avec une charge géante."
+      en: "The limit rejects oversized bodies, preventing an attacker from exhausting memory with a giant payload."
+  - q:
+      fr: "Quel code HTTP express-rate-limit renvoie-t-il quand le quota est dépassé ?"
+      en: "Which HTTP code does express-rate-limit return when the quota is exceeded?"
+    options:
+      fr:
+        - "200 OK"
+        - "301 Moved Permanently"
+        - "403 Forbidden"
+        - "429 Too Many Requests"
+      en:
+        - "200 OK"
+        - "301 Moved Permanently"
+        - "403 Forbidden"
+        - "429 Too Many Requests"
+    answer: 3
+    why:
+      fr: "Le code `429` indique qu'un client a dépassé le nombre de requêtes autorisé dans la fenêtre de temps."
+      en: "The `429` code signals that a client has exceeded the allowed number of requests in the time window."
+  - q:
+      fr: "Pourquoi ne pas renvoyer la trace d'erreur (`err.stack`) au client ?"
+      en: "Why not return the error stack trace (`err.stack`) to the client?"
+    options:
+      fr:
+        - "Parce qu'elle révèle la structure interne et facilite les attaques"
+        - "Parce qu'elle ralentit la réponse"
+        - "Parce qu'elle n'est pas au format JSON"
+        - "Parce qu'elle dépasse la limite de débit"
+      en:
+        - "Because it reveals internal structure and aids attacks"
+        - "Because it slows the response"
+        - "Because it is not JSON"
+        - "Because it exceeds the rate limit"
+    answer: 0
+    why:
+      fr: "Une trace expose chemins, versions et logique interne ; on la journalise côté serveur et on renvoie un message générique."
+      en: "A stack trace exposes paths, versions and internal logic; log it server-side and return a generic message."

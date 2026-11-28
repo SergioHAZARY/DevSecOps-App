@@ -1,0 +1,501 @@
+description:
+  fr: "Gérer le stockage persistant (PV, PVC, StorageClass, StatefulSet) et diagnostiquer méthodiquement les pannes de Pods : CrashLoopBackOff, ImagePullBackOff, Pending."
+  en: "Manage persistent storage (PV, PVC, StorageClass, StatefulSet) and methodically diagnose Pod failures: CrashLoopBackOff, ImagePullBackOff, Pending."
+duration: 40
+
+intro:
+  fr: |
+    Les Pods sont éphémères : quand ils meurent, tout ce qu'ils avaient écrit disparaît. Or une base de
+    données doit garder ses données. Kubernetes sépare donc le **stockage** du Pod, grâce aux volumes
+    persistants, pour que les données survivent au Pod, au nœud, et aux redémarrages.
+
+    C'est la différence entre un bureau jetable et un casier personnel : le bureau (le Pod) change, mais le
+    casier (le volume) reste et vous retrouvez vos affaires. Et pour les applications qui ont besoin d'une
+    identité stable — une base répliquée, par exemple — Kubernetes propose le **StatefulSet**.
+
+    Cette leçon finale du cours a deux volets. D'abord le stockage persistant : **PV**, **PVC**,
+    **StorageClass** et **StatefulSet**. Ensuite, et c'est le plus précieux au quotidien, une **méthode de
+    dépannage** : quand un Pod est en `CrashLoopBackOff`, `ImagePullBackOff` ou `Pending`, quelles commandes
+    taper, dans quel ordre, pour trouver la cause.
+  en: |
+    Pods are ephemeral: when they die, everything they had written vanishes. Yet a database must keep its
+    data. Kubernetes therefore separates the **storage** from the Pod, through persistent volumes, so data
+    survives the Pod, the node, and restarts.
+
+    It is the difference between a disposable desk and a personal locker: the desk (the Pod) changes, but the
+    locker (the volume) stays and you find your things again. And for applications that need a stable
+    identity — a replicated database, say — Kubernetes offers the **StatefulSet**.
+
+    This final lesson of the course has two parts. First, persistent storage: **PV**, **PVC**,
+    **StorageClass** and **StatefulSet**. Then, the most valuable day to day, a **troubleshooting method**:
+    when a Pod is in `CrashLoopBackOff`, `ImagePullBackOff` or `Pending`, which commands to type, in what
+    order, to find the cause.
+
+sections:
+  - heading:
+      fr: "PV, PVC et StorageClass"
+      en: "PV, PVC and StorageClass"
+    body:
+      fr: |
+        Le stockage persistant repose sur une séparation entre la *demande* et la *fourniture* :
+
+        | Objet | Rôle | Qui le gère |
+        |---|---|---|
+        | `PersistentVolume` (PV) | Un morceau de stockage réel (disque) | L'infrastructure |
+        | `PersistentVolumeClaim` (PVC) | Une *demande* de stockage par une appli | Le développeur |
+        | `StorageClass` | Un modèle de fourniture *dynamique* | L'administrateur |
+
+        Le développeur écrit un **PVC** (« je veux 10 Gio en lecture-écriture »). Grâce à une
+        **StorageClass**, Kubernetes **provisionne automatiquement** un PV correspondant (un disque cloud,
+        par exemple) et le relie au PVC. Le Pod monte ensuite le PVC comme un volume.
+
+        Deux réglages importants : les **modes d'accès** (`ReadWriteOnce` = un seul nœud à la fois,
+        `ReadWriteMany` = plusieurs) et la **politique de récupération** (`Retain` garde le disque après
+        suppression du PVC, `Delete` le supprime). En production sensible, on préfère souvent `Retain` pour
+        ne pas perdre des données par une suppression accidentelle.
+      en: |
+        Persistent storage relies on a separation between the *request* and the *supply*:
+
+        | Object | Role | Who manages it |
+        |---|---|---|
+        | `PersistentVolume` (PV) | A piece of real storage (disk) | The infrastructure |
+        | `PersistentVolumeClaim` (PVC) | A storage *request* by an app | The developer |
+        | `StorageClass` | A *dynamic* provisioning template | The administrator |
+
+        The developer writes a **PVC** ("I want 10 GiB read-write"). Thanks to a **StorageClass**, Kubernetes
+        **automatically provisions** a matching PV (a cloud disk, say) and binds it to the PVC. The Pod then
+        mounts the PVC as a volume.
+
+        Two important settings: the **access modes** (`ReadWriteOnce` = one node at a time, `ReadWriteMany` =
+        several) and the **reclaim policy** (`Retain` keeps the disk after the PVC is deleted, `Delete`
+        removes it). In sensitive production you often prefer `Retain` to avoid losing data through an
+        accidental deletion.
+  - heading:
+      fr: "StatefulSet et volumeClaimTemplates"
+      en: "StatefulSet and volumeClaimTemplates"
+    body:
+      fr: |
+        Un Deployment crée des Pods interchangeables et anonymes. Pour une base de données répliquée, il
+        faut au contraire une **identité stable** : un nom fixe, un volume dédié, un ordre de démarrage. Le
+        **StatefulSet** (`apiVersion: apps/v1`) apporte tout cela.
+
+        | Deployment | StatefulSet |
+        |---|---|
+        | Pods anonymes (`api-7d9c-x4k2`) | Noms stables (`db-0`, `db-1`, `db-2`) |
+        | Volume partagé ou éphémère | Un volume **par Pod**, persistant |
+        | Démarrage/arrêt en parallèle | Ordonné (`db-0`, puis `db-1`...) |
+
+        La clé est le **`volumeClaimTemplates`** : le StatefulSet crée automatiquement un PVC *par Pod*
+        (`data-db-0`, `data-db-1`...). Ainsi, `db-0` garde toujours son propre disque, même s'il est
+        recréé. C'est indispensable pour les bases de données, les files de messages, tout ce qui a un état
+        propre à chaque instance.
+
+        Un StatefulSet s'accompagne presque toujours d'un **Service headless** (`clusterIP: None`) qui donne
+        à chaque Pod une adresse DNS stable (`db-0.db`, `db-1.db`), nécessaire à la réplication.
+      en: |
+        A Deployment creates interchangeable, anonymous Pods. For a replicated database you need the
+        opposite: a **stable identity** — a fixed name, a dedicated volume, a start-up order. The
+        **StatefulSet** (`apiVersion: apps/v1`) provides all of this.
+
+        | Deployment | StatefulSet |
+        |---|---|
+        | Anonymous Pods (`api-7d9c-x4k2`) | Stable names (`db-0`, `db-1`, `db-2`) |
+        | Shared or ephemeral volume | One volume **per Pod**, persistent |
+        | Parallel start/stop | Ordered (`db-0`, then `db-1`...) |
+
+        The key is the **`volumeClaimTemplates`**: the StatefulSet automatically creates one PVC *per Pod*
+        (`data-db-0`, `data-db-1`...). So `db-0` always keeps its own disk, even if recreated. This is
+        essential for databases, message queues, anything with state specific to each instance.
+
+        A StatefulSet almost always comes with a **headless Service** (`clusterIP: None`) that gives each Pod
+        a stable DNS address (`db-0.db`, `db-1.db`), needed for replication.
+  - heading:
+      fr: "Méthode de dépannage"
+      en: "Troubleshooting method"
+    body:
+      fr: |
+        Quand un Pod ne va pas bien, on suit toujours le même ordre :
+
+        1. **`kubectl get pods`** — voir le statut et le nombre de redémarrages.
+        2. **`kubectl describe pod <nom>`** — la section `Events` explique presque tout.
+        3. **`kubectl logs <nom>`** (ou `--previous` pour le conteneur qui a planté).
+        4. **`kubectl exec -it <nom> -- sh`** — entrer dans le conteneur (s'il tourne).
+        5. **`kubectl debug`** — un conteneur éphémère pour inspecter un Pod sans shell.
+
+        Les statuts d'erreur les plus courants et leur cause :
+
+        | Statut | Cause typique | Où regarder |
+        |---|---|---|
+        | `ImagePullBackOff` | Image introuvable, tag erroné, registre privé sans secret | `describe` (Events) |
+        | `CrashLoopBackOff` | L'appli démarre puis plante en boucle | `logs --previous` |
+        | `Pending` | Pas de nœud assignable (ressources, PVC non lié, taint) | `describe` (Events) |
+        | `OOMKilled` | Dépassement de la limite mémoire | `describe` + augmenter `limits` |
+        | `CreateContainerConfigError` | ConfigMap/Secret manquant référencé | `describe` (Events) |
+
+        Le réflexe n°1 est toujours **`kubectl describe`** : sa section `Events` nomme la cause dans la
+        grande majorité des cas, avant même de lire les logs.
+      en: |
+        When a Pod is unhealthy, always follow the same order:
+
+        1. **`kubectl get pods`** — see the status and the restart count.
+        2. **`kubectl describe pod <name>`** — the `Events` section explains almost everything.
+        3. **`kubectl logs <name>`** (or `--previous` for the container that crashed).
+        4. **`kubectl exec -it <name> -- sh`** — enter the container (if it runs).
+        5. **`kubectl debug`** — an ephemeral container to inspect a Pod with no shell.
+
+        The most common error statuses and their cause:
+
+        | Status | Typical cause | Where to look |
+        |---|---|---|
+        | `ImagePullBackOff` | Image not found, wrong tag, private registry without secret | `describe` (Events) |
+        | `CrashLoopBackOff` | The app starts then crashes in a loop | `logs --previous` |
+        | `Pending` | No schedulable node (resources, unbound PVC, taint) | `describe` (Events) |
+        | `OOMKilled` | Memory limit exceeded | `describe` + raise `limits` |
+        | `CreateContainerConfigError` | Missing ConfigMap/Secret referenced | `describe` (Events) |
+
+        The number one reflex is always **`kubectl describe`**: its `Events` section names the cause in the
+        vast majority of cases, before you even read the logs.
+
+examples:
+  - title:
+      fr: "Un PVC lié par une StorageClass"
+      en: "A PVC bound by a StorageClass"
+    file: storage.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data
+      spec:
+        # The developer only declares a REQUEST; the StorageClass provisions the PV
+        accessModes:
+          - ReadWriteOnce        # mounted read-write by a single node at a time
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 10Gi
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: db
+      spec:
+        containers:
+          - name: postgres
+            image: postgres:17-alpine
+            env:
+              - name: POSTGRES_PASSWORD_FILE
+                value: /run/secrets/pw
+            volumeMounts:
+              - name: data
+                mountPath: /var/lib/postgresql/data  # data survives Pod restarts
+        volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: data      # mount the PVC declared above
+    output: |
+      $ kubectl get pvc data
+      NAME   STATUS   VOLUME        CAPACITY   ACCESS MODES   STORAGECLASS
+      data   Bound    pvc-9f8e7d6   10Gi       RWO            standard
+      # STATUS Bound = the StorageClass provisioned a PV and linked it to the PVC
+    note:
+      fr: "Le développeur ne décrit qu'un PVC (une demande) ; la StorageClass `standard` provisionne dynamiquement le PV. `STATUS: Bound` confirme la liaison ; un PVC `Pending` signale souvent une StorageClass absente."
+      en: "The developer only describes a PVC (a request); the `standard` StorageClass dynamically provisions the PV. `STATUS: Bound` confirms the binding; a `Pending` PVC often signals a missing StorageClass."
+
+  - title:
+      fr: "Un StatefulSet avec un volume par Pod"
+      en: "A StatefulSet with one volume per Pod"
+    file: statefulset.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: db
+      spec:
+        serviceName: db           # the headless Service giving stable DNS names
+        replicas: 3
+        selector:
+          matchLabels:
+            app: db
+        template:
+          metadata:
+            labels:
+              app: db
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 999
+            containers:
+              - name: postgres
+                image: postgres:17-alpine
+                ports:
+                  - containerPort: 5432
+                volumeMounts:
+                  - name: data
+                    mountPath: /var/lib/postgresql/data
+        # One PVC is created PER Pod: data-db-0, data-db-1, data-db-2
+        volumeClaimTemplates:
+          - metadata:
+              name: data
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              storageClassName: standard
+              resources:
+                requests:
+                  storage: 20Gi
+    output: |
+      $ kubectl get pods,pvc -l app=db
+      NAME     READY   STATUS    AGE
+      db-0     1/1     Running   1m    # stable names, started in order
+      db-1     1/1     Running   50s
+      db-2     1/1     Running   30s
+      NAME            STATUS   VOLUME        CAPACITY
+      data-db-0       Bound    pvc-aaa       20Gi        # one disk each
+      data-db-1       Bound    pvc-bbb       20Gi
+      data-db-2       Bound    pvc-ccc       20Gi
+    note:
+      fr: "`volumeClaimTemplates` crée un PVC dédié par Pod (`data-db-0`...). Chaque réplique a son propre disque et un nom stable, condition indispensable pour une base de données répliquée."
+      en: "`volumeClaimTemplates` creates a dedicated PVC per Pod (`data-db-0`...). Each replica has its own disk and a stable name, a must for a replicated database."
+
+  - title:
+      fr: "Diagnostiquer un CrashLoopBackOff"
+      en: "Diagnose a CrashLoopBackOff"
+    file: debug-crash.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # 1. The status and the RESTARTS column tell the story
+      kubectl get pods
+      # NAME   READY   STATUS             RESTARTS      AGE
+      # api    0/1     CrashLoopBackOff   5 (20s ago)   3m
+
+      # 2. describe first: the Events section usually names the cause
+      kubectl describe pod api
+
+      # 3. The container crashed, so read the PREVIOUS container's logs
+      kubectl logs api --previous
+
+      # 4. If it stays up long enough, open a shell to inspect from inside
+      kubectl exec -it api -- sh
+
+      # 5. No shell in the image (distroless)? Attach an ephemeral debug container
+      kubectl debug -it api --image=busybox:1.37 --target=api
+    output: |
+      # From "kubectl logs api --previous":
+      Traceback (most recent call last):
+        File "/app/server.py", line 3, in <module>
+          DB_PASSWORD = os.environ["DB_PASSWORD"]
+      KeyError: 'DB_PASSWORD'
+      # Root cause: a missing environment variable, not a Kubernetes problem.
+    note:
+      fr: "`--previous` est la clé d'un CrashLoopBackOff : il affiche les logs du conteneur qui vient de planter, pas de celui qui redémarre. Ici, une variable d'environnement manquante, révélée en une commande."
+      en: "`--previous` is the key to a CrashLoopBackOff: it shows the logs of the container that just crashed, not the restarting one. Here, a missing environment variable, revealed in one command."
+
+  - title:
+      fr: "ImagePullBackOff et Pending : lire les Events"
+      en: "ImagePullBackOff and Pending: read the Events"
+    file: debug-events.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # ImagePullBackOff: describe shows WHY the image cannot be pulled
+      kubectl describe pod web | sed -n '/Events:/,$p'
+      #   Failed to pull image "ghcr.io/acme/web:v99": not found
+      #   -> wrong tag, or a private registry needing an imagePullSecret
+
+      # Pending: no node could be assigned; Events explains the blocker
+      kubectl describe pod worker | sed -n '/Events:/,$p'
+      #   0/3 nodes are available: 3 Insufficient cpu
+      #   -> requests too high, or a PVC still unbound, or a node taint
+
+      # Cluster-wide events, newest last, for a broader view
+      kubectl get events --sort-by=.lastTimestamp
+    output: |
+      Events:
+        Type     Reason       Message
+        Warning  Failed       Failed to pull image "ghcr.io/acme/web:v99": not found
+        Warning  FailedSched  0/3 nodes are available: 3 Insufficient cpu
+    note:
+      fr: "`ImagePullBackOff` = image/tag introuvable ou registre privé sans `imagePullSecret`. `Pending` = aucun nœud assignable (ressources, PVC non lié, taint). Dans les deux cas, la section `Events` donne la réponse."
+      en: "`ImagePullBackOff` = image/tag not found or a private registry without an `imagePullSecret`. `Pending` = no schedulable node (resources, unbound PVC, taint). In both cases, the `Events` section gives the answer."
+
+mistake:
+  fr: |
+    **Gérer une base de données avec un Deployment et un volume partagé, et déboguer au hasard.**
+
+    Deux pièges fréquents. D'abord, utiliser un Deployment pour une base répliquée : les Pods sont anonymes
+    et peuvent se partager (ou écraser) le même volume `ReadWriteOnce`, ce qui corrompt les données. Une
+    base à état réclame un **StatefulSet** avec `volumeClaimTemplates` : un disque et une identité stables
+    par réplique. Ensuite, face à un Pod en erreur, redémarrer le cluster ou supprimer le Pod « pour voir »
+    au lieu de diagnostiquer. La méthode est toujours la même : `kubectl describe` (lire les `Events`), puis
+    `kubectl logs --previous` pour un CrashLoopBackOff. La cause est presque toujours écrite noir sur blanc
+    dans les événements ; il suffit de les lire au lieu de deviner.
+  en: |
+    **Managing a database with a Deployment and a shared volume, and debugging at random.**
+
+    Two frequent traps. First, using a Deployment for a replicated database: the Pods are anonymous and can
+    share (or overwrite) the same `ReadWriteOnce` volume, corrupting the data. A stateful database needs a
+    **StatefulSet** with `volumeClaimTemplates`: a stable disk and identity per replica. Second, faced with
+    a failing Pod, restarting the cluster or deleting the Pod "to see" instead of diagnosing. The method is
+    always the same: `kubectl describe` (read the `Events`), then `kubectl logs --previous` for a
+    CrashLoopBackOff. The cause is almost always written in black and white in the events; just read them
+    instead of guessing.
+
+bestPractice:
+  fr: |
+    - **PVC + StorageClass** pour un stockage persistant provisionné dynamiquement.
+    - **`Retain`** comme politique de récupération pour les données sensibles (pas de perte accidentelle).
+    - **StatefulSet + `volumeClaimTemplates`** pour les bases de données : un disque et un nom par réplique.
+    - **Service headless** (`clusterIP: None`) pour donner une identité DNS stable aux Pods d'un StatefulSet.
+    - **Dépannage ordonné** : `get` → `describe` (Events) → `logs --previous` → `exec`/`debug`.
+    - **`kubectl describe` en premier** : la section `Events` nomme la cause dans la plupart des cas.
+    - **Tableau des statuts** en tête : reconnaître `ImagePullBackOff`, `CrashLoopBackOff`, `Pending`, `OOMKilled`.
+  en: |
+    - **PVC + StorageClass** for dynamically provisioned persistent storage.
+    - **`Retain`** reclaim policy for sensitive data (no accidental loss).
+    - **StatefulSet + `volumeClaimTemplates`** for databases: one disk and name per replica.
+    - **Headless Service** (`clusterIP: None`) to give a StatefulSet's Pods a stable DNS identity.
+    - **Ordered troubleshooting**: `get` → `describe` (Events) → `logs --previous` → `exec`/`debug`.
+    - **`kubectl describe` first**: the `Events` section names the cause in most cases.
+    - **Status table** in mind: recognise `ImagePullBackOff`, `CrashLoopBackOff`, `Pending`, `OOMKilled`.
+
+exercise:
+  statement:
+    fr: |
+      1. Un Pod `cache` est en `ImagePullBackOff`. Donnez, dans l'ordre, les deux commandes qui permettent
+         d'en trouver la cause, et indiquez où précisément regarder.
+      2. Un Pod `api` est en `CrashLoopBackOff`. Quelle commande affiche les journaux du conteneur qui vient
+         de planter (et non de celui qui redémarre) ?
+      3. Écrivez un PersistentVolumeClaim nommé `logs` demandant 5Gi en `ReadWriteOnce` via la StorageClass
+         `standard`.
+    en: |
+      1. A `cache` Pod is in `ImagePullBackOff`. Give, in order, the two commands that find the cause, and
+         state where exactly to look.
+      2. An `api` Pod is in `CrashLoopBackOff`. Which command shows the logs of the container that just
+         crashed (not the restarting one)?
+      3. Write a PersistentVolumeClaim named `logs` requesting 5Gi in `ReadWriteOnce` via the `standard`
+         StorageClass.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # 1. ImagePullBackOff diagnosis (in order):
+      #      kubectl get pods            # confirm the status
+      #      kubectl describe pod cache  # read the Events section: it names the
+      #                                  # reason (wrong tag, image not found,
+      #                                  # or a private registry missing a secret)
+      #
+      # 2. CrashLoopBackOff logs of the crashed container:
+      #      kubectl logs api --previous
+      #
+      # 3. The PersistentVolumeClaim:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: logs
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 5Gi
+    note:
+      fr: "Pour `ImagePullBackOff`, la section `Events` de `describe` donne la cause exacte. Pour `CrashLoopBackOff`, `--previous` montre le conteneur mort. Le PVC demande 5Gi que la StorageClass `standard` provisionne."
+      en: "For `ImagePullBackOff`, `describe`'s `Events` section gives the exact cause. For `CrashLoopBackOff`, `--previous` shows the dead container. The PVC requests 5Gi that the `standard` StorageClass provisions."
+
+quiz:
+  - q:
+      fr: "Quel objet le développeur écrit-il pour demander du stockage persistant ?"
+      en: "Which object does the developer write to request persistent storage?"
+    options:
+      fr:
+        - "Un PersistentVolumeClaim (PVC)"
+        - "Un Service"
+        - "Un node"
+        - "Un ConfigMap"
+      en:
+        - "A PersistentVolumeClaim (PVC)"
+        - "A Service"
+        - "A node"
+        - "A ConfigMap"
+    answer: 0
+    why:
+      fr: "Le développeur déclare un PVC (une demande) ; la StorageClass provisionne le PV réel et le lie automatiquement au PVC."
+      en: "The developer declares a PVC (a request); the StorageClass provisions the real PV and binds it to the PVC automatically."
+  - q:
+      fr: "Pourquoi utiliser un StatefulSet plutôt qu'un Deployment pour une base de données ?"
+      en: "Why use a StatefulSet rather than a Deployment for a database?"
+    options:
+      fr:
+        - "Parce qu'il démarre plus vite"
+        - "Parce qu'il donne des noms stables et un volume persistant par Pod"
+        - "Parce qu'il chiffre les données"
+        - "Parce qu'il ne nécessite pas de Service"
+      en:
+        - "Because it starts faster"
+        - "Because it gives stable names and a persistent volume per Pod"
+        - "Because it encrypts the data"
+        - "Because it needs no Service"
+    answer: 1
+    why:
+      fr: "Le StatefulSet fournit une identité stable (`db-0`, `db-1`) et, via `volumeClaimTemplates`, un disque dédié par réplique : indispensable à une base à état."
+      en: "The StatefulSet provides a stable identity (`db-0`, `db-1`) and, via `volumeClaimTemplates`, a dedicated disk per replica: essential for a stateful database."
+  - q:
+      fr: "Quelle commande montre les logs du conteneur qui vient de planter dans un CrashLoopBackOff ?"
+      en: "Which command shows the logs of the container that just crashed in a CrashLoopBackOff?"
+    options:
+      fr:
+        - "`kubectl get pod`"
+        - "`kubectl top pod`"
+        - "`kubectl logs <pod> --previous`"
+        - "`kubectl scale`"
+      en:
+        - "`kubectl get pod`"
+        - "`kubectl top pod`"
+        - "`kubectl logs <pod> --previous`"
+        - "`kubectl scale`"
+    answer: 2
+    why:
+      fr: "`--previous` affiche les journaux de l'instance précédente du conteneur, celle qui a planté, et non celle qui redémarre."
+      en: "`--previous` shows the logs of the container's previous instance, the one that crashed, not the restarting one."
+  - q:
+      fr: "Un Pod reste en `Pending`. Quelle est une cause typique ?"
+      en: "A Pod stays in `Pending`. What is a typical cause?"
+    options:
+      fr:
+        - "Le mot de passe est trop court"
+        - "L'image est trop grosse"
+        - "Le Service est mal nommé"
+        - "Aucun nœud assignable : ressources insuffisantes, PVC non lié ou taint"
+      en:
+        - "The password is too short"
+        - "The image is too large"
+        - "The Service is misnamed"
+        - "No schedulable node: insufficient resources, unbound PVC or a taint"
+    answer: 3
+    why:
+      fr: "`Pending` signifie que le scheduler n'a trouvé aucun nœud : ressources insuffisantes, volume non lié ou taint. La section `Events` de `describe` précise lequel."
+      en: "`Pending` means the scheduler found no node: insufficient resources, an unbound volume or a taint. `describe`'s `Events` section says which."
+  - q:
+      fr: "Quelle est la toute première commande de diagnostic d'un Pod en erreur ?"
+      en: "What is the very first diagnostic command for a failing Pod?"
+    options:
+      fr:
+        - "`kubectl describe pod <nom>` pour lire la section Events"
+        - "Redémarrer le cluster"
+        - "Supprimer le nœud"
+        - "`helm uninstall`"
+      en:
+        - "`kubectl describe pod <name>` to read the Events section"
+        - "Restart the cluster"
+        - "Delete the node"
+        - "`helm uninstall`"
+    answer: 0
+    why:
+      fr: "`kubectl describe` et sa section `Events` nomment la cause dans la grande majorité des cas, avant même de lire les logs : c'est le réflexe n°1."
+      en: "`kubectl describe` and its `Events` section name the cause in the vast majority of cases, before you even read the logs: it is the number one reflex."

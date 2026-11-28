@@ -1,0 +1,461 @@
+description:
+  fr: "Authentification par JWT en Node.js : structure d'un jeton, vérification de la signature et de l'algorithme, expiration, et les pièges alg:none, secret faible et absence de contrôle."
+  en: "JWT authentication in Node.js: token structure, signature and algorithm verification, expiry, and the alg:none, weak-secret and missing-check pitfalls."
+duration: 35
+
+intro:
+  fr: |
+    Un **JWT** (*JSON Web Token*, jeton web JSON) est une carte d'accès numérique : après connexion, le
+    serveur remet au client un jeton signé que celui-ci présente à chaque requête. Le serveur vérifie la
+    signature et sait *qui* appelle, sans conserver de session en mémoire. C'est la base de l'authentification
+    des API modernes.
+
+    Pensez à un bracelet de festival avec un hologramme. Le videur ne vous connaît pas, mais il reconnaît
+    l'hologramme (la signature) et vous laisse entrer. Si l'hologramme est facile à contrefaire (secret
+    faible), ou si le videur accepte un bracelet « sans hologramme » (`alg:none`), ou s'il ne regarde jamais
+    la date (pas d'expiration), tout le système s'effondre.
+
+    Vous allez créer et vérifier des JWT avec **jsonwebtoken**, voir les trois erreurs classiques
+    (`alg:none`, secret faible, absence d'expiration et de contrôle) et leur correction. Les exemples visent
+    un vrai Node.js LTS ; un exemple de logique pure (décodage de la structure) s'exécute dans le navigateur.
+  en: |
+    A **JWT** (JSON Web Token) is a digital access card: after login, the server hands the client a signed
+    token that the client presents on every request. The server checks the signature and knows *who* is
+    calling, without keeping a session in memory. It is the basis of modern API authentication.
+
+    Think of a festival wristband with a hologram. The bouncer does not know you, but recognises the hologram
+    (the signature) and lets you in. If the hologram is easy to forge (weak secret), or the bouncer accepts a
+    wristband "with no hologram" (`alg:none`), or never checks the date (no expiry), the whole system
+    collapses.
+
+    You will create and verify JWTs with **jsonwebtoken**, see the three classic mistakes (`alg:none`, weak
+    secret, missing expiry and check) and their fix. The examples target a real Node.js LTS; one pure-logic
+    example (decoding the structure) runs in the browser.
+
+sections:
+  - heading:
+      fr: "Anatomie d'un JWT"
+      en: "Anatomy of a JWT"
+    body:
+      fr: |
+        Un JWT est fait de trois parties encodées en Base64URL, séparées par des points :
+        `header.payload.signature`.
+
+        - **Header** : l'algorithme de signature, par exemple `{ "alg": "HS256", "typ": "JWT" }`.
+        - **Payload** : les *claims* (affirmations), par exemple `{ "sub": "user-42", "role": "user", "exp": ... }`.
+        - **Signature** : le header et le payload signés avec un secret (HMAC) ou une clé privée (RSA/ECDSA).
+
+        Point crucial : le header et le payload sont seulement **encodés**, pas chiffrés. N'importe qui peut
+        les lire. On ne met donc **jamais** de donnée sensible (mot de passe, numéro de carte) dans un JWT.
+        Ce qui protège le jeton, c'est la **signature** : sans le secret, un attaquant ne peut pas forger un
+        jeton valide ni modifier le payload sans invalider la signature.
+
+        Les *claims* standards importants : `exp` (expiration), `iat` (émis le), `sub` (sujet/identifiant),
+        `iss` (émetteur), `aud` (audience). `exp` est obligatoire en pratique : un jeton sans expiration reste
+        valide pour toujours s'il fuite.
+      en: |
+        A JWT is made of three Base64URL-encoded parts separated by dots: `header.payload.signature`.
+
+        - **Header**: the signing algorithm, for example `{ "alg": "HS256", "typ": "JWT" }`.
+        - **Payload**: the *claims*, for example `{ "sub": "user-42", "role": "user", "exp": ... }`.
+        - **Signature**: the header and payload signed with a secret (HMAC) or a private key (RSA/ECDSA).
+
+        Crucial point: the header and payload are only **encoded**, not encrypted. Anyone can read them. So
+        you **never** put sensitive data (password, card number) in a JWT. What protects the token is the
+        **signature**: without the secret, an attacker cannot forge a valid token nor modify the payload
+        without invalidating the signature.
+
+        Important standard claims: `exp` (expiry), `iat` (issued at), `sub` (subject/id), `iss` (issuer),
+        `aud` (audience). `exp` is mandatory in practice: a token with no expiry stays valid forever if it
+        leaks.
+  - heading:
+      fr: "Les trois pièges mortels"
+      en: "The three deadly pitfalls"
+    body:
+      fr: |
+        | Piège | Cause | Conséquence | Correctif |
+        |---|---|---|---|
+        | **`alg:none`** | On fait confiance à l'`alg` du header | Jeton forgé sans signature accepté | Imposer `algorithms: ["HS256"]` à la vérification |
+        | **Secret faible** | `"secret"`, `"changeme"` | Signature cassée par force brute | Secret aléatoire d'au moins 256 bits, en variable d'environnement |
+        | **Pas d'`exp`** | Jeton signé sans expiration | Jeton volé valide indéfiniment | `expiresIn: "15m"` + refresh token |
+
+        L'attaque **`alg:none`** est historique mais toujours vue : certaines bibliothèques laxistes
+        acceptaient un header `{"alg":"none"}` signifiant « pas de signature », et validaient alors n'importe
+        quel jeton. La parade universelle : **ne jamais laisser le jeton choisir son algorithme**. On passe
+        explicitement la liste des algorithmes autorisés à la vérification.
+
+        Pour limiter l'impact d'un vol, on utilise des **jetons d'accès courts** (quelques minutes) et un
+        **refresh token** stocké de façon sûre pour en obtenir un nouveau. Et on vérifie toujours la
+        signature **avant** de faire confiance au moindre claim.
+      en: |
+        | Pitfall | Cause | Consequence | Fix |
+        |---|---|---|---|
+        | **`alg:none`** | Trusting the header's `alg` | A forged, unsigned token accepted | Enforce `algorithms: ["HS256"]` on verify |
+        | **Weak secret** | `"secret"`, `"changeme"` | Signature brute-forced | Random secret of at least 256 bits, from an env var |
+        | **No `exp`** | Token signed with no expiry | A stolen token is valid forever | `expiresIn: "15m"` + refresh token |
+
+        The **`alg:none`** attack is historical but still seen: some lax libraries accepted a header
+        `{"alg":"none"}` meaning "no signature", and then validated any token. The universal fix: **never let
+        the token choose its own algorithm**. Pass the explicit list of allowed algorithms to the verifier.
+
+        To limit the impact of theft, use **short-lived access tokens** (a few minutes) and a securely stored
+        **refresh token** to obtain a new one. And always verify the signature **before** trusting any claim.
+
+examples:
+  - title:
+      fr: "Décoder la structure d'un JWT (navigateur, non chiffré)"
+      en: "Decoding a JWT's structure (browser, not encrypted)"
+    file: decode.js
+    lang: javascript
+    kind: neutral
+    code: |
+      // Runs in the browser: a JWT is only ENCODED, not encrypted - anyone can read it
+
+      // A sample token: header.payload.signature (signature is not verified here)
+      const token =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+        "eyJzdWIiOiJ1c2VyLTQyIiwicm9sZSI6InVzZXIifQ." +
+        "c2lnbmF0dXJlLXBsYWNlaG9sZGVy";
+
+      function decodePart(part) {
+        // Base64URL -> Base64, then decode to text, then parse JSON
+        const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+        return JSON.parse(atob(b64));
+      }
+
+      const [header, payload] = token.split(".");
+      console.log("header :", decodePart(header));
+      console.log("payload:", decodePart(payload));
+      console.log("note   : no secret was needed to read these - never store secrets here");
+    output: |
+      header : { alg: 'HS256', typ: 'JWT' }
+      payload: { sub: 'user-42', role: 'user' }
+      note   : no secret was needed to read these - never store secrets here
+    note:
+      fr: "On lit le header et le payload **sans aucun secret** : un JWT n'est pas chiffré. C'est la signature, et non le secret des données, qui empêche la falsification. Ne placez jamais d'information sensible dans un JWT."
+      en: "We read the header and payload **with no secret at all**: a JWT is not encrypted. It is the signature, not the secrecy of the data, that prevents forgery. Never put sensitive information in a JWT."
+
+  - title:
+      fr: "Vérification vulnérable : secret faible et algorithme non imposé"
+      en: "Vulnerable verification: weak secret and unenforced algorithm"
+    file: verify_vulnerable.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      // target: real Node.js LTS, "npm i jsonwebtoken"
+      const jwt = require("jsonwebtoken");
+
+      // Problem 1: a weak, hard-coded secret, trivially brute-forced
+      const SECRET = "secret";
+
+      function sign(user) {
+        // Problem 2: no expiration -> the token is valid forever
+        return jwt.sign({ sub: user.id, role: user.role }, SECRET);
+      }
+
+      function verify(token) {
+        // Problem 3: no "algorithms" option -> the token's header picks the algorithm.
+        // A crafted {"alg":"none"} token could be accepted by lax configurations.
+        return jwt.verify(token, SECRET);
+      }
+
+      const token = sign({ id: "user-42", role: "user" });
+      console.log("payload:", verify(token));
+    output: |
+      payload: { sub: 'user-42', role: 'user', iat: 1737000000 }
+    note:
+      fr: "Trois failles : secret `\"secret\"` cassable en secondes, aucune expiration (`exp` absent), et aucun `algorithms` imposé, ce qui laisse le jeton dicter son algorithme. Le code fonctionne, mais un attaquant peut forger ou réutiliser des jetons."
+      en: "Three flaws: the secret `\"secret\"` is crackable in seconds, no expiry (`exp` absent), and no enforced `algorithms`, which lets the token dictate its algorithm. The code works, but an attacker can forge or reuse tokens."
+
+  - title:
+      fr: "Vérification sûre : secret fort, expiration, algorithme imposé"
+      en: "Secure verification: strong secret, expiry, enforced algorithm"
+    file: verify_secure.js
+    lang: javascript
+    kind: secure
+    code: |
+      // target: real Node.js LTS, "npm i jsonwebtoken"
+      const jwt = require("jsonwebtoken");
+
+      // Fix 1: a strong secret (>= 256 bits) read from the environment, never hard-coded.
+      // Generate one with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      const SECRET = process.env.JWT_SECRET;
+      if (!SECRET || SECRET.length < 32) {
+        throw new Error("JWT_SECRET must be set and strong");
+      }
+
+      function sign(user) {
+        // Fix 2: short expiry + issuer/audience bind the token to this service
+        return jwt.sign(
+          { role: user.role },
+          SECRET,
+          { subject: user.id, expiresIn: "15m", issuer: "example-api", audience: "example-app", algorithm: "HS256" },
+        );
+      }
+
+      function verify(token) {
+        // Fix 3: pin the algorithm and check issuer/audience. "none" is impossible now.
+        return jwt.verify(token, SECRET, {
+          algorithms: ["HS256"],
+          issuer: "example-api",
+          audience: "example-app",
+        });
+      }
+
+      const token = sign({ id: "user-42", role: "user" });
+      console.log("valid payload:", verify(token).role);
+
+      // A tampered token fails verification
+      try {
+        verify(token.slice(0, -3) + "aaa");
+      } catch (e) {
+        console.log("tampered token rejected:", e.name);
+      }
+    output: |
+      valid payload: user
+      tampered token rejected: JsonWebTokenError
+    note:
+      fr: "`algorithms: [\"HS256\"]` rend l'attaque `alg:none` impossible, `expiresIn: \"15m\"` limite la durée de vie, et `issuer`/`audience` lient le jeton à ce service. Un jeton modifié est rejeté car la signature ne correspond plus."
+      en: "`algorithms: [\"HS256\"]` makes the `alg:none` attack impossible, `expiresIn: \"15m\"` limits the lifetime, and `issuer`/`audience` bind the token to this service. A tampered token is rejected because the signature no longer matches."
+
+  - title:
+      fr: "Middleware Express qui protège les routes avec un JWT"
+      en: "Express middleware that protects routes with a JWT"
+    file: auth_middleware.js
+    lang: javascript
+    kind: secure
+    code: |
+      // target: real Node.js LTS, "npm i express jsonwebtoken"
+      const jwt = require("jsonwebtoken");
+
+      const SECRET = process.env.JWT_SECRET;
+
+      // requireAuth verifies the Bearer token BEFORE the route runs
+      function requireAuth(req, res, next) {
+        const header = req.headers.authorization ?? "";
+        const [scheme, token] = header.split(" ");
+        if (scheme !== "Bearer" || !token) {
+          return res.status(401).json({ error: "missing bearer token" });
+        }
+        try {
+          // Pin the algorithm; reject expired or tampered tokens
+          req.user = jwt.verify(token, SECRET, { algorithms: ["HS256"] });
+          next();
+        } catch (e) {
+          // Generic message: do not reveal why (expired vs invalid)
+          return res.status(401).json({ error: "invalid token" });
+        }
+      }
+
+      // Authorization check: verify the role AFTER authentication
+      function requireRole(role) {
+        return (req, res, next) => {
+          if (req.user?.role !== role) {
+            return res.status(403).json({ error: "forbidden" });
+          }
+          next();
+        };
+      }
+
+      module.exports = { requireAuth, requireRole };
+    output: |
+      # Usage in an Express app:
+      #   app.get("/admin", requireAuth, requireRole("admin"), handler);
+      # No token      -> 401 missing bearer token
+      # Expired token -> 401 invalid token
+      # user role     -> 403 forbidden
+      # admin role    -> 200 handler runs
+    note:
+      fr: "On sépare l'**authentification** (qui es-tu ? `requireAuth`) de l'**autorisation** (as-tu le droit ? `requireRole`). La signature est vérifiée avant toute logique, l'algorithme est imposé, et les messages restent génériques pour ne pas aider un attaquant."
+      en: "We separate **authentication** (who are you? `requireAuth`) from **authorization** (are you allowed? `requireRole`). The signature is verified before any logic, the algorithm is pinned, and messages stay generic so as not to help an attacker."
+
+mistake:
+  fr: |
+    **Vérifier un JWT sans imposer l'algorithme (`algorithms`).**
+
+    ```javascript
+    jwt.verify(token, SECRET); // the token's header chooses the algorithm
+    ```
+
+    Quand on ne précise pas `algorithms`, c'est le **header du jeton** qui dicte l'algorithme de
+    vérification. Un attaquant peut alors forger un header `{"alg":"none"}` (pas de signature) ou, pire,
+    exploiter une confusion entre algorithmes symétriques et asymétriques (`RS256` → `HS256`) pour signer un
+    jeton avec la clé **publique**. La parade est simple et absolue : passez toujours la liste explicite des
+    algorithmes autorisés à `verify` (`{ algorithms: ["HS256"] }`), et ne faites jamais confiance au champ
+    `alg` du jeton reçu.
+  en: |
+    **Verifying a JWT without enforcing the algorithm (`algorithms`).**
+
+    ```javascript
+    jwt.verify(token, SECRET); // the token's header chooses the algorithm
+    ```
+
+    When you do not specify `algorithms`, it is the **token's header** that dictates the verification
+    algorithm. An attacker can then forge a header `{"alg":"none"}` (no signature) or, worse, exploit a
+    confusion between symmetric and asymmetric algorithms (`RS256` → `HS256`) to sign a token with the
+    **public** key. The fix is simple and absolute: always pass the explicit list of allowed algorithms to
+    `verify` (`{ algorithms: ["HS256"] }`), and never trust the `alg` field of the received token.
+
+bestPractice:
+  fr: |
+    - **Imposez l'algorithme** à la vérification : `{ algorithms: ["HS256"] }`, jamais la valeur du header.
+    - **Secret fort** d'au moins 256 bits (`crypto.randomBytes(32)`), lu dans l'environnement ou un coffre.
+    - **Toujours une expiration** (`expiresIn`) : jetons d'accès courts + refresh token stocké sûrement.
+    - **Liez le jeton** avec `issuer` et `audience`, et vérifiez-les à la lecture.
+    - **Aucune donnée sensible dans le payload** : le JWT est encodé, pas chiffré.
+    - **Vérifiez la signature avant tout** usage d'un claim, et séparez authentification et autorisation.
+    - **Messages d'erreur génériques** : ne révélez pas si le jeton est expiré, mal signé ou absent.
+  en: |
+    - **Enforce the algorithm** on verify: `{ algorithms: ["HS256"] }`, never the header's value.
+    - **Strong secret** of at least 256 bits (`crypto.randomBytes(32)`), read from the environment or a vault.
+    - **Always an expiry** (`expiresIn`): short access tokens + a securely stored refresh token.
+    - **Bind the token** with `issuer` and `audience`, and verify them on read.
+    - **No sensitive data in the payload**: a JWT is encoded, not encrypted.
+    - **Verify the signature before any** use of a claim, and separate authentication from authorization.
+    - **Generic error messages**: do not reveal whether the token is expired, badly signed or missing.
+
+exercise:
+  statement:
+    fr: |
+      Cette fonction de vérification de JWT contient deux faiblesses de sécurité.
+
+      ```javascript
+      const jwt = require("jsonwebtoken");
+      const SECRET = "mypassword";
+
+      function verify(token) {
+        return jwt.verify(token, SECRET);
+      }
+      ```
+
+      1. Identifiez les deux problèmes.
+      2. Réécrivez le code : lisez un secret fort depuis l'environnement et imposez l'algorithme `HS256` à la
+         vérification.
+    en: |
+      This JWT verification function contains two security weaknesses.
+
+      ```javascript
+      const jwt = require("jsonwebtoken");
+      const SECRET = "mypassword";
+
+      function verify(token) {
+        return jwt.verify(token, SECRET);
+      }
+      ```
+
+      1. Identify both problems.
+      2. Rewrite the code: read a strong secret from the environment and enforce the `HS256` algorithm on
+         verification.
+  solution:
+    file: verify.js
+    lang: javascript
+    code: |
+      const jwt = require("jsonwebtoken");
+
+      // 1a. Strong secret from the environment, not a weak hard-coded string
+      const SECRET = process.env.JWT_SECRET;
+      if (!SECRET || SECRET.length < 32) {
+        throw new Error("JWT_SECRET must be set and strong");
+      }
+
+      function verify(token) {
+        // 1b. Pin the algorithm so a forged {"alg":"none"} token is rejected
+        return jwt.verify(token, SECRET, { algorithms: ["HS256"] });
+      }
+
+      module.exports = { verify };
+    note:
+      fr: "Problème 1 : secret faible et en dur (`\"mypassword\"`), cassable par force brute. Problème 2 : pas d'`algorithms`, donc le jeton choisit son algorithme (risque `alg:none`). Les deux corrections — secret fort depuis l'environnement et algorithme imposé — sont indispensables ensemble."
+      en: "Problem 1: a weak, hard-coded secret (`\"mypassword\"`), brute-forceable. Problem 2: no `algorithms`, so the token picks its algorithm (`alg:none` risk). Both fixes — a strong secret from the environment and an enforced algorithm — are needed together."
+
+quiz:
+  - q:
+      fr: "Les trois parties d'un JWT sont-elles chiffrées ?"
+      en: "Are the three parts of a JWT encrypted?"
+    options:
+      fr:
+        - "Oui, il faut le secret pour les lire"
+        - "Non, le header et le payload sont seulement encodés et lisibles par tous"
+        - "Seul le payload est chiffré"
+        - "Seule la signature est lisible"
+      en:
+        - "Yes, you need the secret to read them"
+        - "No, the header and payload are only encoded and readable by anyone"
+        - "Only the payload is encrypted"
+        - "Only the signature is readable"
+    answer: 1
+    why:
+      fr: "Un JWT est encodé en Base64URL, pas chiffré ; la signature empêche la falsification mais ne cache pas le contenu. N'y mettez jamais de secret."
+      en: "A JWT is Base64URL-encoded, not encrypted; the signature prevents forgery but does not hide the content. Never put a secret in it."
+  - q:
+      fr: "Comment empêcher l'attaque `alg:none` lors de la vérification d'un JWT ?"
+      en: "How do you prevent the `alg:none` attack when verifying a JWT?"
+    options:
+      fr:
+        - "En imposant la liste des algorithmes autorisés (`algorithms: [\"HS256\"]`)"
+        - "En chiffrant le payload"
+        - "En raccourcissant le secret"
+        - "En supprimant le claim `exp`"
+      en:
+        - "By enforcing the list of allowed algorithms (`algorithms: [\"HS256\"]`)"
+        - "By encrypting the payload"
+        - "By shortening the secret"
+        - "By removing the `exp` claim"
+    answer: 0
+    why:
+      fr: "En passant explicitement les algorithmes autorisés, on ne laisse pas le header du jeton choisir ; un `alg:none` forgé est rejeté."
+      en: "By explicitly passing the allowed algorithms, you do not let the token's header choose; a forged `alg:none` is rejected."
+  - q:
+      fr: "Pourquoi un JWT doit-il toujours avoir une expiration (`exp`) ?"
+      en: "Why should a JWT always have an expiry (`exp`)?"
+    options:
+      fr:
+        - "Pour réduire sa taille"
+        - "Pour chiffrer le payload"
+        - "Pour qu'un jeton volé ne reste pas valide indéfiniment"
+        - "Pour autoriser `alg:none`"
+      en:
+        - "To reduce its size"
+        - "To encrypt the payload"
+        - "So a stolen token does not stay valid forever"
+        - "To allow `alg:none`"
+    answer: 2
+    why:
+      fr: "Sans `exp`, un jeton qui fuite reste exploitable pour toujours ; une courte durée de vie limite la fenêtre d'attaque."
+      en: "Without `exp`, a leaked token stays usable forever; a short lifetime limits the attack window."
+  - q:
+      fr: "Où doit être stocké le secret utilisé pour signer les JWT ?"
+      en: "Where should the secret used to sign JWTs be stored?"
+    options:
+      fr:
+        - "Dans le code source"
+        - "Dans le payload du jeton"
+        - "Dans un cookie côté client"
+        - "Dans une variable d'environnement ou un coffre à secrets"
+      en:
+        - "In the source code"
+        - "In the token payload"
+        - "In a client-side cookie"
+        - "In an environment variable or a secrets vault"
+    answer: 3
+    why:
+      fr: "Le secret de signature doit rester côté serveur, hors du code versionné ; une fuite permet de forger n'importe quel jeton."
+      en: "The signing secret must stay server-side, out of versioned code; a leak lets anyone forge any token."
+  - q:
+      fr: "Quelle est la bonne séparation entre authentification et autorisation avec un JWT ?"
+      en: "What is the right separation between authentication and authorization with a JWT?"
+    options:
+      fr:
+        - "Vérifier d'abord la signature (qui ?), puis le rôle/les droits (a-t-il le droit ?)"
+        - "Vérifier uniquement le rôle, la signature est optionnelle"
+        - "Faire confiance au payload sans vérifier la signature"
+        - "Autoriser toujours, puis journaliser"
+      en:
+        - "First verify the signature (who?), then the role/permissions (are they allowed?)"
+        - "Check only the role, the signature is optional"
+        - "Trust the payload without verifying the signature"
+        - "Always allow, then log"
+    answer: 0
+    why:
+      fr: "L'authentification vérifie l'identité via la signature ; l'autorisation vérifie ensuite les droits. Faire confiance à un claim non vérifié est une faille."
+      en: "Authentication verifies identity via the signature; authorization then checks permissions. Trusting an unverified claim is a flaw."

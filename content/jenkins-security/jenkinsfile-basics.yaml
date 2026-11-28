@@ -1,0 +1,476 @@
+description:
+  fr: "Écrire un pipeline Jenkins déclaratif : blocs pipeline, agent, stages, steps, environment, when et post, avec un premier contrôle de sécurité."
+  en: "Write a declarative Jenkins pipeline: the pipeline, agent, stages, steps, environment, when and post blocks, with a first security check."
+duration: 25
+
+intro:
+  fr: |
+    **Jenkins** est le serveur d'automatisation open source le plus ancien et le plus répandu. Un pipeline
+    Jenkins décrit, dans un fichier `Jenkinsfile` versionné avec le code, **toutes** les étapes qui vont du
+    `git push` à la mise en production : compiler, tester, scanner, construire une image, déployer.
+
+    Pensez à une chaîne de montage d'usine. Chaque poste (*stage*) fait une tâche précise, dans l'ordre, et
+    si un poste tombe en panne, la chaîne s'arrête : la voiture défectueuse ne part pas chez le client. Le
+    `Jenkinsfile` est le plan de cette chaîne, écrit une fois et rejoué à chaque changement.
+
+    Il existe deux syntaxes : **scripted** (du Groovy libre, puissant mais verbeux) et **declarative** (une
+    structure fixe, plus lisible et plus sûre). Dans cette leçon vous allez écrire un pipeline déclaratif de
+    bout en bout, découvrir les blocs essentiels, et y glisser un premier scan de secrets qui fait échouer
+    le build.
+  en: |
+    **Jenkins** is the oldest and most widespread open source automation server. A Jenkins pipeline
+    describes, in a `Jenkinsfile` versioned together with the code, **every** step from `git push` to
+    production: compile, test, scan, build an image, deploy.
+
+    Think of a factory assembly line. Each station (*stage*) does one precise task, in order, and if a
+    station breaks down the line stops: the faulty car never reaches the customer. The `Jenkinsfile` is the
+    blueprint of that line, written once and replayed on every change.
+
+    There are two syntaxes: **scripted** (free-form Groovy, powerful but verbose) and **declarative** (a
+    fixed structure, more readable and safer). In this lesson you will write a declarative pipeline from end
+    to end, learn the essential blocks, and slip in a first secret scan that fails the build.
+
+sections:
+  - heading:
+      fr: "Déclaratif vs scripted"
+      en: "Declarative vs scripted"
+    body:
+      fr: |
+        Les deux syntaxes produisent le même résultat, mais la forme déclarative est recommandée pour
+        presque tous les cas.
+
+        | | Déclaratif | Scripted |
+        |---|---|---|
+        | Structure | Fixe : `pipeline { ... }` | Libre : `node { ... }` en Groovy |
+        | Lisibilité | Haute, orientée configuration | Variable, orientée code |
+        | Validation | Syntaxe vérifiée avant l'exécution | Erreurs découvertes à l'exécution |
+        | Sandbox Groovy | Respectée par défaut | Souvent contournée |
+        | Cas d'usage | 95 % des pipelines | Logique très dynamique |
+
+        Un pipeline déclaratif commence **toujours** par `pipeline { }` et contient un bloc `agent` (où
+        tourner), un bloc `stages` (quoi faire) et, en option, `environment`, `parameters`, `options`,
+        `when` et `post`. Cette structure fixe permet à Jenkins de **valider** le fichier avant de lancer
+        quoi que ce soit, et limite ce que du Groovy malveillant peut faire.
+      en: |
+        Both syntaxes produce the same result, but the declarative form is recommended for almost every
+        case.
+
+        | | Declarative | Scripted |
+        |---|---|---|
+        | Structure | Fixed: `pipeline { ... }` | Free-form: `node { ... }` in Groovy |
+        | Readability | High, configuration-oriented | Varies, code-oriented |
+        | Validation | Syntax checked before running | Errors found at run time |
+        | Groovy sandbox | Honoured by default | Often bypassed |
+        | Use case | 95% of pipelines | Highly dynamic logic |
+
+        A declarative pipeline **always** starts with `pipeline { }` and contains an `agent` block (where to
+        run), a `stages` block (what to do) and, optionally, `environment`, `parameters`, `options`, `when`
+        and `post`. This fixed structure lets Jenkins **validate** the file before launching anything, and
+        limits what malicious Groovy can do.
+  - heading:
+      fr: "Les blocs essentiels"
+      en: "The essential blocks"
+    body:
+      fr: |
+        Un `Jenkinsfile` déclaratif s'articule autour de quelques blocs :
+
+        - **`agent`** : où s'exécute le pipeline. `agent any` prend n'importe quel exécuteur ;
+          `agent { docker { image '...' } }` lance chaque étape dans un conteneur jetable, ce qui garantit
+          un environnement propre et reproductible.
+        - **`stages` / `stage` / `steps`** : la liste ordonnée des étapes et, dans chacune, les commandes.
+        - **`environment`** : des variables disponibles partout, y compris les credentials via
+          `credentials('id')`.
+        - **`options`** : des réglages de robustesse comme `timeout`, `retry` ou
+          `buildDiscarder` (purge des vieux builds).
+        - **`when`** : exécute une étape sous condition (`branch 'main'`, `changeset '**/*.py'`).
+        - **`post`** : des actions de fin (`always`, `success`, `failure`) pour archiver un rapport ou
+          notifier.
+
+        La bonne pratique de sécurité commence ici : un pipeline qui s'exécute dans un conteneur Docker
+        jetable ne laisse aucune trace entre deux builds et empêche qu'un build « pollue » le suivant.
+      en: |
+        A declarative `Jenkinsfile` is organised around a few blocks:
+
+        - **`agent`**: where the pipeline runs. `agent any` takes any executor;
+          `agent { docker { image '...' } }` runs each step in a throwaway container, which guarantees a
+          clean, reproducible environment.
+        - **`stages` / `stage` / `steps`**: the ordered list of stages and, inside each, the commands.
+        - **`environment`**: variables available everywhere, including credentials via
+          `credentials('id')`.
+        - **`options`**: robustness settings such as `timeout`, `retry` or `buildDiscarder` (pruning old
+          builds).
+        - **`when`**: runs a stage conditionally (`branch 'main'`, `changeset '**/*.py'`).
+        - **`post`**: end-of-run actions (`always`, `success`, `failure`) to archive a report or notify.
+
+        The security best practice starts here: a pipeline that runs inside a throwaway Docker container
+        leaves no trace between builds and prevents one build from "polluting" the next.
+
+  - heading:
+      fr: "Déclencheurs, paramètres et robustesse"
+      en: "Triggers, parameters and robustness"
+    body:
+      fr: |
+        Un pipeline professionnel ne se contente pas d'exécuter des commandes : il se protège.
+
+        - **`triggers`** déclenche automatiquement le build : `pollSCM` interroge le dépôt, mais un
+          **webhook** (déclenché par GitHub/GitLab) est préférable car instantané et sans sondage inutile.
+        - **`parameters`** rend le pipeline réutilisable : une liste de choix `ENVIRONMENT`, un booléen
+          `RUN_DAST`, etc.
+        - **`options { timeout }`** empêche un build bloqué de monopoliser un agent pour toujours.
+        - **`options { buildDiscarder }`** limite l'historique conservé : les logs de build peuvent contenir
+          des informations sensibles, les garder indéfiniment augmente la surface d'exposition.
+
+        Enfin, le bloc `post { }` est l'endroit idéal pour **toujours** archiver les rapports de sécurité,
+        même quand le build échoue : `post { always { archiveArtifacts 'reports/**' } }`. Un rapport n'a de
+        valeur que si on peut le consulter après coup.
+      en: |
+        A professional pipeline does not just run commands: it protects itself.
+
+        - **`triggers`** launches the build automatically: `pollSCM` polls the repository, but a **webhook**
+          (fired by GitHub/GitLab) is preferable because it is instant and avoids useless polling.
+        - **`parameters`** makes the pipeline reusable: a `ENVIRONMENT` choice list, a `RUN_DAST` boolean,
+          and so on.
+        - **`options { timeout }`** stops a stuck build from holding an agent forever.
+        - **`options { buildDiscarder }`** caps the retained history: build logs can contain sensitive
+          information, keeping them forever increases the exposure surface.
+
+        Finally, the `post { }` block is the ideal place to **always** archive security reports, even when
+        the build fails: `post { always { archiveArtifacts 'reports/**' } }`. A report is only useful if you
+        can read it afterwards.
+
+examples:
+  - title:
+      fr: "Un premier Jenkinsfile déclaratif complet"
+      en: "A first complete declarative Jenkinsfile"
+    file: Jenkinsfile
+    lang: groovy
+    kind: neutral
+    code: |
+      pipeline {
+          // Run every stage in a disposable, pinned container: clean and reproducible
+          agent { docker { image 'python:3.12-slim' } }
+
+          options {
+              timeout(time: 15, unit: 'MINUTES')   // never let a build hang forever
+              buildDiscarder(logRotator(numToKeepStr: '20'))  // keep only the last 20 builds
+              disableConcurrentBuilds()            // one run at a time for this job
+          }
+
+          environment {
+              PIP_DISABLE_PIP_VERSION_CHECK = '1'
+          }
+
+          stages {
+              stage('Install') {
+                  steps {
+                      sh 'pip install --no-cache-dir -r requirements.txt'
+                  }
+              }
+              stage('Test') {
+                  steps {
+                      sh 'python -m pytest --junitxml=reports/junit.xml'
+                  }
+              }
+          }
+
+          post {
+              always {
+                  // Publish results even when the build failed
+                  junit 'reports/junit.xml'
+              }
+              failure {
+                  echo 'Build failed - check the test report above.'
+              }
+          }
+      }
+    output: |
+      [Pipeline] stage (Install)
+      + pip install --no-cache-dir -r requirements.txt
+      [Pipeline] stage (Test)
+      + python -m pytest --junitxml=reports/junit.xml
+      ===== 12 passed in 3.41s =====
+      [Pipeline] junit
+      Recording test results
+      Finished: SUCCESS
+    note:
+      fr: "Les quatre blocs clés sont là : `agent` (un conteneur jetable), `options` (garde-fous), `stages` (le travail) et `post` (toujours publier les résultats). Chaque `stage` apparaît dans l'interface Jenkins comme une colonne, ce qui rend l'échec facile à localiser."
+      en: "The four key blocks are here: `agent` (a throwaway container), `options` (guard rails), `stages` (the work) and `post` (always publish results). Each `stage` shows up in the Jenkins UI as a column, which makes a failure easy to locate."
+
+  - title:
+      fr: "Paramètres, conditions when et déclenchement"
+      en: "Parameters, when conditions and triggering"
+    file: Jenkinsfile
+    lang: groovy
+    kind: neutral
+    code: |
+      pipeline {
+          agent any
+
+          // The user (or a webhook) chooses the target when starting the build
+          parameters {
+              choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Target')
+              booleanParam(name: 'RUN_DAST', defaultValue: false, description: 'Run the DAST scan')
+          }
+
+          triggers {
+              // Fallback if no webhook is configured: check the repo every 5 minutes
+              pollSCM('H/5 * * * *')
+          }
+
+          stages {
+              stage('Build') {
+                  steps { sh 'make build' }
+              }
+              stage('Deploy to prod') {
+                  // Only run this stage on main AND when prod was chosen
+                  when {
+                      allOf {
+                          branch 'main'
+                          expression { params.ENVIRONMENT == 'prod' }
+                      }
+                  }
+                  steps { sh './deploy.sh prod' }
+              }
+              stage('DAST') {
+                  when { expression { params.RUN_DAST } }
+                  steps { sh './run-dast.sh' }
+              }
+          }
+      }
+    output: |
+      Started by user admin
+      [Pipeline] stage (Build)
+      + make build
+      Stage "Deploy to prod" skipped due to when conditional
+      Stage "DAST" skipped due to when conditional
+      Finished: SUCCESS
+    note:
+      fr: "Le bloc `when` évite d'exécuter un déploiement de production depuis une branche de test. La notation `H/5` (hashed) répartit la charge entre les jobs au lieu de tous les lancer à la même seconde."
+      en: "The `when` block prevents running a production deployment from a test branch. The `H/5` (hashed) notation spreads the load across jobs instead of firing them all on the same second."
+
+  - title:
+      fr: "Y glisser un premier contrôle de sécurité qui bloque le build"
+      en: "Slipping in a first security check that blocks the build"
+    file: Jenkinsfile
+    lang: groovy
+    kind: secure
+    code: |
+      pipeline {
+          agent any
+
+          stages {
+              stage('Secret scan') {
+                  steps {
+                      // Gitleaks scans the whole history for hard-coded secrets.
+                      // --redact hides the secret value in the logs.
+                      // It exits 1 if it finds anything, which fails the stage.
+                      sh '''
+                        docker run --rm -v "$WORKSPACE:/repo" zricethezav/gitleaks:latest \
+                          detect --source=/repo --redact \
+                          --report-format=sarif --report-path=/repo/reports/gitleaks.sarif
+                      '''
+                  }
+              }
+              stage('Build') {
+                  steps { sh 'make build' }
+              }
+          }
+
+          post {
+              // Archive the report whether the scan passed or failed
+              always {
+                  archiveArtifacts artifacts: 'reports/gitleaks.sarif', allowEmptyArchive: true
+              }
+          }
+      }
+    output: |
+      [Pipeline] stage (Secret scan)
+      + docker run --rm -v /var/jenkins_home/workspace/app:/repo zricethezav/gitleaks:latest detect ...
+      Finding:     AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
+      Secret:      REDACTED
+      File:        config/settings.py
+      leaks found: 1
+      [Pipeline] }
+      ERROR: script returned exit code 1
+      Stage "Build" skipped
+      Finished: FAILURE
+    note:
+      fr: "Gitleaks trouve une clé codée en dur, renvoie le code `1`, et l'étape échoue : l'étape `Build` suivante n'est jamais atteinte. C'est le principe du *fail fast* : on bloque la faille avant de perdre du temps à construire. Le rapport est archivé grâce au bloc `post`."
+      en: "Gitleaks finds a hard-coded key, returns exit code `1`, and the stage fails: the following `Build` stage is never reached. This is *fail fast*: block the flaw before wasting time building. The report is archived thanks to the `post` block."
+
+mistake:
+  fr: |
+    **Mettre `sh 'command || true'` partout « pour que le pipeline reste vert ».**
+
+    En ajoutant `|| true` (ou en capturant toutes les exceptions), vous forcez chaque étape à réussir, quoi
+    qu'il arrive. Le scan de secrets trouve une clé ? Le pipeline reste vert. Les tests échouent ? Vert aussi.
+    Un pipeline qui ne peut pas échouer ne protège rien : il devient une décoration. Laissez les commandes
+    renvoyer leur vrai code de retour, et n'ignorez un échec que de façon explicite et justifiée.
+  en: |
+    **Putting `sh 'command || true'` everywhere "to keep the pipeline green".**
+
+    By adding `|| true` (or catching every exception), you force each step to succeed no matter what. The
+    secret scan found a key? The pipeline stays green. Tests fail? Green too. A pipeline that cannot fail
+    protects nothing: it becomes decoration. Let commands return their real exit code, and only ignore a
+    failure explicitly and with a documented reason.
+
+bestPractice:
+  fr: |
+    - **Versionnez le `Jenkinsfile`** avec le code : le pipeline suit les branches et les revues.
+    - **Préférez le déclaratif** : structure validée, sandbox Groovy respectée.
+    - **Isolez chaque build** dans un conteneur jetable (`agent { docker { ... } }`) et épinglez la version
+      de l'image.
+    - **Ajoutez des garde-fous** : `timeout`, `buildDiscarder`, `disableConcurrentBuilds`.
+    - **Archivez les rapports dans `post { always }`** pour pouvoir les lire même après un échec.
+    - **Faites échouer le build** sur les contrôles de sécurité critiques dès le départ.
+  en: |
+    - **Version the `Jenkinsfile`** with the code: the pipeline follows branches and reviews.
+    - **Prefer declarative**: validated structure, Groovy sandbox honoured.
+    - **Isolate every build** in a throwaway container (`agent { docker { ... } }`) and pin the image
+      version.
+    - **Add guard rails**: `timeout`, `buildDiscarder`, `disableConcurrentBuilds`.
+    - **Archive reports in `post { always }`** so you can read them even after a failure.
+    - **Fail the build** on critical security checks from the start.
+
+exercise:
+  statement:
+    fr: |
+      Vous disposez d'un projet Node.js. On vous demande un `Jenkinsfile` déclaratif qui :
+
+      1. s'exécute dans l'image `node:20-alpine` ;
+      2. a un timeout global de 10 minutes ;
+      3. contient une étape `Install` (`npm ci`), une étape `Audit` qui lance `npm audit --audit-level=high`
+         (cette commande renvoie un code non nul s'il existe une vulnérabilité *high* ou *critical*), et une
+         étape `Build` (`npm run build`) ;
+      4. archive toujours le dossier `dist/` à la fin, même en cas d'échec.
+
+      Écrivez ce `Jenkinsfile`.
+    en: |
+      You have a Node.js project. You are asked for a declarative `Jenkinsfile` that:
+
+      1. runs in the `node:20-alpine` image;
+      2. has a global 10-minute timeout;
+      3. contains an `Install` stage (`npm ci`), an `Audit` stage running `npm audit --audit-level=high`
+         (this command returns a non-zero code if there is a *high* or *critical* vulnerability), and a
+         `Build` stage (`npm run build`);
+      4. always archives the `dist/` folder at the end, even on failure.
+
+      Write that `Jenkinsfile`.
+  solution:
+    file: Jenkinsfile
+    lang: groovy
+    code: |
+      pipeline {
+          agent { docker { image 'node:20-alpine' } }
+
+          options {
+              timeout(time: 10, unit: 'MINUTES')
+          }
+
+          stages {
+              stage('Install') {
+                  steps { sh 'npm ci' }   // clean, reproducible install from the lockfile
+              }
+              stage('Audit') {
+                  // npm audit exits non-zero on high/critical findings, which fails the stage
+                  steps { sh 'npm audit --audit-level=high' }
+              }
+              stage('Build') {
+                  steps { sh 'npm run build' }
+              }
+          }
+
+          post {
+              always {
+                  // Keep the build output even if a later stage failed
+                  archiveArtifacts artifacts: 'dist/**', allowEmptyArchive: true
+              }
+          }
+      }
+    note:
+      fr: "`npm ci` (et non `npm install`) garantit une installation reproductible à partir du `package-lock.json`. L'étape `Audit` est placée **avant** le build : inutile de construire une application dont une dépendance est vulnérable."
+      en: "`npm ci` (not `npm install`) guarantees a reproducible install from the `package-lock.json`. The `Audit` stage is placed **before** the build: no point building an app whose dependency is vulnerable."
+
+quiz:
+  - q:
+      fr: "Quel bloc est obligatoire au début de tout pipeline déclaratif ?"
+      en: "Which block is mandatory at the start of every declarative pipeline?"
+    options:
+      fr: ["node { }", "pipeline { }", "stage { }", "script { }"]
+      en: ["node { }", "pipeline { }", "stage { }", "script { }"]
+    answer: 1
+    why:
+      fr: "Un pipeline déclaratif commence toujours par `pipeline { }`. `node { }` est le point d'entrée de la syntaxe scripted."
+      en: "A declarative pipeline always starts with `pipeline { }`. `node { }` is the entry point of the scripted syntax."
+  - q:
+      fr: "À quoi sert le bloc `post { always { ... } }` ?"
+      en: "What is the `post { always { ... } }` block for?"
+    options:
+      fr:
+        - "À exécuter des actions de fin même si le build a échoué"
+        - "À relancer automatiquement le build en boucle"
+        - "À définir l'agent d'exécution"
+        - "À désactiver la sécurité du pipeline"
+      en:
+        - "To run end-of-run actions even if the build failed"
+        - "To restart the build in a loop automatically"
+        - "To define the execution agent"
+        - "To disable pipeline security"
+    answer: 0
+    why:
+      fr: "`always` s'exécute quel que soit le résultat : c'est l'endroit idéal pour archiver les rapports et publier les résultats de test."
+      en: "`always` runs whatever the outcome: it is the ideal place to archive reports and publish test results."
+  - q:
+      fr: "Pourquoi exécuter chaque build dans `agent { docker { image '...' } }` ?"
+      en: "Why run each build in `agent { docker { image '...' } }`?"
+    options:
+      fr:
+        - "Pour que le build soit plus lent et plus sûr"
+        - "Pour obtenir un environnement propre, isolé et reproductible à chaque fois"
+        - "Parce que Jenkins refuse de tourner sans Docker"
+        - "Pour supprimer le besoin de tester le code"
+      en:
+        - "To make the build slower and safer"
+        - "To get a clean, isolated, reproducible environment every time"
+        - "Because Jenkins refuses to run without Docker"
+        - "To remove the need to test the code"
+    answer: 1
+    why:
+      fr: "Un conteneur jetable repart de zéro à chaque build : aucun résidu d'un build précédent, et la version de l'outil est figée par l'image."
+      en: "A throwaway container starts from scratch each build: no leftovers from a previous run, and the tool version is pinned by the image."
+  - q:
+      fr: "Quel est le risque d'écrire `sh 'gitleaks detect || true'` ?"
+      en: "What is the risk of writing `sh 'gitleaks detect || true'`?"
+    options:
+      fr:
+        - "Le scan sera deux fois plus lent"
+        - "Jenkins refusera de compiler le Jenkinsfile"
+        - "L'étape réussira toujours, même si un secret est trouvé"
+        - "Le rapport ne sera pas généré"
+      en:
+        - "The scan will be twice as slow"
+        - "Jenkins will refuse to compile the Jenkinsfile"
+        - "The stage will always succeed, even if a secret is found"
+        - "The report will not be generated"
+    answer: 2
+    why:
+      fr: "`|| true` force le code de retour à 0 : l'échec de Gitleaks est masqué et la faille passe. Le pipeline devient une décoration."
+      en: "`|| true` forces the exit code to 0: the Gitleaks failure is hidden and the flaw slips through. The pipeline becomes decoration."
+  - q:
+      fr: "Que fait le bloc `when { branch 'main' }` sur un stage ?"
+      en: "What does `when { branch 'main' }` do on a stage?"
+    options:
+      fr:
+        - "Il renomme la branche courante en main"
+        - "Il n'exécute le stage que lorsque le build concerne la branche main"
+        - "Il fusionne automatiquement la branche dans main"
+        - "Il bloque tous les builds sauf le premier"
+      en:
+        - "It renames the current branch to main"
+        - "It runs the stage only when the build is for the main branch"
+        - "It automatically merges the branch into main"
+        - "It blocks every build except the first"
+    answer: 1
+    why:
+      fr: "`when` est une condition d'exécution : le stage est sauté (`skipped`) si la branche n'est pas `main`. Cela évite par exemple de déployer en production depuis une branche de test."
+      en: "`when` is an execution condition: the stage is skipped if the branch is not `main`. This prevents, for example, deploying to production from a test branch."

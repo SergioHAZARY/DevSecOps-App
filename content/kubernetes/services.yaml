@@ -1,0 +1,431 @@
+description:
+  fr: "Exposer et connecter des Pods avec les Services : ClusterIP, NodePort, LoadBalancer, découverte par DNS interne et débogage des endpoints."
+  en: "Expose and connect Pods with Services: ClusterIP, NodePort, LoadBalancer, internal DNS discovery and endpoint debugging."
+duration: 35
+
+intro:
+  fr: |
+    Les Pods sont **éphémères** : ils naissent, meurent, sont recréés, et chacun reçoit une nouvelle adresse
+    IP à chaque fois. Comment, dans ces conditions, un front-end peut-il joindre son API de façon stable ?
+    La réponse est le **Service** : une adresse fixe et un nom stable qui répartissent le trafic vers les
+    Pods du moment, quels qu'ils soient.
+
+    Imaginez le standard téléphonique d'une entreprise : vous composez toujours le même numéro (« le service
+    commercial »), et le standard vous bascule vers un commercial disponible, sans que vous ayez à connaître
+    son poste. Les commerciaux changent ; le numéro, lui, ne change jamais. Le Service est ce standard.
+
+    Vous allez créer un Service `ClusterIP` pour la communication interne, comprendre `NodePort` et
+    `LoadBalancer` pour exposer vers l'extérieur, utiliser le **DNS interne** du cluster pour joindre un
+    service par son nom, et déboguer les **endpoints** quand « rien ne répond ».
+  en: |
+    Pods are **ephemeral**: they are born, they die, they are recreated, and each one gets a new IP address
+    every time. How, then, can a front-end reach its API reliably? The answer is the **Service**: a fixed
+    address and a stable name that spread traffic to whichever Pods exist right now.
+
+    Picture a company's switchboard: you always dial the same number ("the sales desk"), and the switchboard
+    routes you to an available salesperson without you needing their extension. The salespeople change; the
+    number never does. The Service is that switchboard.
+
+    You will create a `ClusterIP` Service for internal communication, understand `NodePort` and
+    `LoadBalancer` for exposing to the outside, use the cluster's **internal DNS** to reach a service by
+    name, and debug the **endpoints** when "nothing answers".
+
+sections:
+  - heading:
+      fr: "Les types de Service"
+      en: "The Service types"
+    body:
+      fr: |
+        Un Service (`apiVersion: v1`, `kind: Service`) sélectionne des Pods via leurs **labels** et leur
+        donne une adresse stable. Trois types répondent à trois besoins :
+
+        | Type | Portée | Usage typique |
+        |---|---|---|
+        | `ClusterIP` | Interne au cluster uniquement | Communication entre services (par défaut) |
+        | `NodePort` | Un port ouvert sur chaque nœud | Accès direct, tests, hors cloud |
+        | `LoadBalancer` | Une IP publique fournie par le cloud | Exposer un service sur Internet |
+
+        `ClusterIP` est le type par défaut et le plus courant : la base de données, l'API interne, le cache
+        n'ont aucune raison d'être accessibles depuis l'extérieur. On préfère toujours exposer une seule
+        porte d'entrée (via un Ingress, leçon suivante) plutôt que d'ouvrir un `LoadBalancer` par service.
+
+        Le champ clé est le **`selector`** : il indique quels Pods (par label) recevront le trafic. Le
+        Service ne connaît pas les Pods par leur nom ni leur IP, seulement par leurs labels.
+      en: |
+        A Service (`apiVersion: v1`, `kind: Service`) selects Pods via their **labels** and gives them a
+        stable address. Three types answer three needs:
+
+        | Type | Scope | Typical use |
+        |---|---|---|
+        | `ClusterIP` | Cluster-internal only | Service-to-service communication (default) |
+        | `NodePort` | A port opened on every node | Direct access, testing, off-cloud |
+        | `LoadBalancer` | A public IP from the cloud | Exposing a service on the Internet |
+
+        `ClusterIP` is the default and most common type: the database, the internal API, the cache have no
+        reason to be reachable from outside. You always prefer exposing a single entry point (via an Ingress,
+        next lesson) rather than opening one `LoadBalancer` per service.
+
+        The key field is the **`selector`**: it states which Pods (by label) will receive traffic. The
+        Service does not know the Pods by name or IP, only by their labels.
+  - heading:
+      fr: "Découverte par DNS interne"
+      en: "Internal DNS discovery"
+    body:
+      fr: |
+        Chaque Service reçoit un **nom DNS** interne grâce à CoreDNS, le serveur DNS du cluster. Un Pod peut
+        joindre un service simplement par son nom :
+
+        | Depuis | Nom à utiliser |
+        |---|---|
+        | Le même namespace | `api` |
+        | Un autre namespace | `api.shop` |
+        | Nom complet (FQDN) | `api.shop.svc.cluster.local` |
+
+        Ainsi, pour connecter une application à sa base, on ne code jamais une IP : on écrit `db` comme nom
+        d'hôte, et le DNS résout vers le `ClusterIP` du Service `db`, qui répartit vers les Pods PostgreSQL.
+        Les IP peuvent changer, le nom reste.
+
+        Cette découverte par nom est la raison pour laquelle les labels et les noms de Services doivent être
+        cohérents et stables : ils constituent le « carnet d'adresses » de toute l'application.
+      en: |
+        Each Service gets an internal **DNS name** thanks to CoreDNS, the cluster's DNS server. A Pod can
+        reach a service simply by its name:
+
+        | From | Name to use |
+        |---|---|
+        | The same namespace | `api` |
+        | Another namespace | `api.shop` |
+        | Full name (FQDN) | `api.shop.svc.cluster.local` |
+
+        So to connect an application to its database, you never hard-code an IP: you write `db` as the
+        hostname, and DNS resolves to the `db` Service's `ClusterIP`, which spreads to the PostgreSQL Pods.
+        IPs can change, the name stays.
+
+        This name-based discovery is why labels and Service names must be consistent and stable: they are
+        the "address book" of the whole application.
+  - heading:
+      fr: "Endpoints et débogage"
+      en: "Endpoints and debugging"
+    body:
+      fr: |
+        En coulisses, un Service maintient une liste d'**endpoints** : les IP des Pods *prêts* qui
+        correspondent à son `selector`. C'est là que se joue la quasi-totalité des pannes « mon service ne
+        répond pas ».
+
+        La règle à retenir : **un Pod n'apparaît dans les endpoints que s'il correspond au sélecteur ET
+        qu'il est prêt** (readinessProbe au vert). Deux causes dominent :
+
+        | Symptôme | Cause fréquente |
+        |---|---|
+        | `ENDPOINTS` vide | Le `selector` ne correspond à aucun label de Pod |
+        | Connexion refusée | `targetPort` ≠ port réel du conteneur |
+        | Trafic intermittent | Certains Pods ne passent pas la readinessProbe |
+
+        Les commandes de diagnostic sont `kubectl get endpoints <service>` (ou `kubectl get endpointslices`)
+        et `kubectl describe service <service>`. Si les endpoints sont vides, le problème est presque
+        toujours une **faute de frappe dans les labels** entre le Service et les Pods.
+      en: |
+        Behind the scenes a Service maintains a list of **endpoints**: the IPs of the *ready* Pods that
+        match its `selector`. This is where almost every "my service does not answer" failure is decided.
+
+        The rule to remember: **a Pod appears in the endpoints only if it matches the selector AND is
+        ready** (readinessProbe green). Two causes dominate:
+
+        | Symptom | Common cause |
+        |---|---|
+        | Empty `ENDPOINTS` | The `selector` matches no Pod label |
+        | Connection refused | `targetPort` ≠ the container's real port |
+        | Intermittent traffic | Some Pods fail the readinessProbe |
+
+        The diagnostic commands are `kubectl get endpoints <service>` (or `kubectl get endpointslices`) and
+        `kubectl describe service <service>`. If the endpoints are empty, the problem is almost always a
+        **typo in the labels** between the Service and the Pods.
+
+examples:
+  - title:
+      fr: "Un Service ClusterIP pour l'API interne"
+      en: "A ClusterIP Service for the internal API"
+    file: service.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: api
+      spec:
+        type: ClusterIP          # internal only: no exposure to the outside
+        selector:
+          app: api               # routes to every Pod labelled app=api
+        ports:
+          - name: http
+            port: 80             # the port the Service listens on
+            targetPort: 8080     # the port the container actually listens on
+    output: |
+      $ kubectl apply -f service.yaml
+      service/api created
+      $ kubectl get service api
+      NAME   TYPE        CLUSTER-IP      PORT(S)   AGE
+      api    ClusterIP   10.96.142.17    80/TCP    4s
+    note:
+      fr: "Le Service écoute sur le port 80 et redirige vers le `targetPort: 8080` des conteneurs. `ClusterIP` garde l'API interne : d'autres Pods la joignent par `http://api`, mais l'extérieur n'y a pas accès."
+      en: "The Service listens on port 80 and forwards to the containers' `targetPort: 8080`. `ClusterIP` keeps the API internal: other Pods reach it at `http://api`, but the outside has no access."
+
+  - title:
+      fr: "Joindre un service par son nom DNS"
+      en: "Reaching a service by its DNS name"
+    file: dns-test.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Launch a throwaway Pod to test DNS resolution and connectivity
+      kubectl run tester --rm -it --image=curlimages/curl:8.11.0 --restart=Never -- sh
+
+      # Inside the tester Pod, reach the api Service by its name (same namespace):
+      #   curl http://api/healthz
+      # From another namespace, use the namespaced name:
+      #   curl http://api.shop/healthz
+      # The fully qualified name always works:
+      #   curl http://api.shop.svc.cluster.local/healthz
+
+      # Check what the Service name resolves to
+      #   nslookup api
+    output: |
+      Server:    10.96.0.10
+      Name:      api.shop.svc.cluster.local
+      Address 1: 10.96.142.17 api.shop.svc.cluster.local
+    note:
+      fr: "Aucune IP codée en dur : le DNS interne résout `api` vers le ClusterIP du Service. C'est pourquoi une appli écrit `db` comme nom d'hôte de sa base, jamais une adresse IP qui changerait."
+      en: "No hard-coded IP: internal DNS resolves `api` to the Service's ClusterIP. That is why an app writes `db` as its database hostname, never an IP address that would change."
+
+  - title:
+      fr: "NodePort et LoadBalancer : exposer vers l'extérieur"
+      en: "NodePort and LoadBalancer: exposing to the outside"
+    file: external.yaml
+    lang: yaml
+    kind: neutral
+    code: |
+      # NodePort: opens a fixed port (30000-32767) on EVERY node
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: web-nodeport
+      spec:
+        type: NodePort
+        selector:
+          app: web
+        ports:
+          - port: 80
+            targetPort: 8080
+            nodePort: 30080      # reachable at http://<any-node-ip>:30080
+      ---
+      # LoadBalancer: the cloud provisions a public IP in front of the Service
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: web-lb
+      spec:
+        type: LoadBalancer       # gets an external IP on a cloud cluster
+        selector:
+          app: web
+        ports:
+          - port: 443
+            targetPort: 8443
+    note:
+      fr: "`NodePort` ouvre un port sur chaque nœud (pratique en local avec kind). `LoadBalancer` demande au cloud une IP publique. En production, on préfère un seul Ingress plutôt qu'un LoadBalancer par service."
+      en: "`NodePort` opens a port on every node (handy locally with kind). `LoadBalancer` asks the cloud for a public IP. In production, prefer a single Ingress over one LoadBalancer per service."
+
+  - title:
+      fr: "VULNÉRABLE : le selector ne correspond à rien"
+      en: "VULNERABLE: the selector matches nothing"
+    file: debug-endpoints.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # The Service selects app=api, but the Pods are labelled app=backend.
+      # Result: the Service has NO endpoints and silently drops all traffic.
+      kubectl get endpoints api
+
+      # Diagnose: compare what the Service wants vs what the Pods have
+      kubectl describe service api | grep -A2 Selector
+      kubectl get pods --show-labels
+
+      # The fix: make the labels match (edit the Service selector OR the Pod labels)
+      # so the Service's selector exactly equals the Pods' labels.
+    output: |
+      NAME   ENDPOINTS   AGE
+      api    <none>      2m
+      # <none> = the classic "my service returns nothing" symptom:
+      # the selector (app=api) matches no Pod (which are app=backend).
+    note:
+      fr: "`ENDPOINTS: <none>` est LE symptôme à reconnaître : le `selector` du Service ne correspond à aucun label de Pod. Neuf fois sur dix, c'est une faute de frappe dans les labels."
+      en: "`ENDPOINTS: <none>` is THE symptom to recognise: the Service's `selector` matches no Pod label. Nine times out of ten, it is a typo in the labels."
+
+mistake:
+  fr: |
+    **Exposer chaque service en `LoadBalancer` ou `NodePort` « pour que ça marche ».**
+
+    Ouvrir un `LoadBalancer` par microservice multiplie les IP publiques, donc la surface d'attaque, et le
+    coût sur un cloud. Pire, exposer la base de données ou une API interne directement sur Internet, c'est
+    l'offrir aux scanners automatiques. La règle est simple : par défaut, tout est `ClusterIP` (interne) ;
+    on n'expose vers l'extérieur que la ou les portes d'entrée nécessaires, idéalement via un **seul**
+    Ingress avec TLS. Avant d'exposer quoi que ce soit, demandez-vous : « ce service a-t-il réellement
+    besoin d'être joignable depuis l'extérieur ? » La réponse est presque toujours non.
+  en: |
+    **Exposing every service as `LoadBalancer` or `NodePort` "to make it work".**
+
+    Opening one `LoadBalancer` per microservice multiplies public IPs, hence the attack surface, and the
+    cost on a cloud. Worse, exposing the database or an internal API directly on the Internet offers it to
+    automated scanners. The rule is simple: by default everything is `ClusterIP` (internal); you only expose
+    the entry point(s) you need to the outside, ideally via a **single** Ingress with TLS. Before exposing
+    anything, ask: "does this service really need to be reachable from outside?" The answer is almost always
+    no.
+
+bestPractice:
+  fr: |
+    - **`ClusterIP` par défaut** : la base, le cache, les API internes restent internes.
+    - **DNS interne** (`db`, `api.shop`) plutôt que des IP codées en dur, jamais figées.
+    - **`selector` cohérent avec les labels des Pods** : la source n°1 de pannes.
+    - **`ENDPOINTS: <none>`** = premier réflexe de diagnostic (`kubectl get endpoints`).
+    - **`targetPort` = port réel du conteneur** ; vérifiez-le en cas de connexion refusée.
+    - **Une seule porte d'entrée** (Ingress + TLS) plutôt qu'un `LoadBalancer` par service.
+  en: |
+    - **`ClusterIP` by default**: the database, cache and internal APIs stay internal.
+    - **Internal DNS** (`db`, `api.shop`) rather than hard-coded, never-fixed IPs.
+    - **`selector` consistent with Pod labels**: the number one source of failures.
+    - **`ENDPOINTS: <none>`** = first diagnostic reflex (`kubectl get endpoints`).
+    - **`targetPort` = the container's real port**; check it on a connection refused.
+    - **A single entry point** (Ingress + TLS) rather than one `LoadBalancer` per service.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez un Deployment dont les Pods portent le label `app: cache` et écoutent sur le port 6379.
+
+      1. Écrivez un Service `ClusterIP` nommé `cache` qui expose le port 6379 vers ces Pods.
+      2. Une application du même namespace veut s'y connecter : quel nom d'hôte doit-elle utiliser ?
+      3. Le Service renvoie `ENDPOINTS: <none>`. Donnez la commande de diagnostic et la cause la plus
+         probable.
+    en: |
+      You have a Deployment whose Pods carry the label `app: cache` and listen on port 6379.
+
+      1. Write a `ClusterIP` Service named `cache` exposing port 6379 to those Pods.
+      2. An application in the same namespace wants to connect: which hostname should it use?
+      3. The Service returns `ENDPOINTS: <none>`. Give the diagnostic command and the most likely cause.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: cache
+      spec:
+        type: ClusterIP
+        selector:
+          app: cache          # must exactly match the Pods' labels
+        ports:
+          - port: 6379
+            targetPort: 6379
+      # 2. The app connects to the hostname "cache" (same namespace);
+      #    the internal DNS resolves it to the Service's ClusterIP.
+      #
+      # 3. Diagnose with:
+      #      kubectl get endpoints cache
+      #    An empty result means the selector (app=cache) matches no Pod:
+      #    almost always a label mismatch/typo between Service and Pods.
+    note:
+      fr: "Le nom d'hôte est simplement `cache`. Un `ENDPOINTS: <none>` indique que le `selector` ne correspond à aucun Pod prêt : on vérifie les labels des Pods avec `kubectl get pods --show-labels`."
+      en: "The hostname is simply `cache`. An `ENDPOINTS: <none>` means the `selector` matches no ready Pod: check the Pod labels with `kubectl get pods --show-labels`."
+
+quiz:
+  - q:
+      fr: "Pourquoi un Service est-il nécessaire pour joindre des Pods de façon stable ?"
+      en: "Why is a Service needed to reach Pods reliably?"
+    options:
+      fr:
+        - "Parce que les Pods sont éphémères et changent d'IP ; le Service offre une adresse et un nom stables"
+        - "Parce que les Pods n'ont pas d'IP"
+        - "Parce que le Service chiffre les Pods"
+        - "Parce que les Pods ne peuvent pas communiquer entre eux"
+      en:
+        - "Because Pods are ephemeral and change IP; the Service offers a stable address and name"
+        - "Because Pods have no IP"
+        - "Because the Service encrypts the Pods"
+        - "Because Pods cannot communicate with each other"
+    answer: 0
+    why:
+      fr: "Les Pods naissent et meurent avec de nouvelles IP ; le Service donne une IP et un nom DNS stables qui suivent les Pods du moment."
+      en: "Pods come and go with new IPs; the Service gives a stable IP and DNS name that follow whichever Pods exist."
+  - q:
+      fr: "Quel type de Service garde un service accessible uniquement à l'intérieur du cluster ?"
+      en: "Which Service type keeps a service reachable only inside the cluster?"
+    options:
+      fr:
+        - "`LoadBalancer`"
+        - "`NodePort`"
+        - "`ClusterIP`"
+        - "`ExternalName`"
+      en:
+        - "`LoadBalancer`"
+        - "`NodePort`"
+        - "`ClusterIP`"
+        - "`ExternalName`"
+    answer: 2
+    why:
+      fr: "`ClusterIP` (le type par défaut) n'est joignable que depuis le cluster : idéal pour les bases et API internes."
+      en: "`ClusterIP` (the default type) is reachable only from within the cluster: ideal for internal databases and APIs."
+  - q:
+      fr: "Quel nom DNS un Pod utilise-t-il pour joindre le Service `api` d'un autre namespace `shop` ?"
+      en: "Which DNS name does a Pod use to reach the `api` Service in another namespace `shop`?"
+    options:
+      fr:
+        - "`api`"
+        - "`api.shop`"
+        - "`shop.api`"
+        - "`api-shop-service`"
+      en:
+        - "`api`"
+        - "`api.shop`"
+        - "`shop.api`"
+        - "`api-shop-service`"
+    answer: 1
+    why:
+      fr: "Depuis un autre namespace, on ajoute le namespace : `api.shop` (forme complète : `api.shop.svc.cluster.local`)."
+      en: "From another namespace you append the namespace: `api.shop` (full form: `api.shop.svc.cluster.local`)."
+  - q:
+      fr: "Que signifie `ENDPOINTS: <none>` sur un Service ?"
+      en: "What does `ENDPOINTS: <none>` on a Service mean?"
+    options:
+      fr:
+        - "Le Service est chiffré"
+        - "Le cluster est éteint"
+        - "Le Service a trop d'endpoints"
+        - "Le `selector` ne correspond à aucun Pod prêt (souvent une faute de label)"
+      en:
+        - "The Service is encrypted"
+        - "The cluster is shut down"
+        - "The Service has too many endpoints"
+        - "The `selector` matches no ready Pod (often a label typo)"
+    answer: 3
+    why:
+      fr: "Sans endpoint, le Service n'a aucun Pod vers qui router : le sélecteur ne correspond à aucun Pod prêt, presque toujours une incohérence de labels."
+      en: "With no endpoint, the Service has no Pod to route to: the selector matches no ready Pod, almost always a label mismatch."
+  - q:
+      fr: "Pourquoi éviter d'exposer chaque service en `LoadBalancer` ?"
+      en: "Why avoid exposing every service as `LoadBalancer`?"
+    options:
+      fr:
+        - "Cela multiplie IP publiques, surface d'attaque et coût ; on préfère une seule porte d'entrée"
+        - "Parce que `LoadBalancer` ne fonctionne jamais"
+        - "Parce que cela chiffre le trafic de force"
+        - "Parce que cela supprime les Pods"
+      en:
+        - "It multiplies public IPs, attack surface and cost; a single entry point is preferred"
+        - "Because `LoadBalancer` never works"
+        - "Because it forces traffic encryption"
+        - "Because it deletes the Pods"
+    answer: 0
+    why:
+      fr: "Un LoadBalancer par service expose inutilement des API internes et coûte cher ; on garde tout en ClusterIP et on expose via un seul Ingress."
+      en: "One LoadBalancer per service needlessly exposes internal APIs and is costly; keep everything ClusterIP and expose through a single Ingress."

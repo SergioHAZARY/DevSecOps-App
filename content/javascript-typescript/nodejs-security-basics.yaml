@@ -1,0 +1,417 @@
+description:
+  fr: "Les fondamentaux de la sécurité Node.js : éviter eval, exécuter des commandes sans injection, générer de l'aléa cryptographique, se défendre de la pollution de prototype et comparer en temps constant."
+  en: "Node.js security fundamentals: avoiding eval, running commands without injection, generating cryptographic randomness, defending against prototype pollution and comparing in constant time."
+duration: 35
+
+intro:
+  fr: |
+    **Node.js** exécute du JavaScript côté serveur : il a accès au système de fichiers, au réseau et à la
+    possibilité de lancer d'autres programmes. Cette puissance change la donne par rapport au navigateur :
+    une erreur n'affiche plus seulement une alerte, elle peut exécuter des commandes sur le serveur.
+
+    C'est comme passer d'un vélo à une voiture : les mêmes gestes maladroits ont des conséquences bien plus
+    graves. Quatre dangers reviennent sans cesse : **exécuter une chaîne comme du code** (`eval`), **lancer
+    une commande shell avec une entrée utilisateur** (injection), **utiliser un mauvais générateur d'aléa**
+    pour des secrets, et la **pollution de prototype**, une faille propre à JavaScript.
+
+    Vous allez voir chaque danger puis sa parade. Les exemples de **logique pure** (pollution de prototype,
+    comparaison en temps constant) s'exécutent dans le navigateur ; les exemples qui ont besoin du système
+    (`child_process`, `crypto`) sont écrits pour un vrai Node.js LTS.
+  en: |
+    **Node.js** runs JavaScript on the server: it has access to the filesystem, the network and the ability
+    to launch other programs. That power changes everything compared with the browser: a mistake no longer
+    just pops up an alert, it can execute commands on the server.
+
+    It is like going from a bicycle to a car: the same clumsy moves have far more serious consequences. Four
+    dangers keep coming up: **running a string as code** (`eval`), **launching a shell command with user
+    input** (injection), **using the wrong randomness source** for secrets, and **prototype pollution**, a
+    JavaScript-specific flaw.
+
+    You will see each danger and its defence. The **pure-logic** examples (prototype pollution, constant-time
+    comparison) run in the browser; the examples that need the system (`child_process`, `crypto`) are written
+    for a real Node.js LTS.
+
+sections:
+  - heading:
+      fr: "eval, child_process et l'injection de commande"
+      en: "eval, child_process and command injection"
+    body:
+      fr: |
+        `eval(str)` et le constructeur `new Function(str)` **exécutent** la chaîne reçue comme du code
+        JavaScript. Si cette chaîne contient la moindre donnée externe, un attaquant exécute son propre code.
+        Il n'existe presque aucune raison légitime d'utiliser `eval` : pour lire une valeur dynamique, on
+        utilise un objet ou un `Map`.
+
+        Pour lancer un programme externe, Node offre deux familles :
+
+        | Fonction | Passe par un shell ? | Risque |
+        |---|---|---|
+        | `exec("cmd " + input)` | **Oui** | Injection : `; rm -rf` est interprété |
+        | `execFile("cmd", [args])` | Non | L'entrée reste un simple argument |
+        | `spawn("cmd", [args])` | Non | Idem, et flux adaptés aux gros volumes |
+
+        La règle : **jamais de concaténation dans `exec`**. Préférez `execFile`/`spawn` avec un **tableau
+        d'arguments** : l'entrée de l'utilisateur devient un argument inerte, qui ne peut pas démarrer une
+        seconde commande.
+      en: |
+        `eval(str)` and the `new Function(str)` constructor **execute** the received string as JavaScript
+        code. If that string contains any external data, an attacker runs their own code. There is almost no
+        legitimate reason to use `eval`: to read a dynamic value, use an object or a `Map`.
+
+        To launch an external program, Node offers two families:
+
+        | Function | Goes through a shell? | Risk |
+        |---|---|---|
+        | `exec("cmd " + input)` | **Yes** | Injection: `; rm -rf` is interpreted |
+        | `execFile("cmd", [args])` | No | The input stays a plain argument |
+        | `spawn("cmd", [args])` | No | Same, with streams for large volumes |
+
+        The rule: **never concatenate into `exec`**. Prefer `execFile`/`spawn` with an **argument array**:
+        the user's input becomes an inert argument that cannot start a second command.
+  - heading:
+      fr: "Aléa cryptographique, pollution de prototype et temps constant"
+      en: "Cryptographic randomness, prototype pollution and constant time"
+    body:
+      fr: |
+        `Math.random()` est rapide mais **prévisible** : il ne doit jamais servir à générer un jeton, un mot
+        de passe temporaire ou un identifiant de session. Pour tout secret, on utilise le module `crypto` :
+        `crypto.randomBytes(32)` ou `crypto.randomUUID()`.
+
+        La **pollution de prototype** est spécifique à JavaScript. En fusionnant un objet JSON non maîtrisé
+        dans un autre, une clé spéciale `__proto__` peut modifier le prototype partagé par **tous** les
+        objets, et ainsi injecter des propriétés partout (contournement d'autorisation, déni de service).
+        Défenses : utiliser `Map` plutôt qu'un objet comme dictionnaire, rejeter les clés `__proto__`,
+        `constructor`, `prototype`, ou créer les objets avec `Object.create(null)`.
+
+        Enfin, comparer un secret (jeton, signature) avec `===` fuit de l'information par le **temps** de
+        comparaison. `crypto.timingSafeEqual` compare en **temps constant**, quel que soit l'endroit où les
+        valeurs diffèrent, ce qui empêche une attaque temporelle.
+      en: |
+        `Math.random()` is fast but **predictable**: it must never generate a token, a temporary password or
+        a session id. For any secret, use the `crypto` module: `crypto.randomBytes(32)` or
+        `crypto.randomUUID()`.
+
+        **Prototype pollution** is specific to JavaScript. When merging an untrusted JSON object into another,
+        a special key `__proto__` can modify the prototype shared by **all** objects, injecting properties
+        everywhere (authorization bypass, denial of service). Defences: use a `Map` rather than an object as a
+        dictionary, reject the keys `__proto__`, `constructor`, `prototype`, or create objects with
+        `Object.create(null)`.
+
+        Finally, comparing a secret (token, signature) with `===` leaks information through the **time** the
+        comparison takes. `crypto.timingSafeEqual` compares in **constant time**, whatever the position where
+        the values differ, which prevents a timing attack.
+
+examples:
+  - title:
+      fr: "Injection de commande via exec, puis la version sûre"
+      en: "Command injection via exec, then the safe version"
+    file: run_command.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      // VULNERABLE - target: real Node.js LTS
+      const { exec, execFile } = require("node:child_process");
+
+      // exec runs the string in a shell: user input can inject commands
+      function pingVulnerable(host) {
+        // host = "example.com; cat /etc/passwd" runs a SECOND command
+        exec("ping -c1 " + host, (err, stdout) => console.log(stdout));
+      }
+
+      // SECURE - execFile does not use a shell; host is a single inert argument
+      function pingSecure(host) {
+        if (!/^[a-zA-Z0-9.-]{1,253}$/.test(host)) {
+          throw new Error("invalid host");
+        }
+        execFile("ping", ["-c1", "--", host], (err, stdout) => console.log(stdout));
+      }
+
+      pingSecure("example.com");
+    output: |
+      # pingVulnerable("example.com; id") would also run `id` on the server.
+      # pingSecure validates the host, then passes it as an argument with no shell:
+      PING example.com (93.184.216.34): 56 data bytes
+      64 bytes from 93.184.216.34: icmp_seq=0 ttl=56 time=11.6 ms
+    note:
+      fr: "`exec(\"ping -c1 \" + host)` passe par un shell : le `;` dans l'entrée lance une seconde commande. `execFile(\"ping\", [\"-c1\", \"--\", host])` n'utilise aucun shell et traite `host` comme un argument inerte. La validation par expression régulière ajoute une seconde barrière."
+      en: "`exec(\"ping -c1 \" + host)` goes through a shell: the `;` in the input launches a second command. `execFile(\"ping\", [\"-c1\", \"--\", host])` uses no shell and treats `host` as an inert argument. The regex validation adds a second barrier."
+
+  - title:
+      fr: "Aléa : Math.random (prévisible) vs crypto (sûr)"
+      en: "Randomness: Math.random (predictable) vs crypto (safe)"
+    file: tokens.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      // target: real Node.js LTS
+      const crypto = require("node:crypto");
+
+      // VULNERABLE: Math.random is predictable and must never create a secret
+      function weakToken() {
+        return Math.random().toString(36).slice(2); // guessable
+      }
+
+      // SECURE: crypto.randomBytes draws from a cryptographic source
+      function strongToken() {
+        return crypto.randomBytes(32).toString("hex"); // 256 bits of entropy
+      }
+
+      // SECURE: a standard, collision-resistant identifier
+      function requestId() {
+        return crypto.randomUUID();
+      }
+
+      console.log("weak  :", weakToken());
+      console.log("strong:", strongToken());
+      console.log("uuid  :", requestId());
+    output: |
+      weak  : k3n8q2p1x
+      strong: 9f8c2a1e7d4b6035ab19c7e2f05d83c41b6a9e2d7f3c08a5e1d4b6079c2a3f8e
+      uuid  : 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed
+    note:
+      fr: "`Math.random` n'est pas cryptographique : connaissant quelques sorties, un attaquant peut prédire les suivantes et deviner un jeton de session. `crypto.randomBytes` et `crypto.randomUUID` puisent dans une source sûre : utilisez-les pour tout secret."
+      en: "`Math.random` is not cryptographic: knowing a few outputs, an attacker can predict the next ones and guess a session token. `crypto.randomBytes` and `crypto.randomUUID` draw from a secure source: use them for any secret."
+
+  - title:
+      fr: "Pollution de prototype : la faille et sa défense (navigateur)"
+      en: "Prototype pollution: the flaw and its defence (browser)"
+    file: pollution.js
+    lang: javascript
+    kind: vulnerable
+    code: |
+      // Runs in the browser: pure logic, no Node needed
+
+      // UNSAFE merge: copies keys blindly, including __proto__
+      function unsafeMerge(target, source) {
+        for (const key in source) {
+          target[key] = source[key];
+        }
+        return target;
+      }
+
+      // A crafted payload, as if it came from JSON.parse(userInput)
+      const payload = JSON.parse('{"__proto__": {"isAdmin": true}}');
+      const victim = {};
+      unsafeMerge(victim, payload);
+      // Every plain object now inherits isAdmin: authorization bypass
+      console.log("polluted {} isAdmin:", ({}).isAdmin);
+
+      // SAFE merge: skip dangerous keys
+      function safeMerge(target, source) {
+        for (const key of Object.keys(source)) {
+          if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+          target[key] = source[key];
+        }
+        return target;
+      }
+      const clean = safeMerge({}, JSON.parse('{"__proto__": {"isAdmin": true}}'));
+      console.log("safe merge isAdmin:", clean.isAdmin);
+    output: |
+      polluted {} isAdmin: true
+      safe merge isAdmin: undefined
+    note:
+      fr: "Après la fusion non sûre, **tout** nouvel objet `{}` possède `isAdmin: true` : une seule charge JSON a modifié le prototype global. La fusion sûre ignore les clés `__proto__`, `constructor` et `prototype`. En pratique, préférez aussi `Map` ou `Object.create(null)`."
+      en: "After the unsafe merge, **every** new `{}` object has `isAdmin: true`: a single JSON payload altered the global prototype. The safe merge skips the `__proto__`, `constructor` and `prototype` keys. In practice, prefer `Map` or `Object.create(null)` too."
+
+  - title:
+      fr: "Comparer un secret en temps constant"
+      en: "Comparing a secret in constant time"
+    file: compare.js
+    lang: javascript
+    kind: secure
+    code: |
+      // target: real Node.js LTS
+      const crypto = require("node:crypto");
+
+      // Constant-time comparison: the duration does not depend on where bytes differ
+      function safeEqual(a, b) {
+        const ba = Buffer.from(a);
+        const bb = Buffer.from(b);
+        // Different lengths would leak via the exception, so check length first
+        if (ba.length !== bb.length) return false;
+        return crypto.timingSafeEqual(ba, bb);
+      }
+
+      const expected = "s3cr3t-api-key";
+      console.log("correct:", safeEqual(expected, "s3cr3t-api-key"));
+      console.log("wrong  :", safeEqual(expected, "wrong-api-key0"));
+    output: |
+      correct: true
+      wrong  : false
+    note:
+      fr: "Une comparaison `===` s'arrête au premier octet différent : le temps de réponse révèle combien de caractères sont corrects, ce qui permet de deviner un secret caractère par caractère. `crypto.timingSafeEqual` compare toujours tous les octets, en temps constant."
+      en: "A `===` comparison stops at the first differing byte: the response time reveals how many characters are correct, letting an attacker guess a secret character by character. `crypto.timingSafeEqual` always compares all bytes, in constant time."
+
+mistake:
+  fr: |
+    **Construire une commande shell par concaténation avec une entrée utilisateur.**
+
+    ```javascript
+    exec("convert " + userFile + " out.png"); // userFile = "x; rm -rf ~"
+    ```
+
+    `child_process.exec` passe la chaîne à un shell (`/bin/sh -c`). Tout métacaractère (`;`, `|`, `$()`,
+    backticks) dans l'entrée est interprété, et l'attaquant exécute ses propres commandes avec les droits du
+    processus Node. La même erreur existe avec `eval` et `new Function` sur une entrée externe. La parade :
+    `execFile`/`spawn` avec un **tableau d'arguments** (aucun shell), après avoir validé l'entrée. Ne
+    « nettoyez » jamais une commande à la main : la liste d'arguments est la seule défense fiable.
+  en: |
+    **Building a shell command by concatenating user input.**
+
+    ```javascript
+    exec("convert " + userFile + " out.png"); // userFile = "x; rm -rf ~"
+    ```
+
+    `child_process.exec` hands the string to a shell (`/bin/sh -c`). Any metacharacter (`;`, `|`, `$()`,
+    backticks) in the input is interpreted, and the attacker runs their own commands with the Node process's
+    privileges. The same mistake exists with `eval` and `new Function` on external input. The fix:
+    `execFile`/`spawn` with an **argument array** (no shell), after validating the input. Never "clean" a
+    command by hand: the argument list is the only reliable defence.
+
+bestPractice:
+  fr: |
+    - **Jamais `eval` ni `new Function`** sur une donnée externe ; utilisez un objet ou un `Map`.
+    - **`execFile`/`spawn` avec un tableau d'arguments**, jamais `exec` avec concaténation.
+    - **Validez les entrées** (liste blanche, regex stricte) avant de les passer à un programme externe.
+    - **Secrets et jetons avec `crypto`** (`randomBytes`, `randomUUID`), jamais `Math.random`.
+    - **Comparez les secrets avec `crypto.timingSafeEqual`**, pas avec `===`.
+    - **Protégez-vous de la pollution de prototype** : `Map`, `Object.create(null)`, rejet de `__proto__`.
+    - **Exécutez Node en non-root** et avec le minimum de droits sur le système de fichiers.
+  en: |
+    - **Never `eval` or `new Function`** on external data; use an object or a `Map`.
+    - **`execFile`/`spawn` with an argument array**, never `exec` with concatenation.
+    - **Validate inputs** (allow-list, strict regex) before passing them to an external program.
+    - **Secrets and tokens with `crypto`** (`randomBytes`, `randomUUID`), never `Math.random`.
+    - **Compare secrets with `crypto.timingSafeEqual`**, not with `===`.
+    - **Guard against prototype pollution**: `Map`, `Object.create(null)`, reject `__proto__`.
+    - **Run Node as non-root** and with the least filesystem privilege.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un programme JavaScript **exécutable dans le navigateur** qui simule la validation d'un nom de
+      fichier avant de le passer à un programme externe.
+
+      1. Écrivez une fonction `isSafeFilename(name)` qui renvoie `true` seulement si `name` ne contient que
+         des lettres, chiffres, `.`, `-`, `_`, fait 1 à 64 caractères, et ne contient pas `..` (path
+         traversal).
+      2. Testez-la avec `console.log` sur `"report.pdf"`, `"../../etc/passwd"` et `"x; rm -rf"`.
+    en: |
+      Write a JavaScript program that **runs in the browser** simulating the validation of a filename before
+      passing it to an external program.
+
+      1. Write a function `isSafeFilename(name)` returning `true` only if `name` contains only letters,
+         digits, `.`, `-`, `_`, is 1 to 64 characters long, and does not contain `..` (path traversal).
+      2. Test it with `console.log` on `"report.pdf"`, `"../../etc/passwd"` and `"x; rm -rf"`.
+  solution:
+    file: solution.js
+    lang: javascript
+    code: |
+      function isSafeFilename(name) {
+        // Allow-list of characters, bounded length
+        if (typeof name !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) {
+          return false;
+        }
+        // Reject path traversal explicitly, even if "." is allowed
+        if (name.includes("..")) return false;
+        return true;
+      }
+
+      console.log("report.pdf       ->", isSafeFilename("report.pdf"));
+      console.log("../../etc/passwd ->", isSafeFilename("../../etc/passwd"));
+      console.log("x; rm -rf        ->", isSafeFilename("x; rm -rf"));
+    note:
+      fr: "La regex n'autorise que des caractères sûrs : le `/` de `../../etc/passwd` et l'espace/`;` de `x; rm -rf` sont rejetés. Le test supplémentaire sur `..` bloque le path traversal même entre caractères autorisés."
+      en: "The regex allows only safe characters: the `/` in `../../etc/passwd` and the space/`;` in `x; rm -rf` are rejected. The extra `..` check blocks path traversal even among allowed characters."
+
+quiz:
+  - q:
+      fr: "Quelle fonction Node lance un programme externe sans passer par un shell ?"
+      en: "Which Node function launches an external program without going through a shell?"
+    options:
+      fr:
+        - "`execFile` (ou `spawn`) avec un tableau d'arguments"
+        - "`exec` avec la commande concaténée"
+        - "`eval`"
+        - "`require`"
+      en:
+        - "`execFile` (or `spawn`) with an argument array"
+        - "`exec` with the concatenated command"
+        - "`eval`"
+        - "`require`"
+    answer: 0
+    why:
+      fr: "`execFile`/`spawn` passent les arguments dans un tableau sans shell, donc l'entrée ne peut pas injecter de commande ; `exec` utilise un shell."
+      en: "`execFile`/`spawn` pass arguments in an array with no shell, so input cannot inject a command; `exec` uses a shell."
+  - q:
+      fr: "Pourquoi `Math.random()` ne doit-il pas générer un jeton de session ?"
+      en: "Why must `Math.random()` not generate a session token?"
+    options:
+      fr:
+        - "Parce qu'il est trop lent"
+        - "Parce qu'il ne renvoie que des entiers"
+        - "Parce qu'il est prévisible et non cryptographique"
+        - "Parce qu'il ne fonctionne pas dans Node"
+      en:
+        - "Because it is too slow"
+        - "Because it only returns integers"
+        - "Because it is predictable and not cryptographic"
+        - "Because it does not work in Node"
+    answer: 2
+    why:
+      fr: "`Math.random` est prévisible : à partir de quelques valeurs, un attaquant peut deviner les suivantes. Il faut `crypto.randomBytes`/`randomUUID`."
+      en: "`Math.random` is predictable: from a few values an attacker can guess the next ones. Use `crypto.randomBytes`/`randomUUID` instead."
+  - q:
+      fr: "Qu'est-ce que la pollution de prototype ?"
+      en: "What is prototype pollution?"
+    options:
+      fr:
+        - "Une attaque qui chiffre la base de données"
+        - "L'injection de propriétés dans le prototype partagé via une clé comme `__proto__`"
+        - "Une fuite de mémoire dans Node"
+        - "Un dépassement de la limite de débit"
+      en:
+        - "An attack that encrypts the database"
+        - "Injecting properties into the shared prototype via a key like `__proto__`"
+        - "A memory leak in Node"
+        - "Exceeding the rate limit"
+    answer: 1
+    why:
+      fr: "En fusionnant un objet contenant `__proto__`, on modifie le prototype commun à tous les objets, ce qui peut injecter des propriétés partout."
+      en: "Merging an object containing `__proto__` alters the prototype shared by all objects, which can inject properties everywhere."
+  - q:
+      fr: "Pourquoi comparer un secret avec `crypto.timingSafeEqual` plutôt que `===` ?"
+      en: "Why compare a secret with `crypto.timingSafeEqual` rather than `===`?"
+    options:
+      fr:
+        - "Parce que `===` ne fonctionne pas sur les chaînes"
+        - "Parce que `timingSafeEqual` chiffre la valeur"
+        - "Parce que `===` est plus lent"
+        - "Parce que `===` fuit de l'information par le temps de comparaison"
+      en:
+        - "Because `===` does not work on strings"
+        - "Because `timingSafeEqual` encrypts the value"
+        - "Because `===` is slower"
+        - "Because `===` leaks information through the comparison time"
+    answer: 3
+    why:
+      fr: "`===` s'arrête au premier octet différent ; le temps révèle combien de caractères sont corrects. `timingSafeEqual` compare en temps constant."
+      en: "`===` stops at the first differing byte; the time reveals how many characters are correct. `timingSafeEqual` compares in constant time."
+  - q:
+      fr: "Quelle est la bonne attitude face à `eval` dans du code serveur ?"
+      en: "What is the right attitude toward `eval` in server code?"
+    options:
+      fr:
+        - "Ne jamais l'utiliser sur une donnée externe ; préférer un objet ou un `Map`"
+        - "L'utiliser mais avec `try`/`catch`"
+        - "L'utiliser seulement la nuit"
+        - "Le remplacer par `new Function`, qui est sûr"
+      en:
+        - "Never use it on external data; prefer an object or a `Map`"
+        - "Use it but with `try`/`catch`"
+        - "Use it only at night"
+        - "Replace it with `new Function`, which is safe"
+    answer: 0
+    why:
+      fr: "`eval` et `new Function` exécutent la chaîne comme du code ; sur une entrée externe, c'est une exécution de code arbitraire. Un objet ou un `Map` suffit pour une valeur dynamique."
+      en: "`eval` and `new Function` execute the string as code; on external input that is arbitrary code execution. An object or a `Map` is enough for a dynamic value."

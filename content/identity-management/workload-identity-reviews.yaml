@@ -1,0 +1,487 @@
+description:
+  fr: "Remplacer les clés statiques par des identités machine fédérées (GitHub Actions OIDC, IRSA) et auditer régulièrement les accès inutilisés."
+  en: "Replace static keys with federated workload identities (GitHub Actions OIDC, IRSA) and regularly audit unused access."
+duration: 28
+
+intro:
+  fr: |
+    Les applications, les pipelines et les conteneurs ont besoin d'accéder au cloud — mais leur donner une
+    **clé d'accès statique** est une mauvaise idée : elle fuit, ne tourne pas et survit à celui qui l'a
+    créée. La solution moderne, c'est l'**identité machine fédérée** : la charge de travail prouve son
+    identité à AWS grâce à un jeton de confiance (OIDC), et reçoit des identifiants **temporaires**. Aucune
+    clé à stocker.
+
+    Imaginez un chantier. Plutôt que de donner à chaque sous-traitant une clé permanente du site (qu'il
+    gardera à vie), on vérifie son badge d'entreprise à l'entrée et on lui remet un laissez-passer valable
+    pour la journée. Le badge, c'est l'identité de la charge de travail ; le laissez-passer, ce sont les
+    identifiants temporaires délivrés par AWS.
+
+    Dans cette leçon, vous allez configurer la fédération OIDC entre GitHub Actions et AWS, découvrir IRSA
+    pour les pods EKS, et écrire un script de **revue des accès** qui repère les clés et identités
+    inutilisées — l'autre moitié du travail : nettoyer ce qui traîne.
+  en: |
+    Applications, pipelines and containers need to access the cloud — but giving them a **static access
+    key** is a bad idea: it leaks, does not rotate and outlives whoever created it. The modern solution is
+    the **federated workload identity**: the workload proves its identity to AWS with a trust token (OIDC),
+    and receives **temporary** credentials. No key to store.
+
+    Picture a building site. Rather than giving each subcontractor a permanent site key (which they keep
+    forever), you check their company badge at the gate and hand them a day pass. The badge is the
+    workload's identity; the day pass is the temporary credentials issued by AWS.
+
+    In this lesson you will set up OIDC federation between GitHub Actions and AWS, discover IRSA for EKS
+    pods, and write an **access-review** script that finds unused keys and identities — the other half of
+    the job: cleaning up what lingers.
+
+sections:
+  - heading:
+      fr: "Identités machine : de la clé statique à la fédération OIDC"
+      en: "Workload identities: from static key to OIDC federation"
+    body:
+      fr: |
+        Une **identité de charge de travail** (*workload identity*) est l'identité d'un logiciel : un
+        pipeline CI, un pod, une fonction serverless. Trop souvent, on la matérialise par une clé d'accès
+        AWS (`AKIA...`) collée dans un secret de CI. Problèmes : elle ne tourne jamais, elle fuit
+        facilement, et elle reste valable même après le départ de son créateur.
+
+        La **fédération OIDC** supprime la clé. Le principe : AWS fait **confiance** à un fournisseur
+        d'identité externe (GitHub, le serveur d'API Kubernetes, Google...). Quand le pipeline s'exécute,
+        GitHub lui remet un **jeton OIDC** signé, prouvant « ce workflow tourne sur le dépôt X, la branche
+        Y ». Le pipeline présente ce jeton à AWS STS, qui vérifie la signature et la **politique de
+        confiance** du rôle, puis délivre des identifiants temporaires.
+
+        | | Clé d'accès statique | Fédération OIDC |
+        |---|---|---|
+        | Secret à stocker | Oui (dans la CI) | Non |
+        | Durée de vie | Permanente | Quelques minutes |
+        | Rotation | Manuelle | Automatique |
+        | En cas de fuite | Valable longtemps | Expire vite + conditions de confiance |
+        | Traçabilité | « c'était la clé partagée » | Jeton lié au dépôt/branche précis |
+
+        La **politique de confiance** (*trust policy*) du rôle est la pièce maîtresse : elle restreint *qui*
+        peut endosser le rôle, via des conditions sur le `sub` du jeton (ex. uniquement la branche `main`
+        du dépôt `example/app`). Sans cette restriction, n'importe quel dépôt pourrait assumer le rôle.
+      en: |
+        A **workload identity** is the identity of software: a CI pipeline, a pod, a serverless function.
+        Too often, it is materialised as an AWS access key (`AKIA...`) pasted into a CI secret. Problems: it
+        never rotates, it leaks easily, and it stays valid even after its creator has left.
+
+        **OIDC federation** removes the key. The principle: AWS **trusts** an external identity provider
+        (GitHub, the Kubernetes API server, Google...). When the pipeline runs, GitHub hands it a signed
+        **OIDC token** proving "this workflow runs on repo X, branch Y". The pipeline presents that token to
+        AWS STS, which verifies the signature and the role's **trust policy**, then issues temporary
+        credentials.
+
+        | | Static access key | OIDC federation |
+        |---|---|---|
+        | Secret to store | Yes (in the CI) | No |
+        | Lifetime | Permanent | A few minutes |
+        | Rotation | Manual | Automatic |
+        | On a leak | Valid for a long time | Expires fast + trust conditions |
+        | Traceability | "it was the shared key" | Token tied to the exact repo/branch |
+
+        The role's **trust policy** is the key piece: it restricts *who* can assume the role, via conditions
+        on the token's `sub` (e.g. only the `main` branch of the `example/app` repo). Without that
+        restriction, any repository could assume the role.
+  - heading:
+      fr: "IRSA et la revue des accès"
+      en: "IRSA and access reviews"
+    body:
+      fr: |
+        Dans Kubernetes sur AWS (EKS), le même principe s'appelle **IRSA** (*IAM Roles for Service
+        Accounts*). On associe un **compte de service** Kubernetes à un **rôle IAM** : le pod reçoit, via un
+        jeton OIDC projeté, des identifiants AWS temporaires correspondant à ce rôle. Chaque application a
+        ainsi son identité AWS propre, sans clé stockée dans le cluster. (Les versions récentes d'EKS
+        proposent aussi les *EKS Pod Identities*, une variante plus simple du même principe.)
+
+        Mais créer des identités ne suffit pas : il faut aussi **retirer** celles qui ne servent plus. La
+        **revue des accès** (*access review*) est l'audit périodique qui répond à : quelles clés d'accès
+        n'ont pas servi depuis des mois ? quels utilisateurs n'ont plus de MFA ? quels rôles n'ont jamais
+        été endossés ?
+
+        Deux outils AWS sont précieux :
+
+        - Le **rapport d'identifiants** (`aws iam generate-credential-report`) : un CSV listant chaque
+          utilisateur, l'âge de ses clés, leur dernière utilisation, l'état du MFA.
+        - L'attribut **`last-used`** d'une clé (`aws iam get-access-key-last-used`) : la date du dernier
+          appel effectué avec cette clé.
+
+        La règle de base : une clé statique inutilisée depuis 90 jours est désactivée puis supprimée ; un
+        compte sans MFA est corrigé ; un rôle jamais endossé est questionné. Automatiser cette revue (un
+        script en CI planifié) évite l'accumulation silencieuse d'accès oubliés — le terrain de jeu des
+        attaquants.
+      en: |
+        In Kubernetes on AWS (EKS), the same principle is called **IRSA** (*IAM Roles for Service
+        Accounts*). You associate a Kubernetes **service account** with an **IAM role**: the pod receives,
+        via a projected OIDC token, temporary AWS credentials matching that role. Each application thus has
+        its own AWS identity, with no key stored in the cluster. (Recent EKS versions also offer *EKS Pod
+        Identities*, a simpler variant of the same idea.)
+
+        But creating identities is not enough: you must also **remove** those no longer in use. The **access
+        review** is the periodic audit that answers: which access keys have not been used in months? which
+        users no longer have MFA? which roles have never been assumed?
+
+        Two AWS tools are valuable:
+
+        - The **credential report** (`aws iam generate-credential-report`): a CSV listing each user, the age
+          of their keys, their last use, the MFA state.
+        - The **`last-used`** attribute of a key (`aws iam get-access-key-last-used`): the date of the last
+          call made with that key.
+
+        The basic rule: a static key unused for 90 days is deactivated then deleted; an account without MFA
+        is fixed; a role never assumed is questioned. Automating this review (a scheduled CI script) avoids
+        the silent build-up of forgotten access — the attacker's playground.
+
+examples:
+  - title:
+      fr: "L'ancien pipeline : une clé AWS statique en secret CI"
+      en: "The old pipeline: a static AWS key as a CI secret"
+    file: .github/workflows/deploy-static.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      name: deploy
+
+      on:
+        push:
+          branches: [main]
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Configure AWS (static long-lived keys)
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                # ANTI-PATTERN: a permanent AKIA... key stored as a repo secret.
+                # It never rotates, and anyone who exfiltrates it keeps AWS
+                # access for months, from anywhere.
+                aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                aws-region: eu-west-1
+            - run: aws s3 sync ./build s3://my-site-bucket
+    note:
+      fr: "La clé statique vit indéfiniment dans les secrets du dépôt. Si elle fuit (log, fork, dépendance malveillante), l'attaquant a un accès AWS durable. C'est exactement ce que la fédération OIDC élimine."
+      en: "The static key lives indefinitely in the repo secrets. If it leaks (log, fork, malicious dependency), the attacker has lasting AWS access. This is exactly what OIDC federation eliminates."
+
+  - title:
+      fr: "GitHub Actions OIDC vers AWS, sans clé"
+      en: "GitHub Actions OIDC to AWS, keyless"
+    file: .github/workflows/deploy-oidc.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: deploy
+
+      on:
+        push:
+          branches: [main]
+
+      # id-token: write lets GitHub mint an OIDC token for this job.
+      permissions:
+        id-token: write
+        contents: read
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Configure AWS (keyless, via OIDC)
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                # No static key: STS trades the OIDC token for short-lived creds.
+                role-to-assume: arn:aws:iam::123456789012:role/github-deploy
+                aws-region: eu-west-1
+            - run: aws s3 sync ./build s3://my-site-bucket
+    output: |
+      # The step assumes the role and gets temporary credentials:
+      Assuming role with OIDC
+      Authenticated as arn:aws:sts::123456789012:assumed-role/github-deploy/...
+    note:
+      fr: "Aucune clé n'est stockée : `id-token: write` permet à GitHub de délivrer un jeton OIDC que STS échange contre des identifiants temporaires. Ils expirent à la fin du job. Plus rien à faire tourner ni à faire fuir."
+      en: "No key is stored: `id-token: write` lets GitHub issue an OIDC token that STS trades for temporary credentials. They expire at the end of the job. Nothing to rotate or to leak any more."
+
+  - title:
+      fr: "La politique de confiance qui restreint le dépôt et la branche"
+      en: "The trust policy restricting repo and branch"
+    file: trust-policy.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+              "StringEquals": {
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+              },
+              "StringLike": {
+                "token.actions.githubusercontent.com:sub": "repo:example/app:ref:refs/heads/main"
+              }
+            }
+          }
+        ]
+      }
+    note:
+      fr: "La condition sur `sub` est vitale : seul le dépôt `example/app`, branche `main`, peut endosser ce rôle. Sans elle, n'importe quel dépôt GitHub pourrait l'assumer. On restreint toujours au dépôt et à la branche (ou à l'environnement) précis."
+      en: "The `sub` condition is vital: only the `example/app` repo, branch `main`, can assume this role. Without it, any GitHub repo could assume it. You always restrict to the exact repo and branch (or environment)."
+
+  - title:
+      fr: "Revue des accès : trouver les clés inutilisées"
+      en: "Access review: finding unused keys"
+    file: review_unused_keys.py
+    lang: python
+    kind: secure
+    code: |
+      import boto3
+      from datetime import datetime, timezone
+
+      iam = boto3.client("iam")
+      MAX_AGE_DAYS = 90  # policy: disable keys idle for more than 90 days
+      now = datetime.now(timezone.utc)
+
+      def days_since(dt):
+          return (now - dt).days if dt else None
+
+      for user in iam.list_users()["Users"]:
+          name = user["UserName"]
+          for key in iam.list_access_keys(UserName=name)["AccessKeyMetadata"]:
+              kid = key["AccessKeyId"]
+              last = iam.get_access_key_last_used(AccessKeyId=kid)
+              used = last["AccessKeyLastUsed"].get("LastUsedDate")
+              idle = days_since(used)
+              # Flag keys never used, or idle longer than the policy allows
+              if idle is None or idle > MAX_AGE_DAYS:
+                  label = "NEVER USED" if idle is None else f"idle {idle}d"
+                  print(f"REVIEW  {name:20} {kid}  {label}  -> disable/delete")
+    output: |
+      REVIEW  old-ci-user          AKIAIOSFODNN7EXAMPLE  idle 214d  -> disable/delete
+      REVIEW  temp-contractor      AKIAI44QH8DHBEXAMPLE  NEVER USED  -> disable/delete
+    note:
+      fr: "Le script liste les clés jamais utilisées ou inactives depuis plus de 90 jours. Planifié (CI hebdomadaire), il empêche l'accumulation d'accès oubliés. On désactive d'abord (`update-access-key --status Inactive`), on supprime ensuite."
+      en: "The script lists keys never used or idle for more than 90 days. Scheduled (weekly CI), it prevents the build-up of forgotten access. You deactivate first (`update-access-key --status Inactive`), then delete."
+
+  - title:
+      fr: "Le rapport d'identifiants pour un audit global"
+      en: "The credential report for a global audit"
+    file: credential-report.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Generate (once) then download the account-wide credential report
+      aws iam generate-credential-report >/dev/null
+      aws iam get-credential-report \
+        --query Content --output text | base64 --decode > report.csv
+
+      # Flag human users who have a password but NO MFA enabled
+      awk -F, 'NR==1 || ($4=="true" && $8=="false") {print $1, "mfa="$8}' report.csv
+    output: |
+      user mfa_active
+      alice mfa=false
+      bob mfa=false
+    note:
+      fr: "Le rapport CSV couvre tout le compte : âge des clés, dernière utilisation, état du MFA. Ici on isole les utilisateurs humains sans MFA, à corriger en priorité. C'est la base d'une revue d'accès régulière et documentée."
+      en: "The CSV report covers the whole account: key age, last use, MFA state. Here we isolate human users without MFA, to fix as a priority. It is the basis of a regular, documented access review."
+
+mistake:
+  fr: |
+    **Distribuer des clés d'accès AWS statiques aux pipelines et aux pods, et ne jamais faire le ménage.**
+
+    Une clé `AKIA...` dans un secret de CI ou un `Secret` Kubernetes est une dette de sécurité : elle ne
+    tourne pas, se copie facilement et survit à ses auteurs. La fédération **OIDC** (GitHub Actions → AWS,
+    IRSA pour les pods) la remplace par des identifiants temporaires, sans aucun secret à stocker — à
+    condition de **restreindre la politique de confiance** au bon dépôt/branche ou au bon compte de service.
+    Oublier cette condition sur le `sub` laisserait n'importe quel dépôt endosser votre rôle.
+
+    La seconde moitié du problème est le **manque de revue**. On crée des utilisateurs, des clés et des
+    rôles, mais personne ne les supprime quand ils deviennent inutiles. Des clés inactives depuis des mois,
+    des comptes sans MFA, des rôles jamais endossés s'accumulent — autant de portes oubliées. Automatisez la
+    revue des accès (rapport d'identifiants, `last-used`) et désactivez systématiquement ce qui dort.
+  en: |
+    **Handing static AWS access keys to pipelines and pods, and never cleaning up.**
+
+    An `AKIA...` key in a CI secret or a Kubernetes `Secret` is a security debt: it does not rotate, copies
+    easily and outlives its authors. **OIDC** federation (GitHub Actions → AWS, IRSA for pods) replaces it
+    with temporary credentials, with no secret to store — provided you **restrict the trust policy** to the
+    right repo/branch or the right service account. Forgetting that condition on the `sub` would let any
+    repository assume your role.
+
+    The second half of the problem is the **lack of review**. You create users, keys and roles, but nobody
+    removes them when they become useless. Keys idle for months, accounts without MFA, roles never assumed
+    pile up — so many forgotten doors. Automate the access review (credential report, `last-used`) and
+    systematically disable what is dormant.
+
+bestPractice:
+  fr: |
+    - **Pas de clés statiques pour les charges de travail** : fédération OIDC (GitHub Actions → AWS), IRSA/Pod Identities pour les pods EKS.
+    - **Restreignez la politique de confiance** au dépôt et à la branche (ou à l'environnement/compte de service) précis, via le `sub` du jeton.
+    - **`permissions: id-token: write`** uniquement dans les jobs qui en ont besoin.
+    - **Donnez une identité AWS propre par application**, avec le moindre privilège.
+    - **Automatisez la revue des accès** : rapport d'identifiants, clés `last-used`, désactivation des accès inutilisés (>90 j).
+    - **Exigez le MFA** sur tous les comptes humains ; corrigez ceux qui en manquent dès le rapport.
+    - **Désactivez avant de supprimer** : on coupe l'accès, on observe, puis on supprime définitivement.
+  en: |
+    - **No static keys for workloads**: OIDC federation (GitHub Actions → AWS), IRSA/Pod Identities for EKS pods.
+    - **Restrict the trust policy** to the exact repo and branch (or environment/service account), via the token's `sub`.
+    - **`permissions: id-token: write`** only in the jobs that need it.
+    - **Give each application its own AWS identity**, with least privilege.
+    - **Automate the access review**: credential report, `last-used` keys, disable unused access (>90 days).
+    - **Require MFA** on all human accounts; fix those missing it as soon as the report shows them.
+    - **Disable before deleting**: cut the access, observe, then permanently remove.
+
+exercise:
+  statement:
+    fr: |
+      Votre politique de sécurité impose : toute clé d'accès AWS inactive depuis plus de **60 jours**, ou
+      jamais utilisée, doit être signalée pour désactivation.
+
+      Écrivez un script Python avec `boto3` qui :
+
+      1. parcourt tous les utilisateurs IAM et leurs clés d'accès ;
+      2. récupère la date de dernière utilisation de chaque clé ;
+      3. affiche les clés jamais utilisées ou inactives depuis plus de 60 jours, avec le nom de
+         l'utilisateur et le nombre de jours d'inactivité.
+
+      Indiquez la commande AWS CLI à utiliser ensuite pour désactiver (sans supprimer) une clé signalée.
+    en: |
+      Your security policy requires: any AWS access key idle for more than **60 days**, or never used, must
+      be flagged for deactivation.
+
+      Write a Python script with `boto3` that:
+
+      1. walks every IAM user and their access keys;
+      2. retrieves each key's last-used date;
+      3. prints the keys never used or idle for more than 60 days, with the user name and the number of idle
+         days.
+
+      State the AWS CLI command to then deactivate (without deleting) a flagged key.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import boto3
+      from datetime import datetime, timezone
+
+      iam = boto3.client("iam")
+      MAX_IDLE_DAYS = 60
+      now = datetime.now(timezone.utc)
+
+      for user in iam.list_users()["Users"]:
+          name = user["UserName"]
+          for key in iam.list_access_keys(UserName=name)["AccessKeyMetadata"]:
+              kid = key["AccessKeyId"]
+              info = iam.get_access_key_last_used(AccessKeyId=kid)
+              used = info["AccessKeyLastUsed"].get("LastUsedDate")
+              if used is None:
+                  print(f"{name} {kid}: NEVER USED -> flag for deactivation")
+              else:
+                  idle = (now - used).days
+                  if idle > MAX_IDLE_DAYS:
+                      print(f"{name} {kid}: idle {idle}d -> flag for deactivation")
+
+      # To deactivate a flagged key WITHOUT deleting it:
+      #   aws iam update-access-key --user-name <name> \
+      #       --access-key-id <kid> --status Inactive
+    note:
+      fr: "On désactive (`--status Inactive`) avant de supprimer : si quelque chose casse, on réactive. La suppression définitive (`delete-access-key`) vient après une période d'observation sans incident."
+      en: "You deactivate (`--status Inactive`) before deleting: if something breaks, you re-enable. Permanent deletion (`delete-access-key`) comes after an observation period with no incident."
+
+quiz:
+  - q:
+      fr: "Quel est l'avantage principal de la fédération OIDC pour un pipeline CI vers AWS ?"
+      en: "What is the main advantage of OIDC federation for a CI pipeline to AWS?"
+    options:
+      fr:
+        - "Elle supprime le besoin de stocker une clé statique : des identifiants temporaires sont délivrés à la demande"
+        - "Elle accélère le build"
+        - "Elle chiffre le code source"
+        - "Elle supprime le besoin de politique IAM"
+      en:
+        - "It removes the need to store a static key: temporary credentials are issued on demand"
+        - "It speeds up the build"
+        - "It encrypts the source code"
+        - "It removes the need for an IAM policy"
+    answer: 0
+    why:
+      fr: "Avec OIDC, GitHub remet un jeton que STS échange contre des identifiants temporaires. Aucune clé permanente n'est stockée ni ne peut fuir durablement."
+      en: "With OIDC, GitHub hands a token that STS trades for temporary credentials. No permanent key is stored or can leak lastingly."
+  - q:
+      fr: "Dans un workflow GitHub Actions utilisant OIDC, quelle permission est nécessaire ?"
+      en: "In a GitHub Actions workflow using OIDC, which permission is required?"
+    options:
+      fr:
+        - "`contents: write`"
+        - "`id-token: write`"
+        - "`packages: write`"
+        - "`actions: admin`"
+      en:
+        - "`contents: write`"
+        - "`id-token: write`"
+        - "`packages: write`"
+        - "`actions: admin`"
+    answer: 1
+    why:
+      fr: "`id-token: write` autorise le job à obtenir de GitHub un jeton OIDC, que STS échangera contre des identifiants AWS temporaires. On l'accorde seulement aux jobs concernés."
+      en: "`id-token: write` lets the job obtain an OIDC token from GitHub, which STS trades for temporary AWS credentials. You grant it only to the relevant jobs."
+  - q:
+      fr: "Pourquoi la condition sur le `sub` dans la politique de confiance est-elle essentielle ?"
+      en: "Why is the `sub` condition in the trust policy essential?"
+    options:
+      fr:
+        - "Pour accélérer l'authentification"
+        - "Pour chiffrer le jeton OIDC"
+        - "Pour restreindre l'endossement du rôle au dépôt et à la branche précis, sinon n'importe quel dépôt pourrait l'assumer"
+        - "Pour définir la région AWS"
+      en:
+        - "To speed up authentication"
+        - "To encrypt the OIDC token"
+        - "To restrict role assumption to the exact repo and branch, otherwise any repo could assume it"
+        - "To set the AWS region"
+    answer: 2
+    why:
+      fr: "Sans condition sur le `sub`, la politique de confiance autoriserait tout dépôt GitHub à endosser le rôle. On la restreint au dépôt et à la branche (ou environnement) attendus."
+      en: "Without a `sub` condition, the trust policy would let any GitHub repo assume the role. You restrict it to the expected repo and branch (or environment)."
+  - q:
+      fr: "Qu'est-ce qu'IRSA dans un cluster EKS ?"
+      en: "What is IRSA in an EKS cluster?"
+    options:
+      fr:
+        - "Un pare-feu pour Kubernetes"
+        - "L'association d'un compte de service Kubernetes à un rôle IAM, donnant au pod des identifiants AWS temporaires"
+        - "Un scanner d'images de conteneurs"
+        - "Un protocole de chiffrement réseau"
+      en:
+        - "A firewall for Kubernetes"
+        - "The association of a Kubernetes service account with an IAM role, giving the pod temporary AWS credentials"
+        - "A container image scanner"
+        - "A network encryption protocol"
+    answer: 1
+    why:
+      fr: "IRSA (IAM Roles for Service Accounts) lie un compte de service à un rôle IAM via OIDC : chaque pod obtient des identifiants AWS temporaires, sans clé stockée dans le cluster."
+      en: "IRSA (IAM Roles for Service Accounts) binds a service account to an IAM role via OIDC: each pod gets temporary AWS credentials, with no key stored in the cluster."
+  - q:
+      fr: "Dans une revue des accès, que faire d'une clé d'accès inactive depuis plus de 90 jours ?"
+      en: "In an access review, what should you do with an access key idle for more than 90 days?"
+    options:
+      fr:
+        - "La laisser, elle resservira peut-être"
+        - "La partager avec un autre service"
+        - "La désactiver, puis la supprimer après une période d'observation"
+        - "Augmenter ses privilèges"
+      en:
+        - "Leave it, it might be useful again"
+        - "Share it with another service"
+        - "Deactivate it, then delete it after an observation period"
+        - "Increase its privileges"
+    answer: 2
+    why:
+      fr: "Une clé dormante est une porte oubliée. On la désactive d'abord (réversible si besoin), puis on la supprime une fois certain qu'elle ne sert plus."
+      en: "A dormant key is a forgotten door. You deactivate it first (reversible if needed), then delete it once sure it is no longer used."

@@ -1,0 +1,339 @@
+description:
+  fr: "Valider la structure d'un JSON avec JSON Schema : types, champs requis, contraintes et validation en CI."
+  en: "Validate a JSON structure with JSON Schema: types, required fields, constraints and CI validation."
+duration: 22
+
+intro:
+  fr: |
+    Recevoir du JSON, c'est bien ; être sûr qu'il a la **bonne forme** avant de l'utiliser, c'est mieux. Un
+    champ manquant, un type inattendu ou une valeur hors bornes peut faire planter une application ou, pire,
+    ouvrir une faille. **JSON Schema** est un standard pour décrire la structure attendue d'un document JSON, et
+    pour la **valider automatiquement**.
+
+    Un schéma est lui-même un document JSON : il indique quels champs sont obligatoires, de quel type, avec
+    quelles contraintes (valeur minimale, longueur, motif, liste de choix...). Un validateur compare ensuite un
+    document à son schéma et liste précisément ce qui ne va pas.
+
+    Imaginez un formulaire administratif avec des cases obligatoires et des formats imposés (une date, un code
+    postal). JSON Schema est ce formulaire, appliqué aux données. Dans cette leçon vous écrirez un schéma,
+    validerez des documents conformes et non conformes, et intégrerez la validation dans un pipeline pour rejeter
+    toute entrée malformée - une défense clé contre les données hostiles.
+  en: |
+    Receiving JSON is fine; being sure it has the **right shape** before using it is better. A missing field, an
+    unexpected type or an out-of-range value can crash an application or, worse, open a vulnerability. **JSON
+    Schema** is a standard to describe the expected structure of a JSON document and to **validate it
+    automatically**.
+
+    A schema is itself a JSON document: it states which fields are required, of which type, with which
+    constraints (minimum value, length, pattern, list of choices...). A validator then compares a document
+    against its schema and lists precisely what is wrong.
+
+    Picture an official form with mandatory boxes and required formats (a date, a postcode). JSON Schema is that
+    form, applied to data. In this lesson you will write a schema, validate conforming and non-conforming
+    documents, and wire validation into a pipeline to reject any malformed input - a key defence against hostile
+    data.
+
+sections:
+  - heading:
+      fr: "Les mots-clés essentiels d'un schéma"
+      en: "The essential schema keywords"
+    body:
+      fr: |
+        Un schéma décrit surtout un objet via `type`, `properties` et `required` :
+
+        | Mot-clé | Rôle |
+        |---|---|
+        | `type` | Type attendu : `object`, `string`, `integer`, `array`, `boolean` |
+        | `properties` | Les champs d'un objet et leur schéma respectif |
+        | `required` | La liste des champs obligatoires |
+        | `enum` | La liste exhaustive des valeurs autorisées |
+        | `minimum` / `maximum` | Bornes numériques |
+        | `minLength` / `maxLength` | Longueurs de chaîne |
+        | `pattern` | Expression régulière à respecter |
+        | `additionalProperties` | `false` pour interdire tout champ non prévu |
+
+        Le réglage **`additionalProperties: false`** est important pour la sécurité : il rejette tout champ
+        inconnu, ce qui empêche un attaquant d'injecter des propriétés inattendues (*mass assignment*).
+      en: |
+        A schema mainly describes an object through `type`, `properties` and `required`:
+
+        | Keyword | Role |
+        |---|---|
+        | `type` | Expected type: `object`, `string`, `integer`, `array`, `boolean` |
+        | `properties` | An object's fields and their respective schemas |
+        | `required` | The list of mandatory fields |
+        | `enum` | The exhaustive list of allowed values |
+        | `minimum` / `maximum` | Numeric bounds |
+        | `minLength` / `maxLength` | String lengths |
+        | `pattern` | Regular expression to match |
+        | `additionalProperties` | `false` to forbid any unexpected field |
+
+        The **`additionalProperties: false`** setting matters for security: it rejects any unknown field, which
+        prevents an attacker from injecting unexpected properties (*mass assignment*).
+  - heading:
+      fr: "Valider en pratique et en CI"
+      en: "Validating in practice and in CI"
+    body:
+      fr: |
+        Un validateur prend deux fichiers - le **schéma** et le **document** - et renvoie soit « valide », soit la
+        liste des erreurs avec leur emplacement. En Python, la bibliothèque `jsonschema` fait ce travail ; en CLI,
+        des outils comme `ajv` (Node.js) ou `check-jsonschema` existent aussi.
+
+        L'intérêt en DevSecOps est double :
+
+        1. **À la frontière de l'application** : valider chaque requête entrante contre un schéma rejette les
+           données malformées *avant* qu'elles n'atteignent la logique métier.
+        2. **En CI** : valider les fichiers de configuration (un `config.json`, une définition d'API OpenAPI)
+           empêche de déployer une config invalide.
+
+        Un document qui échoue à la validation ne doit **jamais** être traité : on renvoie une erreur claire et
+        on journalise la tentative. C'est une application directe du principe « ne jamais faire confiance à
+        l'entrée ».
+      en: |
+        A validator takes two files - the **schema** and the **document** - and returns either "valid" or the list
+        of errors with their location. In Python, the `jsonschema` library does this; on the CLI, tools like
+        `ajv` (Node.js) or `check-jsonschema` also exist.
+
+        The DevSecOps value is twofold:
+
+        1. **At the application boundary**: validating each incoming request against a schema rejects malformed
+           data *before* it reaches the business logic.
+        2. **In CI**: validating configuration files (a `config.json`, an OpenAPI definition) prevents deploying
+           an invalid config.
+
+        A document that fails validation must **never** be processed: return a clear error and log the attempt.
+        This is a direct application of the "never trust input" principle.
+
+examples:
+  - title:
+      fr: "Un schéma pour un compte utilisateur"
+      en: "A schema for a user account"
+    file: user.schema.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": ["username", "email", "role"],
+        "additionalProperties": false,
+        "properties": {
+          "username": { "type": "string", "minLength": 3, "maxLength": 32 },
+          "email": { "type": "string", "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" },
+          "role": { "type": "string", "enum": ["admin", "user", "auditor"] },
+          "age": { "type": "integer", "minimum": 0, "maximum": 150 }
+        }
+      }
+    note:
+      fr: "`required` impose trois champs, `enum` limite les rôles, `additionalProperties: false` rejette tout champ inconnu : une défense contre le *mass assignment*."
+      en: "`required` enforces three fields, `enum` limits the roles, `additionalProperties: false` rejects any unknown field: a defence against mass assignment."
+
+  - title:
+      fr: "Un document valide et un document rejeté"
+      en: "A valid document and a rejected one"
+    file: instances.json
+    lang: json
+    kind: neutral
+    code: |
+      {
+        "valid": {
+          "username": "alice",
+          "email": "alice@example.com",
+          "role": "admin"
+        },
+        "invalid": {
+          "username": "al",
+          "email": "not-an-email",
+          "role": "superuser",
+          "isAdmin": true
+        }
+      }
+    output: |
+      valid   -> OK
+      invalid -> 4 errors:
+        username: "al" is too short (minLength 3)
+        email: "not-an-email" does not match the pattern
+        role: "superuser" is not one of ["admin","user","auditor"]
+        isAdmin: additional property not allowed
+    note:
+      fr: "Le second objet cumule quatre violations : nom trop court, e-mail mal formé, rôle hors `enum` et champ `isAdmin` interdit par `additionalProperties: false`."
+      en: "The second object has four violations: username too short, malformed email, role outside the `enum`, and `isAdmin` forbidden by `additionalProperties: false`."
+
+  - title:
+      fr: "Valider en Python avec la bibliothèque jsonschema"
+      en: "Validate in Python with the jsonschema library"
+    file: validate.py
+    lang: python
+    kind: secure
+    code: |
+      # pip install jsonschema
+      from jsonschema import Draft202012Validator
+
+      schema = {
+          "type": "object",
+          "required": ["username", "role"],
+          "additionalProperties": False,
+          "properties": {
+              "username": {"type": "string", "minLength": 3},
+              "role": {"type": "string", "enum": ["admin", "user", "auditor"]},
+          },
+      }
+
+      validator = Draft202012Validator(schema)
+      payload = {"username": "al", "role": "superuser", "isAdmin": True}
+
+      # Collect every error instead of stopping at the first one
+      errors = sorted(validator.iter_errors(payload), key=lambda e: e.json_path)
+      if errors:
+          for e in errors:
+              print(f"{e.json_path}: {e.message}")
+      else:
+          print("payload is valid")
+    output: |
+      $.isAdmin: Additional properties are not allowed ('isAdmin' was unexpected)
+      $.role: 'superuser' is not one of ['admin', 'user', 'auditor']
+      $.username: 'al' is too short
+    note:
+      fr: "`iter_errors` renvoie **toutes** les erreurs d'un coup, utile pour afficher un message complet à l'utilisateur plutôt que la première faute seulement."
+      en: "`iter_errors` returns **all** the errors at once, useful to show the user a complete message rather than only the first fault."
+
+mistake:
+  fr: |
+    **Oublier `required` et `additionalProperties: false`.**
+
+    Un schéma sans `required` accepte un objet vide `{}` : tous les champs deviennent facultatifs, et votre code
+    plantera plus loin sur un champ absent. Pire, sans `additionalProperties: false`, un document peut contenir
+    **n'importe quel champ supplémentaire** : un attaquant peut glisser `"isAdmin": true` dans une requête
+    d'inscription et, si votre code copie l'objet tel quel, obtenir des privilèges (faille de *mass assignment*).
+    Déclarez toujours les champs obligatoires et interdisez les champs inconnus.
+  en: |
+    **Forgetting `required` and `additionalProperties: false`.**
+
+    A schema without `required` accepts an empty object `{}`: every field becomes optional, and your code will
+    crash later on a missing field. Worse, without `additionalProperties: false`, a document can contain **any
+    extra field**: an attacker can slip `"isAdmin": true` into a sign-up request and, if your code copies the
+    object as-is, gain privileges (a mass-assignment flaw). Always declare mandatory fields and forbid unknown
+    ones.
+
+bestPractice:
+  fr: |
+    - **Listez les champs obligatoires** dans `required` pour détecter tout manque au plus tôt.
+    - **Ajoutez `additionalProperties: false`** pour rejeter les champs inattendus (anti *mass assignment*).
+    - **Contraignez les valeurs** : `enum`, `minimum`/`maximum`, `pattern`, `minLength`/`maxLength`.
+    - **Validez à la frontière** : chaque requête entrante contre son schéma, avant toute logique métier.
+    - **Intégrez la validation en CI** pour qu'aucune configuration invalide ne soit déployée.
+  en: |
+    - **List mandatory fields** in `required` to catch any omission as early as possible.
+    - **Add `additionalProperties: false`** to reject unexpected fields (anti mass-assignment).
+    - **Constrain values**: `enum`, `minimum`/`maximum`, `pattern`, `minLength`/`maxLength`.
+    - **Validate at the boundary**: every incoming request against its schema, before any business logic.
+    - **Integrate validation in CI** so no invalid configuration is ever deployed.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un schéma JSON Schema pour un objet « produit » qui :
+
+      1. exige les champs `id` (entier ≥ 1) et `name` (chaîne de 1 à 100 caractères) ;
+      2. autorise un champ facultatif `currency` limité à `["EUR", "USD", "GBP"]` ;
+      3. interdit tout champ supplémentaire non prévu.
+    en: |
+      Write a JSON Schema for a "product" object that:
+
+      1. requires the fields `id` (integer ≥ 1) and `name` (string of 1 to 100 characters);
+      2. allows an optional `currency` field limited to `["EUR", "USD", "GBP"]`;
+      3. forbids any unexpected extra field.
+  solution:
+    file: product.schema.json
+    lang: json
+    code: |
+      {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "integer", "minimum": 1 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "currency": { "type": "string", "enum": ["EUR", "USD", "GBP"] }
+        }
+      }
+    note:
+      fr: "`id` et `name` sont dans `required` ; `currency` reste facultatif mais contraint par `enum` ; `additionalProperties: false` bloque les champs non prévus."
+      en: "`id` and `name` are in `required`; `currency` stays optional but constrained by `enum`; `additionalProperties: false` blocks unexpected fields."
+
+quiz:
+  - q:
+      fr: "Quel mot-clé liste les champs obligatoires d'un objet ?"
+      en: "Which keyword lists an object's mandatory fields?"
+    options:
+      fr: ["required", "properties", "enum", "type"]
+      en: ["required", "properties", "enum", "type"]
+    answer: 0
+    why:
+      fr: "`required` énumère les clés qui doivent être présentes ; `properties` décrit chaque champ individuellement."
+      en: "`required` enumerates the keys that must be present; `properties` describes each field individually."
+  - q:
+      fr: "À quoi sert `additionalProperties: false` ?"
+      en: "What is `additionalProperties: false` for?"
+    options:
+      fr:
+        - "À rendre tous les champs facultatifs"
+        - "À rejeter tout champ non déclaré dans le schéma"
+        - "À chiffrer l'objet"
+        - "À autoriser les valeurs null"
+      en:
+        - "To make every field optional"
+        - "To reject any field not declared in the schema"
+        - "To encrypt the object"
+        - "To allow null values"
+    answer: 1
+    why:
+      fr: "Il interdit les champs inconnus, défense directe contre l'injection de propriétés (*mass assignment*)."
+      en: "It forbids unknown fields, a direct defence against property injection (mass assignment)."
+  - q:
+      fr: "Quel mot-clé limite une valeur à une liste de choix autorisés ?"
+      en: "Which keyword limits a value to a list of allowed choices?"
+    options:
+      fr: ["pattern", "minimum", "enum", "format"]
+      en: ["pattern", "minimum", "enum", "format"]
+    answer: 2
+    why:
+      fr: "`enum` définit l'ensemble exhaustif des valeurs acceptées pour un champ."
+      en: "`enum` defines the exhaustive set of accepted values for a field."
+  - q:
+      fr: "Pourquoi valider les requêtes entrantes contre un schéma ?"
+      en: "Why validate incoming requests against a schema?"
+    options:
+      fr:
+        - "Pour accélérer la base de données"
+        - "Pour rejeter les données malformées avant qu'elles n'atteignent la logique métier"
+        - "Pour chiffrer le trafic réseau"
+        - "Pour réduire la taille des réponses"
+      en:
+        - "To speed up the database"
+        - "To reject malformed data before it reaches the business logic"
+        - "To encrypt the network traffic"
+        - "To reduce response size"
+    answer: 1
+    why:
+      fr: "Valider à la frontière applique « ne jamais faire confiance à l'entrée » : les données hostiles sont écartées tôt."
+      en: "Validating at the boundary applies \"never trust input\": hostile data is discarded early."
+  - q:
+      fr: "En Python, que renvoie `validator.iter_errors(payload)` ?"
+      en: "In Python, what does `validator.iter_errors(payload)` return?"
+    options:
+      fr:
+        - "Seulement la première erreur"
+        - "Un booléen valide/invalide"
+        - "Le document corrigé"
+        - "Toutes les erreurs de validation du document"
+      en:
+        - "Only the first error"
+        - "A valid/invalid boolean"
+        - "The corrected document"
+        - "Every validation error in the document"
+    answer: 3
+    why:
+      fr: "`iter_errors` parcourt l'ensemble des violations, ce qui permet d'afficher un rapport complet d'un seul coup."
+      en: "`iter_errors` iterates over all violations, which lets you show a complete report at once."

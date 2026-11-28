@@ -1,0 +1,562 @@
+description:
+  fr: "Rendre une configuration HCL sûre par construction : blocs validation, attribut sensitive, preconditions, postconditions et blocs check."
+  en: "Make an HCL configuration safe by construction: validation blocks, the sensitive attribute, preconditions, postconditions and check blocks."
+duration: 30
+
+intro:
+  fr: |
+    Jusqu'ici, HCL acceptait tout ce qu'on lui donnait : une région inexistante, un type d'instance hors
+    budget, un mot de passe affiché en clair dans la sortie. Dans cette leçon, on apprend à faire en sorte
+    que la configuration **se défende elle-même** et rejette les valeurs dangereuses *avant* de créer quoi
+    que ce soit.
+
+    L'analogie : les **garde-fous d'un escalier**. On ne compte pas sur la vigilance de chacun ; la rampe
+    est là, et elle empêche la chute. HCL offre quatre garde-fous, à des moments différents du cycle :
+    `validation` (à l'entrée des variables), `precondition` (avant de créer une ressource), `postcondition`
+    (pour garantir le résultat) et `check` (une surveillance continue, qui avertit sans bloquer).
+
+    Vous allez écrire une variable qui refuse un environnement inconnu, masquer un secret avec `sensitive`,
+    garantir qu'un volume sera chiffré avec une `postcondition`, et poser un `check` qui alerte si une règle
+    de sécurité est violée. Ces mécanismes sont ceux de HCL ; leur mise en œuvre complète avec le *tooling*
+    (Trivy, Checkov, OPA) est traitée dans le cours « Terraform complet ».
+  en: |
+    So far HCL accepted anything you handed it: a non-existent region, an out-of-budget instance type, a
+    password printed in clear in the output. In this lesson you learn to make the configuration **defend
+    itself** and reject dangerous values *before* creating anything.
+
+    The analogy: the **handrails of a staircase**. You do not rely on everyone's alertness; the rail is
+    there, and it prevents the fall. HCL offers four guardrails, at different moments of the lifecycle:
+    `validation` (at a variable's entry), `precondition` (before creating a resource), `postcondition` (to
+    guarantee the result) and `check` (a continuous watch that warns without blocking).
+
+    You will write a variable that rejects an unknown environment, hide a secret with `sensitive`,
+    guarantee that a volume will be encrypted with a `postcondition`, and place a `check` that alerts when a
+    security rule is violated. These mechanisms belong to HCL; their full implementation with tooling
+    (Trivy, Checkov, OPA) is covered in the "Complete Terraform" course.
+
+sections:
+  - heading:
+      fr: "Les blocs validation : refuser une mauvaise entrée"
+      en: "validation blocks: rejecting a bad input"
+    body:
+      fr: |
+        Un type (`string`, `number`) dit *quelle forme* a une valeur ; il ne dit pas si elle est
+        *acceptable*. Un bloc `validation`, placé dans un `variable`, ajoute une condition métier. Si la
+        condition est fausse, `terraform plan` **s'arrête** avec votre message, sans rien créer :
+
+        ```hcl
+        variable "environment" {
+          type = string
+
+          validation {
+            condition     = contains(["dev", "staging", "prod"], var.environment)
+            error_message = "environment must be one of: dev, staging, prod."
+          }
+        }
+        ```
+
+        On peut empiler plusieurs blocs `validation` (chacun teste une chose). Les fonctions utiles :
+        `contains` (liste blanche), `can(...)` qui renvoie `true` si une expression ne plante pas (idéale
+        pour valider un format via `cidrnetmask`, `regex`...), `startswith`/`endswith`, et les comparaisons
+        numériques. La règle de sécurité : **préférer une liste blanche** (« seulement ces valeurs ») à une
+        liste noire (« tout sauf celles-ci »), toujours incomplète.
+      en: |
+        A type (`string`, `number`) says *what shape* a value has; it does not say whether it is
+        *acceptable*. A `validation` block, placed inside a `variable`, adds a business condition. If the
+        condition is false, `terraform plan` **stops** with your message, creating nothing:
+
+        ```hcl
+        variable "environment" {
+          type = string
+
+          validation {
+            condition     = contains(["dev", "staging", "prod"], var.environment)
+            error_message = "environment must be one of: dev, staging, prod."
+          }
+        }
+        ```
+
+        You can stack several `validation` blocks (each tests one thing). Useful functions: `contains`
+        (allowlist), `can(...)` which returns `true` if an expression does not fail (ideal to validate a
+        format via `cidrnetmask`, `regex`...), `startswith`/`endswith`, and numeric comparisons. The
+        security rule: **prefer an allowlist** ("only these values") to a denylist ("everything but these"),
+        which is always incomplete.
+  - heading:
+      fr: "sensitive : empêcher la fuite d'un secret"
+      en: "sensitive: preventing a secret leak"
+    body:
+      fr: |
+        Marquer une variable ou un output `sensitive = true` indique à Terraform de **ne pas l'afficher**
+        dans la sortie du plan, de l'apply ni dans les logs :
+
+        ```hcl
+        variable "db_password" {
+          type      = string
+          sensitive = true   # never printed in plan/apply output
+        }
+
+        output "connection_string" {
+          value     = "postgres://admin:${var.db_password}@db.example.com/app"
+          sensitive = true   # Terraform refuses to print a non-sensitive output built from a sensitive value
+        }
+        ```
+
+        La sensibilité est **contagieuse** : toute valeur dérivée d'une valeur sensible le devient aussi, et
+        Terraform refusera de l'afficher. C'est voulu. Deux limites à connaître :
+
+        1. `sensitive` masque l'**affichage**, pas le stockage : la valeur reste **en clair dans le state**.
+           C'est pourquoi le state doit être chiffré et à accès restreint (cours « Terraform complet »).
+        2. La fonction `nonsensitive(...)` lève le marquage ; à n'utiliser qu'en connaissance de cause,
+           jamais pour « faire taire » un avertissement sur un vrai secret.
+      en: |
+        Marking a variable or output `sensitive = true` tells Terraform **not to print it** in plan or
+        apply output, nor in logs:
+
+        ```hcl
+        variable "db_password" {
+          type      = string
+          sensitive = true   # never printed in plan/apply output
+        }
+
+        output "connection_string" {
+          value     = "postgres://admin:${var.db_password}@db.example.com/app"
+          sensitive = true   # Terraform refuses a non-sensitive output built from a sensitive value
+        }
+        ```
+
+        Sensitivity is **contagious**: any value derived from a sensitive value becomes sensitive too, and
+        Terraform will refuse to print it. This is intended. Two limits to know:
+
+        1. `sensitive` hides the **display**, not the storage: the value stays **in clear text in the
+           state**. That is why the state must be encrypted and access-restricted ("Complete Terraform").
+        2. The `nonsensitive(...)` function removes the marking; use it only knowingly, never to "silence"
+           a warning about a real secret.
+  - heading:
+      fr: "precondition, postcondition et check : garantir le résultat"
+      en: "precondition, postcondition and check: guaranteeing the result"
+    body:
+      fr: |
+        Les validations portent sur une variable isolée. Pour exprimer une règle qui dépend de plusieurs
+        ressources ou de données calculées, HCL offre trois mécanismes complémentaires :
+
+        | Mécanisme | Où | Quand | Effet si faux |
+        |---|---|---|---|
+        | `validation` | dans un `variable` | à l'évaluation des variables | **bloque** le plan |
+        | `precondition` | dans `lifecycle` (ou `output`) | avant de créer/lire | **bloque** le plan |
+        | `postcondition` | dans `lifecycle` (ou `output`) | après le plan/apply | **bloque** si garantie non tenue |
+        | `check` (bloc autonome) | au niveau racine | à chaque plan/apply | **avertit** sans bloquer |
+
+        Une `precondition` vérifie une hypothèse (« l'AMI choisie est bien en x86_64 ») ; une `postcondition`
+        garantit une propriété du résultat (« le volume racine *sera* chiffré »), via `self` qui désigne la
+        ressource. Le bloc **`check`** (Terraform 1.5+) est différent : il n'empêche pas l'apply, il émet un
+        **avertissement** — parfait pour une surveillance continue (« ce bucket devrait avoir le
+        versioning ») sans risquer de bloquer une urgence en production. On combine les quatre : validation
+        et precondition pour *interdire*, postcondition pour *garantir*, check pour *surveiller*.
+      en: |
+        Validations act on a single variable. To express a rule that depends on several resources or
+        computed data, HCL offers three complementary mechanisms:
+
+        | Mechanism | Where | When | Effect if false |
+        |---|---|---|---|
+        | `validation` | in a `variable` | at variable evaluation | **blocks** the plan |
+        | `precondition` | in `lifecycle` (or `output`) | before create/read | **blocks** the plan |
+        | `postcondition` | in `lifecycle` (or `output`) | after plan/apply | **blocks** if the guarantee fails |
+        | `check` (standalone block) | at root level | on every plan/apply | **warns** without blocking |
+
+        A `precondition` checks an assumption ("the chosen AMI is indeed x86_64"); a `postcondition`
+        guarantees a property of the result ("the root volume *will be* encrypted"), via `self` which refers
+        to the resource. The **`check`** block (Terraform 1.5+) is different: it does not prevent apply, it
+        emits a **warning** — perfect for a continuous watch ("this bucket should have versioning") without
+        risking blocking a production emergency. You combine all four: validation and precondition to
+        *forbid*, postcondition to *guarantee*, check to *watch*.
+
+examples:
+  - title:
+      fr: "Vulnérable : des variables qui acceptent n'importe quoi"
+      en: "Vulnerable: variables that accept anything"
+    file: variables.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      variable "environment" {
+        type = string
+        # No validation: "prod ", "Production" or a typo all pass through
+      }
+
+      variable "instance_type" {
+        type    = string
+        default = "m5.24xlarge" # nothing stops a 10x-too-big (and costly) instance
+      }
+
+      variable "db_password" {
+        type = string
+        # Not sensitive: this secret will be printed in plan/apply output and CI logs
+      }
+
+      output "db_password_echo" {
+        value = var.db_password # leaks the secret to anyone reading the output
+      }
+    note:
+      fr: "Tout « fonctionne » et c'est le danger : une faute de frappe dans `environment` crée des ressources mal nommées, et le mot de passe apparaît en clair dans les logs de CI. Rien n'arrête l'erreur avant la production."
+      en: "Everything \"works\", and that is the danger: a typo in `environment` creates mis-named resources, and the password shows up in clear in the CI logs. Nothing stops the mistake before production."
+
+  - title:
+      fr: "Sécurisé : des variables qui se défendent"
+      en: "Secure: variables that defend themselves"
+    file: variables.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "environment" {
+        type        = string
+        description = "Deployment environment"
+
+        validation {
+          # Allowlist: only these three values are ever accepted
+          condition     = contains(["dev", "staging", "prod"], var.environment)
+          error_message = "environment must be one of: dev, staging, prod."
+        }
+      }
+
+      variable "instance_type" {
+        type    = string
+        default = "t3.small"
+
+        validation {
+          # Budget guardrail: only vetted, reasonably sized instance types
+          condition     = contains(["t3.small", "t3.medium", "m5.large"], var.instance_type)
+          error_message = "instance_type must be t3.small, t3.medium or m5.large."
+        }
+      }
+
+      variable "allowed_cidr" {
+        type = string
+
+        validation {
+          # can() returns false instead of crashing if the value is not a valid CIDR
+          condition     = can(cidrnetmask(var.allowed_cidr))
+          error_message = "allowed_cidr must be a valid CIDR block, for example 10.0.0.0/16."
+        }
+
+        validation {
+          # A second, independent rule: refuse opening to the whole internet
+          condition     = var.allowed_cidr != "0.0.0.0/0"
+          error_message = "allowed_cidr must not be 0.0.0.0/0; restrict to a known range."
+        }
+      }
+    output: |
+      # Passing environment = "Production" (wrong case) stops the plan immediately:
+      $ terraform plan -var environment=Production -var allowed_cidr=10.0.0.0/16 -var db_password=xxx
+      ╷
+      │ Error: Invalid value for variable
+      │   environment must be one of: dev, staging, prod.
+      ╵
+    note:
+      fr: "Trois variables, quatre règles. `can(cidrnetmask(...))` valide le format sans planter sur une valeur farfelue ; deux blocs `validation` sur la même variable testent deux choses distinctes. L'erreur survient au `plan`, avant toute création."
+      en: "Three variables, four rules. `can(cidrnetmask(...))` validates the format without crashing on a bogus value; two `validation` blocks on the same variable test two distinct things. The error happens at `plan`, before any creation."
+
+  - title:
+      fr: "sensitive : masquer un secret et sa contagion"
+      en: "sensitive: hiding a secret and its contagion"
+    file: secrets.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "db_password" {
+        type      = string
+        sensitive = true # never shown in plan/apply output or logs
+      }
+
+      # Any value built from a sensitive one becomes sensitive too (contagion)
+      locals {
+        connection_string = "postgres://admin:${var.db_password}@db.example.com/app"
+      }
+
+      output "connection_string" {
+        value     = local.connection_string
+        sensitive = true # required: the value derives from a sensitive input
+      }
+
+      # A non-secret part can be exposed deliberately with nonsensitive()
+      output "db_host" {
+        value = nonsensitive(regex("@([^/]+)/", local.connection_string)[0])
+      }
+    output: |
+      $ terraform apply
+      Outputs:
+      connection_string = (sensitive value)
+      db_host = "db.example.com"
+    note:
+      fr: "`connection_string` est masqué car dérivé du mot de passe ; `db_host` est exposé volontairement via `nonsensitive()`, car l'hôte n'est pas un secret. Rappel : `sensitive` masque l'affichage, mais la valeur reste en clair dans le state."
+      en: "`connection_string` is hidden because it derives from the password; `db_host` is deliberately exposed via `nonsensitive()`, since the host is not a secret. Reminder: `sensitive` hides the display, but the value stays in clear in the state."
+
+  - title:
+      fr: "postcondition : garantir qu'un volume sera chiffré"
+      en: "postcondition: guaranteeing a volume will be encrypted"
+    file: compute.tf
+    lang: hcl
+    kind: secure
+    code: |
+      data "aws_ami" "al2023" {
+        most_recent = true
+        owners      = ["amazon"]
+
+        filter {
+          name   = "name"
+          values = ["al2023-ami-*-x86_64"]
+        }
+      }
+
+      resource "aws_instance" "web" {
+        ami           = data.aws_ami.al2023.id
+        instance_type = var.instance_type
+
+        root_block_device {
+          encrypted = true
+        }
+
+        lifecycle {
+          # Assumption checked BEFORE creating: the AMI must match our architecture
+          precondition {
+            condition     = data.aws_ami.al2023.architecture == "x86_64"
+            error_message = "The selected AMI is not x86_64."
+          }
+
+          # Guarantee checked AFTER planning: the root volume is encrypted (self = this resource)
+          postcondition {
+            condition     = self.root_block_device[0].encrypted
+            error_message = "The root volume must be encrypted at rest."
+          }
+        }
+      }
+    note:
+      fr: "La `precondition` valide une hypothèse (architecture de l'AMI) avant la création ; la `postcondition` garantit une propriété du résultat via `self`. Si quelqu'un passait `encrypted = false`, le plan échouerait sur la postcondition."
+      en: "The `precondition` validates an assumption (AMI architecture) before creation; the `postcondition` guarantees a property of the result via `self`. If someone set `encrypted = false`, the plan would fail on the postcondition."
+
+  - title:
+      fr: "check : surveiller sans bloquer"
+      en: "check: watching without blocking"
+    file: checks.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_ebs_volume" "data" {
+        availability_zone = "eu-west-3a"
+        size              = 20
+        encrypted         = true
+      }
+
+      # A standalone check block: it WARNS, it does not block an apply.
+      # Ideal for a continuous security rule you never want to break an emergency deploy.
+      check "data_volume_is_encrypted" {
+        assert {
+          condition     = aws_ebs_volume.data.encrypted
+          error_message = "EBS volume ${aws_ebs_volume.data.id} is not encrypted."
+        }
+      }
+
+      check "data_volume_not_oversized" {
+        assert {
+          condition     = aws_ebs_volume.data.size <= 100
+          error_message = "EBS volume is larger than 100 GiB; confirm this is intended."
+        }
+      }
+    output: |
+      # If the volume were unencrypted, apply still succeeds but prints:
+      $ terraform apply
+      ╷
+      │ Warning: Check block assertion failed
+      │   EBS volume vol-0abc123 is not encrypted.
+      ╵
+      Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+    note:
+      fr: "Un `check` émet un **avertissement**, pas une erreur : l'apply se termine quand même. On l'utilise pour des règles de conformité qu'on veut voir signalées en continu sans risquer de bloquer un déploiement critique. Pour *interdire*, on garde `precondition`/`postcondition`."
+      en: "A `check` emits a **warning**, not an error: the apply still completes. Use it for compliance rules you want flagged continuously without risking blocking a critical deploy. To *forbid*, keep `precondition`/`postcondition`."
+
+mistake:
+  fr: |
+    **Croire que `sensitive` protège le secret.**
+
+    `sensitive = true` empêche seulement l'**affichage** de la valeur dans la sortie et les logs. La valeur
+    est toujours écrite **en clair dans le fichier de state** : quiconque lit le state lit le mot de passe.
+    `sensitive` réduit la fuite accidentelle par les logs, mais ne remplace ni le chiffrement du state, ni
+    le stockage des secrets dans un gestionnaire dédié (Vault, AWS Secrets Manager). Autre piège : utiliser
+    une liste **noire** dans un `validation` (« interdire `0.0.0.0/0` ») en pensant être couvert — un
+    `0.0.0.0/1` ou une plage trop large passera. Préférez une liste **blanche** chaque fois que possible.
+  en: |
+    **Believing that `sensitive` protects the secret.**
+
+    `sensitive = true` only prevents the value from being **displayed** in output and logs. The value is
+    still written **in clear text in the state file**: anyone who reads the state reads the password.
+    `sensitive` reduces accidental leaks through logs, but replaces neither state encryption nor storing
+    secrets in a dedicated manager (Vault, AWS Secrets Manager). Another trap: using a **denylist** in a
+    `validation` ("forbid `0.0.0.0/0`") and thinking you are covered — a `0.0.0.0/1` or an overly wide
+    range will pass. Prefer an **allowlist** whenever possible.
+
+bestPractice:
+  fr: |
+    - **Validez chaque variable d'entrée** avec une liste blanche (`contains`) plutôt qu'une liste noire.
+    - **`can(...)` pour les formats** (`cidrnetmask`, `regex`) : valide sans planter sur une valeur aberrante.
+    - **`sensitive = true` sur tout secret**, en sachant que le state doit *aussi* être chiffré et restreint.
+    - **`precondition` pour les hypothèses, `postcondition` pour les garanties** de sécurité (chiffrement, TLS).
+    - **`check` pour la conformité continue** que l'on veut signaler sans bloquer un déploiement d'urgence.
+    - **Messages d'erreur actionnables** : indiquez la valeur attendue, pas seulement « valeur invalide ».
+  en: |
+    - **Validate every input variable** with an allowlist (`contains`) rather than a denylist.
+    - **`can(...)` for formats** (`cidrnetmask`, `regex`): validates without crashing on a bogus value.
+    - **`sensitive = true` on every secret**, knowing the state must *also* be encrypted and restricted.
+    - **`precondition` for assumptions, `postcondition` for security guarantees** (encryption, TLS).
+    - **`check` for continuous compliance** you want flagged without blocking an emergency deploy.
+    - **Actionable error messages**: state the expected value, not just "invalid value".
+
+exercise:
+  statement:
+    fr: |
+      Écrivez une variable `bucket_name` et une variable `retention_days`, toutes deux validées, puis un
+      output protégé.
+
+      1. `bucket_name` (string) doit faire entre 3 et 63 caractères et ne contenir que des minuscules, des
+         chiffres et des tirets (indice : `can(regex("^[a-z0-9-]{3,63}$", var.bucket_name))`).
+      2. `retention_days` (number) doit être compris entre 1 et 365.
+      3. Ajoutez un output `bucket_name` et un output `kms_key` marqué `sensitive`.
+    en: |
+      Write a `bucket_name` variable and a `retention_days` variable, both validated, then a protected
+      output.
+
+      1. `bucket_name` (string) must be 3 to 63 characters and contain only lowercase letters, digits and
+         hyphens (hint: `can(regex("^[a-z0-9-]{3,63}$", var.bucket_name))`).
+      2. `retention_days` (number) must be between 1 and 365.
+      3. Add a `bucket_name` output and a `kms_key` output marked `sensitive`.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      variable "bucket_name" {
+        type        = string
+        description = "S3 bucket name"
+
+        validation {
+          # Allowlist via regex: length and allowed characters in one shot
+          condition     = can(regex("^[a-z0-9-]{3,63}$", var.bucket_name))
+          error_message = "bucket_name must be 3-63 lowercase letters, digits or hyphens."
+        }
+      }
+
+      variable "retention_days" {
+        type        = number
+        description = "Object retention in days"
+
+        validation {
+          condition     = var.retention_days >= 1 && var.retention_days <= 365
+          error_message = "retention_days must be between 1 and 365."
+        }
+      }
+
+      variable "kms_key" {
+        type      = string
+        sensitive = true
+      }
+
+      output "bucket_name" {
+        value = var.bucket_name
+      }
+
+      output "kms_key" {
+        value     = var.kms_key
+        sensitive = true # secret: never printed in plan/apply output
+      }
+    note:
+      fr: "`can(regex(...))` combine longueur et jeu de caractères en une condition. L'output `kms_key` reprend obligatoirement `sensitive = true`, sinon Terraform refuse d'exposer une valeur sensible via un output non marqué."
+      en: "`can(regex(...))` combines length and character set in one condition. The `kms_key` output must repeat `sensitive = true`, otherwise Terraform refuses to expose a sensitive value through an unmarked output."
+
+quiz:
+  - q:
+      fr: "Que se passe-t-il si la `condition` d'un bloc `validation` est fausse ?"
+      en: "What happens if a `validation` block's `condition` is false?"
+    options:
+      fr:
+        - "Terraform affiche un avertissement mais continue"
+        - "Terraform arrête le plan avec le message d'erreur, sans rien créer"
+        - "La variable prend sa valeur par défaut"
+        - "La ressource est créée puis détruite"
+      en:
+        - "Terraform prints a warning but continues"
+        - "Terraform stops the plan with the error message, creating nothing"
+        - "The variable takes its default value"
+        - "The resource is created then destroyed"
+    answer: 1
+    why:
+      fr: "Un `validation` est bloquant : si la condition est fausse, `terraform plan` échoue immédiatement avec votre `error_message`, avant toute création."
+      en: "A `validation` is blocking: if the condition is false, `terraform plan` fails immediately with your `error_message`, before any creation."
+  - q:
+      fr: "Quelle limite importante a l'attribut `sensitive` ?"
+      en: "What important limitation does the `sensitive` attribute have?"
+    options:
+      fr:
+        - "Il ralentit l'apply"
+        - "La valeur reste en clair dans le fichier de state"
+        - "Il ne fonctionne que sur les nombres"
+        - "Il chiffre automatiquement le state"
+      en:
+        - "It slows down apply"
+        - "The value stays in clear text in the state file"
+        - "It only works on numbers"
+        - "It automatically encrypts the state"
+    answer: 1
+    why:
+      fr: "`sensitive` masque uniquement l'affichage ; la valeur est stockée en clair dans le state, qui doit donc être chiffré et à accès restreint."
+      en: "`sensitive` only hides the display; the value is stored in clear in the state, which must therefore be encrypted and access-restricted."
+  - q:
+      fr: "Quelle est la différence entre une `postcondition` et un bloc `check` ?"
+      en: "What is the difference between a `postcondition` and a `check` block?"
+    options:
+      fr:
+        - "La `postcondition` bloque le plan si elle échoue ; le `check` émet seulement un avertissement"
+        - "Ils sont identiques"
+        - "Le `check` bloque, la `postcondition` avertit"
+        - "La `postcondition` ne fonctionne que sur les variables"
+      en:
+        - "The `postcondition` blocks the plan if it fails; the `check` only emits a warning"
+        - "They are identical"
+        - "The `check` blocks, the `postcondition` warns"
+        - "The `postcondition` only works on variables"
+    answer: 0
+    why:
+      fr: "Une `postcondition` est une garantie bloquante ; un `check` est une surveillance non bloquante qui signale un problème sans empêcher l'apply."
+      en: "A `postcondition` is a blocking guarantee; a `check` is a non-blocking watch that flags a problem without preventing the apply."
+  - q:
+      fr: "Pourquoi utiliser `can(cidrnetmask(var.cidr))` dans une validation ?"
+      en: "Why use `can(cidrnetmask(var.cidr))` in a validation?"
+    options:
+      fr:
+        - "Pour convertir le CIDR en adresse IP"
+        - "Pour renvoyer `true`/`false` selon que la valeur est un CIDR valide, sans faire planter le plan"
+        - "Pour chiffrer le CIDR"
+        - "Pour ouvrir le port correspondant"
+      en:
+        - "To convert the CIDR to an IP address"
+        - "To return `true`/`false` depending on whether the value is a valid CIDR, without crashing the plan"
+        - "To encrypt the CIDR"
+        - "To open the corresponding port"
+    answer: 1
+    why:
+      fr: "`can(...)` capture l'erreur d'une expression : si `cidrnetmask` échoue sur une valeur invalide, `can` renvoie `false` et le message de validation s'affiche proprement."
+      en: "`can(...)` captures an expression's error: if `cidrnetmask` fails on an invalid value, `can` returns `false` and the validation message is shown cleanly."
+  - q:
+      fr: "Pour contrôler la valeur acceptable d'une variable, quelle approche est la plus sûre ?"
+      en: "To control a variable's acceptable value, which approach is safest?"
+    options:
+      fr:
+        - "Une liste noire des valeurs interdites"
+        - "Aucune validation, on fait confiance à l'appelant"
+        - "Une liste blanche des valeurs autorisées"
+        - "Un commentaire expliquant les valeurs attendues"
+      en:
+        - "A denylist of forbidden values"
+        - "No validation, trusting the caller"
+        - "An allowlist of permitted values"
+        - "A comment explaining the expected values"
+    answer: 2
+    why:
+      fr: "Une liste blanche (`contains([...])`) n'accepte que les valeurs explicitement prévues ; une liste noire est toujours incomplète et laisse passer des cas non anticipés."
+      en: "An allowlist (`contains([...])`) accepts only explicitly intended values; a denylist is always incomplete and lets unforeseen cases through."

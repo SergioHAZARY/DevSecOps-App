@@ -1,0 +1,362 @@
+description:
+  fr: "Interroger, filtrer et transformer du JSON en ligne de commande avec jq : la boîte à outils du DevSecOps."
+  en: "Query, filter and transform JSON on the command line with jq: the DevSecOps toolbox."
+duration: 22
+
+intro:
+  fr: |
+    **jq** est un outil en ligne de commande qui lit du JSON et en extrait exactement ce que vous voulez. Dès
+    que vous travaillez avec des API, des logs structurés, des sorties `aws`, `docker inspect` ou `kubectl -o
+    json`, jq devient indispensable : il transforme un mur de JSON en la réponse précise à votre question.
+
+    Son principe : vous écrivez un **filtre** (une petite expression) que jq applique à l'entrée. Le filtre le
+    plus simple, `.`, affiche le JSON joliment indenté. À partir de là, on navigue dans les clés, on sélectionne
+    des éléments, on les reformate.
+
+    Imaginez une requête sur une feuille de calcul géante, mais en texte. Dans cette leçon vous apprendrez les
+    filtres essentiels (accès aux champs, tableaux, `select`, `map`) à travers des cas réels de sécurité, comme
+    extraire les ports ouverts d'un scan ou les règles permissives d'un *security group*.
+  en: |
+    **jq** is a command-line tool that reads JSON and extracts exactly what you want. As soon as you work with
+    APIs, structured logs, `aws`, `docker inspect` or `kubectl -o json` output, jq becomes essential: it turns a
+    wall of JSON into the precise answer to your question.
+
+    Its principle: you write a **filter** (a small expression) that jq applies to the input. The simplest filter,
+    `.`, pretty-prints the JSON. From there you navigate keys, select elements and reshape them.
+
+    Picture a query over a giant spreadsheet, but in text. In this lesson you will learn the essential filters
+    (field access, arrays, `select`, `map`) through real security cases, such as extracting the open ports of a
+    scan or the permissive rules of a security group.
+
+sections:
+  - heading:
+      fr: "Les filtres de base"
+      en: "The basic filters"
+    body:
+      fr: |
+        Un filtre jq se lit de gauche à droite, les étapes séparées par un *pipe* `|`, exactement comme dans un
+        shell.
+
+        | Filtre | Effet |
+        |---|---|
+        | `.` | Renvoie l'entrée telle quelle (indentée) |
+        | `.name` | La valeur de la clé `name` |
+        | `.user.email` | Navigation dans les objets imbriqués |
+        | `.items[]` | Chaque élément du tableau `items`, un par un |
+        | `.items[0]` | Le premier élément du tableau |
+        | `.items | length` | Le nombre d'éléments |
+        | `keys` | La liste des clés d'un objet |
+
+        Exemple : `echo '{"user":{"name":"alice"}}' | jq '.user.name'` affiche `"alice"`. L'option `-r`
+        (*raw*) retire les guillemets pour obtenir `alice`, pratique quand on réutilise la valeur dans un script.
+      en: |
+        A jq filter reads left to right, with steps separated by a *pipe* `|`, exactly like in a shell.
+
+        | Filter | Effect |
+        |---|---|
+        | `.` | Returns the input as-is (indented) |
+        | `.name` | The value of the `name` key |
+        | `.user.email` | Navigation into nested objects |
+        | `.items[]` | Each element of the `items` array, one by one |
+        | `.items[0]` | The first array element |
+        | `.items | length` | The number of elements |
+        | `keys` | The list of an object's keys |
+
+        Example: `echo '{"user":{"name":"alice"}}' | jq '.user.name'` prints `"alice"`. The `-r` (*raw*) option
+        strips the quotes to get `alice`, handy when reusing the value in a script.
+  - heading:
+      fr: "Sélectionner et transformer"
+      en: "Selecting and transforming"
+    body:
+      fr: |
+        La vraie puissance de jq vient des filtres qui **choisissent** et **reformatent** :
+
+        - `select(condition)` : ne garde que les éléments qui remplissent une condition.
+        - `map(filtre)` : applique un filtre à chaque élément d'un tableau.
+        - `{a: .x, b: .y}` : construit un nouvel objet.
+        - `group_by`, `sort_by`, `unique`, `add` : agrègent des données.
+
+        Exemple de sécurité : à partir d'une liste de règles de pare-feu, extraire celles qui ouvrent un port sur
+        le monde entier (`0.0.0.0/0`).
+
+        ```bash
+        jq '.rules[] | select(.cidr == "0.0.0.0/0") | .port' firewall.json
+        ```
+
+        jq lit chaque règle (`.rules[]`), ne garde (`select`) que celles exposées à tout Internet, puis affiche
+        leur port. C'est le genre de requête qu'on lance pour auditer une configuration cloud en une ligne.
+      en: |
+        jq's real power comes from the filters that **choose** and **reshape**:
+
+        - `select(condition)`: keeps only the elements that satisfy a condition.
+        - `map(filter)`: applies a filter to each element of an array.
+        - `{a: .x, b: .y}`: builds a new object.
+        - `group_by`, `sort_by`, `unique`, `add`: aggregate data.
+
+        A security example: from a list of firewall rules, extract those that open a port to the whole world
+        (`0.0.0.0/0`).
+
+        ```bash
+        jq '.rules[] | select(.cidr == "0.0.0.0/0") | .port' firewall.json
+        ```
+
+        jq reads each rule (`.rules[]`), keeps (`select`) only those exposed to the entire Internet, then prints
+        their port. This is the kind of query you run to audit a cloud configuration in one line.
+
+examples:
+  - title:
+      fr: "Naviguer dans un objet JSON"
+      en: "Navigating a JSON object"
+    file: navigate.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # The sample input
+      cat > server.json <<'JSON'
+      {
+        "host": "web01",
+        "network": { "ip": "10.0.0.5", "open_ports": [22, 80, 443] },
+        "tags": ["prod", "public"]
+      }
+      JSON
+
+      jq '.host' server.json                 # "web01"
+      jq -r '.network.ip' server.json        # 10.0.0.5  (raw, no quotes)
+      jq '.network.open_ports | length' server.json  # 3
+      jq '.tags[0]' server.json              # "prod"
+    output: |
+      "web01"
+      10.0.0.5
+      3
+      "prod"
+    note:
+      fr: "`-r` retire les guillemets pour réutiliser la valeur dans un script. `| length` compte les éléments d'un tableau."
+      en: "`-r` strips the quotes so the value can be reused in a script. `| length` counts an array's elements."
+
+  - title:
+      fr: "Auditer un security group : repérer l'exposition à Internet"
+      en: "Audit a security group: spot exposure to the Internet"
+    file: audit_sg.sh
+    lang: bash
+    kind: secure
+    code: |
+      cat > sg.json <<'JSON'
+      {
+        "rules": [
+          { "port": 22,  "cidr": "10.0.0.0/8" },
+          { "port": 443, "cidr": "0.0.0.0/0" },
+          { "port": 3389, "cidr": "0.0.0.0/0" }
+        ]
+      }
+      JSON
+
+      # List every port that is open to the whole Internet (0.0.0.0/0)
+      jq -r '.rules[] | select(.cidr == "0.0.0.0/0") | .port' sg.json
+
+      # Count how many rules are world-open (should ideally be 0 for admin ports)
+      jq '[.rules[] | select(.cidr == "0.0.0.0/0")] | length' sg.json
+    output: |
+      443
+      3389
+      2
+    note:
+      fr: "Port 3389 (RDP) ouvert sur `0.0.0.0/0` est une alerte sérieuse. Cette requête jq en une ligne est un mini-audit de configuration cloud."
+      en: "Port 3389 (RDP) open to `0.0.0.0/0` is a serious alert. This one-line jq query is a mini cloud-configuration audit."
+
+  - title:
+      fr: "Transformer et agréger avec map et select"
+      en: "Transform and aggregate with map and select"
+    file: transform.sh
+    lang: bash
+    kind: neutral
+    code: |
+      cat > users.json <<'JSON'
+      {
+        "users": [
+          { "name": "alice", "active": true,  "role": "admin" },
+          { "name": "bob",   "active": false, "role": "user" },
+          { "name": "carol", "active": true,  "role": "admin" }
+        ]
+      }
+      JSON
+
+      # Names of active admins only, as a JSON array
+      jq '[.users[] | select(.active and .role == "admin") | .name]' users.json
+
+      # Reshape each user into a smaller object
+      jq '.users | map({login: .name, enabled: .active})' users.json
+    output: |
+      [
+        "alice",
+        "carol"
+      ]
+      [
+        { "login": "alice", "enabled": true },
+        { "login": "bob", "enabled": false },
+        { "login": "carol", "enabled": true }
+      ]
+    note:
+      fr: "`select(.active and .role == \"admin\")` combine deux conditions ; `map({...})` reconstruit un objet plus petit pour chaque élément."
+      en: "`select(.active and .role == \"admin\")` combines two conditions; `map({...})` rebuilds a smaller object for each element."
+
+mistake:
+  fr: |
+    **Oublier les crochets pour reconstruire un tableau, ou parser du JSON avec grep.**
+
+    `.users[] | .name` produit un **flux** de valeurs séparées, pas un tableau JSON. Pour obtenir un vrai tableau
+    `["alice", "carol"]`, il faut entourer l'expression de crochets : `[.users[] | .name]`. Autre mauvaise
+    habitude : extraire des champs JSON avec `grep`/`cut`. C'est fragile (l'ordre des clés, les espaces,
+    l'imbrication cassent tout) ; jq comprend la structure et donne un résultat fiable.
+  en: |
+    **Forgetting the brackets to rebuild an array, or parsing JSON with grep.**
+
+    `.users[] | .name` produces a **stream** of separate values, not a JSON array. To get a real array
+    `["alice", "carol"]`, wrap the expression in brackets: `[.users[] | .name]`. Another bad habit: extracting
+    JSON fields with `grep`/`cut`. That is fragile (key order, spaces, nesting all break it); jq understands the
+    structure and gives a reliable result.
+
+bestPractice:
+  fr: |
+    - **Utilisez `-r`** pour obtenir des valeurs brutes (sans guillemets) réutilisables dans un script.
+    - **Entourez de `[ ]`** quand vous voulez reconstruire un tableau à partir d'un flux.
+    - **Filtrez avec `select(...)`** plutôt qu'avec `grep` : jq comprend la structure JSON.
+    - **Testez vos filtres** progressivement, étape par étape, en ajoutant les `|` un à un.
+    - **Auditez vos configs cloud** avec des one-liners jq (`select(.cidr == "0.0.0.0/0")`).
+  en: |
+    - **Use `-r`** to get raw values (no quotes) reusable in a script.
+    - **Wrap in `[ ]`** when you want to rebuild an array from a stream.
+    - **Filter with `select(...)`** rather than `grep`: jq understands the JSON structure.
+    - **Test your filters** incrementally, step by step, adding the `|` one at a time.
+    - **Audit your cloud configs** with jq one-liners (`select(.cidr == "0.0.0.0/0")`).
+
+exercise:
+  statement:
+    fr: |
+      Vous recevez ce JSON décrivant des conteneurs :
+
+      ```json
+      {
+        "containers": [
+          { "name": "web", "privileged": false },
+          { "name": "db",  "privileged": true },
+          { "name": "cache", "privileged": true }
+        ]
+      }
+      ```
+
+      Écrivez une commande jq qui renvoie, **sous forme de tableau JSON**, le nom des conteneurs qui tournent en
+      mode privilégié (un risque de sécurité).
+    en: |
+      You receive this JSON describing containers:
+
+      ```json
+      {
+        "containers": [
+          { "name": "web", "privileged": false },
+          { "name": "db",  "privileged": true },
+          { "name": "cache", "privileged": true }
+        ]
+      }
+      ```
+
+      Write a jq command that returns, **as a JSON array**, the names of the containers running in privileged
+      mode (a security risk).
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # Keep only privileged containers, take their name, rebuild an array with [ ]
+      jq '[.containers[] | select(.privileged == true) | .name]' containers.json
+
+      # Expected result:
+      # [
+      #   "db",
+      #   "cache"
+      # ]
+    note:
+      fr: "Sans les crochets, jq afficherait deux valeurs séparées ; `[ ... ]` les regroupe en un tableau JSON `[\"db\", \"cache\"]`."
+      en: "Without the brackets, jq would print two separate values; `[ ... ]` groups them into a JSON array `[\"db\", \"cache\"]`."
+
+quiz:
+  - q:
+      fr: "Que fait le filtre jq `.` tout seul ?"
+      en: "What does the jq filter `.` on its own do?"
+    options:
+      fr:
+        - "Il supprime l'entrée"
+        - "Il renvoie l'entrée JSON telle quelle, joliment indentée"
+        - "Il compte les clés"
+        - "Il convertit en YAML"
+      en:
+        - "It deletes the input"
+        - "It returns the JSON input as-is, pretty-printed"
+        - "It counts the keys"
+        - "It converts to YAML"
+    answer: 1
+    why:
+      fr: "`.` est l'identité : il renvoie l'entrée complète, ce qui sert surtout à l'afficher joliment."
+      en: "`.` is the identity: it returns the whole input, which is mainly used to pretty-print it."
+  - q:
+      fr: "À quoi sert l'option `-r` de jq ?"
+      en: "What is jq's `-r` option for?"
+    options:
+      fr:
+        - "À afficher les valeurs brutes, sans guillemets"
+        - "À trier le résultat"
+        - "À lire un fichier distant"
+        - "À supprimer les null"
+      en:
+        - "To output raw values, without quotes"
+        - "To sort the result"
+        - "To read a remote file"
+        - "To remove nulls"
+    answer: 0
+    why:
+      fr: "`-r` (*raw*) retire les guillemets des chaînes, ce qui facilite la réutilisation dans un script shell."
+      en: "`-r` (raw) strips the quotes from strings, making the value easy to reuse in a shell script."
+  - q:
+      fr: "Quel filtre ne garde que les éléments remplissant une condition ?"
+      en: "Which filter keeps only the elements meeting a condition?"
+    options:
+      fr: ["map", "keys", "length", "select"]
+      en: ["map", "keys", "length", "select"]
+    answer: 3
+    why:
+      fr: "`select(condition)` laisse passer uniquement les éléments pour lesquels la condition est vraie."
+      en: "`select(condition)` lets through only the elements for which the condition is true."
+  - q:
+      fr: "Comment reconstruire un tableau JSON à partir d'un flux `.users[] | .name` ?"
+      en: "How do you rebuild a JSON array from the stream `.users[] | .name`?"
+    options:
+      fr:
+        - "En ajoutant `| sort`"
+        - "En entourant l'expression de crochets : `[.users[] | .name]`"
+        - "En ajoutant `-r`"
+        - "C'est impossible"
+      en:
+        - "By adding `| sort`"
+        - "By wrapping it in brackets: `[.users[] | .name]`"
+        - "By adding `-r`"
+        - "It is impossible"
+    answer: 1
+    why:
+      fr: "Les crochets `[ ]` collectent le flux de valeurs en un seul tableau JSON."
+      en: "The brackets `[ ]` collect the stream of values into a single JSON array."
+  - q:
+      fr: "Pourquoi préférer jq à grep pour extraire un champ JSON ?"
+      en: "Why prefer jq over grep to extract a JSON field?"
+    options:
+      fr:
+        - "jq est plus rapide à taper"
+        - "jq comprend la structure JSON, alors que grep est fragile face à l'imbrication et aux espaces"
+        - "grep ne fonctionne pas sous Linux"
+        - "jq chiffre la sortie"
+      en:
+        - "jq is quicker to type"
+        - "jq understands the JSON structure, whereas grep is fragile against nesting and whitespace"
+        - "grep does not work on Linux"
+        - "jq encrypts the output"
+    answer: 1
+    why:
+      fr: "grep ignore la structure : un changement d'ordre, d'espaces ou d'imbrication le casse. jq parse réellement le JSON."
+      en: "grep ignores structure: a change in order, whitespace or nesting breaks it. jq actually parses the JSON."

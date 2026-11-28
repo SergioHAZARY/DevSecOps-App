@@ -1,0 +1,499 @@
+description:
+  fr: "Assembler un pipeline Jenkins déclaratif avec des étapes de sécurité : Gitleaks, SonarQube Quality Gate, Trivy fs, scan d'image Trivy, ZAP baseline et archivage des rapports."
+  en: "Assemble a declarative Jenkins pipeline with security stages: Gitleaks, SonarQube Quality Gate, Trivy fs, Trivy image scan, ZAP baseline and report archiving."
+duration: 30
+
+intro:
+  fr: |
+    Vous savez écrire un `Jenkinsfile`, durcir le contrôleur et manipuler les credentials. Il est temps de
+    construire le cœur du DevSecOps : un pipeline qui **enchaîne les contrôles de sécurité** et bloque le
+    build dès qu'une faille grave apparaît.
+
+    L'image à garder en tête est celle d'un parcours de contrôle qualité en usine : à chaque poste, un
+    capteur différent. L'un vérifie les secrets, l'autre la qualité du code, un autre les dépendances, un
+    autre l'image produite, et un dernier teste le produit en fonctionnement. Si un capteur s'allume en
+    rouge, la pièce est écartée avant d'atteindre le client.
+
+    Dans cette leçon vous allez placer, dans l'ordre, cinq étapes de sécurité couvrant le SAST, le scan de
+    secrets, le SCA, le scan d'image de conteneur et le DAST, chacune avec un **seuil qui fait échouer** le
+    build, et toutes archivant leur rapport même en cas d'échec.
+  en: |
+    You can write a `Jenkinsfile`, harden the controller and handle credentials. It is time to build the
+    heart of DevSecOps: a pipeline that **chains security checks** and blocks the build as soon as a serious
+    flaw appears.
+
+    The picture to keep in mind is a factory quality-control line: a different sensor at each station. One
+    checks secrets, another code quality, another dependencies, another the produced image, and a last one
+    tests the running product. If a sensor turns red, the part is rejected before reaching the customer.
+
+    In this lesson you will place, in order, five security stages covering SAST, secret scanning, SCA,
+    container image scanning and DAST, each with a **failing threshold**, and all archiving their report
+    even on failure.
+
+sections:
+  - heading:
+      fr: "L'ordre des étapes : du moins cher au plus cher"
+      en: "The order of stages: from cheapest to most expensive"
+    body:
+      fr: |
+        On range les contrôles du plus rapide et du plus précoce au plus lent, selon le principe du *fail
+        fast* : inutile de construire une image et de la déployer si un secret traîne dans le code.
+
+        | Ordre | Étape | Famille | Ce qu'elle bloque |
+        |---|---|---|---|
+        | 1 | **Gitleaks** | Secrets | Clés et mots de passe codés en dur |
+        | 2 | **SonarQube** | SAST | Injections, code non sûr, Quality Gate |
+        | 3 | **Trivy fs** | SCA | CVE des dépendances |
+        | 4 | **Trivy image** | Conteneur | CVE de l'image construite |
+        | 5 | **ZAP baseline** | DAST | En-têtes/config de l'app déployée |
+
+        Chaque étape renvoie un **code de retour** ou publie un **résultat** que le pipeline interprète. Une
+        étape qui échoue arrête le pipeline — sauf si l'on choisit explicitement de n'avertir que pour
+        certaines (par exemple le DAST en début d'adoption). Le bon réglage vient avec le temps : on commence
+        par faire échouer sur les secrets et les CVE critiques, puis on élargit.
+      en: |
+        Checks are ordered from the fastest and earliest to the slowest, following the *fail fast* principle:
+        no point building an image and deploying it if a secret is sitting in the code.
+
+        | Order | Stage | Family | What it blocks |
+        |---|---|---|---|
+        | 1 | **Gitleaks** | Secrets | Hard-coded keys and passwords |
+        | 2 | **SonarQube** | SAST | Injections, unsafe code, Quality Gate |
+        | 3 | **Trivy fs** | SCA | Dependency CVEs |
+        | 4 | **Trivy image** | Container | CVEs of the built image |
+        | 5 | **ZAP baseline** | DAST | Headers/config of the deployed app |
+
+        Each stage returns an **exit code** or publishes a **result** that the pipeline interprets. A failing
+        stage stops the pipeline — unless you explicitly choose to only warn for some (for example DAST early
+        in adoption). The right tuning comes with time: start by failing on secrets and critical CVEs, then
+        widen.
+  - heading:
+      fr: "SonarQube et le Quality Gate"
+      en: "SonarQube and the Quality Gate"
+    body:
+      fr: |
+        SonarQube mérite une mention à part car il fonctionne en deux temps. L'étape `withSonarQubeEnv`
+        lance l'analyse et **envoie** les résultats au serveur SonarQube ; mais l'analyse est asynchrone. Le
+        verdict — le **Quality Gate** (passe / échoue selon des seuils sur le nouveau code : zéro
+        vulnérabilité, couverture minimale…) — est récupéré ensuite par `waitForQualityGate`.
+
+        ```groovy
+        stage('SonarQube') {
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    sh 'sonar-scanner'
+                }
+            }
+        }
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    // abortPipeline: true fails the build if the gate is red
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        ```
+
+        Le `timeout` est essentiel : sans lui, un serveur SonarQube indisponible bloquerait le pipeline
+        indéfiniment. En production, SonarQube rappelle Jenkins via un **webhook** dès que l'analyse est
+        terminée, ce qui rend `waitForQualityGate` quasi instantané.
+      en: |
+        SonarQube deserves a separate mention because it works in two steps. The `withSonarQubeEnv` step runs
+        the analysis and **sends** the results to the SonarQube server; but the analysis is asynchronous. The
+        verdict — the **Quality Gate** (pass / fail against thresholds on new code: zero vulnerabilities,
+        minimum coverage…) — is retrieved afterwards with `waitForQualityGate`.
+
+        ```groovy
+        stage('SonarQube') {
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    sh 'sonar-scanner'
+                }
+            }
+        }
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    // abortPipeline: true fails the build if the gate is red
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        ```
+
+        The `timeout` is essential: without it, an unavailable SonarQube server would block the pipeline
+        forever. In production, SonarQube calls Jenkins back through a **webhook** as soon as the analysis is
+        done, which makes `waitForQualityGate` almost instant.
+  - heading:
+      fr: "Archiver et publier les rapports"
+      en: "Archiving and publishing reports"
+    body:
+      fr: |
+        Un contrôle qui bloque le build sans laisser de trace exploitable frustre les développeurs : « ça
+        échoue, mais pourquoi ? ». Chaque étape doit produire un **rapport** (JSON, SARIF, HTML) et le
+        pipeline doit le **conserver**, surtout en cas d'échec.
+
+        Le bloc `post { always { ... } }` est l'endroit pour cela : `archiveArtifacts` attache les fichiers
+        au build, `junit` publie les résultats de tests, et le plugin *Warnings Next Generation*
+        (`recordIssues`) sait lire les formats SARIF de la plupart des scanners pour afficher les alertes
+        directement dans l'interface Jenkins, avec les tendances d'un build à l'autre.
+
+        Deux détails pratiques : utilisez `allowEmptyArchive: true` pour qu'un rapport manquant ne provoque
+        pas une seconde erreur, et faites écrire les rapports par les conteneurs dans le **workspace** monté,
+        pas dans le conteneur jetable où ils disparaîtraient. Un rapport archivé est consultable des mois
+        plus tard pour une revue ou un audit.
+      en: |
+        A check that blocks the build without leaving a usable trace frustrates developers: "it fails, but
+        why?". Each stage must produce a **report** (JSON, SARIF, HTML) and the pipeline must **keep** it,
+        especially on failure.
+
+        The `post { always { ... } }` block is the place for this: `archiveArtifacts` attaches the files to
+        the build, `junit` publishes test results, and the *Warnings Next Generation* plugin (`recordIssues`)
+        can read the SARIF format of most scanners to show alerts directly in the Jenkins UI, with trends
+        from one build to the next.
+
+        Two practical details: use `allowEmptyArchive: true` so a missing report does not cause a second
+        error, and have containers write reports into the mounted **workspace**, not into the throwaway
+        container where they would vanish. An archived report is readable months later for a review or an
+        audit.
+
+examples:
+  - title:
+      fr: "Le pipeline de sécurité complet"
+      en: "The complete security pipeline"
+    file: Jenkinsfile
+    lang: groovy
+    kind: secure
+    code: |
+      pipeline {
+          agent any
+
+          options {
+              timeout(time: 30, unit: 'MINUTES')
+              buildDiscarder(logRotator(numToKeepStr: '30'))
+          }
+
+          environment {
+              IMAGE = "registry.example.com/app:${env.BUILD_NUMBER}"
+          }
+
+          stages {
+              stage('Secret scan') {
+                  steps {
+                      // Gitleaks exits 1 on any finding -> stage fails (fail fast)
+                      sh '''
+                        docker run --rm -v "$WORKSPACE:/repo" zricethezav/gitleaks:latest \
+                          detect --source=/repo --redact \
+                          --report-format=sarif --report-path=/repo/reports/gitleaks.sarif
+                      '''
+                  }
+              }
+              stage('SAST - SonarQube') {
+                  steps {
+                      withSonarQubeEnv('sonarqube') { sh 'sonar-scanner' }
+                  }
+              }
+              stage('Quality Gate') {
+                  steps {
+                      timeout(time: 5, unit: 'MINUTES') {
+                          waitForQualityGate abortPipeline: true  // red gate = failed build
+                      }
+                  }
+              }
+              stage('SCA - Trivy fs') {
+                  steps {
+                      // --exit-code 1 makes HIGH/CRITICAL dependency CVEs fail the build
+                      sh '''
+                        docker run --rm -v "$WORKSPACE:/src" aquasec/trivy:latest fs /src \
+                          --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+                          --format sarif --output /src/reports/trivy-fs.sarif
+                      '''
+                  }
+              }
+              stage('Build image') {
+                  steps { sh 'docker build -t "$IMAGE" .' }
+              }
+              stage('Image scan - Trivy') {
+                  steps {
+                      sh '''
+                        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                          -v "$WORKSPACE:/out" aquasec/trivy:latest image "$IMAGE" \
+                          --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+                          --format sarif --output /out/reports/trivy-image.sarif
+                      '''
+                  }
+              }
+              stage('DAST - ZAP baseline') {
+                  steps {
+                      // The app is started for the test; ZAP only browses (no attack)
+                      sh '''
+                        docker compose up -d app
+                        docker run --rm --network host -v "$WORKSPACE:/zap/wrk" \
+                          ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+                          -t http://localhost:8080 -c zap-rules.tsv -I -r reports/zap.html
+                      '''
+                  }
+              }
+          }
+
+          post {
+              always {
+                  // Archive every report, even when a stage failed
+                  archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+                  sh 'docker compose down || true'  // tidy up the test app
+              }
+          }
+      }
+    output: |
+      [Pipeline] stage (Secret scan)        -> no leaks found
+      [Pipeline] stage (SAST - SonarQube)   -> analysis submitted
+      [Pipeline] stage (Quality Gate)       -> Status: OK
+      [Pipeline] stage (SCA - Trivy fs)
+      requirements.txt: 1 CRITICAL (CVE-2023-XXXXX in urllib3)
+      ERROR: script returned exit code 1
+      Stage "Build image" skipped
+      [Pipeline] archiveArtifacts reports/** -> 2 files archived
+      Finished: FAILURE
+    note:
+      fr: "Le pipeline échoue à l'étape SCA : une CVE critique dans une dépendance stoppe tout avant même de construire l'image. Les rapports déjà produits (secrets, SonarQube, Trivy fs) sont archivés grâce au bloc `post { always }`. On corrige la dépendance, on relance, et le pipeline poursuit."
+      en: "The pipeline fails at the SCA stage: a critical CVE in a dependency stops everything before the image is even built. The reports already produced (secrets, SonarQube, Trivy fs) are archived thanks to the `post { always }` block. Fix the dependency, re-run, and the pipeline continues."
+
+  - title:
+      fr: "Le fichier sonar-project.properties"
+      en: "The sonar-project.properties file"
+    file: sonar-project.properties
+    lang: ini
+    kind: neutral
+    code: |
+      # Unique project key in the SonarQube server
+      sonar.projectKey=example-app
+      sonar.projectName=Example App
+
+      # Sources and tests
+      sonar.sources=src
+      sonar.tests=tests
+      sonar.python.version=3.12
+
+      # Coverage report produced by the test stage (coverage.py -> XML)
+      sonar.python.coverage.reportPaths=reports/coverage.xml
+
+      # Analyse only new code against the main branch (the Quality Gate focuses on new code)
+      sonar.newCode.referenceBranch=main
+    note:
+      fr: "Ce fichier, à la racine du dépôt, dit à `sonar-scanner` quoi analyser. L'URL et le jeton du serveur viennent de `withSonarQubeEnv`, pas d'ici : on ne met jamais le jeton SonarQube dans ce fichier versionné."
+      en: "This file, at the repository root, tells `sonar-scanner` what to analyse. The server URL and token come from `withSonarQubeEnv`, not from here: never put the SonarQube token in this versioned file."
+
+  - title:
+      fr: "Afficher les alertes SARIF dans l'interface Jenkins"
+      en: "Showing SARIF alerts in the Jenkins UI"
+    file: Jenkinsfile
+    lang: groovy
+    kind: secure
+    code: |
+      post {
+          always {
+              // Keep the raw reports attached to the build
+              archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+
+              // Warnings Next Generation plugin reads SARIF and shows trends per build.
+              // This does NOT re-fail the build; the stages already did if needed.
+              recordIssues(
+                  tools: [
+                      sarif(id: 'trivy-fs',    pattern: 'reports/trivy-fs.sarif',    name: 'Trivy FS'),
+                      sarif(id: 'trivy-image', pattern: 'reports/trivy-image.sarif', name: 'Trivy Image'),
+                      sarif(id: 'gitleaks',    pattern: 'reports/gitleaks.sarif',    name: 'Gitleaks')
+                  ]
+              )
+
+              // Publish the ZAP HTML report as a browsable page
+              publishHTML(target: [reportDir: 'reports', reportFiles: 'zap.html',
+                                   reportName: 'ZAP Baseline', keepAll: true])
+          }
+      }
+    output: |
+      [Pipeline] recordIssues
+      [Trivy FS] Parsing SARIF file reports/trivy-fs.sarif
+      [Trivy FS] Successfully parsed file, 3 issues found
+      [Gitleaks] Parsing SARIF file reports/gitleaks.sarif
+      [Gitleaks] Successfully parsed file, 0 issues found
+      [Pipeline] publishHTML -> ZAP Baseline report published
+    note:
+      fr: "`recordIssues` agrège les rapports SARIF de tous les scanners sur une page unique, avec les tendances (nouvelles alertes, alertes corrigées) d'un build à l'autre. `publishHTML` rend le rapport ZAP cliquable depuis la page du build. Les développeurs voient enfin *pourquoi* un build a échoué."
+      en: "`recordIssues` aggregates the SARIF reports of every scanner on a single page, with trends (new alerts, fixed alerts) from one build to the next. `publishHTML` makes the ZAP report clickable from the build page. Developers can finally see *why* a build failed."
+
+mistake:
+  fr: |
+    **Mettre toutes les étapes de sécurité en « avertissement seulement » pour éviter les builds rouges.**
+
+    Un pipeline qui scanne mais ne bloque jamais donne une fausse impression de sécurité : les alertes
+    s'accumulent, personne ne les lit, et les failles partent quand même en production. L'erreur inverse
+    consiste à tout faire échouer d'un coup, y compris sur des alertes de faible gravité ou des faux
+    positifs : l'équipe, noyée sous les builds rouges, finit par tout désactiver. La bonne approche est
+    progressive : bloquer d'abord sur les secrets et les CVE critiques, puis élargir une fois l'équipe
+    rodée.
+  en: |
+    **Setting every security stage to "warning only" to avoid red builds.**
+
+    A pipeline that scans but never blocks gives a false sense of security: alerts pile up, nobody reads
+    them, and the flaws ship to production anyway. The opposite mistake is to fail everything at once,
+    including on low-severity alerts or false positives: the team, drowning in red builds, ends up disabling
+    everything. The right approach is gradual: block first on secrets and critical CVEs, then widen once the
+    team is up to speed.
+
+bestPractice:
+  fr: |
+    - **Ordonnez du moins cher au plus cher** (*fail fast*) : secrets, puis SAST, SCA, image, DAST.
+    - **Un seuil clair par étape** : `--exit-code 1`, `--severity HIGH,CRITICAL`, `abortPipeline: true`.
+    - **Un `timeout` sur `waitForQualityGate`** pour ne pas bloquer sur un SonarQube indisponible.
+    - **Archivez les rapports dans `post { always }`** et affichez-les avec `recordIssues`/`publishHTML`.
+    - **`--ignore-unfixed`** sur les images pour ne pas bloquer sur des CVE sans correctif disponible.
+    - **Nettoyez l'environnement de test** (`docker compose down`) dans le bloc `post`.
+  en: |
+    - **Order from cheapest to most expensive** (*fail fast*): secrets, then SAST, SCA, image, DAST.
+    - **A clear threshold per stage**: `--exit-code 1`, `--severity HIGH,CRITICAL`, `abortPipeline: true`.
+    - **A `timeout` on `waitForQualityGate`** so you do not hang on an unavailable SonarQube.
+    - **Archive reports in `post { always }`** and show them with `recordIssues`/`publishHTML`.
+    - **`--ignore-unfixed`** on images to avoid blocking on CVEs that have no fix yet.
+    - **Clean up the test environment** (`docker compose down`) in the `post` block.
+
+exercise:
+  statement:
+    fr: |
+      On vous demande d'ajouter une étape **SCA** à un pipeline existant. Les contraintes :
+
+      1. l'étape s'appelle `Dependency scan` ;
+      2. elle utilise l'image Docker `aquasec/trivy:latest` pour scanner le système de fichiers du dépôt
+         (`trivy fs`) ;
+      3. elle ne doit faire échouer le build que sur les vulnérabilités `HIGH` et `CRITICAL` ;
+      4. elle écrit un rapport SARIF dans `reports/trivy-fs.sarif` ;
+      5. le rapport doit être archivé même si l'étape échoue.
+
+      Écrivez l'étape `Dependency scan` et le bloc `post` correspondant.
+    en: |
+      You are asked to add an **SCA** stage to an existing pipeline. The constraints:
+
+      1. the stage is called `Dependency scan`;
+      2. it uses the `aquasec/trivy:latest` Docker image to scan the repository filesystem (`trivy fs`);
+      3. it must fail the build only on `HIGH` and `CRITICAL` vulnerabilities;
+      4. it writes a SARIF report to `reports/trivy-fs.sarif`;
+      5. the report must be archived even if the stage fails.
+
+      Write the `Dependency scan` stage and the matching `post` block.
+  solution:
+    file: Jenkinsfile
+    lang: groovy
+    code: |
+      stage('Dependency scan') {
+          steps {
+              // trivy fs scans the dependency files in the workspace.
+              // --exit-code 1 fails the stage on HIGH/CRITICAL findings.
+              sh '''
+                docker run --rm -v "$WORKSPACE:/src" aquasec/trivy:latest fs /src \
+                  --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+                  --format sarif --output /src/reports/trivy-fs.sarif
+              '''
+          }
+      }
+      // ... elsewhere in the pipeline:
+      post {
+          always {
+              // allowEmptyArchive avoids a second error if the report is missing
+              archiveArtifacts artifacts: 'reports/trivy-fs.sarif', allowEmptyArchive: true
+          }
+      }
+    note:
+      fr: "Le point clé est `--exit-code 1` combiné à `--severity HIGH,CRITICAL` : Trivy ne renvoie `1` que pour ces deux niveaux, donc une CVE *medium* n'arrête pas le build. Le rapport est écrit dans le workspace monté, pas dans le conteneur jetable, pour pouvoir être archivé."
+      en: "The key point is `--exit-code 1` combined with `--severity HIGH,CRITICAL`: Trivy only returns `1` for those two levels, so a *medium* CVE does not stop the build. The report is written to the mounted workspace, not the throwaway container, so it can be archived."
+
+quiz:
+  - q:
+      fr: "Pourquoi placer l'étape de scan de secrets en premier ?"
+      en: "Why place the secret-scan stage first?"
+    options:
+      fr:
+        - "Parce que Gitleaks est le plus lent"
+        - "Pour appliquer le fail fast : inutile de construire si un secret est présent"
+        - "Parce que les secrets ne peuvent être trouvés qu'au début"
+        - "Pour masquer les autres étapes"
+      en:
+        - "Because Gitleaks is the slowest"
+        - "To apply fail fast: no point building if a secret is present"
+        - "Because secrets can only be found at the start"
+        - "To hide the other stages"
+    answer: 1
+    why:
+      fr: "On ordonne du contrôle le plus rapide et le plus précoce au plus coûteux. Détecter un secret tôt évite de gaspiller du temps à compiler, scanner et déployer un code à corriger de toute façon."
+      en: "Checks are ordered from the fastest and earliest to the most expensive. Catching a secret early avoids wasting time compiling, scanning and deploying code that must be fixed anyway."
+  - q:
+      fr: "Que fait `waitForQualityGate abortPipeline: true` ?"
+      en: "What does `waitForQualityGate abortPipeline: true` do?"
+    options:
+      fr:
+        - "Il relance l'analyse SonarQube"
+        - "Il attend le verdict du Quality Gate et fait échouer le build s'il est rouge"
+        - "Il désactive le Quality Gate"
+        - "Il archive le rapport SonarQube"
+      en:
+        - "It restarts the SonarQube analysis"
+        - "It waits for the Quality Gate verdict and fails the build if it is red"
+        - "It disables the Quality Gate"
+        - "It archives the SonarQube report"
+    answer: 1
+    why:
+      fr: "L'analyse SonarQube est asynchrone. `waitForQualityGate` récupère le résultat ; avec `abortPipeline: true`, un Quality Gate en échec arrête le build. Un `timeout` autour évite de bloquer si le serveur ne répond pas."
+      en: "The SonarQube analysis is asynchronous. `waitForQualityGate` retrieves the result; with `abortPipeline: true`, a failed Quality Gate stops the build. A surrounding `timeout` avoids hanging if the server does not answer."
+  - q:
+      fr: "À quoi sert `--ignore-unfixed` lors du scan d'une image ?"
+      en: "What is `--ignore-unfixed` for when scanning an image?"
+    options:
+      fr:
+        - "À ignorer toutes les vulnérabilités"
+        - "À corriger automatiquement l'image"
+        - "À accélérer le build de l'image"
+        - "À ne signaler que les CVE pour lesquelles un correctif existe"
+      en:
+        - "To ignore every vulnerability"
+        - "To fix the image automatically"
+        - "To speed up the image build"
+        - "To report only CVEs that have an available fix"
+    answer: 3
+    why:
+      fr: "`--ignore-unfixed` masque les CVE sans correctif publié : on évite de bloquer le build sur quelque chose qu'on ne peut pas encore corriger, tout en gardant la visibilité via le rapport complet."
+      en: "`--ignore-unfixed` hides CVEs with no published fix: you avoid blocking the build on something you cannot fix yet, while keeping visibility through the full report."
+  - q:
+      fr: "Pourquoi archiver les rapports dans `post { always }` plutôt que dans chaque étape ?"
+      en: "Why archive reports in `post { always }` rather than in each stage?"
+    options:
+      fr:
+        - "Pour que les rapports soient conservés même si une étape fait échouer le build"
+        - "Parce que les étapes ne peuvent pas écrire de fichiers"
+        - "Pour chiffrer les rapports"
+        - "Pour relancer le pipeline automatiquement"
+      en:
+        - "So reports are kept even when a stage fails the build"
+        - "Because stages cannot write files"
+        - "To encrypt the reports"
+        - "To restart the pipeline automatically"
+    answer: 0
+    why:
+      fr: "`always` s'exécute quel que soit le résultat. Si une étape de sécurité échoue et arrête le pipeline, les rapports déjà produits sont tout de même archivés et consultables."
+      en: "`always` runs whatever the outcome. If a security stage fails and stops the pipeline, the reports already produced are still archived and readable."
+  - q:
+      fr: "Dans quel dossier un conteneur de scan doit-il écrire son rapport ?"
+      en: "In which folder should a scanning container write its report?"
+    options:
+      fr:
+        - "Dans un dossier interne au conteneur jetable"
+        - "Dans /tmp du contrôleur"
+        - "Dans le workspace Jenkins monté dans le conteneur"
+        - "Nulle part, le rapport est inutile"
+      en:
+        - "In a folder internal to the throwaway container"
+        - "In /tmp on the controller"
+        - "In the Jenkins workspace mounted into the container"
+        - "Nowhere, the report is useless"
+    answer: 2
+    why:
+      fr: "Le conteneur est jetable : un fichier écrit à l'intérieur disparaît avec lui. En écrivant dans le workspace monté (`-v \"$WORKSPACE:/src\"`), le rapport survit et peut être archivé."
+      en: "The container is throwaway: a file written inside it vanishes with it. By writing to the mounted workspace (`-v \"$WORKSPACE:/src\"`), the report survives and can be archived."

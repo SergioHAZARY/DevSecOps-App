@@ -1,0 +1,541 @@
+description:
+  fr: "Écrire un microservice HTTP Go durci : délais d'attente, en-têtes de sécurité, validation des entrées, journalisation structurée avec slog, TLS et arrêt propre."
+  en: "Build a hardened Go HTTP microservice: timeouts, security headers, input validation, structured logging with slog, TLS and graceful shutdown."
+duration: 40
+
+intro:
+  fr: |
+    Un **microservice** est un petit serveur qui fait une seule chose et l'expose par HTTP : vérifier un
+    jeton, redimensionner une image, calculer un prix. En Go, la bibliothèque standard (`net/http`) suffit
+    pour en écrire un rapide et robuste, sans dépendance externe.
+
+    Le piège : le serveur par défaut de Go est pratique mais **dangereux en production**. Il n'a aucun délai
+    d'attente, aucun en-tête de sécurité, et il écoute en clair (HTTP). C'est comme laisser la porte d'un
+    magasin ouverte toute la nuit : ça « marche », jusqu'à ce qu'un client malveillant laisse une connexion
+    ouverte pour épuiser vos ressources (*Slowloris*).
+
+    Dans cette leçon, vous partez d'un serveur naïf, puis vous ajoutez, couche par couche, les délais
+    d'attente, un middleware d'en-têtes de sécurité, la validation des entrées, la journalisation structurée
+    avec `slog`, le TLS et l'arrêt propre (*graceful shutdown*).
+  en: |
+    A **microservice** is a small server that does one thing and exposes it over HTTP: verify a token,
+    resize an image, compute a price. In Go, the standard library (`net/http`) is enough to write a fast,
+    robust one with no external dependency.
+
+    The trap: Go's default server is convenient but **dangerous in production**. It has no timeouts, no
+    security headers, and it listens in clear text (HTTP). It is like leaving a shop door open all night:
+    it "works", until a malicious client keeps a connection open to exhaust your resources (*Slowloris*).
+
+    In this lesson you start from a naive server, then add, layer by layer, timeouts, a security-headers
+    middleware, input validation, structured logging with `slog`, TLS and graceful shutdown.
+
+sections:
+  - heading:
+      fr: "Pourquoi le serveur par défaut est risqué"
+      en: "Why the default server is risky"
+    body:
+      fr: |
+        `http.ListenAndServe(":8080", nil)` crée un `http.Server` avec **tous les délais à zéro**, c'est-à-dire
+        infinis. Un attaquant ouvre une connexion, envoie un octet par seconde, et la garde ouverte : chaque
+        connexion mobilise une goroutine et de la mémoire. Quelques milliers de connexions lentes suffisent à
+        faire tomber le service. C'est l'attaque **Slowloris**, et elle ne coûte presque rien à l'attaquant.
+
+        | Délai | Rôle | Valeur raisonnable |
+        |---|---|---|
+        | `ReadHeaderTimeout` | Temps max pour recevoir les en-têtes | `5s` - protège de Slowloris |
+        | `ReadTimeout` | Temps max pour lire toute la requête | `10s` |
+        | `WriteTimeout` | Temps max pour écrire la réponse | `15s` |
+        | `IdleTimeout` | Durée de vie d'une connexion keep-alive inactive | `60s` |
+        | `MaxHeaderBytes` | Taille max des en-têtes | `1 << 20` (1 Mo) |
+
+        Toujours construire explicitement un `&http.Server{...}` avec ces champs. `ReadHeaderTimeout` est le
+        plus important : c'est la défense directe contre Slowloris.
+      en: |
+        `http.ListenAndServe(":8080", nil)` creates an `http.Server` with **all timeouts set to zero**, meaning
+        infinite. An attacker opens a connection, sends one byte per second, and keeps it open: each connection
+        ties up a goroutine and memory. A few thousand slow connections are enough to bring the service down.
+        This is the **Slowloris** attack, and it costs the attacker almost nothing.
+
+        | Timeout | Role | Reasonable value |
+        |---|---|---|
+        | `ReadHeaderTimeout` | Max time to receive the headers | `5s` - protects against Slowloris |
+        | `ReadTimeout` | Max time to read the whole request | `10s` |
+        | `WriteTimeout` | Max time to write the response | `15s` |
+        | `IdleTimeout` | Lifetime of an idle keep-alive connection | `60s` |
+        | `MaxHeaderBytes` | Max size of the headers | `1 << 20` (1 MB) |
+
+        Always build an explicit `&http.Server{...}` with these fields. `ReadHeaderTimeout` is the most
+        important: it is the direct defense against Slowloris.
+  - heading:
+      fr: "Middleware, en-têtes de sécurité et arrêt propre"
+      en: "Middleware, security headers and graceful shutdown"
+    body:
+      fr: |
+        Un **middleware** est une fonction qui enveloppe un `http.Handler` pour ajouter un comportement
+        commun : journaliser, poser des en-têtes, limiter la taille du corps. On les enchaîne pour que chaque
+        requête passe par chaque couche.
+
+        Les **en-têtes de sécurité** disent au navigateur comment se protéger :
+
+        - `X-Content-Type-Options: nosniff` empêche le navigateur de deviner le type d'un fichier.
+        - `X-Frame-Options: DENY` empêche l'affichage dans une iframe (clickjacking).
+        - `Content-Security-Policy` restreint les sources de scripts.
+        - `Strict-Transport-Security` force HTTPS pour les prochaines visites.
+
+        L'**arrêt propre** (`srv.Shutdown(ctx)`) laisse les requêtes en cours se terminer avant de fermer le
+        serveur, au lieu de couper brutalement. On l'enclenche sur un signal `SIGINT`/`SIGTERM` (Ctrl-C,
+        ou l'arrêt d'un conteneur). Enfin, `slog` (standard depuis Go 1.21) produit des journaux
+        **structurés** (JSON) qu'un SIEM peut indexer, sans jamais enregistrer de secret.
+      en: |
+        A **middleware** is a function that wraps an `http.Handler` to add common behaviour: logging, setting
+        headers, limiting body size. You chain them so every request passes through each layer.
+
+        **Security headers** tell the browser how to protect itself:
+
+        - `X-Content-Type-Options: nosniff` stops the browser from guessing a file's type.
+        - `X-Frame-Options: DENY` prevents display inside an iframe (clickjacking).
+        - `Content-Security-Policy` restricts where scripts may come from.
+        - `Strict-Transport-Security` forces HTTPS on future visits.
+
+        **Graceful shutdown** (`srv.Shutdown(ctx)`) lets in-flight requests finish before closing the server,
+        instead of cutting them off. You trigger it on a `SIGINT`/`SIGTERM` signal (Ctrl-C, or a container
+        stopping). Finally, `slog` (standard since Go 1.21) produces **structured** logs (JSON) that a SIEM
+        can index, while never recording a secret.
+
+examples:
+  - title:
+      fr: "Serveur naïf : aucun délai, aucun en-tête de sécurité"
+      en: "Naive server: no timeout, no security header"
+    file: main.go
+    lang: go
+    kind: vulnerable
+    code: |
+      package main
+
+      import (
+      	"fmt"
+      	"net/http"
+      )
+
+      func hello(w http.ResponseWriter, r *http.Request) {
+      	// Problem 2: the user's name is reflected without any validation or encoding
+      	name := r.URL.Query().Get("name")
+      	fmt.Fprintf(w, "<p>Hello %s</p>", name)
+      }
+
+      func main() {
+      	http.HandleFunc("/hello", hello)
+
+      	// Problem 1: the default server has no timeouts (ReadHeaderTimeout = 0 = infinite).
+      	// A Slowloris attack keeps thousands of connections open and exhausts the process.
+      	http.ListenAndServe(":8080", nil)
+      }
+    output: |
+      $ curl 'http://localhost:8080/hello?name=<script>alert(1)</script>'
+      <p>Hello <script>alert(1)</script></p>
+    note:
+      fr: "Deux failles : pas de délai d'attente (vulnérable à Slowloris) et l'entrée utilisateur est renvoyée telle quelle dans du HTML (XSS réfléchi). Le code compile et répond, mais il ne doit jamais aller en production."
+      en: "Two flaws: no timeout (vulnerable to Slowloris) and the user input is echoed straight into HTML (reflected XSS). The code compiles and responds, but it must never reach production."
+
+  - title:
+      fr: "Serveur durci : délais, middlewares, validation et slog"
+      en: "Hardened server: timeouts, middlewares, validation and slog"
+    file: main.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"context"
+      	"errors"
+      	"html"
+      	"log/slog"
+      	"net/http"
+      	"os"
+      	"os/signal"
+      	"regexp"
+      	"syscall"
+      	"time"
+      )
+
+      var log = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+      // Allow-list: a name is 1-32 letters, digits, space, dash or underscore
+      var nameRe = regexp.MustCompile(`^[\p{L}\p{N} _-]{1,32}$`)
+
+      // securityHeaders sets defensive headers on every response
+      func securityHeaders(next http.Handler) http.Handler {
+      	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+      		h := w.Header()
+      		h.Set("X-Content-Type-Options", "nosniff")
+      		h.Set("X-Frame-Options", "DENY")
+      		h.Set("Content-Security-Policy", "default-src 'none'")
+      		h.Set("Referrer-Policy", "no-referrer")
+      		next.ServeHTTP(w, r)
+      	})
+      }
+
+      // requestLogger records who called what, never the request body or secrets
+      func requestLogger(next http.Handler) http.Handler {
+      	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+      		start := time.Now()
+      		next.ServeHTTP(w, r)
+      		log.Info("request",
+      			"method", r.Method, "path", r.URL.Path,
+      			"remote", r.RemoteAddr, "dur_ms", time.Since(start).Milliseconds())
+      	})
+      }
+
+      func hello(w http.ResponseWriter, r *http.Request) {
+      	name := r.URL.Query().Get("name")
+      	if !nameRe.MatchString(name) {
+      		// Reject bad input instead of trying to clean it
+      		http.Error(w, "invalid name", http.StatusBadRequest)
+      		return
+      	}
+      	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+      	// Defence in depth: validated AND HTML-escaped before output
+      	w.Write([]byte("<p>Hello " + html.EscapeString(name) + "</p>"))
+      }
+
+      func main() {
+      	mux := http.NewServeMux()
+      	mux.HandleFunc("/hello", hello)
+
+      	// Chain the middlewares around the router
+      	handler := securityHeaders(requestLogger(mux))
+
+      	srv := &http.Server{
+      		Addr:              ":8080",
+      		Handler:           handler,
+      		ReadHeaderTimeout: 5 * time.Second,  // direct defence against Slowloris
+      		ReadTimeout:       10 * time.Second,
+      		WriteTimeout:      15 * time.Second,
+      		IdleTimeout:       60 * time.Second,
+      		MaxHeaderBytes:    1 << 20, // 1 MB
+      	}
+
+      	// Start the server in its own goroutine so main can wait for a signal
+      	go func() {
+      		log.Info("listening", "addr", srv.Addr)
+      		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+      			log.Error("server failed", "err", err)
+      			os.Exit(1)
+      		}
+      	}()
+
+      	// Graceful shutdown: on Ctrl-C or SIGTERM, let in-flight requests finish
+      	stop := make(chan os.Signal, 1)
+      	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+      	<-stop
+
+      	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+      	defer cancel()
+      	if err := srv.Shutdown(ctx); err != nil {
+      		log.Error("shutdown failed", "err", err)
+      	}
+      	log.Info("stopped cleanly")
+      }
+    output: |
+      {"time":"2026-01-15T09:00:00Z","level":"INFO","msg":"listening","addr":":8080"}
+      $ curl 'http://localhost:8080/hello?name=Alice'
+      <p>Hello Alice</p>
+      $ curl -i 'http://localhost:8080/hello?name=<script>' | head -n 1
+      HTTP/1.1 400 Bad Request
+      {"time":"2026-01-15T09:00:03Z","level":"INFO","msg":"request","method":"GET","path":"/hello","remote":"127.0.0.1:52344","dur_ms":0}
+    note:
+      fr: "Les délais ferment les connexions lentes, le middleware pose les en-têtes, la validation par liste blanche rejette `<script>` avec un `400`, et `slog` journalise chaque requête en JSON sans exposer de secret. L'arrêt propre évite de couper une requête en cours lors d'un déploiement."
+      en: "Timeouts close slow connections, the middleware sets the headers, allow-list validation rejects `<script>` with a `400`, and `slog` logs every request as JSON without exposing a secret. Graceful shutdown avoids cutting off an in-flight request during a deploy."
+
+  - title:
+      fr: "Servir en HTTPS avec un certificat auto-signé (laboratoire)"
+      en: "Serving over HTTPS with a self-signed certificate (lab)"
+    file: tls.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Generate a self-signed certificate for localhost (LAB ONLY - use a real CA in production)
+      openssl req -x509 -newkey rsa:4096 -nodes \
+        -keyout key.pem -out cert.pem -days 365 \
+        -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
+
+      # The hardened server above becomes HTTPS by replacing ListenAndServe with:
+      #
+      #   srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+      #   srv.ListenAndServeTLS("cert.pem", "key.pem")
+      #
+      # MinVersion rejects the old, broken TLS 1.0 and 1.1 protocols.
+
+      # Test it, trusting our local self-signed cert only for this call
+      curl --cacert cert.pem 'https://localhost:8443/hello?name=Bob'
+    output: |
+      <p>Hello Bob</p>
+    note:
+      fr: "En production, le certificat vient d'une autorité reconnue (Let's Encrypt) ou d'un reverse proxy / mesh (Caddy, Traefik, Istio) qui termine le TLS. `MinVersion: tls.VersionTLS12` interdit les versions obsolètes. Le certificat auto-signé ne sert qu'à un laboratoire local."
+      en: "In production the certificate comes from a trusted authority (Let's Encrypt) or from a reverse proxy / mesh (Caddy, Traefik, Istio) that terminates TLS. `MinVersion: tls.VersionTLS12` forbids obsolete versions. The self-signed certificate is only for a local lab."
+
+  - title:
+      fr: "Limiter la taille du corps pour éviter l'épuisement mémoire"
+      en: "Limiting the body size to avoid memory exhaustion"
+    file: upload.go
+    lang: go
+    kind: secure
+    code: |
+      package main
+
+      import (
+      	"encoding/json"
+      	"net/http"
+      )
+
+      type order struct {
+      	Item string `json:"item"`
+      	Qty  int    `json:"qty"`
+      }
+
+      func createOrder(w http.ResponseWriter, r *http.Request) {
+      	// Cap the body at 64 KB: a huge POST can no longer exhaust the server's memory
+      	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+
+      	dec := json.NewDecoder(r.Body)
+      	dec.DisallowUnknownFields() // reject unexpected fields instead of ignoring them
+
+      	var o order
+      	if err := dec.Decode(&o); err != nil {
+      		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+      		return
+      	}
+      	// Validate business rules AFTER decoding
+      	if o.Item == "" || o.Qty < 1 || o.Qty > 1000 {
+      		http.Error(w, "item required and qty must be 1-1000", http.StatusBadRequest)
+      		return
+      	}
+
+      	w.WriteHeader(http.StatusCreated)
+      	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
+      }
+    output: |
+      $ curl -X POST localhost:8080/orders -d '{"item":"ssl-cert","qty":2}'
+      {"status":"created"}
+      $ curl -X POST localhost:8080/orders -d '{"item":"x","qty":0}'
+      item required and qty must be 1-1000
+    note:
+      fr: "`http.MaxBytesReader` plafonne la taille du corps : un POST de plusieurs gigaoctets ne peut plus saturer la mémoire. `DisallowUnknownFields` rejette les champs inattendus (défense contre le *mass assignment*), et les règles métier sont vérifiées après le décodage."
+      en: "`http.MaxBytesReader` caps the body size: a multi-gigabyte POST can no longer exhaust memory. `DisallowUnknownFields` rejects unexpected fields (a defence against mass assignment), and business rules are checked after decoding."
+
+mistake:
+  fr: |
+    **Utiliser `http.ListenAndServe` directement en production.**
+
+    ```go
+    http.ListenAndServe(":8080", mux) // no timeouts: Slowloris-ready
+    ```
+
+    Ce raccourci crée un serveur sans aucun délai d'attente. Tant que le trafic est honnête, tout va bien,
+    mais une seule machine peut ouvrir des milliers de connexions lentes et épuiser vos goroutines et votre
+    mémoire. Construisez toujours un `&http.Server{...}` explicite avec au minimum `ReadHeaderTimeout`,
+    `ReadTimeout` et `WriteTimeout`. Le gain de confort du raccourci ne vaut pas le risque de déni de service.
+  en: |
+    **Using `http.ListenAndServe` directly in production.**
+
+    ```go
+    http.ListenAndServe(":8080", mux) // no timeouts: Slowloris-ready
+    ```
+
+    This shortcut creates a server with no timeouts at all. As long as traffic is honest, everything is fine,
+    but a single machine can open thousands of slow connections and exhaust your goroutines and memory.
+    Always build an explicit `&http.Server{...}` with at least `ReadHeaderTimeout`, `ReadTimeout` and
+    `WriteTimeout`. The convenience of the shortcut is not worth the denial-of-service risk.
+
+bestPractice:
+  fr: |
+    - **Définissez tous les délais** : `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, `IdleTimeout`.
+    - **Plafonnez les entrées** : `MaxHeaderBytes` et `http.MaxBytesReader` sur le corps.
+    - **Validez par liste blanche** : acceptez ce qui correspond à un format connu, rejetez le reste.
+    - **Posez les en-têtes de sécurité** via un middleware appliqué à toutes les routes.
+    - **Journalisez en structuré avec `slog`** : méthode, chemin, statut, durée - jamais de secret ni de corps.
+    - **Servez en TLS 1.2+** (`MinVersion: tls.VersionTLS12`), idéalement via une vraie autorité.
+    - **Implémentez l'arrêt propre** avec `srv.Shutdown(ctx)` sur `SIGINT`/`SIGTERM`.
+  en: |
+    - **Set all timeouts**: `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, `IdleTimeout`.
+    - **Cap inputs**: `MaxHeaderBytes` and `http.MaxBytesReader` on the body.
+    - **Validate with an allow-list**: accept what matches a known format, reject everything else.
+    - **Set security headers** through a middleware applied to every route.
+    - **Log in structured form with `slog`**: method, path, status, duration - never a secret or a body.
+    - **Serve over TLS 1.2+** (`MinVersion: tls.VersionTLS12`), ideally through a real authority.
+    - **Implement graceful shutdown** with `srv.Shutdown(ctx)` on `SIGINT`/`SIGTERM`.
+
+exercise:
+  statement:
+    fr: |
+      Complétez ce microservice `/health` pour qu'il soit prêt pour la production.
+
+      ```go
+      package main
+
+      import "net/http"
+
+      func main() {
+          mux := http.NewServeMux()
+          mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+              w.Write([]byte("ok"))
+          })
+          http.ListenAndServe(":8080", mux) // to fix
+      }
+      ```
+
+      1. Remplacez le raccourci par un `&http.Server{...}` avec `ReadHeaderTimeout`, `ReadTimeout` et
+         `WriteTimeout`.
+      2. Ajoutez un middleware qui pose l'en-tête `X-Content-Type-Options: nosniff` sur chaque réponse.
+      3. Branchez le middleware sur le serveur.
+    en: |
+      Complete this `/health` microservice so it is production-ready.
+
+      ```go
+      package main
+
+      import "net/http"
+
+      func main() {
+          mux := http.NewServeMux()
+          mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+              w.Write([]byte("ok"))
+          })
+          http.ListenAndServe(":8080", mux) // to fix
+      }
+      ```
+
+      1. Replace the shortcut with an `&http.Server{...}` that sets `ReadHeaderTimeout`, `ReadTimeout` and
+         `WriteTimeout`.
+      2. Add a middleware that sets the `X-Content-Type-Options: nosniff` header on every response.
+      3. Wire the middleware into the server.
+  solution:
+    file: main.go
+    lang: go
+    code: |
+      package main
+
+      import (
+      	"net/http"
+      	"time"
+      )
+
+      // nosniff adds a defensive header to every response
+      func nosniff(next http.Handler) http.Handler {
+      	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+      		w.Header().Set("X-Content-Type-Options", "nosniff")
+      		next.ServeHTTP(w, r)
+      	})
+      }
+
+      func main() {
+      	mux := http.NewServeMux()
+      	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+      		w.Write([]byte("ok"))
+      	})
+
+      	srv := &http.Server{
+      		Addr:              ":8080",
+      		Handler:           nosniff(mux), // middleware wraps the router
+      		ReadHeaderTimeout: 5 * time.Second,
+      		ReadTimeout:       10 * time.Second,
+      		WriteTimeout:      15 * time.Second,
+      	}
+      	srv.ListenAndServe()
+      }
+    note:
+      fr: "`ReadHeaderTimeout` est la ligne la plus importante : c'est elle qui protège de Slowloris. Le middleware `nosniff` enveloppe le routeur, donc chaque route hérite de l'en-tête."
+      en: "`ReadHeaderTimeout` is the single most important line: it is what protects against Slowloris. The `nosniff` middleware wraps the router, so every route inherits the header."
+
+quiz:
+  - q:
+      fr: "Quel délai du serveur HTTP protège le plus directement contre une attaque Slowloris ?"
+      en: "Which HTTP server timeout most directly protects against a Slowloris attack?"
+    options:
+      fr:
+        - "`ReadHeaderTimeout`"
+        - "`IdleTimeout`"
+        - "`WriteTimeout`"
+        - "Aucun, il faut un pare-feu"
+      en:
+        - "`ReadHeaderTimeout`"
+        - "`IdleTimeout`"
+        - "`WriteTimeout`"
+        - "None, you need a firewall"
+    answer: 0
+    why:
+      fr: "Slowloris envoie les en-têtes très lentement ; `ReadHeaderTimeout` ferme la connexion si les en-têtes ne sont pas reçus à temps."
+      en: "Slowloris sends headers very slowly; `ReadHeaderTimeout` closes the connection if the headers are not received in time."
+  - q:
+      fr: "Pourquoi éviter `http.ListenAndServe(\":8080\", mux)` en production ?"
+      en: "Why avoid `http.ListenAndServe(\":8080\", mux)` in production?"
+    options:
+      fr:
+        - "Parce qu'il ne supporte pas le JSON"
+        - "Parce qu'il crée un serveur sans aucun délai d'attente"
+        - "Parce qu'il est plus lent que Cobra"
+        - "Parce qu'il ne compile pas sous Linux"
+      en:
+        - "Because it does not support JSON"
+        - "Because it creates a server with no timeouts at all"
+        - "Because it is slower than Cobra"
+        - "Because it does not compile on Linux"
+    answer: 1
+    why:
+      fr: "Ce raccourci utilise des délais à zéro (infinis), ce qui laisse le serveur vulnérable aux connexions lentes."
+      en: "This shortcut uses zero (infinite) timeouts, leaving the server vulnerable to slow connections."
+  - q:
+      fr: "À quoi sert `http.MaxBytesReader` ?"
+      en: "What is `http.MaxBytesReader` for?"
+    options:
+      fr:
+        - "À chiffrer le corps de la requête"
+        - "À compresser la réponse"
+        - "À limiter la taille du corps lu, pour éviter l'épuisement mémoire"
+        - "À valider le format JSON"
+      en:
+        - "To encrypt the request body"
+        - "To compress the response"
+        - "To limit the size of the body read, avoiding memory exhaustion"
+        - "To validate the JSON format"
+    answer: 2
+    why:
+      fr: "Il plafonne le nombre d'octets lus depuis le corps ; au-delà, la lecture échoue, ce qui bloque les requêtes géantes."
+      en: "It caps the number of bytes read from the body; beyond that, reading fails, which blocks oversized requests."
+  - q:
+      fr: "Quel est le rôle d'un middleware d'en-têtes de sécurité ?"
+      en: "What is the role of a security-headers middleware?"
+    options:
+      fr:
+        - "Il ajoute des en-têtes comme `X-Content-Type-Options` à chaque réponse"
+        - "Il chiffre la base de données"
+        - "Il remplace le besoin de TLS"
+        - "Il supprime les logs sensibles"
+      en:
+        - "It adds headers like `X-Content-Type-Options` to every response"
+        - "It encrypts the database"
+        - "It removes the need for TLS"
+        - "It deletes sensitive logs"
+    answer: 0
+    why:
+      fr: "Un middleware enveloppe le routeur et applique les mêmes en-têtes défensifs à toutes les routes, de façon centralisée."
+      en: "A middleware wraps the router and applies the same defensive headers to all routes, in one central place."
+  - q:
+      fr: "Que fait `srv.Shutdown(ctx)` lors d'un arrêt propre ?"
+      en: "What does `srv.Shutdown(ctx)` do during a graceful shutdown?"
+    options:
+      fr:
+        - "Il supprime les fichiers temporaires"
+        - "Il coupe immédiatement toutes les connexions"
+        - "Il redémarre le serveur"
+        - "Il laisse les requêtes en cours se terminer avant de fermer le serveur"
+      en:
+        - "It deletes temporary files"
+        - "It cuts all connections immediately"
+        - "It restarts the server"
+        - "It lets in-flight requests finish before closing the server"
+    answer: 3
+    why:
+      fr: "`Shutdown` arrête d'accepter de nouvelles connexions et attend la fin des requêtes en cours, dans la limite du contexte fourni."
+      en: "`Shutdown` stops accepting new connections and waits for in-flight requests to finish, within the given context deadline."

@@ -1,0 +1,407 @@
+description:
+  fr: "Comprendre l'architecture d'un cluster Kubernetes : plan de contrôle, nœuds, composants, et créer un cluster local avec kind ou minikube pour piloter kubectl."
+  en: "Understand a Kubernetes cluster's architecture: control plane, nodes, components, and spin up a local cluster with kind or minikube to drive kubectl."
+duration: 35
+
+intro:
+  fr: |
+    **Kubernetes** (souvent abrégé **K8s** : K, puis 8 lettres, puis s) est un orchestrateur de conteneurs.
+    Son travail : faire tourner vos conteneurs sur un ensemble de machines, les redémarrer s'ils tombent,
+    les répartir, les mettre à jour sans coupure. Vous décrivez **l'état voulu** (« je veux 3 copies de mon
+    API ») et Kubernetes s'arrange pour que la réalité y corresponde en permanence.
+
+    Imaginez le chef d'orchestre d'un grand orchestre : il ne joue d'aucun instrument, mais il coordonne les
+    musiciens pour que la partition soit respectée, remplace celui qui s'arrête, et ajuste le tempo. Le chef
+    est le **plan de contrôle** (*control plane*), les musiciens sont les **nœuds** (*nodes*).
+
+    Dans cette leçon, vous allez découvrir chaque composant du cluster, puis en créer un **en local** avec
+    `kind` ou `minikube` et le piloter avec `kubectl`, l'outil en ligne de commande que vous utiliserez
+    dans toutes les leçons suivantes.
+  en: |
+    **Kubernetes** (often shortened to **K8s**: K, then 8 letters, then s) is a container orchestrator. Its
+    job: run your containers across a set of machines, restart them if they fall over, spread them out,
+    update them without downtime. You describe the **desired state** ("I want 3 copies of my API") and
+    Kubernetes works to make reality match it at all times.
+
+    Picture the conductor of a large orchestra: they play no instrument, but they coordinate the musicians
+    so the score is followed, replace one who stops, and adjust the tempo. The conductor is the **control
+    plane**, the musicians are the **nodes**.
+
+    In this lesson you will discover each cluster component, then create one **locally** with `kind` or
+    `minikube` and drive it with `kubectl`, the command-line tool you will use in every following lesson.
+
+sections:
+  - heading:
+      fr: "Plan de contrôle et nœuds"
+      en: "Control plane and nodes"
+    body:
+      fr: |
+        Un cluster se divise en deux parties : le **plan de contrôle** qui décide, et les **nœuds de
+        travail** (*worker nodes*) qui exécutent les conteneurs.
+
+        | Composant | Emplacement | Rôle |
+        |---|---|---|
+        | `kube-apiserver` | Plan de contrôle | Le point d'entrée : toute commande passe par lui |
+        | `etcd` | Plan de contrôle | La base de données qui stocke l'état du cluster |
+        | `kube-scheduler` | Plan de contrôle | Décide sur quel nœud placer chaque Pod |
+        | `kube-controller-manager` | Plan de contrôle | Boucle qui corrige l'écart état réel/état voulu |
+        | `kubelet` | Chaque nœud | Agent qui lance et surveille les conteneurs |
+        | `kube-proxy` | Chaque nœud | Gère les règles réseau pour les Services |
+
+        Le cœur du fonctionnement est la **boucle de réconciliation** : les contrôleurs comparent sans cesse
+        l'état réel à l'état voulu stocké dans `etcd`, et agissent pour combler l'écart. C'est pourquoi un
+        Pod supprimé par erreur est recréé : l'état voulu n'a pas changé.
+      en: |
+        A cluster splits into two parts: the **control plane** that decides, and the **worker nodes** that
+        run the containers.
+
+        | Component | Location | Role |
+        |---|---|---|
+        | `kube-apiserver` | Control plane | The entry point: every command goes through it |
+        | `etcd` | Control plane | The database storing the cluster's state |
+        | `kube-scheduler` | Control plane | Decides which node each Pod lands on |
+        | `kube-controller-manager` | Control plane | Loop that corrects the actual/desired gap |
+        | `kubelet` | Each node | Agent that starts and watches the containers |
+        | `kube-proxy` | Each node | Manages the network rules for Services |
+
+        The heart of it is the **reconciliation loop**: controllers constantly compare the actual state to
+        the desired state stored in `etcd`, and act to close the gap. That is why a Pod deleted by mistake
+        is recreated: the desired state has not changed.
+  - heading:
+      fr: "Objets, déclaratif et namespaces"
+      en: "Objects, declarative and namespaces"
+    body:
+      fr: |
+        On ne « lance » pas des conteneurs dans Kubernetes : on crée des **objets** décrits en YAML (Pod,
+        Deployment, Service...) qu'on envoie à l'API. Chaque objet a quatre champs de base :
+
+        - `apiVersion` : la version de l'API (ex. `apps/v1`, `v1`).
+        - `kind` : le type d'objet (`Pod`, `Deployment`).
+        - `metadata` : le nom, les labels.
+        - `spec` : l'état voulu.
+
+        L'approche **déclarative** (`kubectl apply -f`) est la bonne : on décrit l'état voulu dans un
+        fichier versionné, et Kubernetes converge vers lui. L'approche **impérative** (`kubectl run`,
+        `kubectl create`) est pratique pour expérimenter, mais ne laisse aucune trace réutilisable.
+
+        Les **namespaces** cloisonnent les objets d'un même cluster (par équipe, par environnement). Le
+        namespace `default` existe toujours ; `kube-system` héberge les composants internes. On ne mélange
+        jamais la production et les tests dans le même namespace.
+      en: |
+        You do not "launch" containers in Kubernetes: you create **objects** described in YAML (Pod,
+        Deployment, Service...) that you send to the API. Every object has four base fields:
+
+        - `apiVersion`: the API version (e.g. `apps/v1`, `v1`).
+        - `kind`: the object type (`Pod`, `Deployment`).
+        - `metadata`: the name, the labels.
+        - `spec`: the desired state.
+
+        The **declarative** approach (`kubectl apply -f`) is the right one: you describe the desired state
+        in a versioned file, and Kubernetes converges to it. The **imperative** approach (`kubectl run`,
+        `kubectl create`) is handy for experimenting, but leaves no reusable trace.
+
+        **Namespaces** partition the objects of a single cluster (per team, per environment). The `default`
+        namespace always exists; `kube-system` hosts the internal components. Never mix production and tests
+        in the same namespace.
+  - heading:
+      fr: "Un cluster local pour apprendre"
+      en: "A local cluster to learn with"
+    body:
+      fr: |
+        Pas besoin de cloud pour apprendre : on crée un cluster sur son poste.
+
+        | Outil | Idée | Pour |
+        |---|---|---|
+        | `kind` | Kubernetes *in Docker* : les nœuds sont des conteneurs | CI, multi-nœuds rapide |
+        | `minikube` | Une VM ou un conteneur unique | Débuter, tester des add-ons |
+        | `k3d` | k3s léger dans Docker | Clusters très légers |
+
+        L'outil universel pour parler au cluster est **`kubectl`**. Quelques commandes reviennent sans
+        cesse :
+
+        | Commande | Rôle |
+        |---|---|
+        | `kubectl get nodes` | Lister les nœuds |
+        | `kubectl get pods -A` | Lister tous les Pods de tous les namespaces |
+        | `kubectl apply -f fichier.yaml` | Créer/mettre à jour des objets |
+        | `kubectl describe pod <nom>` | Détailler un objet et ses événements |
+        | `kubectl logs <pod>` | Lire les journaux d'un Pod |
+
+        `kubectl config current-context` montre à quel cluster vous parlez — à vérifier avant toute
+        commande, pour ne jamais agir par erreur sur la production.
+      en: |
+        No cloud needed to learn: you create a cluster on your workstation.
+
+        | Tool | Idea | For |
+        |---|---|---|
+        | `kind` | Kubernetes *in Docker*: nodes are containers | CI, fast multi-node |
+        | `minikube` | A single VM or container | Getting started, testing add-ons |
+        | `k3d` | Lightweight k3s in Docker | Very light clusters |
+
+        The universal tool to talk to the cluster is **`kubectl`**. A handful of commands come up
+        constantly:
+
+        | Command | Role |
+        |---|---|
+        | `kubectl get nodes` | List the nodes |
+        | `kubectl get pods -A` | List every Pod in every namespace |
+        | `kubectl apply -f file.yaml` | Create/update objects |
+        | `kubectl describe pod <name>` | Detail an object and its events |
+        | `kubectl logs <pod>` | Read a Pod's logs |
+
+        `kubectl config current-context` shows which cluster you are talking to — check it before any
+        command, so you never act on production by mistake.
+
+examples:
+  - title:
+      fr: "Créer un cluster local avec kind"
+      en: "Create a local cluster with kind"
+    file: create-cluster.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Create a 3-node cluster (1 control plane + 2 workers) from a config file
+      cat > kind-config.yaml <<'EOF'
+      kind: Cluster
+      apiVersion: kind.x-k8s.io/v1alpha4
+      nodes:
+        - role: control-plane
+        - role: worker
+        - role: worker
+      EOF
+
+      kind create cluster --name lab --config kind-config.yaml
+
+      # Confirm which cluster kubectl now talks to (avoid acting on the wrong one)
+      kubectl config current-context
+
+      # List the nodes: you should see one control-plane and two workers
+      kubectl get nodes
+    output: |
+      kind-lab
+      NAME                STATUS   ROLES           AGE   VERSION
+      lab-control-plane   Ready    control-plane   40s   v1.31.0
+      lab-worker          Ready    <none>          20s   v1.31.0
+      lab-worker2         Ready    <none>          20s   v1.31.0
+    note:
+      fr: "`kind` crée chaque nœud comme un conteneur Docker : un cluster multi-nœuds en quelques secondes. `kubectl config current-context` confirme qu'on parle bien au cluster `kind-lab` et pas à la production."
+      en: "`kind` creates each node as a Docker container: a multi-node cluster in seconds. `kubectl config current-context` confirms you are talking to the `kind-lab` cluster, not production."
+
+  - title:
+      fr: "Explorer les composants du plan de contrôle"
+      en: "Explore the control plane components"
+    file: explore.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # The internal components run as Pods in the kube-system namespace
+      kubectl get pods -n kube-system
+
+      # Show the API resources and their apiVersion (handy reference)
+      kubectl api-resources | head -n 8
+
+      # Inspect one node in detail: capacity, conditions, running pods
+      kubectl describe node lab-control-plane | head -n 20
+    output: |
+      NAME                                        READY   STATUS    RESTARTS   AGE
+      etcd-lab-control-plane                      1/1     Running   0          2m
+      kube-apiserver-lab-control-plane            1/1     Running   0          2m
+      kube-controller-manager-lab-control-plane   1/1     Running   0          2m
+      kube-scheduler-lab-control-plane            1/1     Running   0          2m
+      coredns-76f75df574-abcde                    1/1     Running   0          2m
+    note:
+      fr: "Les composants du plan de contrôle (`etcd`, `kube-apiserver`, `kube-scheduler`...) tournent eux-mêmes comme des Pods dans `kube-system` : Kubernetes se gère lui-même avec ses propres mécanismes."
+      en: "The control plane components (`etcd`, `kube-apiserver`, `kube-scheduler`...) themselves run as Pods in `kube-system`: Kubernetes manages itself with its own mechanisms."
+
+  - title:
+      fr: "Déclaratif : un namespace décrit en YAML"
+      en: "Declarative: a namespace described in YAML"
+    file: namespace.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # The declarative way: a versioned file, applied with kubectl apply
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: shop
+        labels:
+          # Enforce the "restricted" Pod Security Standard on this namespace
+          pod-security.kubernetes.io/enforce: restricted
+          environment: production
+    output: |
+      $ kubectl apply -f namespace.yaml
+      namespace/shop created
+      $ kubectl get namespace shop --show-labels
+      NAME   STATUS   AGE   LABELS
+      shop   Active   3s    environment=production,pod-security.kubernetes.io/enforce=restricted
+    note:
+      fr: "On décrit le namespace dans un fichier versionné plutôt qu'avec `kubectl create namespace`. Le label `pod-security.../enforce: restricted` applique d'emblée une politique de sécurité à tout ce qui y sera créé."
+      en: "You describe the namespace in a versioned file rather than with `kubectl create namespace`. The `pod-security.../enforce: restricted` label applies a security policy from the start to everything created in it."
+
+mistake:
+  fr: |
+    **Tout créer de façon impérative avec `kubectl run` et `kubectl create`.**
+
+    Ces commandes sont parfaites pour explorer, mais elles ne laissent **aucune trace** : six mois plus
+    tard, personne ne sait pourquoi tel Pod existe ni comment le recréer à l'identique. Pire, on finit par
+    agir sur le mauvais cluster faute d'avoir vérifié le contexte. Décrivez vos objets dans des fichiers
+    YAML versionnés dans Git et appliquez-les avec `kubectl apply -f`. Vous obtenez un historique,
+    des revues de code, et la possibilité de recréer tout le cluster à partir du dépôt. Et vérifiez toujours
+    `kubectl config current-context` avant une commande qui modifie quelque chose.
+  en: |
+    **Creating everything imperatively with `kubectl run` and `kubectl create`.**
+
+    These commands are perfect for exploring, but they leave **no trace**: six months later nobody knows
+    why a given Pod exists or how to recreate it identically. Worse, you end up acting on the wrong cluster
+    for lack of checking the context. Describe your objects in YAML files versioned in Git and apply them
+    with `kubectl apply -f`. You get history, code reviews, and the ability to recreate the whole cluster
+    from the repository. And always check `kubectl config current-context` before any command that changes
+    something.
+
+bestPractice:
+  fr: |
+    - **Déclaratif par défaut** : objets en YAML versionnés, appliqués avec `kubectl apply -f`.
+    - **Vérifiez le contexte** (`kubectl config current-context`) avant toute commande modifiante.
+    - **Un namespace par environnement/équipe** ; jamais la prod et les tests mélangés.
+    - **Cluster local** (`kind`/`minikube`) pour apprendre et pour la CI, sans risque ni coût.
+    - **Labels dès la création** pour organiser, filtrer et appliquer des politiques de sécurité.
+    - **`kubectl describe` et `kubectl get -o yaml`** pour comprendre un objet avant d'agir dessus.
+  en: |
+    - **Declarative by default**: objects in versioned YAML, applied with `kubectl apply -f`.
+    - **Check the context** (`kubectl config current-context`) before any modifying command.
+    - **One namespace per environment/team**; never prod and tests mixed.
+    - **Local cluster** (`kind`/`minikube`) to learn and for CI, without risk or cost.
+    - **Labels from creation** to organise, filter and apply security policies.
+    - **`kubectl describe` and `kubectl get -o yaml`** to understand an object before acting on it.
+
+exercise:
+  statement:
+    fr: |
+      Vous débutez sur un cluster local.
+
+      1. Donnez la commande qui vérifie à quel cluster `kubectl` est actuellement connecté.
+      2. Donnez la commande qui liste tous les Pods de tous les namespaces.
+      3. Écrivez un manifeste YAML qui crée un namespace nommé `staging` portant le label
+         `environment: staging`, de façon déclarative.
+    en: |
+      You are starting on a local cluster.
+
+      1. Give the command that checks which cluster `kubectl` is currently connected to.
+      2. Give the command that lists every Pod in every namespace.
+      3. Write a YAML manifest that creates a namespace named `staging` with the label
+         `environment: staging`, declaratively.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # 1. Check the active cluster/context:
+      #      kubectl config current-context
+      #
+      # 2. List all pods across all namespaces:
+      #      kubectl get pods --all-namespaces   (or -A)
+      #
+      # 3. Declarative namespace manifest:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: staging
+        labels:
+          environment: staging
+      # Apply it with:
+      #   kubectl apply -f solution.yaml
+    note:
+      fr: "`current-context` évite d'agir sur le mauvais cluster ; `-A` est le raccourci de `--all-namespaces`. Le namespace est décrit en YAML versionné, pas créé à la volée."
+      en: "`current-context` avoids acting on the wrong cluster; `-A` is the shortcut for `--all-namespaces`. The namespace is described in versioned YAML, not created on the fly."
+
+quiz:
+  - q:
+      fr: "Quel composant stocke l'état complet du cluster ?"
+      en: "Which component stores the cluster's complete state?"
+    options:
+      fr:
+        - "`kubelet`"
+        - "`etcd`"
+        - "`kube-proxy`"
+        - "`kube-scheduler`"
+      en:
+        - "`kubelet`"
+        - "`etcd`"
+        - "`kube-proxy`"
+        - "`kube-scheduler`"
+    answer: 1
+    why:
+      fr: "`etcd` est la base de données clé-valeur du plan de contrôle : elle conserve l'état voulu de tous les objets du cluster."
+      en: "`etcd` is the control plane's key-value database: it holds the desired state of every object in the cluster."
+  - q:
+      fr: "Quel composant tourne sur chaque nœud pour lancer et surveiller les conteneurs ?"
+      en: "Which component runs on each node to start and watch the containers?"
+    options:
+      fr:
+        - "`kube-apiserver`"
+        - "`etcd`"
+        - "`kubelet`"
+        - "`kube-controller-manager`"
+      en:
+        - "`kube-apiserver`"
+        - "`etcd`"
+        - "`kubelet`"
+        - "`kube-controller-manager`"
+    answer: 2
+    why:
+      fr: "Le `kubelet` est l'agent présent sur chaque nœud : il reçoit les spécifications des Pods et s'assure que les conteneurs tournent."
+      en: "The `kubelet` is the agent present on each node: it receives Pod specs and makes sure the containers run."
+  - q:
+      fr: "Qu'est-ce que la boucle de réconciliation de Kubernetes ?"
+      en: "What is Kubernetes' reconciliation loop?"
+    options:
+      fr:
+        - "Un mécanisme qui compare l'état réel à l'état voulu et corrige l'écart"
+        - "Un pare-feu intégré"
+        - "Un système de sauvegarde des journaux"
+        - "Un outil de compilation d'images"
+      en:
+        - "A mechanism that compares actual state to desired state and closes the gap"
+        - "A built-in firewall"
+        - "A log backup system"
+        - "An image build tool"
+    answer: 0
+    why:
+      fr: "Les contrôleurs observent sans cesse l'état réel et agissent pour le ramener vers l'état voulu stocké dans `etcd` : d'où la recréation automatique d'un Pod supprimé."
+      en: "Controllers constantly watch the actual state and act to bring it back to the desired state stored in `etcd`: hence the automatic recreation of a deleted Pod."
+  - q:
+      fr: "Pourquoi préférer `kubectl apply -f` (déclaratif) à `kubectl run` (impératif) ?"
+      en: "Why prefer `kubectl apply -f` (declarative) over `kubectl run` (imperative)?"
+    options:
+      fr:
+        - "Parce que c'est plus rapide à taper"
+        - "Parce que l'état est décrit dans un fichier versionné, traçable et reproductible"
+        - "Parce que `kubectl run` ne fonctionne pas"
+        - "Parce que le déclaratif chiffre les objets"
+      en:
+        - "Because it is faster to type"
+        - "Because the state is described in a versioned, traceable, reproducible file"
+        - "Because `kubectl run` does not work"
+        - "Because declarative encrypts objects"
+    answer: 1
+    why:
+      fr: "Le déclaratif laisse une trace Git : historique, revue et recréation à l'identique, contrairement à une commande impérative sans trace."
+      en: "Declarative leaves a Git trace: history, review and identical recreation, unlike an imperative command that leaves nothing."
+  - q:
+      fr: "À quoi servent les namespaces ?"
+      en: "What are namespaces for?"
+    options:
+      fr:
+        - "À chiffrer les Secrets"
+        - "À accélérer le scheduler"
+        - "À remplacer les nœuds"
+        - "À cloisonner les objets d'un même cluster (par équipe, par environnement)"
+      en:
+        - "To encrypt Secrets"
+        - "To speed up the scheduler"
+        - "To replace nodes"
+        - "To partition objects within one cluster (per team, per environment)"
+    answer: 3
+    why:
+      fr: "Les namespaces isolent logiquement les objets : on y sépare les environnements et les équipes, sans jamais mélanger production et tests."
+      en: "Namespaces logically isolate objects: you separate environments and teams in them, never mixing production and tests."

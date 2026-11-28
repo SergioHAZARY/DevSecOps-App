@@ -1,0 +1,454 @@
+description:
+  fr: "Empaqueter, versionner et déployer des applications Kubernetes avec Helm : structure d'un chart, values, templates, helpers et gestion multi-environnements."
+  en: "Package, version and deploy Kubernetes applications with Helm: chart structure, values, templates, helpers and multi-environment management."
+duration: 40
+
+intro:
+  fr: |
+    Déployer une application Kubernetes réelle, c'est écrire un Deployment, un Service, un Ingress, un
+    ConfigMap, parfois un HPA... et refaire tout cela, presque à l'identique, pour la dev, la préprod et la
+    prod. Copier-coller ces fichiers en changeant trois valeurs à la main est une source d'erreurs sans fin.
+
+    **Helm** est le « gestionnaire de paquets » de Kubernetes, comme `apt` l'est pour Debian ou `npm` pour
+    JavaScript. Il empaquète tous vos manifestes dans un **chart** paramétrable : vous écrivez les
+    manifestes une fois, avec des trous (`{{ .Values.image.tag }}`), et vous les remplissez différemment
+    par environnement avec des fichiers `values`.
+
+    Imaginez un formulaire type à remplir plutôt que de réécrire une lettre entière à chaque fois. Vous allez
+    créer un chart, comprendre sa structure, écrire des templates et des helpers, gérer plusieurs
+    environnements avec des `values` distincts, et maîtriser `install`, `upgrade`, `rollback`, `lint` et
+    `template`.
+  en: |
+    Deploying a real Kubernetes application means writing a Deployment, a Service, an Ingress, a ConfigMap,
+    sometimes an HPA... and redoing all of that, nearly identically, for dev, staging and prod. Copy-pasting
+    these files while changing three values by hand is an endless source of errors.
+
+    **Helm** is Kubernetes' "package manager", as `apt` is for Debian or `npm` for JavaScript. It packages
+    all your manifests into a parameterisable **chart**: you write the manifests once, with blanks
+    (`{{ .Values.image.tag }}`), and fill them differently per environment with `values` files.
+
+    Picture a template form to fill in rather than rewriting a whole letter each time. You will create a
+    chart, understand its structure, write templates and helpers, manage several environments with separate
+    `values`, and master `install`, `upgrade`, `rollback`, `lint` and `template`.
+
+sections:
+  - heading:
+      fr: "La structure d'un chart"
+      en: "The structure of a chart"
+    body:
+      fr: |
+        `helm create myapp` génère un **chart** : un dossier avec une structure conventionnelle.
+
+        | Fichier / dossier | Rôle |
+        |---|---|
+        | `Chart.yaml` | Métadonnées : nom, version du chart, version de l'appli |
+        | `values.yaml` | Les valeurs par défaut (les « réglages » du chart) |
+        | `templates/` | Les manifestes Kubernetes, avec des variables `{{ }}` |
+        | `templates/_helpers.tpl` | Fonctions réutilisables (noms, labels communs) |
+        | `charts/` | Les sous-charts (dépendances) |
+
+        Un chart est **versionné** : `version` (celle du chart) et `appVersion` (celle de l'application)
+        dans `Chart.yaml`. On peut ainsi publier `myapp-1.2.0` qui déploie l'application `2.5.1`, et
+        retrouver exactement quel paquet a produit quel déploiement.
+
+        Chaque déploiement d'un chart s'appelle une **release** : un même chart peut être installé plusieurs
+        fois (par ex. `shop-dev` et `shop-prod`), chaque release ayant ses propres valeurs et son propre
+        historique de révisions.
+      en: |
+        `helm create myapp` generates a **chart**: a folder with a conventional structure.
+
+        | File / folder | Role |
+        |---|---|
+        | `Chart.yaml` | Metadata: name, chart version, app version |
+        | `values.yaml` | The default values (the chart's "settings") |
+        | `templates/` | The Kubernetes manifests, with `{{ }}` variables |
+        | `templates/_helpers.tpl` | Reusable functions (names, common labels) |
+        | `charts/` | Sub-charts (dependencies) |
+
+        A chart is **versioned**: `version` (the chart's) and `appVersion` (the application's) in
+        `Chart.yaml`. So you can publish `myapp-1.2.0` that deploys application `2.5.1`, and trace exactly
+        which package produced which deployment.
+
+        Each deployment of a chart is called a **release**: the same chart can be installed several times
+        (e.g. `shop-dev` and `shop-prod`), each release having its own values and its own revision history.
+  - heading:
+      fr: "Templates, values et helpers"
+      en: "Templates, values and helpers"
+    body:
+      fr: |
+        Un template est un manifeste Kubernetes classique dans lequel on insère des **valeurs** avec la
+        syntaxe Go/Sprig entre `{{ }}` :
+
+        - `{{ .Values.replicaCount }}` lit une valeur de `values.yaml` (ou surchargée).
+        - `{{ .Release.Name }}` est le nom de la release.
+        - `{{ include "myapp.labels" . }}` appelle un **helper** défini dans `_helpers.tpl`.
+
+        Les **helpers** évitent la répétition : on définit une fois le nom complet (`myapp.fullname`) et le
+        bloc de labels communs, puis on les réutilise dans chaque template. C'est l'équivalent des fonctions
+        en programmation.
+
+        Le fichier **`values.yaml`** contient les valeurs par défaut. On les **surcharge** de deux façons :
+        `--set key=value` en ligne de commande (pratique mais non versionné), ou `-f values-prod.yaml` (un
+        fichier dédié, versionné, recommandé). L'ordre de priorité : valeurs par défaut < fichier `-f` <
+        `--set`.
+      en: |
+        A template is a classic Kubernetes manifest into which you insert **values** with Go/Sprig syntax
+        between `{{ }}`:
+
+        - `{{ .Values.replicaCount }}` reads a value from `values.yaml` (or an override).
+        - `{{ .Release.Name }}` is the release name.
+        - `{{ include "myapp.labels" . }}` calls a **helper** defined in `_helpers.tpl`.
+
+        **Helpers** avoid repetition: you define the full name (`myapp.fullname`) and the common labels block
+        once, then reuse them in every template. It is the equivalent of functions in programming.
+
+        The **`values.yaml`** file holds the default values. You **override** them two ways: `--set
+        key=value` on the command line (handy but not versioned), or `-f values-prod.yaml` (a dedicated,
+        versioned file, recommended). The priority order: defaults < `-f` file < `--set`.
+  - heading:
+      fr: "install, upgrade, rollback et validation"
+      en: "install, upgrade, rollback and validation"
+    body:
+      fr: |
+        Le cycle de vie d'une release se pilote avec quelques commandes :
+
+        | Commande | Rôle |
+        |---|---|
+        | `helm install <release> <chart>` | Déployer une nouvelle release |
+        | `helm upgrade <release> <chart>` | Mettre à jour une release existante |
+        | `helm rollback <release> <rev>` | Revenir à une révision précédente |
+        | `helm uninstall <release>` | Supprimer la release |
+        | `helm list` | Lister les releases et leur révision |
+
+        Avant tout déploiement, deux commandes de **validation** sans effet de bord :
+
+        - **`helm lint`** vérifie que le chart est bien formé.
+        - **`helm template`** rend les manifestes en local sans rien déployer : on voit exactement ce qui
+          sera envoyé au cluster. On peut même le passer à un scanner de sécurité (Checkov, Trivy).
+
+        La bonne pratique : `helm lint`, puis `helm template | kubectl apply --dry-run=server` ou un scan,
+        *puis* `helm upgrade --install`. Et comme Helm garde l'historique des révisions, un `helm rollback`
+        annule un mauvais déploiement en une commande.
+      en: |
+        A release's lifecycle is driven by a handful of commands:
+
+        | Command | Role |
+        |---|---|
+        | `helm install <release> <chart>` | Deploy a new release |
+        | `helm upgrade <release> <chart>` | Update an existing release |
+        | `helm rollback <release> <rev>` | Revert to a previous revision |
+        | `helm uninstall <release>` | Remove the release |
+        | `helm list` | List releases and their revision |
+
+        Before any deployment, two **validation** commands with no side effects:
+
+        - **`helm lint`** checks the chart is well-formed.
+        - **`helm template`** renders the manifests locally without deploying anything: you see exactly what
+          will be sent to the cluster. You can even feed it to a security scanner (Checkov, Trivy).
+
+        Best practice: `helm lint`, then `helm template | kubectl apply --dry-run=server` or a scan, *then*
+        `helm upgrade --install`. And since Helm keeps the revision history, a `helm rollback` undoes a bad
+        deployment in one command.
+
+examples:
+  - title:
+      fr: "La structure générée par helm create"
+      en: "The structure generated by helm create"
+    file: chart-tree.sh
+    lang: bash
+    kind: neutral
+    code: |
+      helm create myapp
+      find myapp -maxdepth 2 -type f | sort
+    output: |
+      myapp/.helmignore
+      myapp/Chart.yaml
+      myapp/charts
+      myapp/templates/NOTES.txt
+      myapp/templates/_helpers.tpl
+      myapp/templates/deployment.yaml
+      myapp/templates/hpa.yaml
+      myapp/templates/ingress.yaml
+      myapp/templates/service.yaml
+      myapp/templates/serviceaccount.yaml
+      myapp/values.yaml
+    note:
+      fr: "`helm create` génère un chart complet et fonctionnel. `Chart.yaml` porte les versions, `values.yaml` les réglages par défaut, et `templates/` les manifestes paramétrables à adapter."
+      en: "`helm create` generates a complete, working chart. `Chart.yaml` carries the versions, `values.yaml` the default settings, and `templates/` the parameterisable manifests to adapt."
+
+  - title:
+      fr: "Un template qui lit les values et un helper"
+      en: "A template reading values and a helper"
+    file: templates/deployment.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # templates/_helpers.tpl defines reusable snippets:
+      # {{- define "myapp.labels" -}}
+      # app.kubernetes.io/name: {{ .Release.Name }}
+      # app.kubernetes.io/managed-by: {{ .Release.Service }}
+      # {{- end -}}
+
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: {{ .Release.Name }}
+        labels:
+          {{- include "myapp.labels" . | nindent 4 }}  # reuse the helper
+      spec:
+        replicas: {{ .Values.replicaCount }}           # from values.yaml
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: {{ .Release.Name }}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: {{ .Release.Name }}
+          spec:
+            securityContext:
+              runAsNonRoot: true
+            containers:
+              - name: app
+                # Image and tag both come from values -> different per environment
+                image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                resources:
+                  {{- toYaml .Values.resources | nindent 12 }}
+    note:
+      fr: "Les valeurs variables (`replicaCount`, `image.tag`, `resources`) viennent de `values.yaml`. Le helper `myapp.labels` factorise les labels communs : on l'écrit une fois, on le réutilise partout."
+      en: "The variable values (`replicaCount`, `image.tag`, `resources`) come from `values.yaml`. The `myapp.labels` helper factors the common labels: written once, reused everywhere."
+
+  - title:
+      fr: "Des values distincts par environnement"
+      en: "Separate values per environment"
+    file: values-prod.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # values.yaml (defaults, committed with the chart)
+      # replicaCount: 1
+      # image:
+      #   repository: ghcr.io/acme/myapp
+      #   tag: "1.0.0"
+      # resources:
+      #   requests: { cpu: "50m", memory: "64Mi" }
+      #   limits: { cpu: "250m", memory: "128Mi" }
+
+      # values-prod.yaml: ONLY the keys that differ in production
+      replicaCount: 5          # more copies in prod
+      image:
+        tag: "1.4.2"           # a specific, pinned version for prod
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "256Mi"
+        limits:
+          cpu: "1000m"
+          memory: "512Mi"
+    output: |
+      # Install/upgrade prod with the production overrides (idempotent):
+      #   helm upgrade --install shop-prod ./myapp -f values-prod.yaml
+      # Dev uses the defaults (or values-dev.yaml):
+      #   helm upgrade --install shop-dev ./myapp
+    note:
+      fr: "Un seul chart, plusieurs environnements : `values-prod.yaml` ne surcharge que ce qui diffère (plus de replicas, image épinglée, plus de ressources). Le reste vient des valeurs par défaut."
+      en: "One chart, several environments: `values-prod.yaml` overrides only what differs (more replicas, pinned image, more resources). The rest comes from the defaults."
+
+  - title:
+      fr: "Valider puis déployer en toute sécurité"
+      en: "Validate then deploy safely"
+    file: deploy.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. Lint the chart: catch structural and template errors early
+      helm lint ./myapp -f values-prod.yaml
+
+      # 2. Render the manifests locally WITHOUT deploying, to review the real output
+      helm template shop-prod ./myapp -f values-prod.yaml > rendered.yaml
+
+      # 3. Optionally scan the rendered manifests for misconfigurations
+      trivy config rendered.yaml
+
+      # 4. Deploy (upgrade if it exists, install if not): idempotent and repeatable
+      helm upgrade --install shop-prod ./myapp -f values-prod.yaml
+
+      # 5. If the new revision is bad, roll back to the previous one
+      helm history shop-prod
+      helm rollback shop-prod 1
+    output: |
+      ==> Linting ./myapp
+      1 chart(s) linted, 0 chart(s) failed
+      Release "shop-prod" has been upgraded. Happy Helming!
+      REVISION  STATUS      CHART        APP VERSION
+      1         superseded  myapp-1.2.0  1.0.0
+      2         deployed    myapp-1.2.0  1.4.2
+    note:
+      fr: "`helm lint` et `helm template` valident sans déployer ; on peut même scanner le rendu. `upgrade --install` est idempotent. `helm rollback` annule un mauvais déploiement grâce à l'historique des révisions."
+      en: "`helm lint` and `helm template` validate without deploying; you can even scan the render. `upgrade --install` is idempotent. `helm rollback` undoes a bad deployment thanks to the revision history."
+
+mistake:
+  fr: |
+    **Dupliquer des dossiers de manifestes pour chaque environnement au lieu d'utiliser des values.**
+
+    Beaucoup d'équipes copient tout le dossier `k8s/` en `k8s-dev/`, `k8s-staging/`, `k8s-prod/`, puis
+    modifient quelques valeurs à la main dans chacun. Résultat : les trois divergent lentement, un correctif
+    appliqué à la prod est oublié en préprod, et personne ne sait plus quelle version tourne où. Avec Helm,
+    on écrit les manifestes **une fois** dans `templates/` et on ne maintient que les quelques valeurs qui
+    diffèrent dans `values-<env>.yaml`. Et on valide toujours avant de déployer : `helm lint` puis
+    `helm template` (idéalement scanné) évitent d'envoyer un manifeste cassé ou non sécurisé au cluster.
+  en: |
+    **Duplicating manifest folders for each environment instead of using values.**
+
+    Many teams copy the whole `k8s/` folder into `k8s-dev/`, `k8s-staging/`, `k8s-prod/`, then tweak a few
+    values by hand in each. Result: the three slowly diverge, a fix applied to prod is forgotten in staging,
+    and nobody knows which version runs where. With Helm you write the manifests **once** in `templates/`
+    and only maintain the few values that differ in `values-<env>.yaml`. And always validate before
+    deploying: `helm lint` then `helm template` (ideally scanned) avoid sending a broken or insecure
+    manifest to the cluster.
+
+bestPractice:
+  fr: |
+    - **Un chart, des `values-<env>.yaml`** : les manifestes écrits une fois, surchargés par environnement.
+    - **Préférez `-f values.yaml` à `--set`** : versionné, revu, reproductible.
+    - **Helpers (`_helpers.tpl`)** pour factoriser noms et labels communs.
+    - **Versionnez le chart** (`version` et `appVersion`) : traçabilité paquet → déploiement.
+    - **`helm lint` + `helm template`** (et un scan) avant tout `helm upgrade --install`.
+    - **`helm upgrade --install`** (idempotent) et **`helm rollback`** pour annuler un mauvais déploiement.
+    - **Images épinglées dans les values de prod**, jamais `latest`.
+  en: |
+    - **One chart, `values-<env>.yaml` files**: manifests written once, overridden per environment.
+    - **Prefer `-f values.yaml` over `--set`**: versioned, reviewed, reproducible.
+    - **Helpers (`_helpers.tpl`)** to factor common names and labels.
+    - **Version the chart** (`version` and `appVersion`): package → deployment traceability.
+    - **`helm lint` + `helm template`** (and a scan) before any `helm upgrade --install`.
+    - **`helm upgrade --install`** (idempotent) and **`helm rollback`** to undo a bad deployment.
+    - **Pinned images in prod values**, never `latest`.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez un chart Helm `./api` et deux environnements.
+
+      1. Donnez la commande qui vérifie que le chart est bien formé avec les valeurs de production
+         `values-prod.yaml`.
+      2. Donnez la commande qui affiche localement les manifestes rendus, sans rien déployer.
+      3. Donnez la commande, idempotente, qui installe ou met à jour la release `api-prod` avec ces valeurs.
+      4. Donnez la commande qui annule le dernier déploiement et revient à la révision 2.
+    en: |
+      You have a Helm chart `./api` and two environments.
+
+      1. Give the command that checks the chart is well-formed with the production values
+         `values-prod.yaml`.
+      2. Give the command that renders the manifests locally, without deploying anything.
+      3. Give the idempotent command that installs or updates the `api-prod` release with those values.
+      4. Give the command that undoes the last deployment and reverts to revision 2.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Lint the chart with the production values
+      helm lint ./api -f values-prod.yaml
+
+      # 2. Render the manifests locally, nothing is sent to the cluster
+      helm template api-prod ./api -f values-prod.yaml
+
+      # 3. Install OR upgrade in one idempotent command
+      helm upgrade --install api-prod ./api -f values-prod.yaml
+
+      # 4. Roll back to revision 2 (view history first with: helm history api-prod)
+      helm rollback api-prod 2
+    note:
+      fr: "`helm template` rend sans déployer (idéal pour une revue ou un scan). `upgrade --install` fonctionne que la release existe ou non. `rollback` s'appuie sur l'historique des révisions conservé par Helm."
+      en: "`helm template` renders without deploying (ideal for review or a scan). `upgrade --install` works whether the release exists or not. `rollback` relies on the revision history Helm keeps."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'un chart Helm ?"
+      en: "What is a Helm chart?"
+    options:
+      fr:
+        - "Un graphique de supervision"
+        - "Un paquet de manifestes Kubernetes paramétrables et versionnés"
+        - "Un type de Service"
+        - "Un pare-feu applicatif"
+      en:
+        - "A monitoring graph"
+        - "A package of parameterisable, versioned Kubernetes manifests"
+        - "A kind of Service"
+        - "An application firewall"
+    answer: 1
+    why:
+      fr: "Un chart empaquète les manifestes (templates + values) comme un paquet logiciel, installable et versionnable : le « apt » de Kubernetes."
+      en: "A chart packages the manifests (templates + values) like a software package, installable and versionable: Kubernetes' \"apt\"."
+  - q:
+      fr: "Comment adapter un même chart à plusieurs environnements ?"
+      en: "How do you adapt one chart to several environments?"
+    options:
+      fr:
+        - "En dupliquant tout le dossier du chart"
+        - "En modifiant les templates à la main à chaque fois"
+        - "Avec des fichiers `values-<env>.yaml` qui surchargent les valeurs par défaut"
+        - "En créant un cluster par environnement obligatoirement"
+      en:
+        - "By duplicating the whole chart folder"
+        - "By editing the templates by hand each time"
+        - "With `values-<env>.yaml` files that override the default values"
+        - "By mandatorily creating one cluster per environment"
+    answer: 2
+    why:
+      fr: "On écrit les templates une fois et on ne maintient que les valeurs qui diffèrent dans un `values-<env>.yaml` par environnement."
+      en: "You write the templates once and only maintain the differing values in a per-environment `values-<env>.yaml`."
+  - q:
+      fr: "Que fait `helm template` ?"
+      en: "What does `helm template` do?"
+    options:
+      fr:
+        - "Il rend les manifestes en local sans rien déployer"
+        - "Il supprime la release"
+        - "Il redémarre le cluster"
+        - "Il chiffre les values"
+      en:
+        - "It renders the manifests locally without deploying anything"
+        - "It deletes the release"
+        - "It restarts the cluster"
+        - "It encrypts the values"
+    answer: 0
+    why:
+      fr: "`helm template` produit les manifestes finaux localement : on peut les relire ou les scanner avant tout déploiement réel."
+      en: "`helm template` produces the final manifests locally: you can review or scan them before any real deployment."
+  - q:
+      fr: "À quoi sert `helm rollback` ?"
+      en: "What is `helm rollback` for?"
+    options:
+      fr:
+        - "À scanner les images"
+        - "À créer un nouveau chart"
+        - "À lister les namespaces"
+        - "À revenir à une révision précédente d'une release"
+      en:
+        - "To scan images"
+        - "To create a new chart"
+        - "To list namespaces"
+        - "To revert to a previous revision of a release"
+    answer: 3
+    why:
+      fr: "Helm conserve l'historique des révisions ; `helm rollback` restaure une version antérieure en une commande, idéal après un mauvais déploiement."
+      en: "Helm keeps the revision history; `helm rollback` restores an earlier version in one command, ideal after a bad deployment."
+  - q:
+      fr: "À quoi sert le fichier `_helpers.tpl` d'un chart ?"
+      en: "What is a chart's `_helpers.tpl` file for?"
+    options:
+      fr:
+        - "À définir des fragments réutilisables (noms, labels communs) appelés par les templates"
+        - "À stocker les mots de passe"
+        - "À lister les dépendances"
+        - "À configurer le cluster"
+      en:
+        - "To define reusable snippets (names, common labels) called by the templates"
+        - "To store passwords"
+        - "To list dependencies"
+        - "To configure the cluster"
+    answer: 0
+    why:
+      fr: "`_helpers.tpl` factorise la logique répétée (nom complet, labels) ; les templates l'appellent via `include`, comme des fonctions."
+      en: "`_helpers.tpl` factors repeated logic (full name, labels); templates call it via `include`, like functions."

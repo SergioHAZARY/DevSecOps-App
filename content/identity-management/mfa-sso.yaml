@@ -1,0 +1,444 @@
+description:
+  fr: "Comparer les facteurs MFA (TOTP, WebAuthn/passkeys, SMS) et comprendre le SSO : OIDC vs SAML et la lecture d'un jeton d'identité décodé."
+  en: "Compare MFA factors (TOTP, WebAuthn/passkeys, SMS) and understand SSO: OIDC vs SAML and reading a decoded ID token."
+duration: 28
+
+intro:
+  fr: |
+    Un mot de passe seul ne suffit plus : il se devine, se rejoue et se vole par hameçonnage. La **MFA**
+    (*Multi-Factor Authentication*, authentification à plusieurs facteurs) exige une **deuxième preuve** en
+    plus du mot de passe. Et le **SSO** (*Single Sign-On*, authentification unique) permet de se connecter
+    une seule fois pour accéder à de nombreuses applications, via un fournisseur d'identité central.
+
+    Imaginez un coffre de banque. Le mot de passe, c'est votre code secret ; la MFA ajoute une clé physique
+    qu'il faut tourner en même temps. Le SSO, lui, c'est le badge unique de l'immeuble : vous le présentez
+    une fois à l'entrée, et il ouvre ensuite toutes les portes auxquelles vous avez droit, sans ressaisir
+    votre code à chaque bureau.
+
+    Dans cette leçon, vous allez comparer les facteurs MFA (TOTP, passkeys WebAuthn, SMS) et leur solidité,
+    opposer les deux grands protocoles de SSO — OIDC et SAML — et apprendre à lire le contenu décodé d'un
+    jeton d'identité (*ID token*).
+  en: |
+    A password alone is no longer enough: it can be guessed, replayed and stolen by phishing. **MFA**
+    (*Multi-Factor Authentication*) requires a **second proof** in addition to the password. And **SSO**
+    (*Single Sign-On*) lets you log in once to reach many applications, through a central identity provider.
+
+    Picture a bank vault. The password is your secret code; MFA adds a physical key you must turn at the
+    same time. SSO is the building's single badge: you present it once at the entrance, and it then opens
+    every door you are entitled to, without re-entering your code at each office.
+
+    In this lesson you will compare MFA factors (TOTP, WebAuthn passkeys, SMS) and their strength, contrast
+    the two main SSO protocols — OIDC and SAML — and learn to read the decoded contents of an identity token
+    (*ID token*).
+
+sections:
+  - heading:
+      fr: "Les facteurs MFA et leur solidité"
+      en: "MFA factors and their strength"
+    body:
+      fr: |
+        Un **facteur** d'authentification appartient à l'une de trois familles : quelque chose que l'on
+        **sait** (mot de passe), que l'on **possède** (téléphone, clé), ou que l'on **est** (biométrie). La
+        MFA combine au moins deux familles différentes. Mais tous les facteurs ne se valent pas.
+
+        | Facteur | Famille | Résiste à l'hameçonnage ? | Solidité |
+        |---|---|---|---|
+        | SMS (code reçu par texto) | Possession (faible) | Non | Faible |
+        | TOTP (code d'une app type Authenticator) | Possession | Partiellement | Moyenne |
+        | WebAuthn / passkey (clé FIDO2, biométrie) | Possession + inhérence | Oui | Forte |
+
+        Le **SMS** est le plus faible : il est vulnérable au *SIM swap* (l'attaquant détourne votre numéro)
+        et à l'interception réseau. Le **TOTP** (*Time-based One-Time Password*) génère un code à 6 chiffres
+        qui change toutes les 30 secondes à partir d'un secret partagé ; il est bien meilleur, mais un site
+        d'hameçonnage peut encore vous piéger en vous demandant de saisir le code en temps réel.
+
+        **WebAuthn** et les **passkeys** sont le standard le plus sûr : la clé cryptographique est liée au
+        **domaine** du site légitime. Si vous arrivez sur un faux site, la clé refuse tout simplement de
+        signer — l'hameçonnage devient impossible. C'est pourquoi on recommande les passkeys pour les
+        comptes à privilèges.
+      en: |
+        An authentication **factor** belongs to one of three families: something you **know** (password),
+        something you **have** (phone, key), or something you **are** (biometrics). MFA combines at least two
+        different families. But not all factors are equal.
+
+        | Factor | Family | Phishing-resistant? | Strength |
+        |---|---|---|---|
+        | SMS (code by text message) | Possession (weak) | No | Weak |
+        | TOTP (code from an Authenticator app) | Possession | Partially | Medium |
+        | WebAuthn / passkey (FIDO2 key, biometrics) | Possession + inherence | Yes | Strong |
+
+        **SMS** is the weakest: it is vulnerable to *SIM swap* (the attacker hijacks your number) and to
+        network interception. **TOTP** (*Time-based One-Time Password*) generates a 6-digit code that
+        changes every 30 seconds from a shared secret; it is much better, but a phishing site can still
+        trick you into typing the code in real time.
+
+        **WebAuthn** and **passkeys** are the safest standard: the cryptographic key is bound to the
+        **domain** of the legitimate site. If you land on a fake site, the key simply refuses to sign —
+        phishing becomes impossible. That is why passkeys are recommended for privileged accounts.
+  - heading:
+      fr: "SSO : OIDC vs SAML et le jeton d'identité"
+      en: "SSO: OIDC vs SAML and the identity token"
+    body:
+      fr: |
+        Le **SSO** repose sur un **fournisseur d'identité** (*IdP*, ex. Okta, Entra ID, Google) qui
+        authentifie l'utilisateur, et des **applications** (les *Service Providers*) qui lui font confiance.
+        Deux protocoles dominent :
+
+        | | OIDC (OpenID Connect) | SAML 2.0 |
+        |---|---|---|
+        | Format du jeton | JWT (JSON compact) | Assertion XML |
+        | Fondé sur | OAuth 2.0 | XML / SOAP |
+        | Transport | API REST, mobile, SPA | Navigateur, redirections POST |
+        | Époque | Moderne (2014+) | Historique (2005) |
+        | Cas d'usage typique | Apps web/mobiles, API | SSO d'entreprise hérité |
+
+        **OIDC** ajoute une couche d'identité par-dessus OAuth 2.0 : après authentification, l'IdP délivre
+        un **ID token**, un **JWT** (*JSON Web Token*). Un JWT se compose de trois parties séparées par des
+        points : un en-tête, une charge utile (*payload*) et une signature. Le payload contient des
+        **claims** — `iss` (émetteur), `aud` (destinataire), `sub` (identifiant de l'utilisateur), `exp`
+        (expiration), `email`...
+
+        Point crucial : la partie payload d'un JWT est seulement encodée en Base64, **pas chiffrée**.
+        N'importe qui peut la décoder et la lire. Ce qui protège le jeton, c'est la **signature** : l'appli
+        doit la vérifier avec la clé publique de l'IdP avant de faire confiance aux claims. Ne mettez jamais
+        de secret dans un JWT, et vérifiez toujours la signature, l'émetteur (`iss`), le destinataire
+        (`aud`) et l'expiration (`exp`).
+      en: |
+        **SSO** rests on an **identity provider** (*IdP*, e.g. Okta, Entra ID, Google) that authenticates
+        the user, and **applications** (the *Service Providers*) that trust it. Two protocols dominate:
+
+        | | OIDC (OpenID Connect) | SAML 2.0 |
+        |---|---|---|
+        | Token format | JWT (compact JSON) | XML assertion |
+        | Built on | OAuth 2.0 | XML / SOAP |
+        | Transport | REST API, mobile, SPA | Browser, POST redirects |
+        | Era | Modern (2014+) | Legacy (2005) |
+        | Typical use case | Web/mobile apps, APIs | Legacy enterprise SSO |
+
+        **OIDC** adds an identity layer on top of OAuth 2.0: after authentication, the IdP issues an **ID
+        token**, a **JWT** (*JSON Web Token*). A JWT has three parts separated by dots: a header, a payload
+        and a signature. The payload holds **claims** — `iss` (issuer), `aud` (audience), `sub` (user id),
+        `exp` (expiry), `email`...
+
+        A crucial point: a JWT's payload is only Base64-encoded, **not encrypted**. Anyone can decode and
+        read it. What protects the token is the **signature**: the application must verify it with the IdP's
+        public key before trusting the claims. Never put a secret in a JWT, and always check the signature,
+        the issuer (`iss`), the audience (`aud`) and the expiry (`exp`).
+
+examples:
+  - title:
+      fr: "SMS comme second facteur : à éviter"
+      en: "SMS as a second factor: to avoid"
+    file: sms_mfa.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import random
+
+      # SMS codes are sent over a channel an attacker can hijack (SIM swap)
+      # or intercept. The code is also phishable in real time.
+      def send_sms_code(phone):
+          code = f"{random.randint(0, 999999):06d}"
+          print(f"Sending code {code} to {phone} by SMS")  # travels in clear
+          return code
+
+      # If the attacker has ported the victim's number, they receive this code
+      # and pass the "second factor" without ever touching the real phone.
+      send_sms_code("+15550100")
+    output: |
+      Sending code 482913 to +15550100 by SMS
+    note:
+      fr: "Le SMS reste mieux que rien, mais c'est le facteur le plus faible : le *SIM swap* permet à l'attaquant de recevoir le code à votre place. Pour un compte à privilèges, on exige un facteur résistant à l'hameçonnage (passkey)."
+      en: "SMS is better than nothing, but it is the weakest factor: SIM swap lets the attacker receive the code in your place. For a privileged account, you require a phishing-resistant factor (passkey)."
+
+  - title:
+      fr: "TOTP : vérifier un code à usage unique"
+      en: "TOTP: verifying a one-time code"
+    file: totp_demo.py
+    lang: python
+    kind: secure
+    code: |
+      import hmac, hashlib, struct, time, base64
+
+      # TOTP = HOTP over a 30-second time step (RFC 6238). The secret is
+      # shared once (QR code) between the authenticator app and the server.
+      def totp(secret_b32, step=30, digits=6, t=None):
+          key = base64.b32decode(secret_b32)
+          counter = int((t or time.time()) // step)
+          msg = struct.pack(">Q", counter)
+          digest = hmac.new(key, msg, hashlib.sha1).digest()
+          offset = digest[-1] & 0x0F
+          code = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF)
+          return str(code % (10 ** digits)).zfill(digits)
+
+      SECRET = "JBSWY3DPEHPK3PXP"  # example shared secret (fake)
+      now = 1700000000             # fixed time so the output is reproducible
+      generated = totp(SECRET, t=now)
+      user_input = totp(SECRET, t=now)  # the app on the user's phone
+      print("Server code:", generated)
+      print("Match:", hmac.compare_digest(generated, user_input))
+    output: |
+      Server code: 348652
+      Match: True
+    note:
+      fr: "Le code dépend du temps et d'un secret partagé : il change toutes les 30 secondes et ne se rejoue pas. On compare avec `hmac.compare_digest` (temps constant) pour éviter les attaques temporelles. TOTP est bien plus sûr que le SMS."
+      en: "The code depends on time and a shared secret: it changes every 30 seconds and cannot be replayed. You compare with `hmac.compare_digest` (constant time) to avoid timing attacks. TOTP is far safer than SMS."
+
+  - title:
+      fr: "Décoder le payload d'un ID token OIDC"
+      en: "Decoding the payload of an OIDC ID token"
+    file: decode_jwt.py
+    lang: python
+    kind: neutral
+    code: |
+      import base64, json
+
+      # A JWT is header.payload.signature (Base64url). The payload is NOT
+      # encrypted: anyone can read it. The signature is what must be verified.
+      id_token = (
+          "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9."
+          "eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlLmNvbSIsInN1YiI6InVzZXItMTIz"
+          "IiwiYXVkIjoibXktYXBwIiwiZXhwIjoxNzAwMDAwMDAwLCJlbWFpbCI6ImFsaWNl"
+          "QGV4YW1wbGUuY29tIn0."
+          "SIGNATURE_PLACEHOLDER"
+      )
+
+      def decode_part(part):
+          padded = part + "=" * (-len(part) % 4)  # fix Base64url padding
+          return json.loads(base64.urlsafe_b64decode(padded))
+
+      header, payload, _ = id_token.split(".")
+      print("Header :", decode_part(header))
+      print("Payload:", decode_part(payload))
+      # The app MUST then verify: signature (IdP public key), iss, aud, exp.
+    output: |
+      Header : {'alg': 'RS256', 'typ': 'JWT'}
+      Payload: {'iss': 'https://idp.example.com', 'sub': 'user-123',
+                'aud': 'my-app', 'exp': 1700000000, 'email': 'alice@example.com'}
+    note:
+      fr: "Le payload se lit sans aucune clé : un JWT n'est pas chiffré. On y voit l'émetteur (`iss`), le sujet (`sub`), le destinataire (`aud`) et l'expiration (`exp`). L'application doit vérifier la **signature** et ces claims avant de faire confiance au jeton."
+      en: "The payload reads without any key: a JWT is not encrypted. You can see the issuer (`iss`), subject (`sub`), audience (`aud`) and expiry (`exp`). The application must verify the **signature** and these claims before trusting the token."
+
+  - title:
+      fr: "Valider un ID token côté application"
+      en: "Validating an ID token on the application side"
+    file: validate_token.py
+    lang: python
+    kind: secure
+    code: |
+      import time
+
+      # After decoding, the app must CHECK the claims before trusting them.
+      # (Signature verification with the IdP's public key is done first,
+      #  e.g. with PyJWT + the IdP JWKS; shown here as already passed.)
+      def validate(payload, expected_iss, expected_aud):
+          now = int(time.time())
+          if payload["iss"] != expected_iss:
+              return "reject: wrong issuer (possible forged token)"
+          if payload["aud"] != expected_aud:
+              return "reject: token was issued for another application"
+          if payload["exp"] < now:
+              return "reject: token expired"
+          return f"accept: {payload['sub']}"
+
+      token = {"iss": "https://idp.example.com", "aud": "my-app",
+               "sub": "user-123", "exp": int(time.time()) + 300}
+      print(validate(token, "https://idp.example.com", "my-app"))
+      print(validate(token, "https://idp.example.com", "other-app"))
+    output: |
+      accept: user-123
+      reject: token was issued for another application
+    note:
+      fr: "Vérifier `iss`, `aud` et `exp` (après la signature) est indispensable : un jeton valide mais émis pour une autre application (`aud` différent) doit être rejeté. Sans ces contrôles, un attaquant réutilise un jeton légitime ailleurs."
+      en: "Checking `iss`, `aud` and `exp` (after the signature) is essential: a valid token issued for another application (different `aud`) must be rejected. Without these checks, an attacker reuses a legitimate token elsewhere."
+
+mistake:
+  fr: |
+    **Croire qu'un JWT est chiffré, et faire confiance à son contenu sans vérifier la signature.**
+
+    La charge utile (*payload*) d'un JWT est seulement encodée en Base64url : n'importe qui la décode en une
+    ligne. Y placer un mot de passe, un numéro de carte ou toute donnée sensible revient à l'écrire en
+    clair. Un JWT se **signe** (pour garantir qu'il n'a pas été modifié), il ne se chiffre pas par défaut.
+
+    Erreur jumelle : accepter les claims d'un jeton sans vérifier la **signature** avec la clé publique de
+    l'IdP, ni contrôler l'émetteur (`iss`), le destinataire (`aud`) et l'expiration (`exp`). Un attaquant
+    peut forger un payload, ou rejouer un jeton émis pour une autre application. Côté MFA, la faute
+    équivalente est de se reposer sur le **SMS** pour des comptes sensibles : vulnérable au SIM swap, il
+    doit céder la place aux passkeys WebAuthn, résistantes à l'hameçonnage.
+  en: |
+    **Believing a JWT is encrypted, and trusting its content without verifying the signature.**
+
+    A JWT's payload is only Base64url-encoded: anyone decodes it in one line. Putting a password, a card
+    number or any sensitive data in it is like writing it in clear text. A JWT is **signed** (to guarantee
+    it was not tampered with), it is not encrypted by default.
+
+    The twin mistake: accepting a token's claims without verifying the **signature** with the IdP's public
+    key, nor checking the issuer (`iss`), audience (`aud`) and expiry (`exp`). An attacker can forge a
+    payload, or replay a token issued for another application. On the MFA side, the equivalent fault is
+    relying on **SMS** for sensitive accounts: vulnerable to SIM swap, it must give way to WebAuthn
+    passkeys, which resist phishing.
+
+bestPractice:
+  fr: |
+    - **Activez la MFA partout**, et exigez un facteur **résistant à l'hameçonnage** (WebAuthn/passkey) pour les comptes à privilèges.
+    - **Préférez TOTP au SMS** ; réservez le SMS au dernier recours, jamais pour un accès sensible (vulnérable au SIM swap).
+    - **Centralisez l'authentification avec le SSO** : un IdP, moins de mots de passe, une révocation d'accès immédiate au départ d'un employé.
+    - **Choisissez OIDC pour les applications modernes** (web, mobile, API) ; SAML reste pour l'existant d'entreprise.
+    - **Ne mettez jamais de secret dans un JWT** : le payload n'est pas chiffré.
+    - **Vérifiez toujours** la signature du jeton et les claims `iss`, `aud`, `exp` avant de faire confiance.
+    - **Fixez des durées de vie courtes** aux jetons et utilisez des *refresh tokens* pour renouveler.
+  en: |
+    - **Enable MFA everywhere**, and require a **phishing-resistant** factor (WebAuthn/passkey) for privileged accounts.
+    - **Prefer TOTP over SMS**; keep SMS as a last resort, never for sensitive access (vulnerable to SIM swap).
+    - **Centralise authentication with SSO**: one IdP, fewer passwords, immediate access revocation when an employee leaves.
+    - **Choose OIDC for modern applications** (web, mobile, API); SAML remains for enterprise legacy.
+    - **Never put a secret in a JWT**: the payload is not encrypted.
+    - **Always verify** the token's signature and the `iss`, `aud`, `exp` claims before trusting it.
+    - **Set short lifetimes** on tokens and use *refresh tokens* to renew.
+
+exercise:
+  statement:
+    fr: |
+      Votre application reçoit un ID token OIDC déjà décodé sous forme de dictionnaire. On suppose que la
+      **signature a déjà été vérifiée** avec la clé publique de l'IdP. Il reste à valider les claims.
+
+      Écrivez une fonction `check(payload)` qui rejette le jeton si :
+
+      1. l'émetteur `iss` n'est pas `https://idp.example.com` ;
+      2. le destinataire `aud` n'est pas votre application `billing-app` ;
+      3. le jeton est expiré (`exp` dépassé par rapport à l'heure courante).
+
+      Sinon, la fonction renvoie l'identifiant de l'utilisateur (`sub`). Testez un jeton valide et un jeton
+      destiné à une autre application.
+    en: |
+      Your application receives an already-decoded OIDC ID token as a dictionary. Assume the **signature has
+      already been verified** with the IdP's public key. The claims remain to be validated.
+
+      Write a function `check(payload)` that rejects the token if:
+
+      1. the issuer `iss` is not `https://idp.example.com`;
+      2. the audience `aud` is not your application `billing-app`;
+      3. the token is expired (`exp` is past the current time).
+
+      Otherwise, the function returns the user id (`sub`). Test a valid token and one meant for another
+      application.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import time
+
+      EXPECTED_ISS = "https://idp.example.com"
+      EXPECTED_AUD = "billing-app"
+
+      def check(payload):
+          # Signature is assumed verified; now validate the standard claims.
+          if payload.get("iss") != EXPECTED_ISS:
+              return "reject: wrong issuer"
+          if payload.get("aud") != EXPECTED_AUD:
+              return "reject: wrong audience"
+          if payload.get("exp", 0) < int(time.time()):
+              return "reject: expired"
+          return f"accept: {payload['sub']}"
+
+      valid = {"iss": EXPECTED_ISS, "aud": "billing-app",
+               "sub": "user-42", "exp": int(time.time()) + 300}
+      other = {"iss": EXPECTED_ISS, "aud": "other-app",
+               "sub": "user-99", "exp": int(time.time()) + 300}
+      print(check(valid))
+      print(check(other))
+    note:
+      fr: "Le contrôle de `aud` est essentiel : sans lui, un jeton légitime émis pour une autre application serait accepté ici. On vérifie toujours `iss`, `aud` et `exp` après la signature."
+      en: "Checking `aud` is essential: without it, a legitimate token issued for another application would be accepted here. You always verify `iss`, `aud` and `exp` after the signature."
+
+quiz:
+  - q:
+      fr: "Pourquoi le SMS est-il le facteur MFA le plus faible ?"
+      en: "Why is SMS the weakest MFA factor?"
+    options:
+      fr:
+        - "Parce qu'il est trop lent"
+        - "Parce qu'il est vulnérable au SIM swap et à l'interception, et reste hameçonnable"
+        - "Parce qu'il nécessite une application dédiée"
+        - "Parce qu'il ne fonctionne pas à l'étranger"
+      en:
+        - "Because it is too slow"
+        - "Because it is vulnerable to SIM swap and interception, and remains phishable"
+        - "Because it requires a dedicated app"
+        - "Because it does not work abroad"
+    answer: 1
+    why:
+      fr: "Un attaquant peut détourner votre numéro (SIM swap) ou intercepter le texto, et vous piéger par hameçonnage. Pour un compte sensible, on exige un facteur résistant à l'hameçonnage."
+      en: "An attacker can hijack your number (SIM swap) or intercept the text, and trap you by phishing. For a sensitive account, you require a phishing-resistant factor."
+  - q:
+      fr: "Qu'est-ce qui rend les passkeys WebAuthn résistantes à l'hameçonnage ?"
+      en: "What makes WebAuthn passkeys resistant to phishing?"
+    options:
+      fr:
+        - "La clé est liée au domaine du site légitime et refuse de signer sur un faux site"
+        - "Elles utilisent un code à 6 chiffres plus long"
+        - "Elles envoient une alerte par e-mail"
+        - "Elles changent de mot de passe automatiquement"
+      en:
+        - "The key is bound to the legitimate site's domain and refuses to sign on a fake site"
+        - "They use a longer 6-digit code"
+        - "They send an email alert"
+        - "They change the password automatically"
+    answer: 0
+    why:
+      fr: "La clé cryptographique est associée au domaine d'origine. Sur un site d'hameçonnage (autre domaine), elle ne signe pas : l'attaque échoue, même si l'utilisateur est trompé."
+      en: "The cryptographic key is tied to the origin domain. On a phishing site (different domain), it does not sign: the attack fails, even if the user is fooled."
+  - q:
+      fr: "La charge utile (payload) d'un JWT est-elle chiffrée ?"
+      en: "Is a JWT's payload encrypted?"
+    options:
+      fr:
+        - "Oui, avec AES"
+        - "Oui, avec la clé privée de l'utilisateur"
+        - "Non : elle est seulement encodée en Base64 et lisible par tous ; c'est la signature qui protège"
+        - "Oui, mais uniquement en HTTPS"
+      en:
+        - "Yes, with AES"
+        - "Yes, with the user's private key"
+        - "No: it is only Base64-encoded and readable by anyone; the signature is what protects it"
+        - "Yes, but only over HTTPS"
+    answer: 2
+    why:
+      fr: "Un JWT est signé, pas chiffré : le payload se décode en une ligne. On n'y met jamais de secret, et on vérifie la signature avant de faire confiance aux claims."
+      en: "A JWT is signed, not encrypted: the payload decodes in one line. You never put a secret in it, and you verify the signature before trusting the claims."
+  - q:
+      fr: "Quelle différence majeure distingue OIDC de SAML ?"
+      en: "What major difference sets OIDC apart from SAML?"
+    options:
+      fr:
+        - "OIDC utilise des jetons JWT (JSON) et s'appuie sur OAuth 2.0 ; SAML utilise des assertions XML"
+        - "OIDC n'authentifie pas les utilisateurs"
+        - "SAML est plus récent qu'OIDC"
+        - "OIDC ne fonctionne que sur mobile"
+      en:
+        - "OIDC uses JWT (JSON) tokens and builds on OAuth 2.0; SAML uses XML assertions"
+        - "OIDC does not authenticate users"
+        - "SAML is newer than OIDC"
+        - "OIDC only works on mobile"
+    answer: 0
+    why:
+      fr: "OIDC est moderne, fondé sur OAuth 2.0, avec des jetons JWT adaptés aux API et au mobile. SAML, plus ancien, repose sur des assertions XML et des redirections navigateur."
+      en: "OIDC is modern, built on OAuth 2.0, with JWT tokens suited to APIs and mobile. SAML, older, relies on XML assertions and browser redirects."
+  - q:
+      fr: "Après avoir vérifié la signature d'un ID token, que doit encore contrôler l'application ?"
+      en: "After verifying an ID token's signature, what must the application still check?"
+    options:
+      fr:
+        - "Rien, la signature suffit"
+        - "Uniquement la longueur du jeton"
+        - "La couleur du bouton de connexion"
+        - "L'émetteur (`iss`), le destinataire (`aud`) et l'expiration (`exp`)"
+      en:
+        - "Nothing, the signature is enough"
+        - "Only the token length"
+        - "The colour of the login button"
+        - "The issuer (`iss`), audience (`aud`) and expiry (`exp`)"
+    answer: 3
+    why:
+      fr: "La signature garantit l'intégrité, mais il faut encore vérifier que le jeton vient du bon IdP (`iss`), vise bien votre application (`aud`) et n'est pas expiré (`exp`)."
+      en: "The signature guarantees integrity, but you still must check the token comes from the right IdP (`iss`), targets your application (`aud`) and is not expired (`exp`)."

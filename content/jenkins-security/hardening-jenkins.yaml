@@ -1,0 +1,486 @@
+description:
+  fr: "Durcir un contrôleur Jenkins : realm d'authentification, autorisation par matrice/rôles, aucun build sur le nœud intégré, sécurité agent-contrôleur, CSRF, sandbox et hygiène des plugins."
+  en: "Harden a Jenkins controller: security realm, matrix/role authorization, no builds on the built-in node, agent-to-controller security, CSRF, sandbox and plugin hygiene."
+duration: 30
+
+intro:
+  fr: |
+    Un contrôleur **Jenkins** est une cible de choix : il détient les credentials de déploiement, exécute du
+    code à chaque build et a souvent accès à toute l'infrastructure. Un Jenkins mal configuré laissé sur
+    Internet est compromis en quelques heures — c'est l'un des vecteurs d'attaque les plus connus.
+
+    Imaginez le trousseau de clés du gardien d'un immeuble : il ouvre tous les appartements, la cave et le
+    local technique. Si ce trousseau traîne sur le comptoir de l'accueil sans surveillance, tout l'immeuble
+    est en danger. Durcir Jenkins, c'est enfermer ce trousseau, vérifier l'identité des visiteurs et ne
+    donner à chacun que les clés dont il a besoin.
+
+    Dans cette leçon vous allez activer l'authentification, mettre en place une autorisation par matrice,
+    interdire l'exécution de builds sur le nœud intégré, sécuriser les communications agent-contrôleur et
+    comprendre la sandbox Groovy et l'hygiène des plugins.
+  en: |
+    A **Jenkins** controller is a prime target: it holds deployment credentials, runs code on every build
+    and often has access to the whole infrastructure. A misconfigured Jenkins left on the Internet is
+    compromised within hours — it is one of the best-known attack vectors.
+
+    Picture a building caretaker's keyring: it opens every flat, the cellar and the plant room. If that
+    keyring is left unattended on the reception desk, the whole building is at risk. Hardening Jenkins means
+    locking that keyring away, verifying the identity of visitors and giving each person only the keys they
+    need.
+
+    In this lesson you will enable authentication, set up matrix authorization, forbid builds on the
+    built-in node, secure agent-to-controller communication and understand the Groovy sandbox and plugin
+    hygiene.
+
+sections:
+  - heading:
+      fr: "Authentification : le security realm"
+      en: "Authentication: the security realm"
+    body:
+      fr: |
+        Le premier réglage, dans **Manage Jenkins → Security**, est le **security realm** : *qui* peut se
+        connecter. Ne jamais laisser l'option « Anyone can do anything » ni l'accès anonyme en écriture.
+
+        | Realm | Pour qui |
+        |---|---|
+        | Base de données propre à Jenkins | Petites équipes, labo |
+        | LDAP / Active Directory | Entreprise avec annuaire existant |
+        | OIDC / SAML (via plugin) | Fédération d'identité, SSO moderne |
+        | GitHub / GitLab OAuth | Équipes centrées sur le dépôt |
+
+        Dès que le realm est actif, **activez aussi la 2FA** si le plugin le permet, et désactivez le compte
+        d'installation initial une fois les comptes nominatifs créés. Point crucial : par défaut Jenkins
+        autorise l'**auto-inscription** (« Allow users to sign up »). Laissée active, n'importe quel visiteur
+        se crée un compte. Décochez-la immédiatement.
+      en: |
+        The first setting, in **Manage Jenkins → Security**, is the **security realm**: *who* can log in.
+        Never leave the "Anyone can do anything" option or anonymous write access.
+
+        | Realm | For whom |
+        |---|---|
+        | Jenkins' own user database | Small teams, lab |
+        | LDAP / Active Directory | Enterprise with an existing directory |
+        | OIDC / SAML (via plugin) | Identity federation, modern SSO |
+        | GitHub / GitLab OAuth | Repository-centric teams |
+
+        As soon as the realm is active, **enable 2FA** too if the plugin allows it, and disable the initial
+        setup account once named accounts exist. A crucial point: by default Jenkins allows **self sign-up**
+        ("Allow users to sign up"). Left on, any visitor creates themselves an account. Uncheck it
+        immediately.
+  - heading:
+      fr: "Autorisation : matrice et rôles"
+      en: "Authorization: matrix and roles"
+    body:
+      fr: |
+        Savoir *qui* se connecte ne suffit pas : il faut décider *ce qu'il peut faire*. C'est le rôle de la
+        stratégie d'**autorisation**.
+
+        | Stratégie | Principe | Recommandation |
+        |---|---|---|
+        | Legacy / Anyone can do anything | Tout le monde est admin | À bannir |
+        | Logged-in users can do anything | Tout utilisateur connecté est admin | À éviter |
+        | **Matrix-based security** | Permissions par utilisateur/groupe | Bon pour des équipes réduites |
+        | **Role-Based (plugin Role Strategy)** | Permissions par rôle, par dossier | Recommandé à l'échelle |
+
+        La matrice attribue des permissions fines (Overall/Read, Job/Build, Job/Configure, Run/Delete,
+        Credentials/View…). Appliquez le **moindre privilège** : un développeur a besoin de `Job/Build` et
+        `Job/Read`, pas de `Overall/Administer`. Donnez à l'utilisateur **anonyme** zéro permission.
+
+        À grande échelle, le plugin **Role Strategy** permet d'attribuer des rôles (admin, dev, lecteur) et
+        de les restreindre à certains dossiers avec des motifs, ce qui évite la matrice géante et
+        ingérable.
+      en: |
+        Knowing *who* logs in is not enough: you must decide *what they can do*. That is the job of the
+        **authorization** strategy.
+
+        | Strategy | Principle | Recommendation |
+        |---|---|---|
+        | Legacy / Anyone can do anything | Everyone is admin | Ban it |
+        | Logged-in users can do anything | Every logged-in user is admin | Avoid |
+        | **Matrix-based security** | Permissions per user/group | Good for small teams |
+        | **Role-Based (Role Strategy plugin)** | Permissions per role, per folder | Recommended at scale |
+
+        The matrix grants fine-grained permissions (Overall/Read, Job/Build, Job/Configure, Run/Delete,
+        Credentials/View…). Apply **least privilege**: a developer needs `Job/Build` and `Job/Read`, not
+        `Overall/Administer`. Give the **anonymous** user zero permissions.
+
+        At scale, the **Role Strategy** plugin lets you assign roles (admin, dev, reader) and restrict them
+        to certain folders with patterns, which avoids the giant, unmanageable matrix.
+  - heading:
+      fr: "Exécution, agents et accès réseau"
+      en: "Execution, agents and network access"
+    body:
+      fr: |
+        Trois réglages souvent oubliés ferment des portes critiques :
+
+        1. **Aucun build sur le nœud intégré.** Par défaut, le contrôleur (*built-in node*) peut exécuter
+           des builds. Or un build exécute du code arbitraire issu du dépôt ; sur le contrôleur, ce code a
+           accès aux credentials et au système de fichiers de Jenkins. Mettez le nombre d'exécuteurs du nœud
+           intégré à **0** et faites tourner les builds sur des **agents** dédiés.
+        2. **Agent-to-controller security.** Le sous-système de contrôle d'accès limite ce qu'un agent
+           (potentiellement compromis) peut demander au contrôleur. Laissez-le **activé** ; ne désactivez
+           jamais `hudson.remoting` ni la protection JNLP3/4.
+        3. **CSRF protection.** Le *crumb* anti-CSRF est activé par défaut depuis les versions récentes.
+           Ne le désactivez pas : sans lui, une page web piégée peut déclencher des actions en votre nom.
+
+        Enfin, Jenkins ne doit **jamais** être exposé directement : placez-le derrière un reverse proxy
+        (Nginx, Traefik) qui termine le **TLS**, et n'autorisez l'accès qu'à des réseaux de confiance (VPN,
+        liste d'IP). Les webhooks entrants passent par le proxy, pas par le port 8080 ouvert au monde.
+      en: |
+        Three often-forgotten settings close critical doors:
+
+        1. **No builds on the built-in node.** By default the controller (*built-in node*) can run builds.
+           But a build executes arbitrary code from the repository; on the controller, that code has access
+           to Jenkins' credentials and filesystem. Set the built-in node's executor count to **0** and run
+           builds on dedicated **agents**.
+        2. **Agent-to-controller security.** The access control subsystem limits what a (possibly
+           compromised) agent can ask the controller to do. Leave it **enabled**; never disable
+           `hudson.remoting` or the JNLP3/4 protection.
+        3. **CSRF protection.** The anti-CSRF *crumb* has been on by default in recent versions. Do not
+           disable it: without it, a booby-trapped web page can trigger actions in your name.
+
+        Finally, Jenkins must **never** be exposed directly: put it behind a reverse proxy (Nginx, Traefik)
+        that terminates **TLS**, and only allow access from trusted networks (VPN, IP allow-list). Inbound
+        webhooks go through the proxy, not through port 8080 open to the world.
+  - heading:
+      fr: "Sandbox Groovy et hygiène des plugins"
+      en: "Groovy sandbox and plugin hygiene"
+    body:
+      fr: |
+        Un `Jenkinsfile` contient du Groovy. Pour éviter qu'un pipeline exécute du code dangereux sur le
+        contrôleur, Jenkins utilise la **sandbox Groovy** : seules des méthodes jugées sûres sont permises.
+        Quand un pipeline a besoin d'une méthode hors sandbox, un administrateur doit l'approuver dans
+        **Manage Jenkins → In-process Script Approval**. Ne cochez **jamais** « Use Groovy Sandbox » à
+        `false` pour un job alimenté par un dépôt que des contributeurs externes peuvent modifier, et
+        n'approuvez une signature que si vous comprenez ce qu'elle fait.
+
+        Les **plugins** sont l'autre grande surface d'attaque : Jenkins en compte des milliers, et une CVE
+        dans un plugin très installé est fréquente. L'hygiène minimale :
+
+        - installer **uniquement** les plugins nécessaires ;
+        - les mettre à jour régulièrement et surveiller l'onglet des avis de sécurité ;
+        - supprimer les plugins non utilisés (chaque plugin est du code qui tourne sur le contrôleur).
+
+        La configuration de tous ces réglages gagne à être gérée en **Configuration as Code** (JCasC),
+        sujet de la dernière leçon de ce cours, pour éviter la dérive manuelle et versionner la sécurité.
+      en: |
+        A `Jenkinsfile` contains Groovy. To prevent a pipeline from running dangerous code on the
+        controller, Jenkins uses the **Groovy sandbox**: only methods deemed safe are allowed. When a
+        pipeline needs a method outside the sandbox, an administrator must approve it in **Manage Jenkins →
+        In-process Script Approval**. **Never** set "Use Groovy Sandbox" to `false` for a job fed by a
+        repository that external contributors can modify, and only approve a signature if you understand
+        what it does.
+
+        **Plugins** are the other big attack surface: Jenkins has thousands of them, and a CVE in a widely
+        installed plugin is common. The minimum hygiene:
+
+        - install **only** the plugins you need;
+        - update them regularly and watch the security advisories tab;
+        - remove unused plugins (every plugin is code running on the controller).
+
+        Configuring all of this is best managed with **Configuration as Code** (JCasC), the subject of the
+        last lesson of this course, to avoid manual drift and to version security.
+
+examples:
+  - title:
+      fr: "Vulnérable : accès anonyme et auto-inscription"
+      en: "Vulnerable: anonymous access and self sign-up"
+    file: config.xml
+    lang: xml
+    kind: vulnerable
+    code: |
+      <?xml version='1.1' encoding='UTF-8'?>
+      <hudson>
+        <!-- DANGER: anyone, even anonymous, is a full administrator -->
+        <authorizationStrategy class="hudson.security.AuthorizationStrategy$Unsecured"/>
+
+        <!-- DANGER: self sign-up enabled, any visitor can create an account -->
+        <securityRealm class="hudson.security.HudsonPrivateSecurityRealm">
+          <disableSignup>false</disableSignup>
+        </securityRealm>
+
+        <!-- DANGER: the built-in node runs builds with access to all credentials -->
+        <numExecutors>4</numExecutors>
+        <mode>NORMAL</mode>
+      </hudson>
+    note:
+      fr: "Cette configuration est équivalente à laisser la porte grande ouverte : `Unsecured` donne les pleins pouvoirs à tout le monde, l'auto-inscription est active, et le contrôleur exécute des builds. C'est exactement la configuration que des bots scannent et exploitent sur Internet."
+      en: "This configuration is like leaving the door wide open: `Unsecured` grants full power to everyone, self sign-up is on, and the controller runs builds. This is exactly the configuration that bots scan for and exploit on the Internet."
+
+  - title:
+      fr: "Sécurisé : realm privé, matrice et nœud intégré à zéro"
+      en: "Secure: private realm, matrix and built-in node at zero"
+    file: config.xml
+    lang: xml
+    kind: secure
+    code: |
+      <?xml version='1.1' encoding='UTF-8'?>
+      <hudson>
+        <!-- Named accounts only, self sign-up disabled -->
+        <securityRealm class="hudson.security.HudsonPrivateSecurityRealm">
+          <disableSignup>true</disableSignup>
+          <enableCaptcha>false</enableCaptcha>
+        </securityRealm>
+
+        <!-- Least privilege: anonymous has nothing, devs can build and read only -->
+        <authorizationStrategy class="hudson.security.ProjectMatrixAuthorizationStrategy">
+          <permission>hudson.model.Hudson.Administer:admin</permission>
+          <permission>hudson.model.Item.Build:dev-team</permission>
+          <permission>hudson.model.Item.Read:dev-team</permission>
+        </authorizationStrategy>
+
+        <!-- 0 executors on the controller: builds run on dedicated agents only -->
+        <numExecutors>0</numExecutors>
+      </hudson>
+    note:
+      fr: "`ProjectMatrixAuthorizationStrategy` applique le moindre privilège : `admin` administre, `dev-team` peut lancer et lire des jobs, l'anonyme n'apparaît pas donc n'a rien. `numExecutors` à 0 garantit qu'aucun build ne s'exécute sur le contrôleur. On édite rarement ce fichier à la main : JCasC le génère."
+      en: "`ProjectMatrixAuthorizationStrategy` applies least privilege: `admin` administers, `dev-team` can build and read jobs, anonymous is absent so has nothing. `numExecutors` at 0 guarantees no build runs on the controller. This file is rarely edited by hand: JCasC generates it."
+
+  - title:
+      fr: "Reverse proxy Nginx qui termine le TLS devant Jenkins"
+      en: "Nginx reverse proxy terminating TLS in front of Jenkins"
+    file: jenkins.conf
+    lang: nginx
+    kind: secure
+    code: |
+      # Redirect all plain HTTP to HTTPS
+      server {
+          listen 80;
+          server_name jenkins.example.com;
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl;
+          server_name jenkins.example.com;
+
+          # TLS terminated here; Jenkins itself never faces the Internet
+          ssl_certificate     /etc/letsencrypt/live/jenkins.example.com/fullchain.pem;
+          ssl_certificate_key /etc/letsencrypt/live/jenkins.example.com/privkey.pem;
+          ssl_protocols       TLSv1.2 TLSv1.3;
+
+          # Security headers for the Jenkins UI
+          add_header Strict-Transport-Security "max-age=31536000" always;
+          add_header X-Content-Type-Options "nosniff" always;
+
+          location / {
+              # Jenkins listens only on localhost:8080, not on a public interface
+              proxy_pass http://127.0.0.1:8080;
+              proxy_set_header Host              $host;
+              proxy_set_header X-Real-IP         $remote_addr;
+              proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto https;
+          }
+      }
+    note:
+      fr: "Jenkins écoute uniquement sur `127.0.0.1:8080` ; seul Nginx est exposé, avec un certificat Let's Encrypt et HSTS. Pensez à régler l'URL Jenkins (*Manage Jenkins → System → Jenkins URL*) sur `https://jenkins.example.com` pour que les liens et les webhooks soient corrects."
+      en: "Jenkins listens only on `127.0.0.1:8080`; only Nginx is exposed, with a Let's Encrypt certificate and HSTS. Remember to set the Jenkins URL (*Manage Jenkins → System → Jenkins URL*) to `https://jenkins.example.com` so links and webhooks are correct."
+
+  - title:
+      fr: "Vérifier le durcissement avec le Script Console"
+      en: "Checking the hardening with the Script Console"
+    file: audit.groovy
+    lang: groovy
+    kind: neutral
+    code: |
+      // Run in Manage Jenkins -> Script Console to audit key security settings.
+      def jenkins = jenkins.model.Jenkins.get()
+
+      // 1. Builds must NOT run on the controller
+      println "Controller executors (should be 0): ${jenkins.numExecutors}"
+
+      // 2. A real authorization strategy must be in place
+      println "Authorization: ${jenkins.authorizationStrategy.class.simpleName}"
+
+      // 3. Self sign-up must be disabled
+      def realm = jenkins.securityRealm
+      if (realm.hasProperty('disableSignup')) {
+          println "Signup disabled (should be true): ${realm.disableSignup}"
+      }
+
+      // 4. CSRF crumb issuer must be present
+      println "CSRF protection: ${jenkins.crumbIssuer != null}"
+    output: |
+      Controller executors (should be 0): 0
+      Authorization: ProjectMatrixAuthorizationStrategy
+      Signup disabled (should be true): true
+      CSRF protection: true
+    note:
+      fr: "Ce petit script lit l'état réel du contrôleur. Un `Authorization: Unsecured`, des exécuteurs non nuls ou `CSRF protection: false` signalent un durcissement incomplet. On peut en faire un contrôle régulier."
+      en: "This small script reads the controller's real state. An `Authorization: Unsecured`, non-zero executors or `CSRF protection: false` flag incomplete hardening. You can turn it into a regular check."
+
+mistake:
+  fr: |
+    **Désactiver la protection CSRF ou la sandbox Groovy pour « faire marcher » un pipeline.**
+
+    Quand un pipeline échoue avec une erreur d'approbation de script ou de crumb, la tentation est de tout
+    désactiver. C'est ouvrir une porte dérobée permanente pour résoudre un problème ponctuel. La bonne
+    réponse : approuver précisément la signature manquante dans *In-process Script Approval*, ou réécrire
+    le pipeline avec des méthodes de la sandbox. Désactiver globalement la CSRF ou la sandbox transforme
+    Jenkins en exécuteur de code à distance pour n'importe qui.
+  en: |
+    **Disabling CSRF protection or the Groovy sandbox to "make" a pipeline work.**
+
+    When a pipeline fails with a script approval or crumb error, the temptation is to switch everything off.
+    That is opening a permanent backdoor to solve a one-off problem. The right answer: approve exactly the
+    missing signature in *In-process Script Approval*, or rewrite the pipeline using sandbox methods.
+    Disabling CSRF or the sandbox globally turns Jenkins into a remote code executor for anyone.
+
+bestPractice:
+  fr: |
+    - **Un vrai realm** (base privée, LDAP, OIDC) et **auto-inscription désactivée**.
+    - **Autorisation par matrice ou rôles**, moindre privilège, anonyme à zéro permission.
+    - **0 exécuteur sur le nœud intégré** : les builds tournent sur des agents dédiés.
+    - **Gardez CSRF et agent-to-controller activés**, ne touchez pas à la sandbox Groovy.
+    - **Derrière un reverse proxy TLS**, Jenkins écoutant sur localhost uniquement.
+    - **Hygiène des plugins** : le minimum, à jour, les avis de sécurité surveillés.
+    - **Sauvegardez `$JENKINS_HOME`** et gérez la config en JCasC.
+  en: |
+    - **A real realm** (private DB, LDAP, OIDC) and **self sign-up disabled**.
+    - **Matrix or role authorization**, least privilege, anonymous with zero permissions.
+    - **0 executors on the built-in node**: builds run on dedicated agents.
+    - **Keep CSRF and agent-to-controller enabled**, do not touch the Groovy sandbox.
+    - **Behind a TLS reverse proxy**, with Jenkins listening on localhost only.
+    - **Plugin hygiene**: the minimum, up to date, security advisories watched.
+    - **Back up `$JENKINS_HOME`** and manage the config with JCasC.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue vient d'installer Jenkins et vous envoie ces constats :
+
+      - la stratégie d'autorisation est « Logged-in users can do anything » ;
+      - le nœud intégré a 2 exécuteurs ;
+      - Jenkins est accessible directement sur `http://203.0.113.10:8080` ;
+      - l'option « Allow users to sign up » est cochée.
+
+      Pour **chacun** des quatre points, indiquez le risque concret et le réglage correct à appliquer.
+    en: |
+      A colleague has just installed Jenkins and sends you these findings:
+
+      - the authorization strategy is "Logged-in users can do anything";
+      - the built-in node has 2 executors;
+      - Jenkins is reachable directly at `http://203.0.113.10:8080`;
+      - the "Allow users to sign up" option is checked.
+
+      For **each** of the four points, state the concrete risk and the correct setting to apply.
+  solution:
+    file: hardening-checklist.md
+    lang: markdown
+    code: |
+      # Hardening findings and fixes
+
+      1. **"Logged-in users can do anything"**
+         Risk: every authenticated user is an administrator (can read credentials, reconfigure jobs,
+         run the script console = remote code execution).
+         Fix: switch to Matrix-based security (or Role Strategy) and grant least privilege;
+         anonymous gets zero permissions.
+
+      2. **Built-in node with 2 executors**
+         Risk: builds run on the controller, so repository code has access to Jenkins' credentials
+         and filesystem.
+         Fix: set the built-in node executors to 0 and run builds on dedicated agents.
+
+      3. **Jenkins reachable directly on http://...:8080**
+         Risk: no TLS (credentials and crumbs in clear text) and the controller is exposed to the
+         whole Internet.
+         Fix: bind Jenkins to 127.0.0.1, put a TLS reverse proxy (Nginx/Traefik) in front, restrict
+         access to trusted networks, set the Jenkins URL to the https name.
+
+      4. **"Allow users to sign up" checked**
+         Risk: any visitor creates an account, defeating the realm.
+         Fix: uncheck self sign-up; create accounts through the directory or by an administrator.
+    note:
+      fr: "Les quatre points forment le socle de tout durcissement Jenkins : authentifier, autoriser au plus juste, ne pas builder sur le contrôleur, chiffrer et ne pas exposer."
+      en: "The four points form the foundation of any Jenkins hardening: authenticate, authorize tightly, do not build on the controller, encrypt and do not expose."
+
+quiz:
+  - q:
+      fr: "Pourquoi régler le nombre d'exécuteurs du nœud intégré à 0 ?"
+      en: "Why set the built-in node's executor count to 0?"
+    options:
+      fr:
+        - "Pour que le contrôleur n'exécute pas de code de build ayant accès aux credentials"
+        - "Pour accélérer l'interface web"
+        - "Pour désactiver complètement les builds"
+        - "Pour économiser de la place disque"
+      en:
+        - "So the controller does not run build code that has access to credentials"
+        - "To speed up the web UI"
+        - "To disable builds entirely"
+        - "To save disk space"
+    answer: 0
+    why:
+      fr: "Un build exécute du code arbitraire issu du dépôt. Sur le contrôleur, ce code accède aux secrets et au système de Jenkins. Les builds doivent tourner sur des agents isolés."
+      en: "A build runs arbitrary code from the repository. On the controller, that code reaches Jenkins' secrets and filesystem. Builds must run on isolated agents."
+  - q:
+      fr: "Quelle stratégie d'autorisation applique le moindre privilège pour des équipes réduites ?"
+      en: "Which authorization strategy applies least privilege for small teams?"
+    options:
+      fr:
+        - "Anyone can do anything"
+        - "Logged-in users can do anything"
+        - "Matrix-based security"
+        - "Désactiver l'autorisation"
+      en:
+        - "Anyone can do anything"
+        - "Logged-in users can do anything"
+        - "Matrix-based security"
+        - "Turning authorization off"
+    answer: 2
+    why:
+      fr: "La sécurité par matrice attribue des permissions fines par utilisateur ou groupe. À l'échelle, le plugin Role Strategy étend ce principe avec des rôles par dossier."
+      en: "Matrix-based security grants fine-grained permissions per user or group. At scale, the Role Strategy plugin extends this with roles per folder."
+  - q:
+      fr: "Quel est le rôle de la sandbox Groovy dans un pipeline ?"
+      en: "What is the role of the Groovy sandbox in a pipeline?"
+    options:
+      fr:
+        - "Elle compile le pipeline plus vite"
+        - "Elle limite le pipeline à des méthodes jugées sûres, sauf approbation"
+        - "Elle chiffre les logs de build"
+        - "Elle sauvegarde automatiquement $JENKINS_HOME"
+      en:
+        - "It compiles the pipeline faster"
+        - "It restricts the pipeline to methods deemed safe, unless approved"
+        - "It encrypts build logs"
+        - "It automatically backs up $JENKINS_HOME"
+    answer: 1
+    why:
+      fr: "Un `Jenkinsfile` est du Groovy. La sandbox empêche un pipeline d'exécuter du code dangereux sur le contrôleur ; une méthode hors sandbox doit être approuvée explicitement par un administrateur."
+      en: "A `Jenkinsfile` is Groovy. The sandbox prevents a pipeline from running dangerous code on the controller; a method outside the sandbox must be explicitly approved by an administrator."
+  - q:
+      fr: "Comment exposer Jenkins sur Internet de façon correcte ?"
+      en: "How should Jenkins be exposed to the Internet correctly?"
+    options:
+      fr:
+        - "En ouvrant le port 8080 directement"
+        - "En désactivant l'authentification pour les webhooks"
+        - "Derrière un reverse proxy qui termine le TLS, Jenkins écoutant sur localhost"
+        - "En activant l'accès anonyme en lecture/écriture"
+      en:
+        - "By opening port 8080 directly"
+        - "By disabling authentication for webhooks"
+        - "Behind a reverse proxy terminating TLS, with Jenkins listening on localhost"
+        - "By enabling anonymous read/write access"
+    answer: 2
+    why:
+      fr: "Le reverse proxy chiffre le trafic et devient le seul point exposé ; Jenkins reste sur `127.0.0.1`. L'accès est en plus limité à des réseaux de confiance."
+      en: "The reverse proxy encrypts traffic and becomes the only exposed point; Jenkins stays on `127.0.0.1`. Access is further limited to trusted networks."
+  - q:
+      fr: "Que faut-il faire des plugins Jenkins non utilisés ?"
+      en: "What should be done with unused Jenkins plugins?"
+    options:
+      fr:
+        - "Les laisser, ils sont inoffensifs s'ils ne servent pas"
+        - "Les supprimer, car chaque plugin est du code tournant sur le contrôleur"
+        - "Les dupliquer pour avoir une sauvegarde"
+        - "Les renommer pour les cacher"
+      en:
+        - "Leave them, they are harmless if unused"
+        - "Remove them, because every plugin is code running on the controller"
+        - "Duplicate them as a backup"
+        - "Rename them to hide them"
+    answer: 1
+    why:
+      fr: "Un plugin inutilisé reste du code exécuté par Jenkins et peut porter une CVE. Réduire le nombre de plugins réduit la surface d'attaque."
+      en: "An unused plugin is still code run by Jenkins and may carry a CVE. Reducing the number of plugins reduces the attack surface."

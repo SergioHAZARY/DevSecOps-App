@@ -1,0 +1,464 @@
+description:
+  fr: "Sécuriser un projet TypeScript : tsconfig strict, validation Zod avec types inférés, ESLint et plugins de sécurité, npm ci avec lockfile et --ignore-scripts, npm audit."
+  en: "Securing a TypeScript project: strict tsconfig, Zod validation with inferred types, ESLint and security plugins, npm ci with lockfile and --ignore-scripts, npm audit."
+duration: 35
+
+intro:
+  fr: |
+    TypeScript apporte un filet de sécurité, mais seulement si on l'active vraiment. Un `tsconfig.json`
+    laxiste (sans `strict`) laisse passer des `null`, des `any` et des erreurs que le compilateur aurait pu
+    attraper. De même, installer des dépendances sans précaution expose le projet à la **chaîne
+    d'approvisionnement** : un paquet compromis peut exécuter du code pendant l'installation.
+
+    C'est la différence entre une ceinture de sécurité bouclée et une ceinture simplement posée sur les
+    genoux : présente, mais inutile. Cette leçon règle correctement le « harnais » d'un projet TypeScript
+    professionnel.
+
+    Vous allez activer le mode **strict** de TypeScript, relier la validation **Zod** aux types (une seule
+    source de vérité pour le type et la validation), ajouter **ESLint** avec des règles de sécurité, et
+    sécuriser l'installation des dépendances (`npm ci`, lockfile, `--ignore-scripts`, `npm audit`). Les
+    extraits TypeScript de logique s'exécutent dans le navigateur ; les configurations visent un vrai projet.
+  en: |
+    TypeScript provides a safety net, but only if you actually turn it on. A lax `tsconfig.json` (without
+    `strict`) lets `null`, `any` and errors the compiler could have caught slip through. Likewise, installing
+    dependencies carelessly exposes the project to the **supply chain**: a compromised package can run code
+    during installation.
+
+    It is the difference between a buckled seatbelt and one just laid across your lap: present, but useless.
+    This lesson correctly sets up the "harness" of a professional TypeScript project.
+
+    You will enable TypeScript's **strict** mode, tie **Zod** validation to the types (one source of truth
+    for both type and validation), add **ESLint** with security rules, and secure dependency installation
+    (`npm ci`, lockfile, `--ignore-scripts`, `npm audit`). The TypeScript logic snippets run in the browser;
+    the configurations target a real project.
+
+sections:
+  - heading:
+      fr: "tsconfig strict et types inférés par Zod"
+      en: "Strict tsconfig and Zod-inferred types"
+    body:
+      fr: |
+        Le mode **strict** de TypeScript (`"strict": true`) active un ensemble de vérifications qui
+        éliminent des classes entières de bugs :
+
+        | Option (incluse dans strict) | Ce qu'elle attrape |
+        |---|---|
+        | `strictNullChecks` | Les `null`/`undefined` non gérés (la cause n°1 de plantage) |
+        | `noImplicitAny` | Les variables au type `any` implicite, qui désactivent toute vérification |
+        | `strictFunctionTypes` | Les incompatibilités de signatures de fonctions |
+
+        On ajoute souvent `noUncheckedIndexedAccess` (un accès `tab[i]` peut être `undefined`) et
+        `exactOptionalPropertyTypes`. Le type `any` est l'ennemi : il **désactive** le vérificateur. On le
+        remplace par `unknown`, qui force à valider avant usage.
+
+        Le lien puissant : **Zod infère le type depuis le schéma**. On écrit le schéma une fois, et
+        `z.infer<typeof schema>` donne le type TypeScript correspondant. La validation à l'exécution et le
+        type à la compilation restent ainsi **toujours synchronisés** : impossible qu'ils divergent.
+      en: |
+        TypeScript's **strict** mode (`"strict": true`) enables a set of checks that eliminate whole classes
+        of bugs:
+
+        | Option (included in strict) | What it catches |
+        |---|---|
+        | `strictNullChecks` | Unhandled `null`/`undefined` (the number-one crash cause) |
+        | `noImplicitAny` | Variables with an implicit `any` type, which disable all checking |
+        | `strictFunctionTypes` | Function signature mismatches |
+
+        You often add `noUncheckedIndexedAccess` (an `arr[i]` access may be `undefined`) and
+        `exactOptionalPropertyTypes`. The `any` type is the enemy: it **disables** the checker. Replace it
+        with `unknown`, which forces you to validate before use.
+
+        The powerful link: **Zod infers the type from the schema**. You write the schema once, and
+        `z.infer<typeof schema>` gives the matching TypeScript type. Runtime validation and compile-time type
+        thus stay **always in sync**: they cannot drift apart.
+  - heading:
+      fr: "ESLint et sécurité de la chaîne d'approvisionnement"
+      en: "ESLint and supply-chain security"
+    body:
+      fr: |
+        **ESLint** analyse le code pour trouver bugs et patrons dangereux. Des plugins ajoutent des règles de
+        sécurité : `eslint-plugin-security` (repère `eval`, regex dangereuses, `child_process`…) et
+        `@typescript-eslint` (impose, par exemple, l'interdiction de `any` ou l'usage de `===`). ESLint tourne
+        en local et en CI, et fait échouer le build sur les règles critiques.
+
+        La **chaîne d'approvisionnement** est un vecteur d'attaque majeur : vous faites confiance à des
+        centaines de paquets. Trois réflexes :
+
+        | Pratique | Pourquoi |
+        |---|---|
+        | `npm ci` (pas `npm install`) en CI | Installe **exactement** le lockfile, build reproductible |
+        | Committer `package-lock.json` | Fige les versions **et** les empreintes de chaque dépendance |
+        | `npm ci --ignore-scripts` | Empêche l'exécution de scripts `postinstall` malveillants |
+        | `npm audit` / Dependabot | Signale les dépendances avec une faille connue |
+
+        Les scripts `postinstall` d'un paquet s'exécutent automatiquement à l'installation : c'est par là que
+        plusieurs paquets compromis ont exfiltré des secrets. `--ignore-scripts` coupe ce vecteur ; on
+        n'autorise les scripts que pour les paquets de confiance qui en ont réellement besoin.
+      en: |
+        **ESLint** analyses code to find bugs and dangerous patterns. Plugins add security rules:
+        `eslint-plugin-security` (flags `eval`, dangerous regexes, `child_process`…) and `@typescript-eslint`
+        (enforces, for example, the ban on `any` or the use of `===`). ESLint runs locally and in CI, and
+        fails the build on critical rules.
+
+        The **supply chain** is a major attack vector: you trust hundreds of packages. Three reflexes:
+
+        | Practice | Why |
+        |---|---|
+        | `npm ci` (not `npm install`) in CI | Installs **exactly** the lockfile, reproducible build |
+        | Commit `package-lock.json` | Freezes versions **and** the hash of each dependency |
+        | `npm ci --ignore-scripts` | Prevents malicious `postinstall` scripts from running |
+        | `npm audit` / Dependabot | Flags dependencies with a known flaw |
+
+        A package's `postinstall` scripts run automatically on install: this is how several compromised
+        packages exfiltrated secrets. `--ignore-scripts` cuts that vector; you allow scripts only for trusted
+        packages that genuinely need them.
+
+examples:
+  - title:
+      fr: "any désactive la sécurité, unknown la rétablit (navigateur)"
+      en: "any disables safety, unknown restores it (browser)"
+    file: any_vs_unknown.ts
+    lang: typescript
+    kind: vulnerable
+    code: |
+      // Runs in the browser (types are stripped before execution)
+
+      // VULNERABLE pattern: "any" turns off all type checking
+      function readRoleUnsafe(data: any): string {
+        // No check: if data.user is undefined, this crashes at runtime
+        return data.user.role.toUpperCase();
+      }
+
+      // SAFE pattern: "unknown" forces you to narrow the type before using it
+      function readRoleSafe(data: unknown): string {
+        if (
+          typeof data === "object" && data !== null &&
+          "user" in data && typeof (data as any).user?.role === "string"
+        ) {
+          return (data as { user: { role: string } }).user.role.toUpperCase();
+        }
+        return "UNKNOWN";
+      }
+
+      console.log(readRoleSafe({ user: { role: "admin" } }));
+      console.log(readRoleSafe({})); // no crash, returns a safe default
+    output: |
+      ADMIN
+      UNKNOWN
+    note:
+      fr: "`any` fait croire au compilateur que tout est permis : `data.user.role` plante si `user` est absent. `unknown` oblige à vérifier la forme avant d'accéder aux champs, ce qui évite le plantage. Bannissez `any` dans le code de production."
+      en: "`any` makes the compiler believe anything is allowed: `data.user.role` crashes if `user` is missing. `unknown` forces you to check the shape before accessing fields, avoiding the crash. Ban `any` in production code."
+
+  - title:
+      fr: "tsconfig.json strict et recommandé"
+      en: "A strict, recommended tsconfig.json"
+    file: tsconfig.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "compilerOptions": {
+          "target": "ES2022",
+          "module": "NodeNext",
+          "moduleResolution": "NodeNext",
+
+          "strict": true,                        // enables the whole strict family
+          "noImplicitAny": true,                 // (redundant with strict, kept explicit)
+          "strictNullChecks": true,              // null/undefined must be handled
+          "noUncheckedIndexedAccess": true,      // arr[i] is T | undefined
+          "exactOptionalPropertyTypes": true,    // optional means "absent", not "undefined"
+
+          "noImplicitReturns": true,             // every code path must return
+          "noFallthroughCasesInSwitch": true,    // a switch case must not fall through
+          "noUnusedLocals": true,                // dead variables are flagged
+
+          "esModuleInterop": true,
+          "skipLibCheck": true,
+          "outDir": "dist"
+        },
+        "include": ["src/**/*.ts"]
+      }
+    output: |
+      $ npx tsc --noEmit
+      src/user.ts:12:10 - error TS2532: Object is possibly 'undefined'.
+      12   return users[id].name;
+                  ~~~~~~~~~
+      # noUncheckedIndexedAccess caught a real bug: users[id] may not exist.
+    note:
+      fr: "`strict: true` active d'un coup les vérifications les plus utiles. `noUncheckedIndexedAccess` attrape ici un bug réel : un accès par index peut renvoyer `undefined`. Compiler avec `tsc --noEmit` en CI fait échouer le build sur ces erreurs."
+      en: "`strict: true` turns on the most useful checks at once. `noUncheckedIndexedAccess` here catches a real bug: an index access may return `undefined`. Running `tsc --noEmit` in CI fails the build on these errors."
+
+  - title:
+      fr: "Zod : une seule source de vérité pour le type et la validation"
+      en: "Zod: one source of truth for type and validation"
+    file: config.ts
+    lang: typescript
+    kind: secure
+    code: |
+      // target: real TypeScript project, "npm i zod"
+      import { z } from "zod";
+
+      // Validate the process environment at startup: fail fast if misconfigured
+      const envSchema = z.object({
+        PORT: z.coerce.number().int().min(1).max(65535),
+        NODE_ENV: z.enum(["development", "production", "test"]),
+        JWT_SECRET: z.string().min(32), // reject weak/missing secrets
+      });
+
+      // The TYPE is inferred from the SCHEMA: they can never drift apart
+      type Env = z.infer<typeof envSchema>;
+
+      export function loadEnv(raw: NodeJS.ProcessEnv): Env {
+        const result = envSchema.safeParse(raw);
+        if (!result.success) {
+          // Print precise, actionable errors and refuse to start
+          console.error("Invalid environment:", result.error.flatten().fieldErrors);
+          process.exit(1);
+        }
+        return result.data; // typed as Env, fully validated
+      }
+    output: |
+      # With JWT_SECRET missing:
+      Invalid environment: { JWT_SECRET: [ 'String must contain at least 32 character(s)' ] }
+      # process exits with code 1 before the app starts with a broken config
+    note:
+      fr: "`z.infer<typeof envSchema>` déduit le type `Env` directement du schéma : si on ajoute un champ au schéma, le type suit automatiquement. L'application valide sa configuration au démarrage et **refuse de démarrer** si un secret est trop faible ou absent."
+      en: "`z.infer<typeof envSchema>` derives the `Env` type straight from the schema: add a field to the schema and the type follows automatically. The app validates its configuration at startup and **refuses to start** if a secret is too weak or missing."
+
+  - title:
+      fr: "ESLint sécurité et installation durcie des dépendances"
+      en: "Security ESLint and hardened dependency install"
+    file: ci-lint.sh
+    lang: bash
+    kind: secure
+    code: |
+      # eslint.config.js enables TypeScript + security rules, for example:
+      #
+      #   import security from "eslint-plugin-security";
+      #   export default [
+      #     security.configs.recommended,            // flags eval, unsafe regex, etc.
+      #     { rules: {
+      #         "@typescript-eslint/no-explicit-any": "error",  // ban "any"
+      #         "eqeqeq": ["error", "always"],                  // force === over ==
+      #     }},
+      #   ];
+
+      # Install EXACTLY the lockfile, and do NOT run package install scripts
+      npm ci --ignore-scripts
+
+      # Lint: fail CI on any error (security rules included)
+      npx eslint . --max-warnings 0
+
+      # Type-check without emitting files
+      npx tsc --noEmit
+
+      # Report dependencies with known vulnerabilities; fail on high severity
+      npm audit --audit-level=high
+    output: |
+      $ npm ci --ignore-scripts
+      added 214 packages in 3s
+      $ npx eslint . --max-warnings 0
+      /src/legacy.ts
+        8:5  error  Unexpected use of '=='. Use '===' instead  eqeqeq
+      ✖ 1 problem (1 error, 0 warnings)
+      # Exit code 1 -> the pipeline fails until the issue is fixed.
+    note:
+      fr: "`npm ci --ignore-scripts` installe exactement le lockfile sans exécuter les scripts `postinstall` (vecteur d'attaque courant). ESLint avec les règles de sécurité fait échouer la CI sur `==`, `eval`, etc., et `npm audit` signale les failles connues des dépendances."
+      en: "`npm ci --ignore-scripts` installs exactly the lockfile without running `postinstall` scripts (a common attack vector). ESLint with security rules fails CI on `==`, `eval`, etc., and `npm audit` flags known dependency flaws."
+
+mistake:
+  fr: |
+    **Désactiver le mode strict ou abuser de `any` pour « faire taire » le compilateur.**
+
+    ```json
+    { "compilerOptions": { "strict": false } }
+    ```
+
+    ```typescript
+    const data = JSON.parse(body) as any; // the type checker is now blind
+    ```
+
+    Sans `strict`, TypeScript n'attrape ni les `null` non gérés, ni les `any` implicites : vous gardez la
+    syntaxe des types mais perdez leur protection. Et chaque `any` explicite crée un **trou** dans le filet :
+    le compilateur cesse de vérifier tout ce qui en découle, et un `undefined` ou un objet malveillant passe
+    jusqu'à l'exécution. La règle : `strict: true` activé partout, `unknown` à la place de `any` (il force à
+    valider), et une règle ESLint `no-explicit-any` pour interdire la triche.
+  en: |
+    **Turning off strict mode or abusing `any` to "silence" the compiler.**
+
+    ```json
+    { "compilerOptions": { "strict": false } }
+    ```
+
+    ```typescript
+    const data = JSON.parse(body) as any; // the type checker is now blind
+    ```
+
+    Without `strict`, TypeScript catches neither unhandled `null` nor implicit `any`: you keep the type syntax
+    but lose its protection. And every explicit `any` punches a **hole** in the net: the compiler stops
+    checking everything downstream, and an `undefined` or malicious object reaches runtime. The rule:
+    `strict: true` on everywhere, `unknown` instead of `any` (it forces validation), and a `no-explicit-any`
+    ESLint rule to forbid cheating.
+
+bestPractice:
+  fr: |
+    - **`"strict": true`** dans `tsconfig.json`, plus `noUncheckedIndexedAccess`, et `tsc --noEmit` en CI.
+    - **Bannissez `any`** : utilisez `unknown` et validez avant usage ; règle ESLint `no-explicit-any`.
+    - **Validez par schéma Zod** et dérivez le type avec `z.infer` : une seule source de vérité.
+    - **ESLint avec plugins de sécurité** (`eslint-plugin-security`, `@typescript-eslint`), build qui échoue sur erreur.
+    - **`npm ci` (pas `npm install`) en CI** et committez `package-lock.json`.
+    - **`--ignore-scripts`** pour bloquer les scripts `postinstall` malveillants des dépendances.
+    - **`npm audit` et Dependabot/Renovate** pour suivre et corriger les failles des dépendances.
+  en: |
+    - **`"strict": true`** in `tsconfig.json`, plus `noUncheckedIndexedAccess`, and `tsc --noEmit` in CI.
+    - **Ban `any`**: use `unknown` and validate before use; ESLint `no-explicit-any` rule.
+    - **Validate with a Zod schema** and derive the type with `z.infer`: a single source of truth.
+    - **ESLint with security plugins** (`eslint-plugin-security`, `@typescript-eslint`), build fails on error.
+    - **`npm ci` (not `npm install`) in CI** and commit `package-lock.json`.
+    - **`--ignore-scripts`** to block malicious dependency `postinstall` scripts.
+    - **`npm audit` and Dependabot/Renovate** to track and fix dependency flaws.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue propose ce `tsconfig.json` et cette commande d'installation pour la CI. Corrigez les deux.
+
+      ```json
+      { "compilerOptions": { "strict": false, "outDir": "dist" } }
+      ```
+
+      ```bash
+      npm install
+      ```
+
+      1. Réécrivez le `tsconfig.json` pour activer le mode strict et au moins une vérification supplémentaire
+         utile.
+      2. Remplacez la commande d'installation par une version adaptée à la CI qui n'exécute pas les scripts
+         des paquets.
+    en: |
+      A colleague proposes this `tsconfig.json` and this install command for CI. Fix both.
+
+      ```json
+      { "compilerOptions": { "strict": false, "outDir": "dist" } }
+      ```
+
+      ```bash
+      npm install
+      ```
+
+      1. Rewrite the `tsconfig.json` to enable strict mode and at least one useful extra check.
+      2. Replace the install command with a CI-appropriate version that does not run package scripts.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. tsconfig.json with strict mode and an extra safety check:
+      #
+      # {
+      #   "compilerOptions": {
+      #     "strict": true,                   // enable the full strict family
+      #     "noUncheckedIndexedAccess": true, // arr[i] is T | undefined
+      #     "noImplicitReturns": true,        // every path must return
+      #     "outDir": "dist"
+      #   },
+      #   "include": ["src/**/*.ts"]
+      # }
+
+      # 2. CI install: exact lockfile, no install scripts, then audit
+      npm ci --ignore-scripts
+      npm audit --audit-level=high
+    note:
+      fr: "`strict: true` rétablit toutes les vérifications désactivées par `strict: false`, et `noUncheckedIndexedAccess` ajoute une protection sur les accès par index. `npm ci` installe exactement le lockfile (reproductible) et `--ignore-scripts` coupe le vecteur des scripts `postinstall`."
+      en: "`strict: true` restores every check that `strict: false` disabled, and `noUncheckedIndexedAccess` adds protection on index access. `npm ci` installs exactly the lockfile (reproducible) and `--ignore-scripts` cuts the `postinstall` script vector."
+
+quiz:
+  - q:
+      fr: "Que fait principalement `\"strict\": true` dans un tsconfig.json ?"
+      en: "What does `\"strict\": true` mainly do in a tsconfig.json?"
+    options:
+      fr:
+        - "Il active un ensemble de vérifications (null, any implicite...) qui attrapent des bugs"
+        - "Il chiffre le code compilé"
+        - "Il interdit les dépendances externes"
+        - "Il accélère la compilation"
+      en:
+        - "It enables a set of checks (null, implicit any...) that catch bugs"
+        - "It encrypts the compiled code"
+        - "It forbids external dependencies"
+        - "It speeds up compilation"
+    answer: 0
+    why:
+      fr: "`strict` regroupe `strictNullChecks`, `noImplicitAny` et d'autres contrôles qui éliminent des classes entières de bugs."
+      en: "`strict` bundles `strictNullChecks`, `noImplicitAny` and other checks that eliminate whole classes of bugs."
+  - q:
+      fr: "Pourquoi préférer `unknown` à `any` pour une donnée externe ?"
+      en: "Why prefer `unknown` over `any` for external data?"
+    options:
+      fr:
+        - "Parce que `unknown` est plus rapide"
+        - "Parce que `unknown` force à valider la donnée avant de l'utiliser"
+        - "Parce que `any` n'existe pas en TypeScript"
+        - "Parce que `unknown` chiffre la donnée"
+      en:
+        - "Because `unknown` is faster"
+        - "Because `unknown` forces you to validate the data before using it"
+        - "Because `any` does not exist in TypeScript"
+        - "Because `unknown` encrypts the data"
+    answer: 1
+    why:
+      fr: "`any` désactive le vérificateur ; `unknown` oblige à restreindre le type avant tout accès, ce qui évite les plantages et les objets malveillants."
+      en: "`any` disables the checker; `unknown` forces you to narrow the type before any access, avoiding crashes and malicious objects."
+  - q:
+      fr: "Quel est l'intérêt de `z.infer<typeof schema>` avec Zod ?"
+      en: "What is the benefit of `z.infer<typeof schema>` with Zod?"
+    options:
+      fr:
+        - "Il chiffre le schéma"
+        - "Il accélère la validation"
+        - "Il dérive le type TypeScript du schéma, gardant type et validation synchronisés"
+        - "Il désactive le mode strict"
+      en:
+        - "It encrypts the schema"
+        - "It speeds up validation"
+        - "It derives the TypeScript type from the schema, keeping type and validation in sync"
+        - "It disables strict mode"
+    answer: 2
+    why:
+      fr: "Le type est déduit du schéma : une seule source de vérité, impossible que la validation à l'exécution et le type à la compilation divergent."
+      en: "The type is derived from the schema: a single source of truth, so runtime validation and compile-time type cannot drift apart."
+  - q:
+      fr: "Pourquoi utiliser `npm ci` plutôt que `npm install` en CI ?"
+      en: "Why use `npm ci` rather than `npm install` in CI?"
+    options:
+      fr:
+        - "Parce qu'il installe exactement le lockfile, pour un build reproductible"
+        - "Parce qu'il met à jour toutes les dépendances"
+        - "Parce qu'il ignore le `package-lock.json`"
+        - "Parce qu'il désactive TypeScript"
+      en:
+        - "Because it installs exactly the lockfile, for a reproducible build"
+        - "Because it updates all dependencies"
+        - "Because it ignores the `package-lock.json`"
+        - "Because it disables TypeScript"
+    answer: 0
+    why:
+      fr: "`npm ci` installe précisément les versions et empreintes du lockfile ; `npm install` peut résoudre des versions différentes."
+      en: "`npm ci` installs exactly the lockfile's versions and hashes; `npm install` may resolve different versions."
+  - q:
+      fr: "Que protège l'option `--ignore-scripts` lors de l'installation des dépendances ?"
+      en: "What does the `--ignore-scripts` option protect against when installing dependencies?"
+    options:
+      fr:
+        - "Contre les erreurs de syntaxe TypeScript"
+        - "Contre les regex trop lentes"
+        - "Contre les dépassements de mémoire"
+        - "Contre l'exécution de scripts postinstall malveillants d'un paquet"
+      en:
+        - "Against TypeScript syntax errors"
+        - "Against slow regexes"
+        - "Against memory overflows"
+        - "Against a package's malicious postinstall scripts running"
+    answer: 3
+    why:
+      fr: "Les scripts `postinstall` s'exécutent automatiquement à l'installation ; `--ignore-scripts` coupe ce vecteur d'attaque de la chaîne d'approvisionnement."
+      en: "`postinstall` scripts run automatically on install; `--ignore-scripts` cuts this supply-chain attack vector."

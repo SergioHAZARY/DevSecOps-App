@@ -1,0 +1,445 @@
+description:
+  fr: "Comprendre le RBAC et le moindre privilège, en Kubernetes (Role, RoleBinding, ClusterRole) et au niveau applicatif, avec exemples sur-privilégié vs restreint."
+  en: "Understand RBAC and least privilege, in Kubernetes (Role, RoleBinding, ClusterRole) and at app level, with over-privileged vs scoped examples."
+duration: 28
+
+intro:
+  fr: |
+    Le **RBAC** (*Role-Based Access Control*, contrôle d'accès basé sur les rôles) répond à une question
+    simple : plutôt que d'attribuer des droits à chaque personne une par une, on définit des **rôles** (un
+    ensemble de permissions) et on **assigne** des personnes ou des services à ces rôles. Changer les droits
+    de toute une équipe revient alors à modifier un rôle, pas cent comptes.
+
+    Pensez à un restaurant. Le **cuisinier** a accès à la cuisine et au stock ; le **serveur** à la salle et
+    à la caisse ; le **plongeur** à la plonge. On ne discute pas les droits de chaque employé : on lui donne
+    un rôle, et le rôle porte les accès. Le **moindre privilège** ajoute une exigence : chaque rôle ne
+    reçoit *que* ce dont il a besoin — le serveur n'entre pas dans le coffre.
+
+    Dans cette leçon, vous allez écrire du RBAC Kubernetes (Role, RoleBinding, ClusterRole), comparer un
+    binding sur-privilégié à un binding au moindre privilège, et transposer la même logique au niveau d'une
+    application.
+  en: |
+    **RBAC** (*Role-Based Access Control*) answers a simple question: instead of assigning rights to each
+    person one by one, you define **roles** (a set of permissions) and **assign** people or services to
+    those roles. Changing the rights of a whole team then means editing one role, not a hundred accounts.
+
+    Think of a restaurant. The **cook** has access to the kitchen and the stock; the **waiter** to the
+    dining room and the till; the **dishwasher** to the sink. You do not argue each employee's rights: you
+    give them a role, and the role carries the access. **Least privilege** adds one requirement: each role
+    gets *only* what it needs — the waiter does not enter the safe.
+
+    In this lesson you will write Kubernetes RBAC (Role, RoleBinding, ClusterRole), compare an
+    over-privileged binding to a least-privilege one, and carry the same logic over to an application.
+
+sections:
+  - heading:
+      fr: "RBAC et moindre privilège : les principes"
+      en: "RBAC and least privilege: the principles"
+    body:
+      fr: |
+        Le RBAC repose sur trois briques :
+
+        - **Permission** : le droit d'effectuer une action précise sur une ressource (ex. *lire* les pods).
+        - **Rôle** : un paquet de permissions cohérent (ex. « lecteur de l'application »).
+        - **Assignation / liaison** (*binding*) : relie un rôle à un sujet (une personne, un groupe, un
+          compte de service).
+
+        Le **moindre privilège** (*least privilege*) est le principe qui dit : n'accordez à chaque rôle que
+        les permissions **strictement nécessaires** à sa fonction, et rien de plus. On démarre « fermé » et
+        on ouvre au besoin, plutôt que de donner large et de retirer ensuite (ce qu'on ne fait jamais).
+
+        Un principe complémentaire, la **séparation des tâches** (*separation of duties*), interdit qu'un
+        seul rôle cumule des pouvoirs incompatibles — par exemple créer une dépense *et* l'approuver. En
+        sécurité cloud et Kubernetes, cela se traduit par des rôles distincts pour déployer, lire les
+        journaux et administrer les accès.
+
+        Le RBAC existe à tous les niveaux : dans Kubernetes (droits sur les ressources du cluster), dans une
+        base de données (droits sur les tables), dans une application métier (qui peut approuver un devis).
+        La mécanique est toujours la même : rôles + liaisons + moindre privilège.
+      en: |
+        RBAC rests on three building blocks:
+
+        - **Permission**: the right to perform a precise action on a resource (e.g. *read* pods).
+        - **Role**: a coherent bundle of permissions (e.g. "application reader").
+        - **Assignment / binding**: links a role to a subject (a person, a group, a service account).
+
+        **Least privilege** is the principle that says: grant each role only the permissions **strictly
+        necessary** for its function, and nothing more. You start "closed" and open as needed, rather than
+        granting broadly and removing later (which nobody ever does).
+
+        A complementary principle, **separation of duties**, forbids a single role from holding incompatible
+        powers — for example creating an expense *and* approving it. In cloud and Kubernetes security this
+        translates into distinct roles for deploying, reading logs and administering access.
+
+        RBAC exists at every level: in Kubernetes (rights on cluster resources), in a database (rights on
+        tables), in a business application (who can approve a quote). The mechanism is always the same:
+        roles + bindings + least privilege.
+  - heading:
+      fr: "Le RBAC de Kubernetes concrètement"
+      en: "Kubernetes RBAC in practice"
+    body:
+      fr: |
+        Kubernetes distingue deux portées :
+
+        | Objet | Portée | Usage |
+        |---|---|---|
+        | `Role` | Un seul *namespace* | Droits limités à un espace (ex. l'app `web` dans `prod`) |
+        | `ClusterRole` | Tout le cluster | Droits globaux ou sur ressources non-namespacées (nodes) |
+        | `RoleBinding` | Un namespace | Lie un (Cluster)Role à des sujets dans ce namespace |
+        | `ClusterRoleBinding` | Tout le cluster | Lie un ClusterRole à des sujets partout |
+
+        Un `Role` énumère des **règles** : des `apiGroups`, des `resources` (pods, secrets...) et des
+        **`verbs`** (`get`, `list`, `watch`, `create`, `update`, `delete`). Le moindre privilège, ici,
+        consiste à n'accorder que les verbes utiles sur les ressources utiles.
+
+        Le piège le plus dangereux : lier un sujet au ClusterRole intégré **`cluster-admin`** via un
+        `ClusterRoleBinding`. Cela donne **tous les droits sur tout le cluster** — l'équivalent de
+        `"Action": "*"` d'AWS. Un compte de service applicatif ne devrait jamais être `cluster-admin` : s'il
+        est compromis, c'est tout le cluster qui tombe. On préfère un `Role` étroit, limité à un namespace,
+        lié par un `RoleBinding`.
+      en: |
+        Kubernetes distinguishes two scopes:
+
+        | Object | Scope | Use |
+        |---|---|---|
+        | `Role` | A single *namespace* | Rights limited to one space (e.g. the `web` app in `prod`) |
+        | `ClusterRole` | The whole cluster | Global rights or non-namespaced resources (nodes) |
+        | `RoleBinding` | A namespace | Binds a (Cluster)Role to subjects in that namespace |
+        | `ClusterRoleBinding` | The whole cluster | Binds a ClusterRole to subjects everywhere |
+
+        A `Role` lists **rules**: `apiGroups`, `resources` (pods, secrets...) and **`verbs`** (`get`,
+        `list`, `watch`, `create`, `update`, `delete`). Least privilege here means granting only the useful
+        verbs on the useful resources.
+
+        The most dangerous trap: binding a subject to the built-in **`cluster-admin`** ClusterRole via a
+        `ClusterRoleBinding`. That grants **all rights on the whole cluster** — the equivalent of AWS's
+        `"Action": "*"`. An application service account should never be `cluster-admin`: if it is
+        compromised, the entire cluster falls. You prefer a narrow `Role`, limited to a namespace, bound by
+        a `RoleBinding`.
+
+examples:
+  - title:
+      fr: "L'anti-pattern : cluster-admin pour un compte de service"
+      en: "The anti-pattern: cluster-admin for a service account"
+    file: dangerous-binding.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # A ClusterRoleBinding to the built-in cluster-admin gives the app's
+      # service account FULL control over the ENTIRE cluster: read every
+      # secret, delete any workload, create new admins. If the pod is
+      # compromised, the whole cluster is compromised.
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: web-app-admin
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-admin   # <-- all verbs, all resources, all namespaces
+      subjects:
+        - kind: ServiceAccount
+          name: web-app
+          namespace: prod
+    note:
+      fr: "`cluster-admin` est l'équivalent Kubernetes du wildcard AWS : tout, partout. Lier un compte de service applicatif à ce rôle fait de la moindre faille du pod une prise de contrôle totale du cluster. À ne jamais faire."
+      en: "`cluster-admin` is Kubernetes' equivalent of the AWS wildcard: everything, everywhere. Binding an application service account to this role turns the smallest pod flaw into a full cluster takeover. Never do this."
+
+  - title:
+      fr: "Le Role au moindre privilège : lecture seule dans un namespace"
+      en: "The least-privilege Role: read-only in one namespace"
+    file: readonly-role.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # A Role is namespaced: these rights apply ONLY in namespace 'prod'.
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: web-reader
+        namespace: prod
+      rules:
+        # Only read pods and their logs; no secrets, no write verbs.
+        - apiGroups: [""]
+          resources: ["pods", "pods/log"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["apps"]
+          resources: ["deployments"]
+          verbs: ["get", "list", "watch"]
+      ---
+      # The RoleBinding attaches the Role to the app's service account.
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: web-reader-binding
+        namespace: prod
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: web-reader
+      subjects:
+        - kind: ServiceAccount
+          name: web-app
+          namespace: prod
+    note:
+      fr: "Ce compte de service ne peut que lire pods, logs et deployments, et seulement dans `prod`. Pas de `secrets`, pas de verbe d'écriture, aucun accès aux autres namespaces. Une compromission du pod reste contenue."
+      en: "This service account can only read pods, logs and deployments, and only in `prod`. No `secrets`, no write verb, no access to other namespaces. A pod compromise stays contained."
+
+  - title:
+      fr: "Vérifier les droits avec kubectl auth can-i"
+      en: "Checking rights with kubectl auth can-i"
+    file: check-rbac.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Impersonate the service account and ask what it is allowed to do.
+      SA="system:serviceaccount:prod:web-app"
+
+      # Should be allowed: reading pods in prod
+      kubectl auth can-i get pods --namespace prod --as "$SA"
+
+      # Should be DENIED: reading secrets (not granted by web-reader)
+      kubectl auth can-i get secrets --namespace prod --as "$SA"
+
+      # Should be DENIED: anything in another namespace
+      kubectl auth can-i list pods --namespace kube-system --as "$SA"
+    output: |
+      yes
+      no
+      no
+    note:
+      fr: "`kubectl auth can-i --as` teste les permissions sans rien exécuter : c'est l'outil d'audit du RBAC. On vérifie que les accès voulus passent (`yes`) et que tout le reste est refusé (`no`), à intégrer en CI."
+      en: "`kubectl auth can-i --as` tests permissions without running anything: it is the RBAC audit tool. You verify that intended access passes (`yes`) and everything else is denied (`no`), to wire into CI."
+
+  - title:
+      fr: "RBAC applicatif : rôles et permissions côté code"
+      en: "Application-level RBAC: roles and permissions in code"
+    file: app_rbac.py
+    lang: python
+    kind: secure
+    code: |
+      # Same idea, inside an application: roles map to permission sets,
+      # users map to roles, and every sensitive action is checked.
+      ROLE_PERMISSIONS = {
+          "viewer": {"invoice:read"},
+          "accountant": {"invoice:read", "invoice:create"},
+          # Separation of duties: the approver cannot also create invoices
+          "approver": {"invoice:read", "invoice:approve"},
+      }
+      user_roles = {"alice": {"accountant"}, "bob": {"approver"}}
+
+      def can(user, permission):
+          perms = set()
+          for role in user_roles.get(user, set()):
+              perms |= ROLE_PERMISSIONS[role]
+          return permission in perms
+
+      # alice can create but not approve; bob can approve but not create
+      print("alice create:", can("alice", "invoice:create"))
+      print("alice approve:", can("alice", "invoice:approve"))
+      print("bob approve:", can("bob", "invoice:approve"))
+      print("bob create:", can("bob", "invoice:create"))
+    output: |
+      alice create: True
+      alice approve: False
+      bob approve: True
+      bob create: False
+    note:
+      fr: "Les rôles `accountant` et `approver` séparent la création et l'approbation : personne ne peut créer *et* approuver une facture. C'est la séparation des tâches appliquée dans le code, qui prévient la fraude."
+      en: "The `accountant` and `approver` roles separate creation and approval: nobody can both create *and* approve an invoice. That is separation of duties applied in code, which prevents fraud."
+
+mistake:
+  fr: |
+    **Donner `cluster-admin` (ou un rôle trop large) « pour que ça marche », puis ne jamais le resserrer.**
+
+    C'est l'exact pendant Kubernetes du wildcard AWS. Face à une erreur de permission, la tentation est
+    d'élargir les droits jusqu'à ce que l'application fonctionne — souvent jusqu'à `cluster-admin`. Mais un
+    compte de service `cluster-admin` compromis donne l'intégralité du cluster : lecture de tous les
+    secrets, suppression de n'importe quel workload, création de nouveaux administrateurs.
+
+    La bonne démarche est inverse : partir de **zéro droit**, lancer l'application, lire l'erreur de
+    permission précise (`cannot get secrets ...`), et n'ajouter **que** la règle manquante. L'outil
+    `kubectl auth can-i --as` permet de vérifier exactement ce qu'un sujet peut faire. Et on préfère
+    toujours un `Role` namespacé lié par `RoleBinding` à un `ClusterRole` global, sauf besoin réel sur des
+    ressources de cluster.
+  en: |
+    **Granting `cluster-admin` (or an overly broad role) "to make it work", then never tightening it.**
+
+    This is the exact Kubernetes counterpart of the AWS wildcard. Faced with a permission error, the
+    temptation is to widen the rights until the application works — often all the way to `cluster-admin`.
+    But a compromised `cluster-admin` service account hands over the whole cluster: reading every secret,
+    deleting any workload, creating new administrators.
+
+    The right approach is the opposite: start from **zero rights**, run the application, read the precise
+    permission error (`cannot get secrets ...`), and add **only** the missing rule. The `kubectl auth can-i
+    --as` tool lets you check exactly what a subject can do. And you always prefer a namespaced `Role` bound
+    by a `RoleBinding` over a global `ClusterRole`, unless you genuinely need cluster-wide resources.
+
+bestPractice:
+  fr: |
+    - **Définissez des rôles par fonction** et liez-y les sujets, au lieu d'accorder des droits individuels.
+    - **Moindre privilège** : partez de zéro droit, ajoutez seulement les verbes et ressources nécessaires.
+    - **En Kubernetes, préférez `Role` + `RoleBinding`** (namespacés) à `ClusterRole` global ; bannissez `cluster-admin` pour les applications.
+    - **Appliquez la séparation des tâches** : jamais un même rôle pour créer *et* approuver.
+    - **Donnez un compte de service dédié par application**, pas le compte par défaut du namespace.
+    - **Auditez avec `kubectl auth can-i --as`** (et en CI) pour vérifier que seul le nécessaire est autorisé.
+    - **Revoyez les rôles régulièrement** : les besoins changent, les droits accordés « temporairement » restent.
+  en: |
+    - **Define roles by function** and bind subjects to them, instead of granting individual rights.
+    - **Least privilege**: start from zero rights, add only the necessary verbs and resources.
+    - **In Kubernetes, prefer `Role` + `RoleBinding`** (namespaced) over a global `ClusterRole`; ban `cluster-admin` for applications.
+    - **Apply separation of duties**: never one role for both creating *and* approving.
+    - **Give each application a dedicated service account**, not the namespace default.
+    - **Audit with `kubectl auth can-i --as`** (and in CI) to verify only the necessary is allowed.
+    - **Review roles regularly**: needs change, rights granted "temporarily" tend to stay.
+
+exercise:
+  statement:
+    fr: |
+      Une application de supervision tourne dans le namespace `monitoring` avec le compte de service
+      `metrics-reader`. Elle doit uniquement **lire** (get, list, watch) les `pods` et les `services` de ce
+      namespace, et rien d'autre — surtout pas les `secrets`.
+
+      Écrivez les manifestes Kubernetes :
+
+      1. un `Role` namespacé `metrics-reader` accordant la lecture seule des `pods` et `services` ;
+      2. un `RoleBinding` qui lie ce rôle au compte de service `metrics-reader` du namespace `monitoring`.
+
+      Indiquez la commande qui prouve que ce compte ne peut pas lire les secrets.
+    en: |
+      A monitoring application runs in the `monitoring` namespace with the service account
+      `metrics-reader`. It must only **read** (get, list, watch) the `pods` and `services` of that
+      namespace, and nothing else — especially not the `secrets`.
+
+      Write the Kubernetes manifests:
+
+      1. a namespaced `Role` `metrics-reader` granting read-only access to `pods` and `services`;
+      2. a `RoleBinding` that binds this role to the `metrics-reader` service account in the `monitoring`
+         namespace.
+
+      State the command that proves this account cannot read secrets.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: metrics-reader
+        namespace: monitoring
+      rules:
+        - apiGroups: [""]
+          resources: ["pods", "services"]
+          verbs: ["get", "list", "watch"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: metrics-reader-binding
+        namespace: monitoring
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: metrics-reader
+      subjects:
+        - kind: ServiceAccount
+          name: metrics-reader
+          namespace: monitoring
+      # Proof it cannot read secrets (should print "no"):
+      #   kubectl auth can-i get secrets -n monitoring \
+      #     --as system:serviceaccount:monitoring:metrics-reader
+    note:
+      fr: "La règle n'accorde que trois verbes de lecture sur `pods` et `services`. Comme `secrets` n'y figure pas et que tout est refusé par défaut, `kubectl auth can-i get secrets` renvoie `no`."
+      en: "The rule grants only three read verbs on `pods` and `services`. Since `secrets` is absent and everything is denied by default, `kubectl auth can-i get secrets` returns `no`."
+
+quiz:
+  - q:
+      fr: "Quel est le principe du moindre privilège ?"
+      en: "What is the principle of least privilege?"
+    options:
+      fr:
+        - "Accorder à chaque rôle uniquement les permissions strictement nécessaires"
+        - "Donner tous les droits puis en retirer au fil du temps"
+        - "Attribuer un administrateur par utilisateur"
+        - "Supprimer tous les rôles"
+      en:
+        - "Grant each role only the strictly necessary permissions"
+        - "Give all rights then remove some over time"
+        - "Assign one administrator per user"
+        - "Remove all roles"
+    answer: 0
+    why:
+      fr: "Le moindre privilège consiste à partir fermé et n'ouvrir que le nécessaire. Donner large « puis retirer » ne se fait jamais en pratique et laisse des droits excessifs."
+      en: "Least privilege means starting closed and opening only what is needed. Granting broadly \"then removing\" never actually happens and leaves excessive rights."
+  - q:
+      fr: "Quelle est la portée d'un `Role` Kubernetes par rapport à un `ClusterRole` ?"
+      en: "What is the scope of a Kubernetes `Role` compared to a `ClusterRole`?"
+    options:
+      fr:
+        - "Le `Role` s'applique à tout le cluster, le `ClusterRole` à un namespace"
+        - "Le `Role` est limité à un namespace, le `ClusterRole` couvre tout le cluster"
+        - "Les deux sont identiques"
+        - "Le `Role` ne fonctionne que pour les humains"
+      en:
+        - "The `Role` applies to the whole cluster, the `ClusterRole` to a namespace"
+        - "The `Role` is limited to a namespace, the `ClusterRole` covers the whole cluster"
+        - "Both are identical"
+        - "The `Role` only works for humans"
+    answer: 1
+    why:
+      fr: "Un `Role` est namespacé : ses droits ne valent que dans son namespace. Un `ClusterRole` a une portée globale ou s'applique aux ressources non-namespacées."
+      en: "A `Role` is namespaced: its rights only apply in its namespace. A `ClusterRole` has global scope or applies to non-namespaced resources."
+  - q:
+      fr: "Pourquoi ne pas lier un compte de service applicatif au ClusterRole `cluster-admin` ?"
+      en: "Why not bind an application service account to the `cluster-admin` ClusterRole?"
+    options:
+      fr:
+        - "Parce que `cluster-admin` n'existe pas"
+        - "Parce que cela ralentit le cluster"
+        - "Parce qu'il donne tous les droits sur tout le cluster : une compromission du pod compromet tout"
+        - "Parce que les comptes de service ne peuvent pas avoir de rôle"
+      en:
+        - "Because `cluster-admin` does not exist"
+        - "Because it slows the cluster down"
+        - "Because it grants all rights on the whole cluster: a pod compromise compromises everything"
+        - "Because service accounts cannot have a role"
+    answer: 2
+    why:
+      fr: "`cluster-admin` équivaut au wildcard : tout, partout. Un pod compromis avec ce rôle donne l'intégralité du cluster. On préfère un `Role` étroit, limité à un namespace."
+      en: "`cluster-admin` equals the wildcard: everything, everywhere. A compromised pod with this role hands over the whole cluster. You prefer a narrow `Role`, limited to a namespace."
+  - q:
+      fr: "À quoi sert la commande `kubectl auth can-i get secrets --as <compte>` ?"
+      en: "What is `kubectl auth can-i get secrets --as <account>` for?"
+    options:
+      fr:
+        - "À créer un secret"
+        - "À tester si un sujet est autorisé à lire les secrets, sans rien exécuter"
+        - "À supprimer tous les secrets"
+        - "À chiffrer les secrets"
+      en:
+        - "To create a secret"
+        - "To test whether a subject is allowed to read secrets, without executing anything"
+        - "To delete all secrets"
+        - "To encrypt secrets"
+    answer: 1
+    why:
+      fr: "`auth can-i --as` simule le sujet et répond `yes`/`no` : c'est l'outil d'audit du RBAC pour vérifier que seul le nécessaire est autorisé."
+      en: "`auth can-i --as` simulates the subject and answers `yes`/`no`: it is the RBAC audit tool to check that only the necessary is allowed."
+  - q:
+      fr: "Qu'est-ce que la séparation des tâches (separation of duties) ?"
+      en: "What is separation of duties?"
+    options:
+      fr:
+        - "Donner le même rôle à tout le monde"
+        - "Interdire qu'un seul rôle cumule des pouvoirs incompatibles (ex. créer et approuver)"
+        - "Séparer le réseau en sous-réseaux"
+        - "Chiffrer les communications entre services"
+      en:
+        - "Give everyone the same role"
+        - "Forbid a single role from holding incompatible powers (e.g. create and approve)"
+        - "Split the network into subnets"
+        - "Encrypt communications between services"
+    answer: 1
+    why:
+      fr: "La séparation des tâches empêche qu'une même identité crée *et* approuve une action sensible, ce qui préviendrait toute fraude ou erreur non contrôlée."
+      en: "Separation of duties prevents the same identity from both creating *and* approving a sensitive action, which guards against fraud or unchecked error."

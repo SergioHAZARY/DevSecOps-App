@@ -1,0 +1,470 @@
+description:
+  fr: "Exposer ses services sur Internet avec un Ingress NGINX et automatiser les certificats TLS avec cert-manager et Let's Encrypt, sans aucune clé codée en dur."
+  en: "Expose your services on the Internet with an NGINX Ingress and automate TLS certificates with cert-manager and Let's Encrypt, with no hard-coded keys."
+duration: 40
+
+intro:
+  fr: |
+    Vous avez des Services internes (`ClusterIP`) et vous voulez qu'un seul point d'entrée, en HTTPS, dirige
+    `shop.example.com` vers votre boutique et `api.example.com` vers votre API. Ouvrir un `LoadBalancer`
+    par service serait coûteux et peu sûr. L'**Ingress** est la solution : un routeur HTTP(S) unique à
+    l'entrée du cluster qui aiguille selon le nom de domaine et le chemin.
+
+    Imaginez le hall d'accueil d'un grand immeuble : une seule porte d'entrée, un seul agent de sécurité, et
+    un panneau qui indique « Comptabilité : 2e étage, Ventes : 3e étage ». L'Ingress est ce hall ; les
+    Services sont les étages.
+
+    Vous allez installer un **contrôleur Ingress** (ingress-nginx), écrire des règles de routage, puis
+    automatiser entièrement les certificats TLS avec **cert-manager** et **Let's Encrypt** : un
+    `ClusterIssuer`, une annotation, et le certificat HTTPS s'obtient et se renouvelle tout seul. On
+    évoquera aussi la **Gateway API**, le successeur moderne de l'Ingress.
+  en: |
+    You have internal Services (`ClusterIP`) and you want a single HTTPS entry point to route
+    `shop.example.com` to your shop and `api.example.com` to your API. Opening one `LoadBalancer` per
+    service would be costly and insecure. The **Ingress** is the answer: a single HTTP(S) router at the
+    cluster's edge that dispatches by domain name and path.
+
+    Picture the lobby of a large building: one front door, one security guard, and a sign reading
+    "Accounting: 2nd floor, Sales: 3rd floor". The Ingress is that lobby; the Services are the floors.
+
+    You will install an **Ingress controller** (ingress-nginx), write routing rules, then fully automate TLS
+    certificates with **cert-manager** and **Let's Encrypt**: a `ClusterIssuer`, an annotation, and the
+    HTTPS certificate is obtained and renewed on its own. We will also mention the **Gateway API**, the
+    modern successor to Ingress.
+
+sections:
+  - heading:
+      fr: "Ingress et contrôleur Ingress"
+      en: "Ingress and Ingress controller"
+    body:
+      fr: |
+        Attention à une confusion fréquente : un objet **Ingress** (`apiVersion: networking.k8s.io/v1`)
+        n'est qu'un ensemble de **règles de routage**. À lui seul, il ne fait rien. Il faut un **contrôleur
+        Ingress** (un logiciel comme ingress-nginx, Traefik ou HAProxy) qui lit ces règles et route
+        réellement le trafic.
+
+        | Élément | Rôle |
+        |---|---|
+        | Objet `Ingress` | Les règles : quel domaine/chemin va vers quel Service |
+        | Contrôleur Ingress | Le programme (Pods) qui applique ces règles |
+        | `ingressClassName` | Indique quel contrôleur doit prendre en charge cet Ingress |
+
+        Le contrôleur s'installe une fois par cluster, généralement via Helm. Il reçoit une IP publique (un
+        `LoadBalancer`) : **une seule** pour tout le cluster. Ensuite, chaque application déclare son propre
+        objet Ingress avec ses domaines. On route par **hôte** (`shop.example.com`) et par **chemin**
+        (`/api`), vers des Services `ClusterIP` qui, eux, restent internes.
+      en: |
+        Beware a common confusion: an **Ingress** object (`apiVersion: networking.k8s.io/v1`) is only a set
+        of **routing rules**. On its own it does nothing. You need an **Ingress controller** (software like
+        ingress-nginx, Traefik or HAProxy) that reads those rules and actually routes the traffic.
+
+        | Element | Role |
+        |---|---|
+        | `Ingress` object | The rules: which domain/path goes to which Service |
+        | Ingress controller | The program (Pods) that enforces those rules |
+        | `ingressClassName` | States which controller should handle this Ingress |
+
+        The controller is installed once per cluster, usually via Helm. It receives a public IP (a
+        `LoadBalancer`): **one** for the whole cluster. Then each application declares its own Ingress object
+        with its domains. You route by **host** (`shop.example.com`) and by **path** (`/api`), to
+        `ClusterIP` Services that themselves stay internal.
+  - heading:
+      fr: "TLS automatique avec cert-manager"
+      en: "Automatic TLS with cert-manager"
+    body:
+      fr: |
+        Gérer des certificats à la main — les générer, les installer, penser à les renouveler avant
+        l'expiration — est pénible et source de pannes (le fameux « certificat expiré »). **cert-manager**
+        automatise tout : il demande, installe et renouvelle les certificats, notamment auprès de **Let's
+        Encrypt** (autorité de certification gratuite).
+
+        Le fonctionnement repose sur deux objets :
+
+        | Objet | Rôle |
+        |---|---|
+        | `ClusterIssuer` | Comment obtenir des certificats (Let's Encrypt, email, méthode de validation) |
+        | `Certificate` | Un certificat demandé pour des domaines donnés (souvent créé automatiquement) |
+
+        On installe cert-manager (via Helm), on crée **un** `ClusterIssuer`, puis il suffit d'ajouter une
+        **annotation** et un bloc `tls:` sur l'Ingress. cert-manager détecte la demande, prouve à Let's
+        Encrypt qu'on contrôle le domaine (défi HTTP-01), récupère le certificat et le stocke dans un Secret.
+        Le HTTPS devient automatique, et le renouvellement aussi : plus jamais de certificat expiré.
+      en: |
+        Managing certificates by hand — generating them, installing them, remembering to renew them before
+        expiry — is painful and a source of outages (the infamous "expired certificate"). **cert-manager**
+        automates everything: it requests, installs and renews certificates, notably from **Let's Encrypt**
+        (a free certificate authority).
+
+        It works through two objects:
+
+        | Object | Role |
+        |---|---|
+        | `ClusterIssuer` | How to obtain certificates (Let's Encrypt, email, validation method) |
+        | `Certificate` | A certificate requested for given domains (often created automatically) |
+
+        You install cert-manager (via Helm), create **one** `ClusterIssuer`, then just add an **annotation**
+        and a `tls:` block on the Ingress. cert-manager detects the request, proves to Let's Encrypt that
+        you control the domain (HTTP-01 challenge), fetches the certificate and stores it in a Secret. HTTPS
+        becomes automatic, and renewal too: never again an expired certificate.
+  - heading:
+      fr: "Durcir l'Ingress et la Gateway API"
+      en: "Hardening the Ingress and the Gateway API"
+    body:
+      fr: |
+        Exposer sur Internet impose quelques protections de base, ajoutées via des **annotations** sur
+        l'Ingress ou la configuration du contrôleur :
+
+        - **Forcer HTTPS** : rediriger tout le HTTP vers HTTPS (`ssl-redirect`).
+        - **HSTS** : dire au navigateur de n'utiliser que HTTPS pour ce domaine.
+        - **Limiter le débit** (*rate limiting*) pour amortir la force brute et les abus.
+        - **Taille maximale du corps** pour limiter les envois massifs.
+
+        Enfin, un mot sur l'avenir : la **Gateway API** (`apiVersion: gateway.networking.k8s.io/v1`) est le
+        successeur de l'Ingress. Elle sépare les rôles (l'opérateur gère le `Gateway`, le développeur gère
+        les `HTTPRoute`), gère nativement plus de protocoles et offre un modèle plus riche. L'Ingress reste
+        très répandu et parfaitement valide en 2026, mais les nouveaux projets regardent de plus en plus du
+        côté de la Gateway API. Les concepts (routage par hôte/chemin, TLS) restent les mêmes.
+      en: |
+        Exposing to the Internet requires a few basic protections, added via **annotations** on the Ingress
+        or the controller's configuration:
+
+        - **Force HTTPS**: redirect all HTTP to HTTPS (`ssl-redirect`).
+        - **HSTS**: tell the browser to use only HTTPS for this domain.
+        - **Rate limiting** to cushion brute force and abuse.
+        - **Maximum body size** to limit massive uploads.
+
+        Finally, a word on the future: the **Gateway API** (`apiVersion:
+        gateway.networking.k8s.io/v1`) is the successor to Ingress. It separates roles (the operator manages
+        the `Gateway`, the developer manages the `HTTPRoute`), natively handles more protocols and offers a
+        richer model. Ingress remains very widespread and perfectly valid in 2026, but new projects
+        increasingly look toward the Gateway API. The concepts (host/path routing, TLS) stay the same.
+
+examples:
+  - title:
+      fr: "Installer le contrôleur et un ClusterIssuer"
+      en: "Install the controller and a ClusterIssuer"
+    file: setup.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Install the ingress-nginx controller (one per cluster) via Helm
+      helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+      helm install ingress-nginx ingress-nginx/ingress-nginx \
+        --namespace ingress-nginx --create-namespace
+
+      # Install cert-manager (provides ClusterIssuer / Certificate objects)
+      helm repo add jetstack https://charts.jetstack.io
+      helm install cert-manager jetstack/cert-manager \
+        --namespace cert-manager --create-namespace \
+        --set crds.enabled=true
+
+      # Verify both are running
+      kubectl get pods -n ingress-nginx
+      kubectl get pods -n cert-manager
+    output: |
+      NAME                                        READY   STATUS    AGE
+      ingress-nginx-controller-7d9c... (ingress)  1/1     Running   30s
+      cert-manager-5f... (cert-manager)           1/1     Running   25s
+    note:
+      fr: "Le contrôleur ingress-nginx et cert-manager s'installent une fois par cluster. Sans contrôleur, un objet Ingress ne route rien du tout : c'est le logiciel qui applique les règles."
+      en: "The ingress-nginx controller and cert-manager are installed once per cluster. Without a controller, an Ingress object routes nothing at all: the software is what enforces the rules."
+
+  - title:
+      fr: "Le ClusterIssuer Let's Encrypt"
+      en: "The Let's Encrypt ClusterIssuer"
+    file: clusterissuer.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: cert-manager.io/v1
+      kind: ClusterIssuer
+      metadata:
+        name: letsencrypt-prod
+      spec:
+        acme:
+          # Let's Encrypt production endpoint
+          server: https://acme-v02.api.letsencrypt.org/directory
+          email: admin@example.com      # notified before a cert expires
+          privateKeySecretRef:
+            name: letsencrypt-prod-account-key # account key, created by cert-manager
+          solvers:
+            - http01:
+                ingress:
+                  # Prove domain ownership through the nginx ingress (HTTP-01)
+                  ingressClassName: nginx
+    output: |
+      $ kubectl apply -f clusterissuer.yaml
+      clusterissuer.cert-manager.io/letsencrypt-prod created
+      $ kubectl get clusterissuer
+      NAME               READY   AGE
+      letsencrypt-prod   True    10s
+    note:
+      fr: "Un seul `ClusterIssuer` sert tout le cluster. Le défi `http01` prouve à Let's Encrypt qu'on contrôle le domaine via l'Ingress. La clé de compte est générée et gérée par cert-manager, pas écrite à la main."
+      en: "A single `ClusterIssuer` serves the whole cluster. The `http01` challenge proves to Let's Encrypt that you control the domain via the Ingress. The account key is generated and managed by cert-manager, not hand-written."
+
+  - title:
+      fr: "L'Ingress avec TLS automatique et durcissement"
+      en: "The Ingress with automatic TLS and hardening"
+    file: ingress.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: shop
+        annotations:
+          # cert-manager watches this annotation and provisions the certificate
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+          # Redirect all HTTP to HTTPS
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          # Basic rate limiting: cushion brute force and abuse
+          nginx.ingress.kubernetes.io/limit-rps: "20"
+      spec:
+        ingressClassName: nginx
+        tls:
+          - hosts:
+              - shop.example.com
+            # cert-manager creates and fills this Secret automatically
+            secretName: shop-tls
+        rules:
+          - host: shop.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: shop        # internal ClusterIP Service
+                      port:
+                        number: 80
+                - path: /api
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: api         # a second internal Service, same host
+                      port:
+                        number: 80
+    output: |
+      $ kubectl get certificate
+      NAME       READY   SECRET     AGE
+      shop-tls   True     shop-tls   90s
+      # cert-manager obtained the certificate and stored it in the shop-tls Secret
+    note:
+      fr: "Une annotation (`cluster-issuer`) et un bloc `tls:` suffisent : cert-manager obtient le certificat et remplit le Secret `shop-tls`. Le routage dirige `/` vers `shop` et `/api` vers `api`, deux Services internes."
+      en: "One annotation (`cluster-issuer`) and a `tls:` block are enough: cert-manager obtains the certificate and fills the `shop-tls` Secret. Routing sends `/` to `shop` and `/api` to `api`, two internal Services."
+
+  - title:
+      fr: "VULNÉRABLE : HTTP en clair et certificat à la main"
+      en: "VULNERABLE: plain HTTP and a hand-made certificate"
+    file: ingress-bad.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: shop
+        # Problem 1: no cert-manager annotation -> no automatic TLS
+        # Problem 2: no ssl-redirect -> HTTP stays open, traffic in clear text
+      spec:
+        ingressClassName: nginx
+        # Problem 3: no tls: block at all -> the site is served over plain HTTP
+        rules:
+          - host: shop.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: shop
+                      port:
+                        number: 80
+    note:
+      fr: "Sans bloc `tls:` ni cert-manager, le site est servi en HTTP clair : identifiants et cookies circulent en clair, interceptables. La version sécurisée n'ajoute que trois lignes pour tout chiffrer automatiquement."
+      en: "With no `tls:` block or cert-manager, the site is served over plain HTTP: credentials and cookies travel in the clear, interceptable. The secure version adds just three lines to encrypt everything automatically."
+
+mistake:
+  fr: |
+    **Croire qu'un objet Ingress suffit, ou gérer les certificats TLS à la main.**
+
+    Deux erreurs classiques. D'abord, créer un objet Ingress sans avoir installé de contrôleur Ingress : les
+    règles existent mais rien ne les applique, et le trafic n'arrive jamais. Ensuite, générer et installer
+    les certificats TLS manuellement : tôt ou tard, quelqu'un oublie de renouveler, le certificat expire un
+    dimanche soir, et tout le site affiche une alerte de sécurité. Installez un contrôleur une fois, puis
+    laissez **cert-manager** gérer l'obtention et le renouvellement automatiques des certificats Let's
+    Encrypt. Une annotation suffit, et vous ne penserez plus jamais à l'expiration.
+  en: |
+    **Believing an Ingress object is enough, or managing TLS certificates by hand.**
+
+    Two classic mistakes. First, creating an Ingress object without having installed an Ingress controller:
+    the rules exist but nothing enforces them, and traffic never arrives. Second, generating and installing
+    TLS certificates manually: sooner or later someone forgets to renew, the certificate expires on a Sunday
+    night, and the whole site shows a security warning. Install a controller once, then let **cert-manager**
+    handle the automatic issuance and renewal of Let's Encrypt certificates. One annotation is enough, and
+    you will never think about expiry again.
+
+bestPractice:
+  fr: |
+    - **Un contrôleur Ingress par cluster** (ingress-nginx) ; l'objet Ingress seul ne route rien.
+    - **Une seule porte d'entrée** pour tout le cluster, vers des Services `ClusterIP` internes.
+    - **cert-manager + un `ClusterIssuer`** pour des certificats TLS automatiques et auto-renouvelés.
+    - **Forcer HTTPS** (`ssl-redirect`) et activer HSTS ; aucun service en HTTP clair.
+    - **Rate limiting** et taille de corps maximale sur les Ingress exposés.
+    - **Jamais de clé ou certificat codé en dur** : cert-manager stocke tout dans un Secret.
+    - **Regardez la Gateway API** pour les nouveaux projets : le successeur de l'Ingress.
+  en: |
+    - **One Ingress controller per cluster** (ingress-nginx); an Ingress object alone routes nothing.
+    - **A single entry point** for the whole cluster, to internal `ClusterIP` Services.
+    - **cert-manager + a `ClusterIssuer`** for automatic, self-renewing TLS certificates.
+    - **Force HTTPS** (`ssl-redirect`) and enable HSTS; no service over plain HTTP.
+    - **Rate limiting** and a maximum body size on exposed Ingresses.
+    - **Never a hard-coded key or certificate**: cert-manager stores everything in a Secret.
+    - **Look at the Gateway API** for new projects: the successor to Ingress.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez un Service `ClusterIP` nommé `blog` (port 80) et un `ClusterIssuer` nommé `letsencrypt-prod`
+      déjà installé.
+
+      Écrivez un objet Ingress qui :
+
+      1. Utilise la classe `nginx`.
+      2. Route le domaine `blog.example.com` vers le Service `blog`.
+      3. Obtient automatiquement un certificat TLS via cert-manager, stocké dans un Secret `blog-tls`.
+      4. Force la redirection de HTTP vers HTTPS.
+    en: |
+      You have a `ClusterIP` Service named `blog` (port 80) and a `ClusterIssuer` named `letsencrypt-prod`
+      already installed.
+
+      Write an Ingress object that:
+
+      1. Uses the `nginx` class.
+      2. Routes the domain `blog.example.com` to the `blog` Service.
+      3. Automatically obtains a TLS certificate via cert-manager, stored in a `blog-tls` Secret.
+      4. Forces the redirect from HTTP to HTTPS.
+  solution:
+    file: blog-ingress.yaml
+    lang: yaml
+    code: |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: blog
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      spec:
+        ingressClassName: nginx
+        tls:
+          - hosts:
+              - blog.example.com
+            secretName: blog-tls   # cert-manager creates and fills this Secret
+        rules:
+          - host: blog.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: blog
+                      port:
+                        number: 80
+    note:
+      fr: "L'annotation `cluster-issuer` déclenche cert-manager, qui remplit le Secret `blog-tls`. `ssl-redirect` force HTTPS. Aucun certificat n'est écrit à la main : tout est obtenu et renouvelé automatiquement."
+      en: "The `cluster-issuer` annotation triggers cert-manager, which fills the `blog-tls` Secret. `ssl-redirect` forces HTTPS. No certificate is hand-written: everything is obtained and renewed automatically."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre un objet Ingress et un contrôleur Ingress ?"
+      en: "What is the difference between an Ingress object and an Ingress controller?"
+    options:
+      fr:
+        - "L'objet Ingress décrit les règles ; le contrôleur est le logiciel qui les applique"
+        - "Ils sont identiques"
+        - "Le contrôleur décrit les règles ; l'objet les applique"
+        - "L'objet Ingress chiffre le cluster"
+      en:
+        - "The Ingress object describes the rules; the controller is the software that enforces them"
+        - "They are identical"
+        - "The controller describes the rules; the object enforces them"
+        - "The Ingress object encrypts the cluster"
+    answer: 0
+    why:
+      fr: "Un objet Ingress n'est qu'un jeu de règles ; sans contrôleur (ingress-nginx, Traefik...) qui les lit et route, rien ne se passe."
+      en: "An Ingress object is just a set of rules; without a controller (ingress-nginx, Traefik...) reading and routing them, nothing happens."
+  - q:
+      fr: "Que fait cert-manager dans un cluster Kubernetes ?"
+      en: "What does cert-manager do in a Kubernetes cluster?"
+    options:
+      fr:
+        - "Il remplace le contrôleur Ingress"
+        - "Il obtient, installe et renouvelle automatiquement les certificats TLS"
+        - "Il scanne les images"
+        - "Il gère les sauvegardes etcd"
+      en:
+        - "It replaces the Ingress controller"
+        - "It automatically obtains, installs and renews TLS certificates"
+        - "It scans images"
+        - "It manages etcd backups"
+    answer: 1
+    why:
+      fr: "cert-manager automatise tout le cycle de vie des certificats (Let's Encrypt), supprimant le risque de certificat expiré."
+      en: "cert-manager automates the full certificate lifecycle (Let's Encrypt), removing the risk of an expired certificate."
+  - q:
+      fr: "Combien d'objets `ClusterIssuer` faut-il en général pour tout un cluster ?"
+      en: "How many `ClusterIssuer` objects are generally needed for a whole cluster?"
+    options:
+      fr:
+        - "Un par Pod"
+        - "Un par namespace obligatoirement"
+        - "Un seul peut servir tout le cluster"
+        - "Un par certificat"
+      en:
+        - "One per Pod"
+        - "Mandatorily one per namespace"
+        - "A single one can serve the whole cluster"
+        - "One per certificate"
+    answer: 2
+    why:
+      fr: "Un `ClusterIssuer` est global : un seul (par ex. Let's Encrypt prod) peut délivrer des certificats pour tous les Ingress du cluster."
+      en: "A `ClusterIssuer` is cluster-wide: a single one (e.g. Let's Encrypt prod) can issue certificates for every Ingress in the cluster."
+  - q:
+      fr: "Comment déclenche-t-on l'obtention automatique d'un certificat pour un Ingress ?"
+      en: "How do you trigger automatic certificate issuance for an Ingress?"
+    options:
+      fr:
+        - "En redémarrant le cluster"
+        - "En codant le certificat en base64 dans l'objet"
+        - "En désactivant le TLS"
+        - "Avec une annotation `cert-manager.io/cluster-issuer` et un bloc `tls:`"
+      en:
+        - "By restarting the cluster"
+        - "By base64-encoding the certificate in the object"
+        - "By disabling TLS"
+        - "With a `cert-manager.io/cluster-issuer` annotation and a `tls:` block"
+    answer: 3
+    why:
+      fr: "cert-manager surveille l'annotation `cluster-issuer` ; combinée au bloc `tls:`, elle déclenche la demande, la validation et le stockage du certificat dans un Secret."
+      en: "cert-manager watches the `cluster-issuer` annotation; combined with the `tls:` block, it triggers the request, validation and storage of the certificate in a Secret."
+  - q:
+      fr: "Quelle API est présentée comme le successeur moderne de l'Ingress ?"
+      en: "Which API is presented as the modern successor to Ingress?"
+    options:
+      fr:
+        - "La Gateway API"
+        - "L'API etcd"
+        - "L'API Helm"
+        - "L'API NodePort"
+      en:
+        - "The Gateway API"
+        - "The etcd API"
+        - "The Helm API"
+        - "The NodePort API"
+    answer: 0
+    why:
+      fr: "La Gateway API (`gateway.networking.k8s.io`) sépare les rôles, gère plus de protocoles et constitue l'évolution de l'Ingress, encore largement utilisé en 2026."
+      en: "The Gateway API (`gateway.networking.k8s.io`) separates roles, handles more protocols and is the evolution of Ingress, still widely used in 2026."

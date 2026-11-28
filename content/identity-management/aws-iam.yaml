@@ -1,0 +1,449 @@
+description:
+  fr: "Maîtriser AWS IAM : utilisateurs vs rôles, politiques JSON avec conditions, permission boundaries, wildcard vs moindre privilège et sts assume-role."
+  en: "Master AWS IAM: users vs roles, JSON policies with conditions, permission boundaries, wildcard vs least privilege and sts assume-role."
+duration: 30
+
+intro:
+  fr: |
+    **AWS IAM** (*Identity and Access Management*) est le service qui décide, pour chaque appel à AWS, s'il
+    est autorisé. Tout y passe : un développeur qui liste des buckets, une application qui lit un secret,
+    un pipeline qui déploie. Comprendre IAM, c'est comprendre comment AWS répond à « qui a le droit de faire
+    quoi, sur quelle ressource, et sous quelles conditions ».
+
+    Imaginez un trousseau de badges d'entreprise. Un **utilisateur** IAM, c'est un badge permanent gravé à
+    votre nom. Un **rôle** IAM, c'est un badge d'invité que l'on emprunte à l'accueil pour une mission
+    précise, qui expire en fin de journée. La bonne pratique moderne consiste à utiliser le moins possible
+    de badges permanents et le plus possible de badges temporaires.
+
+    Dans cette leçon, vous allez opposer utilisateurs et rôles, écrire des politiques JSON avec conditions,
+    comparer une politique « wildcard » dangereuse à une politique au moindre privilège, poser une
+    permission boundary et endosser un rôle avec `sts assume-role`.
+  en: |
+    **AWS IAM** (*Identity and Access Management*) is the service that decides, for every call to AWS,
+    whether it is allowed. Everything goes through it: a developer listing buckets, an application reading a
+    secret, a pipeline deploying. Understanding IAM means understanding how AWS answers "who is allowed to
+    do what, on which resource, and under which conditions".
+
+    Picture a set of company badges. An IAM **user** is a permanent badge engraved with your name. An IAM
+    **role** is a guest badge you borrow from reception for a specific mission, which expires at the end of
+    the day. Modern best practice is to use as few permanent badges as possible and as many temporary ones
+    as possible.
+
+    In this lesson you will contrast users and roles, write JSON policies with conditions, compare a
+    dangerous "wildcard" policy to a least-privilege one, set a permission boundary and assume a role with
+    `sts assume-role`.
+
+sections:
+  - heading:
+      fr: "Utilisateurs vs rôles : préférez le temporaire"
+      en: "Users vs roles: prefer the temporary"
+    body:
+      fr: |
+        Un **utilisateur IAM** a une identité permanente et, souvent, une **clé d'accès** statique
+        (`AKIA...` + clé secrète) qui ne change jamais toute seule. C'est pratique, mais dangereux : cette
+        clé peut fuir dans un dépôt, un journal, une image — et rester valable des mois.
+
+        Un **rôle IAM** n'a pas de clé permanente. Un principal (utilisateur, service AWS, identité
+        fédérée) **l'endosse** via `sts assume-role` et reçoit des **identifiants temporaires** (valables
+        de quelques minutes à quelques heures). Si ces identifiants fuient, ils expirent vite.
+
+        | | Utilisateur IAM + clé statique | Rôle IAM (identifiants temporaires) |
+        |---|---|---|
+        | Durée de vie | Permanente | Courte (minutes/heures) |
+        | En cas de fuite | Valable jusqu'à rotation manuelle | Expire tout seul |
+        | Usage recommandé | À éviter pour les applications | Standard (apps, CI, services) |
+        | Rotation | Manuelle | Automatique à chaque assume-role |
+
+        La règle d'or d'AWS : **pas de clés d'accès statiques pour les charges de travail**. Les services
+        AWS (EC2, ECS, Lambda) reçoivent un rôle attaché ; les pipelines externes utilisent la fédération
+        **OIDC** (voir la leçon « Identités machine et revue des accès »). Les clés statiques ne survivent
+        que pour de rares cas humains, toujours protégées par MFA.
+      en: |
+        An **IAM user** has a permanent identity and, often, a static **access key** (`AKIA...` + secret
+        key) that never changes on its own. It is convenient but dangerous: that key can leak in a repo, a
+        log, an image — and stay valid for months.
+
+        An **IAM role** has no permanent key. A principal (user, AWS service, federated identity)
+        **assumes** it via `sts assume-role` and receives **temporary credentials** (valid from a few
+        minutes to a few hours). If those credentials leak, they expire quickly.
+
+        | | IAM user + static key | IAM role (temporary credentials) |
+        |---|---|---|
+        | Lifetime | Permanent | Short (minutes/hours) |
+        | On a leak | Valid until manual rotation | Expires on its own |
+        | Recommended use | Avoid for applications | Standard (apps, CI, services) |
+        | Rotation | Manual | Automatic on each assume-role |
+
+        AWS's golden rule: **no static access keys for workloads**. AWS services (EC2, ECS, Lambda) get an
+        attached role; external pipelines use **OIDC** federation (see the "Workload identities and access
+        reviews" lesson). Static keys survive only for rare human cases, always protected by MFA.
+  - heading:
+      fr: "Anatomie d'une politique IAM"
+      en: "Anatomy of an IAM policy"
+    body:
+      fr: |
+        Une **politique IAM** est un document JSON composé d'énoncés (*Statements*). Chaque énoncé répond à
+        quatre questions :
+
+        - **Effect** : `Allow` ou `Deny`.
+        - **Action** : les opérations autorisées, ex. `s3:GetObject`, `secretsmanager:GetSecretValue`.
+        - **Resource** : les ARN concernés, ex. `arn:aws:s3:::my-bucket/*`.
+        - **Condition** (facultatif) : des restrictions supplémentaires, ex. une région, une IP source, la
+          présence de MFA.
+
+        Deux règles d'évaluation à connaître absolument :
+
+        1. **Tout est refusé par défaut.** Sans `Allow` explicite, l'action est interdite.
+        2. **Un `Deny` explicite l'emporte toujours** sur n'importe quel `Allow`. C'est ce qui rend les
+           permission boundaries et les SCP efficaces.
+
+        Le **moindre privilège** consiste à n'accorder que les `Action` nécessaires sur les `Resource`
+        précises, jamais `"Action": "*"` sur `"Resource": "*"`. Les **conditions** resserrent encore :
+        `aws:MultiFactorAuthPresent`, `aws:SourceIp`, `aws:RequestedRegion`. Enfin, une **permission
+        boundary** est une politique qui fixe le **plafond** des permissions d'un principal : même si on lui
+        attache une politique plus large, il ne pourra jamais dépasser ce plafond. C'est l'outil clé pour
+        déléguer la création d'identités sans risque d'escalade.
+      en: |
+        An **IAM policy** is a JSON document made of statements. Each statement answers four questions:
+
+        - **Effect**: `Allow` or `Deny`.
+        - **Action**: the allowed operations, e.g. `s3:GetObject`, `secretsmanager:GetSecretValue`.
+        - **Resource**: the ARNs concerned, e.g. `arn:aws:s3:::my-bucket/*`.
+        - **Condition** (optional): extra restrictions, e.g. a region, a source IP, the presence of MFA.
+
+        Two evaluation rules you absolutely must know:
+
+        1. **Everything is denied by default.** Without an explicit `Allow`, the action is forbidden.
+        2. **An explicit `Deny` always wins** over any `Allow`. This is what makes permission boundaries and
+           SCPs effective.
+
+        **Least privilege** means granting only the needed `Action` on the exact `Resource`, never
+        `"Action": "*"` on `"Resource": "*"`. **Conditions** tighten further:
+        `aws:MultiFactorAuthPresent`, `aws:SourceIp`, `aws:RequestedRegion`. Finally, a **permission
+        boundary** is a policy that sets the **ceiling** of a principal's permissions: even if a broader
+        policy is attached, it can never exceed that ceiling. It is the key tool for delegating identity
+        creation without risk of escalation.
+
+examples:
+  - title:
+      fr: "La politique wildcard : le droit de tout faire"
+      en: "The wildcard policy: the right to do anything"
+    file: admin-wildcard.json
+    lang: json
+    kind: vulnerable
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "GodMode",
+            "Effect": "Allow",
+            "Action": "*",
+            "Resource": "*"
+          }
+        ]
+      }
+    note:
+      fr: "`\"Action\": \"*\"` sur `\"Resource\": \"*\"` accorde **tous** les droits sur **toutes** les ressources : supprimer la production, créer des utilisateurs, vider les buckets. Attachée à une application, elle fait de la moindre compromission une prise de contrôle totale du compte."
+      en: "`\"Action\": \"*\"` on `\"Resource\": \"*\"` grants **every** right on **every** resource: delete production, create users, empty buckets. Attached to an application, it turns the slightest compromise into a full account takeover."
+
+  - title:
+      fr: "La même intention, au moindre privilège avec condition"
+      en: "The same intent, least privilege with a condition"
+    file: s3-read-scoped.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "ReadOneBucketFromCorpIpWithMfa",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:ListBucket"],
+            "Resource": [
+              "arn:aws:s3:::reports-prod",
+              "arn:aws:s3:::reports-prod/*"
+            ],
+            "Condition": {
+              "Bool": { "aws:MultiFactorAuthPresent": "true" },
+              "IpAddress": { "aws:SourceIp": "192.0.2.0/24" }
+            }
+          }
+        ]
+      }
+    note:
+      fr: "Seules deux actions de lecture, sur un seul bucket (le nom pour `ListBucket`, le nom + `/*` pour `GetObject`), et uniquement avec MFA depuis le réseau de l'entreprise. Une clé volée hors de ce réseau ou sans MFA est inutile."
+      en: "Only two read actions, on a single bucket (the name for `ListBucket`, the name + `/*` for `GetObject`), and only with MFA from the corporate network. A key stolen outside that network or without MFA is useless."
+
+  - title:
+      fr: "Permission boundary : plafonner les droits délégués"
+      en: "Permission boundary: capping delegated rights"
+    file: boundary.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "CeilingForDelegatedUsers",
+            "Effect": "Allow",
+            "Action": ["s3:*", "cloudwatch:*", "logs:*"],
+            "Resource": "*"
+          },
+          {
+            "Sid": "NeverTouchIam",
+            "Effect": "Deny",
+            "Action": ["iam:*", "organizations:*"],
+            "Resource": "*"
+          }
+        ]
+      }
+    note:
+      fr: "Cette boundary fixe le plafond : même si on attache une politique `AdministratorAccess` à l'utilisateur, le `Deny` sur `iam:*` l'empêche de modifier des identités (pas d'escalade de privilèges). Un `Deny` explicite l'emporte toujours sur un `Allow`."
+      en: "This boundary sets the ceiling: even if `AdministratorAccess` is attached to the user, the `Deny` on `iam:*` stops them from modifying identities (no privilege escalation). An explicit `Deny` always beats an `Allow`."
+
+  - title:
+      fr: "Endosser un rôle avec sts assume-role"
+      en: "Assuming a role with sts assume-role"
+    file: assume-role.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Exchange your identity for TEMPORARY credentials of a role.
+      # No static key is created; the credentials expire after --duration-seconds.
+      aws sts assume-role \
+        --role-arn arn:aws:iam::123456789012:role/deploy-prod \
+        --role-session-name alice-deploy \
+        --duration-seconds 3600 \
+        --query 'Credentials' > creds.json
+
+      # Load the temporary credentials into the environment for the next calls
+      export AWS_ACCESS_KEY_ID=$(jq -r .AccessKeyId creds.json)
+      export AWS_SECRET_ACCESS_KEY=$(jq -r .SecretAccessKey creds.json)
+      export AWS_SESSION_TOKEN=$(jq -r .SessionToken creds.json)
+
+      # Confirm we now act AS the role, not as the original user
+      aws sts get-caller-identity --query Arn --output text
+    output: |
+      arn:aws:sts::123456789012:assumed-role/deploy-prod/alice-deploy
+    note:
+      fr: "`get-caller-identity` renvoie un ARN `assumed-role` : vous agissez temporairement comme `deploy-prod`. Ces identifiants expirent dans une heure. C'est le mécanisme de base des accès cloud sans clé permanente."
+      en: "`get-caller-identity` returns an `assumed-role` ARN: you temporarily act as `deploy-prod`. These credentials expire in one hour. This is the basic mechanism of cloud access without a permanent key."
+
+  - title:
+      fr: "Vérifier une politique avant de la déployer"
+      en: "Checking a policy before deploying it"
+    file: analyze.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # IAM Access Analyzer validates a policy and flags risky grants
+      aws accessanalyzer validate-policy \
+        --policy-type IDENTITY_POLICY \
+        --policy-document file://s3-read-scoped.json \
+        --query 'findings[].{type:findingType, detail:findingDetails}'
+
+      # Access Analyzer can also report resources shared outside the account:
+      aws accessanalyzer list-findings \
+        --analyzer-arn arn:aws:access-analyzer:eu-west-1:123456789012:analyzer/acct \
+        --query 'findings[?status==`ACTIVE`].resource' --output text
+    output: |
+      [
+        {
+          "type": "SECURITY_WARNING",
+          "detail": "Using a wildcard in the action with broad resources ..."
+        }
+      ]
+      arn:aws:s3:::reports-prod
+    note:
+      fr: "`validate-policy` signale les formulations risquées (wildcard, ressources trop larges) avant la mise en production. `list-findings` révèle les ressources exposées hors du compte. On intègre ces contrôles en CI pour les politiques versionnées."
+      en: "`validate-policy` flags risky wording (wildcards, overly broad resources) before production. `list-findings` reveals resources exposed outside the account. You wire these checks into CI for versioned policies."
+
+mistake:
+  fr: |
+    **Donner `"Action": "*"` sur `"Resource": "*"` et distribuer des clés d'accès statiques.**
+
+    Le wildcard est le raccourci qui fait « marcher tout de suite » et qui transforme la moindre
+    compromission en désastre : une application avec `*/*` qui se fait pirater donne les clés de tout le
+    compte. Accordez toujours des actions précises sur des ressources précises, et resserrez avec des
+    conditions (MFA, IP, région).
+
+    Le second réflexe dangereux est de créer un utilisateur IAM avec une clé d'accès statique « parce que
+    c'est simple », puis de la coller dans un `.env` ou un pipeline. Ces clés ne tournent pas, fuient
+    facilement et restent valables longtemps. La bonne approche : des **rôles** endossés via `sts
+    assume-role` (ou la fédération OIDC) qui délivrent des identifiants **temporaires**. Et quand vous
+    déléguez la création d'identités, posez une **permission boundary** pour empêcher l'escalade de
+    privilèges.
+  en: |
+    **Granting `"Action": "*"` on `"Resource": "*"` and handing out static access keys.**
+
+    The wildcard is the shortcut that "works right away" and turns the slightest compromise into a
+    disaster: an application with `*/*` that gets hacked hands over the keys to the whole account. Always
+    grant precise actions on precise resources, and tighten with conditions (MFA, IP, region).
+
+    The second dangerous reflex is creating an IAM user with a static access key "because it's simple",
+    then pasting it into a `.env` or a pipeline. Those keys do not rotate, leak easily and stay valid for a
+    long time. The right approach: **roles** assumed via `sts assume-role` (or OIDC federation) that issue
+    **temporary** credentials. And when you delegate identity creation, set a **permission boundary** to
+    prevent privilege escalation.
+
+bestPractice:
+  fr: |
+    - **Moindre privilège** : actions et ressources précises ; jamais `"Action": "*"` sur `"Resource": "*"`.
+    - **Pas de clés statiques pour les charges de travail** : rôles attachés (EC2/ECS/Lambda) ou fédération OIDC.
+    - **Identifiants temporaires** via `sts assume-role` plutôt que des clés permanentes.
+    - **Resserrez avec des conditions** : `aws:MultiFactorAuthPresent`, `aws:SourceIp`, `aws:RequestedRegion`.
+    - **Posez des permission boundaries** pour plafonner les droits délégués et bloquer l'escalade (`Deny iam:*`).
+    - **Validez les politiques** avec IAM Access Analyzer, en CI, avant de les déployer.
+    - **Souvenez-vous** : refus par défaut, et un `Deny` explicite l'emporte toujours sur un `Allow`.
+  en: |
+    - **Least privilege**: precise actions and resources; never `"Action": "*"` on `"Resource": "*"`.
+    - **No static keys for workloads**: attached roles (EC2/ECS/Lambda) or OIDC federation.
+    - **Temporary credentials** via `sts assume-role` rather than permanent keys.
+    - **Tighten with conditions**: `aws:MultiFactorAuthPresent`, `aws:SourceIp`, `aws:RequestedRegion`.
+    - **Set permission boundaries** to cap delegated rights and block escalation (`Deny iam:*`).
+    - **Validate policies** with IAM Access Analyzer, in CI, before deploying them.
+    - **Remember**: default deny, and an explicit `Deny` always wins over an `Allow`.
+
+exercise:
+  statement:
+    fr: |
+      Une application de reporting doit pouvoir **lire** les objets du bucket S3 `analytics-exports` (et
+      seulement lui), uniquement depuis la plage d'adresses `198.51.100.0/24`, et rien d'autre.
+
+      Écrivez la politique IAM JSON correspondante :
+
+      1. autorisez uniquement `s3:GetObject` et `s3:ListBucket` ;
+      2. ciblez précisément le bucket et son contenu (deux ARN) ;
+      3. ajoutez une condition restreignant à l'adresse source `198.51.100.0/24`.
+
+      Expliquez pourquoi `ListBucket` et `GetObject` nécessitent deux ARN différents.
+    en: |
+      A reporting application must be able to **read** objects from the S3 bucket `analytics-exports` (and
+      only it), only from the address range `198.51.100.0/24`, and nothing else.
+
+      Write the matching IAM JSON policy:
+
+      1. allow only `s3:GetObject` and `s3:ListBucket`;
+      2. target the bucket and its contents precisely (two ARNs);
+      3. add a condition restricting to the source address `198.51.100.0/24`.
+
+      Explain why `ListBucket` and `GetObject` need two different ARNs.
+  solution:
+    file: solution.json
+    lang: json
+    code: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "ReadAnalyticsExportsFromCorpRange",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:ListBucket"],
+            "Resource": [
+              "arn:aws:s3:::analytics-exports",
+              "arn:aws:s3:::analytics-exports/*"
+            ],
+            "Condition": {
+              "IpAddress": { "aws:SourceIp": "198.51.100.0/24" }
+            }
+          }
+        ]
+      }
+    note:
+      fr: "`s3:ListBucket` agit sur le bucket lui-même (`arn:aws:s3:::analytics-exports`), tandis que `s3:GetObject` agit sur les objets qu'il contient (`.../*`). Il faut donc les deux ARN. La condition `aws:SourceIp` rend la politique inopérante hors du réseau autorisé."
+      en: "`s3:ListBucket` acts on the bucket itself (`arn:aws:s3:::analytics-exports`), while `s3:GetObject` acts on the objects inside it (`.../*`). Hence both ARNs are required. The `aws:SourceIp` condition makes the policy useless outside the allowed network."
+
+quiz:
+  - q:
+      fr: "Pourquoi préférer un rôle IAM à un utilisateur avec clé statique pour une application ?"
+      en: "Why prefer an IAM role over a user with a static key for an application?"
+    options:
+      fr:
+        - "Le rôle délivre des identifiants temporaires qui expirent, limitant l'impact d'une fuite"
+        - "Le rôle est gratuit, l'utilisateur est payant"
+        - "Le rôle ne nécessite aucune politique"
+        - "L'utilisateur ne peut pas appeler l'API AWS"
+      en:
+        - "The role issues temporary credentials that expire, limiting the impact of a leak"
+        - "The role is free, the user is paid"
+        - "The role needs no policy"
+        - "The user cannot call the AWS API"
+    answer: 0
+    why:
+      fr: "Les identifiants d'un rôle sont temporaires et tournent à chaque assume-role. Une clé statique d'utilisateur reste valable jusqu'à rotation manuelle et fuit facilement."
+      en: "A role's credentials are temporary and rotate on each assume-role. A user's static key stays valid until manual rotation and leaks easily."
+  - q:
+      fr: "Dans l'évaluation d'une politique IAM, que se passe-t-il si un `Allow` et un `Deny` explicites concernent la même action ?"
+      en: "In IAM policy evaluation, what happens if an explicit `Allow` and an explicit `Deny` apply to the same action?"
+    options:
+      fr:
+        - "Le `Allow` l'emporte"
+        - "Le `Deny` explicite l'emporte toujours"
+        - "AWS choisit au hasard"
+        - "L'action est mise en file d'attente"
+      en:
+        - "The `Allow` wins"
+        - "The explicit `Deny` always wins"
+        - "AWS picks at random"
+        - "The action is queued"
+    answer: 1
+    why:
+      fr: "La règle d'AWS : refus par défaut, et un `Deny` explicite l'emporte sur n'importe quel `Allow`. C'est ce qui rend les permission boundaries et les SCP efficaces."
+      en: "AWS's rule: default deny, and an explicit `Deny` beats any `Allow`. This is what makes permission boundaries and SCPs effective."
+  - q:
+      fr: "Que fait une permission boundary ?"
+      en: "What does a permission boundary do?"
+    options:
+      fr:
+        - "Elle chiffre les ressources"
+        - "Elle fixe un plafond de permissions qu'un principal ne peut jamais dépasser"
+        - "Elle supprime le besoin de politiques"
+        - "Elle crée automatiquement des utilisateurs"
+      en:
+        - "It encrypts resources"
+        - "It sets a ceiling of permissions a principal can never exceed"
+        - "It removes the need for policies"
+        - "It automatically creates users"
+    answer: 1
+    why:
+      fr: "Une boundary plafonne les droits effectifs : même avec une politique large attachée, le principal ne dépasse pas la boundary. Idéale pour déléguer sans risque d'escalade."
+      en: "A boundary caps effective rights: even with a broad policy attached, the principal cannot exceed the boundary. Ideal for delegating without escalation risk."
+  - q:
+      fr: "Pourquoi `s3:ListBucket` et `s3:GetObject` nécessitent-ils des ARN différents ?"
+      en: "Why do `s3:ListBucket` and `s3:GetObject` need different ARNs?"
+    options:
+      fr:
+        - "Parce que `ListBucket` porte sur le bucket et `GetObject` sur les objets qu'il contient"
+        - "Parce que `GetObject` est obsolète"
+        - "Parce que les deux actions ne peuvent pas coexister"
+        - "Parce que S3 exige un ARN par région"
+      en:
+        - "Because `ListBucket` acts on the bucket and `GetObject` on the objects inside it"
+        - "Because `GetObject` is deprecated"
+        - "Because the two actions cannot coexist"
+        - "Because S3 requires one ARN per region"
+    answer: 0
+    why:
+      fr: "`ListBucket` s'applique à la ressource bucket (`.../analytics-exports`), `GetObject` aux objets (`.../*`). Il faut donc les deux ARN dans la politique."
+      en: "`ListBucket` applies to the bucket resource (`.../analytics-exports`), `GetObject` to the objects (`.../*`). Both ARNs are therefore required in the policy."
+  - q:
+      fr: "Que renvoie `aws sts get-caller-identity` après un `assume-role` réussi ?"
+      en: "What does `aws sts get-caller-identity` return after a successful `assume-role`?"
+    options:
+      fr:
+        - "Le mot de passe root du compte"
+        - "Une erreur, car assume-role désactive l'identité"
+        - "Un ARN `assumed-role`, indiquant que l'on agit temporairement comme le rôle"
+        - "L'adresse IP du serveur"
+      en:
+        - "The account root password"
+        - "An error, because assume-role disables the identity"
+        - "An `assumed-role` ARN, showing you temporarily act as the role"
+        - "The server's IP address"
+    answer: 2
+    why:
+      fr: "Après assume-role, l'appelant agit sous une identité `assumed-role/...`, avec des identifiants temporaires. C'est la preuve que l'on opère comme le rôle, pas comme l'utilisateur d'origine."
+      en: "After assume-role, the caller acts under an `assumed-role/...` identity, with temporary credentials. It proves you operate as the role, not as the original user."
