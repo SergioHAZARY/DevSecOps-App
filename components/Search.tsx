@@ -7,6 +7,7 @@ import { BookOpen, FileText, Search as SearchIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { localePath, type Dictionary } from "@/lib/i18n";
 import { searchEntries } from "@/lib/search";
+import { asset } from "@/lib/site";
 import type { Locale, SearchEntry } from "@/lib/types";
 
 interface SearchProps {
@@ -48,7 +49,7 @@ export function Search({ locale, t, nav, suggestions }: SearchProps) {
     if (!open || index.status === "ready" || index.status === "loading") return;
     let cancelled = false;
     setIndex({ status: "loading" });
-    fetch(`/search/${locale}.json`)
+    fetch(asset(`/search/${locale}.json`))
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<SearchEntry[]>;

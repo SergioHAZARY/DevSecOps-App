@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
-import { site } from "@/lib/site";
+import { asset, site } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,11 +12,12 @@ export const metadata: Metadata = {
   manifest: "manifest.webmanifest",
   appleWebApp: { capable: true, statusBarStyle: "default", title: site.name },
   icons: {
+    // Next prepends basePath to `manifest` but NOT to `icons`, so set the path explicitly.
     icon: [
-      { url: "icons/icon.svg", type: "image/svg+xml" },
-      { url: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: asset("/icons/icon.svg"), type: "image/svg+xml" },
+      { url: asset("/icons/icon-192.png"), sizes: "192x192", type: "image/png" },
     ],
-    apple: [{ url: "icons/icon-192.png", sizes: "192x192" }],
+    apple: [{ url: asset("/icons/icon-192.png"), sizes: "192x192" }],
   },
   formatDetection: { telephone: false },
 };

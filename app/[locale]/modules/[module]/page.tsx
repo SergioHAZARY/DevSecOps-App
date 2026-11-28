@@ -3,12 +3,19 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { CourseCard, LevelBadge } from "@/components/Cards";
+import { CertificateCard } from "@/components/Certificate";
 import { ModuleIcon } from "@/components/ModuleIcon";
 import { ProgressBar } from "@/components/ProgressBar";
+import { Quiz, type QuizItem } from "@/components/Quiz";
 import { getModule, modules } from "@/data/curriculum";
 import { getDictionary, localePath } from "@/lib/i18n";
-import { courseHasAnyContent, isValidLocale, moduleParams } from "@/lib/lessons";
+import { courseHasAnyContent, getLessons, isValidLocale, moduleParams } from "@/lib/lessons";
+import { site } from "@/lib/site";
 import type { Locale } from "@/lib/types";
+
+// Cap the embedded module-quiz pool so module pages stay light; the sample is spread
+// evenly across all of the module's lessons (deterministic for a stable static build).
+const MAX_POOL = 40;
 
 export function generateStaticParams() {
   return moduleParams();
@@ -41,6 +48,17 @@ export default async function ModulePage({ params }: { params: Promise<{ locale:
   const index = modules.findIndex((m) => m.slug === slug);
   const prev = modules[index - 1];
   const next = modules[index + 1];
+
+  // Module final quiz: a pool drawn from every lesson of the module, from which the
+  // Quiz component picks 10 at random on each attempt. Passing it unlocks the certificate.
+  const lessonsByCourse = await Promise.all(module.courses.map((c) => getLessons(c.slug)));
+  const fullPool: QuizItem[] = lessonsByCourse.flat().flatMap((lesson) =>
+    lesson.quiz.map((q) => ({ q: q.q[locale], options: q.options[locale], answer: q.answer, why: q.why[locale] })),
+  );
+  const pool =
+    fullPool.length <= MAX_POOL
+      ? fullPool
+      : Array.from({ length: MAX_POOL }, (_, i) => fullPool[Math.floor((i * fullPool.length) / MAX_POOL)]);
 
   return (
     <main id="main" className="mx-auto w-full max-w-[1000px] px-4 py-8">
@@ -77,7 +95,34 @@ export default async function ModulePage({ params }: { params: Promise<{ locale:
         ))}
       </div>
 
-      <nav className="mt-10 flex items-center justify-between gap-4 border-t pt-6" aria-label={dict.nav.breadcrumb}>
+      {pool.length >= 5 && (
+        <section className="mt-12">
+          <h2 className="text-2xl font-bold">{dict.quiz.moduleQuizTitle}</h2>
+          <p className="mt-1 text-muted-foreground">
+            {Math.min(10, pool.length)} {dict.quiz.moduleQuizIntro}
+          </p>
+          <div className="mt-4">
+            <Quiz questions={pool} pick={Math.min(10, pool.length)} mode="module" storageKey={module.slug} t={dict.quiz} />
+          </div>
+        </section>
+      )}
+
+      <section className="mt-12">
+        <h2 className="text-2xl font-bold">{dict.progress.certificates}</h2>
+        <div className="mt-4">
+          <CertificateCard
+            locale={locale}
+            moduleSlug={module.slug}
+            moduleNumber={`${dict.course.module} ${module.id}`}
+            moduleTitle={module.title[locale]}
+            lessonKeys={keys}
+            t={dict.certificate}
+            slogan={site.slogan[locale]}
+          />
+        </div>
+      </section>
+
+      <nav className="mt-12 flex items-center justify-between gap-4 border-t pt-6" aria-label={dict.nav.breadcrumb}>
         {prev ? (
           <Link href={localePath(locale, `/modules/${prev.slug}`)} className="group flex flex-col text-left">
             <span className="text-xs text-muted-foreground">{dict.lesson.previous}</span>

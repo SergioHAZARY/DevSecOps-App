@@ -6,6 +6,8 @@
  * Everything happens in the browser.
  */
 
+import { asset } from "@/lib/site";
+
 export interface CertificateData {
   name: string;
   module: string;
@@ -22,7 +24,7 @@ export interface CertificateData {
   footer: string;
 }
 
-const TEMPLATE_URL = "/certificat-template/certificate.svg";
+const TEMPLATE_URL = asset("/certificat-template/certificate.svg");
 const WIDTH = 1123;
 const HEIGHT = 794;
 /** 3x keeps text sharp when the PDF is printed */
