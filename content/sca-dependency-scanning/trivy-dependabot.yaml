@@ -1,0 +1,523 @@
+description:
+  fr: "Scanner les dépendances avec Trivy fs, automatiser les mises à jour avec Dependabot (groupes) et comparer avec Renovate pour maintenir une chaîne de dépendances à jour."
+  en: "Scan dependencies with Trivy fs, automate updates with Dependabot (groups) and compare with Renovate to keep a dependency chain up to date."
+duration: 25
+
+intro:
+  fr: |
+    Détecter une dépendance vulnérable ne sert à rien si personne ne la met à jour. Ce cours combine donc
+    deux gestes : **scanner** pour voir le problème, et **automatiser les mises à jour** pour le résoudre
+    sans effort manuel répétitif.
+
+    L'analogie : un détecteur de fumée (le scanner) vous prévient qu'il y a un début d'incendie ; mais vous
+    voulez aussi un système qui remplace automatiquement les piles usées avant qu'elles ne lâchent
+    (l'automatisation des mises à jour). Les deux sont complémentaires : l'un alerte, l'autre entretient.
+
+    Dans cette leçon vous allez utiliser **Trivy** en mode `fs` pour scanner les fichiers de dépendances
+    d'un dépôt, puis configurer **Dependabot** (le robot intégré à GitHub) avec des **groupes** de mises à
+    jour pour éviter un déluge de pull requests, et enfin comparer Dependabot à **Renovate**, l'alternative
+    la plus configurable, via un `renovate.json`.
+  en: |
+    Detecting a vulnerable dependency is useless if nobody updates it. This lesson therefore combines two
+    actions: **scan** to see the problem, and **automate updates** to fix it without repetitive manual work.
+
+    The analogy: a smoke detector (the scanner) warns you that a fire is starting; but you also want a system
+    that automatically replaces worn-out batteries before they die (update automation). The two are
+    complementary: one alerts, the other maintains.
+
+    In this lesson you will use **Trivy** in `fs` mode to scan a repository's dependency files, then configure
+    **Dependabot** (GitHub's built-in bot) with update **groups** to avoid a flood of pull requests, and
+    finally compare Dependabot with **Renovate**, the most configurable alternative, through a
+    `renovate.json`.
+
+sections:
+  - heading:
+      fr: "Trivy en mode filesystem"
+      en: "Trivy in filesystem mode"
+    body:
+      fr: |
+        **Trivy** (d'Aqua Security) est un scanner polyvalent. En mode `fs` (*filesystem*), il lit les
+        fichiers de dépendances d'un dossier et les compare à des bases de vulnérabilités. Il reconnaît
+        quasiment tous les écosystèmes : `package-lock.json`, `yarn.lock`, `requirements.txt`, `poetry.lock`,
+        `go.mod`, `pom.xml`, `Gemfile.lock`, `Cargo.lock`…
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" aquasec/trivy:latest fs /src \
+          --scanners vuln --severity HIGH,CRITICAL --exit-code 1
+        ```
+
+        | Option | Rôle |
+        |---|---|
+        | `--scanners vuln` | Ne chercher que les vulnérabilités (pas secrets/misconfig ici) |
+        | `--severity` | Filtrer par gravité |
+        | `--exit-code 1` | Renvoyer `1` s'il reste des failles (pour bloquer la CI) |
+        | `--ignore-unfixed` | Ignorer les failles sans correctif disponible |
+        | `--format` | `table`, `json`, `sarif`, `cyclonedx` |
+
+        Trivy est un atout majeur en CI : rapide, sans licence, et capable de scanner d'un même outil les
+        dépendances, les images de conteneur, l'IaC et les secrets. Pour un **fichier de verrou** complet
+        (`package-lock.json`), il voit tout l'arbre de dépendances, y compris les dépendances transitives.
+      en: |
+        **Trivy** (by Aqua Security) is a versatile scanner. In `fs` (*filesystem*) mode, it reads a folder's
+        dependency files and compares them against vulnerability databases. It recognises almost every
+        ecosystem: `package-lock.json`, `yarn.lock`, `requirements.txt`, `poetry.lock`, `go.mod`, `pom.xml`,
+        `Gemfile.lock`, `Cargo.lock`…
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" aquasec/trivy:latest fs /src \
+          --scanners vuln --severity HIGH,CRITICAL --exit-code 1
+        ```
+
+        | Option | Role |
+        |---|---|
+        | `--scanners vuln` | Only look for vulnerabilities (not secrets/misconfig here) |
+        | `--severity` | Filter by severity |
+        | `--exit-code 1` | Return `1` if flaws remain (to block CI) |
+        | `--ignore-unfixed` | Ignore flaws with no available fix |
+        | `--format` | `table`, `json`, `sarif`, `cyclonedx` |
+
+        Trivy is a major asset in CI: fast, licence-free, and able to scan dependencies, container images,
+        IaC and secrets from a single tool. For a complete **lockfile** (`package-lock.json`), it sees the
+        whole dependency tree, including transitive dependencies.
+  - heading:
+      fr: "Dependabot et les groupes"
+      en: "Dependabot and groups"
+    body:
+      fr: |
+        **Dependabot** est intégré à GitHub. Configuré par un fichier `.github/dependabot.yml`, il surveille
+        les fichiers de dépendances et ouvre automatiquement des **pull requests** de mise à jour. Il fournit
+        aussi des alertes de sécurité basées sur la *GitHub Advisory Database*.
+
+        Le problème historique de Dependabot est le **déluge de pull requests** : sur un gros projet, une PR
+        par dépendance par semaine devient ingérable. La solution moderne est les **groupes** (`groups`) :
+        on regroupe plusieurs mises à jour en une seule pull request.
+
+        | Clé de `dependabot.yml` | Rôle |
+        |---|---|
+        | `package-ecosystem` | L'écosystème (`npm`, `pip`, `docker`, `github-actions`) |
+        | `directory` | Où se trouvent les manifestes |
+        | `schedule.interval` | Fréquence (`daily`, `weekly`, `monthly`) |
+        | `groups` | Regrouper des mises à jour en une PR |
+        | `open-pull-requests-limit` | Plafond de PR simultanées |
+        | `ignore` | Exclure un paquet ou une version majeure |
+
+        On surveille **aussi** `github-actions` : les actions de CI sont du code tiers, et une action
+        épinglée sur une version obsolète est une faille de chaîne d'approvisionnement, au même titre qu'une
+        bibliothèque.
+      en: |
+        **Dependabot** is built into GitHub. Configured by a `.github/dependabot.yml` file, it watches the
+        dependency files and automatically opens update **pull requests**. It also provides security alerts
+        based on the *GitHub Advisory Database*.
+
+        Dependabot's historic problem is the **pull-request flood**: on a large project, one PR per dependency
+        per week becomes unmanageable. The modern solution is **groups** (`groups`): you bundle several
+        updates into a single pull request.
+
+        | `dependabot.yml` key | Role |
+        |---|---|
+        | `package-ecosystem` | The ecosystem (`npm`, `pip`, `docker`, `github-actions`) |
+        | `directory` | Where the manifests are |
+        | `schedule.interval` | Frequency (`daily`, `weekly`, `monthly`) |
+        | `groups` | Bundle updates into one PR |
+        | `open-pull-requests-limit` | Cap on simultaneous PRs |
+        | `ignore` | Exclude a package or a major version |
+
+        You **also** watch `github-actions`: CI actions are third-party code, and an action pinned to an
+        outdated version is a supply-chain flaw, just like a library.
+  - heading:
+      fr: "Dependabot vs Renovate"
+      en: "Dependabot vs Renovate"
+    body:
+      fr: |
+        **Renovate** (de Mend) est l'alternative la plus puissante à Dependabot. Configuré par un fichier
+        `renovate.json`, il offre beaucoup plus de finesse : regroupements complexes, règles par paquet,
+        auto-merge conditionnel, fenêtres horaires, « tableau de bord » des dépendances, et le support de
+        bien plus d'écosystèmes et de plateformes (GitLab, Bitbucket, Azure DevOps).
+
+        | | Dependabot | Renovate |
+        |---|---|---|
+        | Intégration | Native GitHub | GitHub, GitLab, Bitbucket, Azure |
+        | Configuration | `dependabot.yml` (simple) | `renovate.json` (très riche) |
+        | Groupes | Oui (récent) | Oui, très flexibles |
+        | Auto-merge | Via règles de dépôt | Natif et conditionnel |
+        | Presets partagés | Non | Oui (configs réutilisables) |
+        | Courbe d'apprentissage | Faible | Plus élevée |
+
+        Le choix : **Dependabot** suffit pour la plupart des projets GitHub et ne demande presque aucune
+        configuration. **Renovate** s'impose quand on veut un contrôle fin, de l'auto-merge pour les mises à
+        jour mineures sûres, ou qu'on n'est pas sur GitHub. Les deux se combinent très bien avec Trivy : le
+        robot propose la mise à jour, Trivy et les tests valident la pull request avant la fusion.
+      en: |
+        **Renovate** (by Mend) is the most powerful alternative to Dependabot. Configured by a `renovate.json`
+        file, it offers far more finesse: complex grouping, per-package rules, conditional auto-merge, time
+        windows, a dependency "dashboard", and support for many more ecosystems and platforms (GitLab,
+        Bitbucket, Azure DevOps).
+
+        | | Dependabot | Renovate |
+        |---|---|---|
+        | Integration | Native to GitHub | GitHub, GitLab, Bitbucket, Azure |
+        | Configuration | `dependabot.yml` (simple) | `renovate.json` (very rich) |
+        | Groups | Yes (recent) | Yes, very flexible |
+        | Auto-merge | Via repo rules | Native and conditional |
+        | Shared presets | No | Yes (reusable configs) |
+        | Learning curve | Low | Higher |
+
+        The choice: **Dependabot** is enough for most GitHub projects and needs almost no configuration.
+        **Renovate** wins when you want fine control, auto-merge for safe minor updates, or you are not on
+        GitHub. Both pair very well with Trivy: the bot proposes the update, Trivy and the tests validate the
+        pull request before the merge.
+
+examples:
+  - title:
+      fr: "Scanner les dépendances avec Trivy fs"
+      en: "Scanning dependencies with Trivy fs"
+    file: trivy-deps.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Scan the dependency files of the repo for known vulnerabilities.
+      # --ignore-unfixed hides flaws with no patch yet (not actionable).
+      # --exit-code 1 makes the CI job fail on HIGH/CRITICAL findings.
+      docker run --rm -v "$(pwd):/src" aquasec/trivy:latest fs /src \
+        --scanners vuln \
+        --severity HIGH,CRITICAL \
+        --ignore-unfixed \
+        --exit-code 1 \
+        --format table
+      echo "exit code: $?"
+    output: |
+      2026-04-02T10:12:03Z  INFO  Vulnerability scanning is enabled
+      package-lock.json (npm)
+      ====================
+      Total: 2 (HIGH: 1, CRITICAL: 1)
+
+      ┌───────────────┬────────────────┬──────────┬───────────────┬───────────────┐
+      │    Library    │ Vulnerability  │ Severity │   Installed   │     Fixed     │
+      ├───────────────┼────────────────┼──────────┼───────────────┼───────────────┤
+      │ jsonwebtoken  │ CVE-2022-23529 │ CRITICAL │ 8.5.0         │ 9.0.0         │
+      │ lodash        │ CVE-2021-23337 │ HIGH     │ 4.17.11       │ 4.17.21       │
+      └───────────────┴────────────────┴──────────┴───────────────┴───────────────┘
+      exit code: 1
+    note:
+      fr: "Trivy lit `package-lock.json` et liste chaque faille avec la **version installée** et la **version corrigée**. `--exit-code 1` renvoie `1` : la CI échoue. `--ignore-unfixed` a écarté les CVE sans correctif, pour ne garder que l'actionnable."
+      en: "Trivy reads `package-lock.json` and lists each flaw with the **installed version** and the **fixed version**. `--exit-code 1` returns `1`: CI fails. `--ignore-unfixed` dropped CVEs with no fix, keeping only the actionable ones."
+
+  - title:
+      fr: "Un dependabot.yml avec groupes"
+      en: "A dependabot.yml with groups"
+    file: .github/dependabot.yml
+    lang: yaml
+    kind: secure
+    code: |
+      version: 2
+      updates:
+        # 1. JavaScript dependencies, grouped to avoid a PR flood
+        - package-ecosystem: "npm"
+          directory: "/"
+          schedule:
+            interval: "weekly"
+          open-pull-requests-limit: 5
+          groups:
+            # All minor/patch updates of production deps in ONE pull request
+            production-minor:
+              dependency-type: "production"
+              update-types: ["minor", "patch"]
+            # Dev dependencies grouped separately
+            dev-dependencies:
+              dependency-type: "development"
+          ignore:
+            # Hold back a major upgrade that needs a manual migration
+            - dependency-name: "express"
+              update-types: ["version-update:semver-major"]
+
+        # 2. The CI actions are third-party code too: keep them updated
+        - package-ecosystem: "github-actions"
+          directory: "/"
+          schedule:
+            interval: "weekly"
+
+        # 3. The base image of the Dockerfile
+        - package-ecosystem: "docker"
+          directory: "/"
+          schedule:
+            interval: "weekly"
+    output: |
+      # Dependabot opens, for example:
+      #  - "Bump the production-minor group with 4 updates"  (one PR, 4 deps)
+      #  - "Bump the dev-dependencies group with 2 updates"  (one PR, 2 deps)
+      #  - "Bump actions/checkout from 4.1.1 to 4.2.0"
+      # Instead of 7 separate pull requests.
+    note:
+      fr: "Les `groups` transforment sept pull requests isolées en trois lots cohérents. L'`ignore` retient la montée majeure d'Express qui demande une migration manuelle. On surveille aussi `github-actions` et `docker` : ce sont des dépendances comme les autres."
+      en: "The `groups` turn seven isolated pull requests into three coherent batches. The `ignore` holds back the Express major upgrade that needs a manual migration. We also watch `github-actions` and `docker`: these are dependencies like any other."
+
+  - title:
+      fr: "L'équivalent avec Renovate"
+      en: "The Renovate equivalent"
+    file: renovate.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+        "extends": ["config:recommended"],
+        "schedule": ["before 6am on monday"],
+        "packageRules": [
+          {
+            "description": "Group all non-major updates into one PR",
+            "matchUpdateTypes": ["minor", "patch"],
+            "groupName": "all non-major dependencies"
+          },
+          {
+            "description": "Auto-merge safe dev-dependency patch updates after CI passes",
+            "matchDepTypes": ["devDependencies"],
+            "matchUpdateTypes": ["patch"],
+            "automerge": true
+          },
+          {
+            "description": "Hold back the Express major upgrade (manual migration)",
+            "matchPackageNames": ["express"],
+            "matchUpdateTypes": ["major"],
+            "enabled": false
+          }
+        ],
+        "vulnerabilityAlerts": {
+          "labels": ["security"],
+          "automerge": false
+        }
+      }
+    output: |
+      # Renovate opens a "Dependency Dashboard" issue and, for example:
+      #  - one grouped PR "Update all non-major dependencies"
+      #  - auto-merges a devDependency patch once CI is green
+      #  - raises a separate, labelled PR for each security advisory
+    note:
+      fr: "Renovate exprime la même intention que Dependabot mais avec plus de finesse : regroupement, **auto-merge conditionnel** des patchs de dev une fois la CI verte, et traitement prioritaire des alertes de sécurité. Le `config:recommended` apporte des réglages par défaut sensés sans tout réécrire."
+      en: "Renovate expresses the same intent as Dependabot but with more finesse: grouping, **conditional auto-merge** of dev patches once CI is green, and priority handling of security advisories. The `config:recommended` brings sensible defaults without rewriting everything."
+
+  - title:
+      fr: "Valider la pull request de mise à jour avec Trivy"
+      en: "Validating the update pull request with Trivy"
+    file: .github/workflows/sca.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: sca
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        trivy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            # Scan dependencies; fail the PR on fixable HIGH/CRITICAL findings.
+            # This gates both human and bot (Dependabot/Renovate) pull requests.
+            - name: Trivy dependency scan
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: fs
+                scanners: vuln
+                severity: HIGH,CRITICAL
+                ignore-unfixed: true
+                exit-code: 1
+                format: sarif
+                output: trivy.sarif
+
+            - name: Upload SARIF
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: trivy.sarif
+    output: |
+      # On a Dependabot "bump lodash to 4.17.21" PR:
+      package-lock.json (npm)
+      Total: 0 (HIGH: 0, CRITICAL: 0)
+      # exit code 0 -> the update PR is green and safe to merge
+    note:
+      fr: "Le robot propose la mise à jour, mais c'est Trivy (plus les tests) qui garde la porte : la pull request de Dependabot n'est fusionnée que si le scan passe. On ferme ainsi la boucle : détecter (Trivy), proposer la correction (Dependabot/Renovate), valider (Trivy + tests), fusionner."
+      en: "The bot proposes the update, but Trivy (plus the tests) guards the gate: the Dependabot pull request is only merged if the scan passes. This closes the loop: detect (Trivy), propose the fix (Dependabot/Renovate), validate (Trivy + tests), merge."
+
+mistake:
+  fr: |
+    **Activer Dependabot sans groupes ni limite, puis ignorer le flot de pull requests.**
+
+    Sur un projet avec des centaines de dépendances, Dependabot sans `groups` ni `open-pull-requests-limit`
+    ouvre des dizaines de pull requests isolées. Submergée, l'équipe les laisse s'empiler sans les fusionner
+    — et les mises à jour de sécurité se perdent dans la masse. Résultat paradoxal : l'outil censé maintenir
+    les dépendances à jour les laisse se périmer. La solution est de **regrouper** les mises à jour mineures,
+    de **plafonner** le nombre de PR, et de laisser la CI (Trivy + tests) valider automatiquement les lots
+    sûrs.
+  en: |
+    **Enabling Dependabot with no groups and no limit, then ignoring the flood of pull requests.**
+
+    On a project with hundreds of dependencies, Dependabot without `groups` or `open-pull-requests-limit`
+    opens dozens of isolated pull requests. Overwhelmed, the team lets them pile up without merging — and the
+    security updates get lost in the mass. The paradoxical result: the tool meant to keep dependencies up to
+    date lets them rot. The solution is to **group** minor updates, **cap** the number of PRs, and let CI
+    (Trivy + tests) automatically validate the safe batches.
+
+bestPractice:
+  fr: |
+    - **Scannez les fichiers de verrou** avec `trivy fs` et `--exit-code 1` pour bloquer sur HIGH/CRITICAL.
+    - **`--ignore-unfixed`** pour ne bloquer que sur l'actionnable.
+    - **Regroupez les mises à jour** (`groups`) et **plafonnez** les PR pour éviter le déluge.
+    - **Surveillez aussi `github-actions` et `docker`** : ce sont des dépendances tierces.
+    - **Validez les PR du robot** avec Trivy + les tests avant toute fusion, auto-merge pour les patchs sûrs.
+    - **Choisissez l'outil** : Dependabot pour la simplicité GitHub, Renovate pour le contrôle fin ou hors GitHub.
+  en: |
+    - **Scan the lockfiles** with `trivy fs` and `--exit-code 1` to block on HIGH/CRITICAL.
+    - **`--ignore-unfixed`** to only block on the actionable.
+    - **Group updates** (`groups`) and **cap** PRs to avoid the flood.
+    - **Also watch `github-actions` and `docker`**: they are third-party dependencies.
+    - **Validate the bot's PRs** with Trivy + tests before any merge, auto-merge for safe patches.
+    - **Pick the tool**: Dependabot for GitHub simplicity, Renovate for fine control or outside GitHub.
+
+exercise:
+  statement:
+    fr: |
+      Un dépôt GitHub d'application Python (avec `requirements.txt` et un `Dockerfile`) n'a aucune
+      automatisation de mise à jour. On vous demande :
+
+      1. un fichier `.github/dependabot.yml` qui surveille **pip**, **docker** et **github-actions**, en
+         hebdomadaire, avec les mises à jour mineures/patch de pip **regroupées** en une seule PR et un
+         plafond de 5 PR ouvertes ;
+      2. la commande Trivy (une ligne via Docker) qui scanne les dépendances et fait échouer la CI sur les
+         failles HIGH et CRITICAL **corrigeables**.
+
+      Donnez les deux.
+    en: |
+      A Python application GitHub repository (with `requirements.txt` and a `Dockerfile`) has no update
+      automation. You are asked for:
+
+      1. a `.github/dependabot.yml` that watches **pip**, **docker** and **github-actions**, weekly, with
+         pip's minor/patch updates **grouped** into a single PR and a cap of 5 open PRs;
+      2. the Trivy command (one line via Docker) that scans the dependencies and fails CI on **fixable**
+         HIGH and CRITICAL flaws.
+
+      Give both.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # 1. .github/dependabot.yml
+      version: 2
+      updates:
+        - package-ecosystem: "pip"
+          directory: "/"
+          schedule:
+            interval: "weekly"
+          open-pull-requests-limit: 5
+          groups:
+            python-minor:
+              update-types: ["minor", "patch"]
+        - package-ecosystem: "docker"
+          directory: "/"
+          schedule:
+            interval: "weekly"
+        - package-ecosystem: "github-actions"
+          directory: "/"
+          schedule:
+            interval: "weekly"
+
+      # 2. Trivy command (run as a single docker line):
+      # docker run --rm -v "$(pwd):/src" aquasec/trivy:latest fs /src \
+      #   --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+    note:
+      fr: "Le `groups` évite un flot de PR pour pip ; `docker` et `github-actions` sont surveillés car ce sont aussi des dépendances. Côté scan, `--ignore-unfixed` limite le blocage aux failles corrigeables et `--exit-code 1` fait échouer la CI quand il en reste."
+      en: "The `groups` avoids a PR flood for pip; `docker` and `github-actions` are watched because they are dependencies too. For the scan, `--ignore-unfixed` limits blocking to fixable flaws and `--exit-code 1` fails CI when any remain."
+
+quiz:
+  - q:
+      fr: "Que scanne `trivy fs` ?"
+      en: "What does `trivy fs` scan?"
+    options:
+      fr:
+        - "Le trafic réseau de l'application"
+        - "Les fichiers de dépendances d'un dossier, comparés à des bases de vulnérabilités"
+        - "Uniquement les images Docker en registre"
+        - "Le code binaire compilé"
+      en:
+        - "The application's network traffic"
+        - "The dependency files of a folder, compared against vulnerability databases"
+        - "Only Docker images in a registry"
+        - "The compiled binary code"
+    answer: 1
+    why:
+      fr: "En mode `fs`, Trivy lit les manifestes et fichiers de verrou (`package-lock.json`, `requirements.txt`…) et les confronte aux bases de CVE, y compris pour les dépendances transitives."
+      en: "In `fs` mode, Trivy reads the manifests and lockfiles (`package-lock.json`, `requirements.txt`…) and checks them against CVE databases, including transitive dependencies."
+  - q:
+      fr: "À quoi servent les `groups` dans un dependabot.yml ?"
+      en: "What are `groups` for in a dependabot.yml?"
+    options:
+      fr:
+        - "À regrouper plusieurs mises à jour en une seule pull request pour éviter le déluge"
+        - "À supprimer les dépendances inutilisées"
+        - "À chiffrer les manifestes"
+        - "À désactiver Dependabot le week-end"
+      en:
+        - "To bundle several updates into a single pull request to avoid the flood"
+        - "To remove unused dependencies"
+        - "To encrypt the manifests"
+        - "To disable Dependabot on weekends"
+    answer: 0
+    why:
+      fr: "Sans groupes, Dependabot ouvre une PR par dépendance, ce qui devient ingérable. Les `groups` combinent par exemple les mises à jour mineures en une seule PR cohérente."
+      en: "Without groups, Dependabot opens one PR per dependency, which becomes unmanageable. `groups` combine, for example, minor updates into a single coherent PR."
+  - q:
+      fr: "Quel avantage distinctif Renovate a-t-il sur Dependabot ?"
+      en: "What distinctive advantage does Renovate have over Dependabot?"
+    options:
+      fr:
+        - "Il est le seul à détecter les CVE"
+        - "Il fonctionne sur plus de plateformes et offre un auto-merge conditionnel très configurable"
+        - "Il n'a besoin d'aucune configuration"
+        - "Il remplace la CI"
+      en:
+        - "It is the only one that detects CVEs"
+        - "It works on more platforms and offers highly configurable conditional auto-merge"
+        - "It needs no configuration at all"
+        - "It replaces CI"
+    answer: 1
+    why:
+      fr: "Renovate (GitHub, GitLab, Bitbucket, Azure) propose des règles par paquet, des presets partagés et de l'auto-merge conditionnel. Dependabot est plus simple et natif GitHub."
+      en: "Renovate (GitHub, GitLab, Bitbucket, Azure) offers per-package rules, shared presets and conditional auto-merge. Dependabot is simpler and native to GitHub."
+  - q:
+      fr: "Pourquoi surveiller aussi `github-actions` dans dependabot.yml ?"
+      en: "Why also watch `github-actions` in dependabot.yml?"
+    options:
+      fr:
+        - "Parce que les actions sont du code tiers et une action obsolète est une faille de chaîne d'approvisionnement"
+        - "Parce que GitHub l'exige pour le facturer"
+        - "Pour accélérer les workflows"
+        - "Cela n'a aucun intérêt"
+      en:
+        - "Because actions are third-party code and an outdated action is a supply-chain flaw"
+        - "Because GitHub requires it for billing"
+        - "To speed up workflows"
+        - "It serves no purpose"
+    answer: 0
+    why:
+      fr: "Une action de CI exécute du code tiers dans votre pipeline. La garder à jour est aussi important que mettre à jour une bibliothèque : c'est une dépendance de votre chaîne d'approvisionnement."
+      en: "A CI action runs third-party code in your pipeline. Keeping it up to date is as important as updating a library: it is a dependency in your supply chain."
+  - q:
+      fr: "Comment valider automatiquement une pull request de mise à jour ouverte par Dependabot ?"
+      en: "How do you automatically validate an update pull request opened by Dependabot?"
+    options:
+      fr:
+        - "En la fusionnant sans vérification"
+        - "En la fermant systématiquement"
+        - "En laissant la CI (Trivy + tests) scanner et valider la PR avant la fusion"
+        - "En désactivant la CI pour les bots"
+      en:
+        - "By merging it without checks"
+        - "By always closing it"
+        - "By letting CI (Trivy + tests) scan and validate the PR before merging"
+        - "By disabling CI for bots"
+    answer: 2
+    why:
+      fr: "Le robot propose la mise à jour, mais la CI garde la porte : Trivy rescanne les dépendances et les tests vérifient que rien n'est cassé. La PR n'est fusionnée que si tout passe."
+      en: "The bot proposes the update, but CI guards the gate: Trivy rescans the dependencies and the tests check nothing is broken. The PR is only merged if everything passes."

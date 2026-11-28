@@ -1,0 +1,462 @@
+description:
+  fr: "Utiliser Snyk : snyk test, monitor, container et iac, le fichier de politique .snyk avec expiration, le token en CI et un seuil de sévérité qui bloque le build."
+  en: "Use Snyk: snyk test, monitor, container and iac, the .snyk policy file with expiry, the token in CI and a severity threshold that blocks the build."
+duration: 25
+
+intro:
+  fr: |
+    **Snyk** est une plateforme commerciale (avec une offre gratuite généreuse) spécialisée dans la sécurité
+    de la chaîne d'approvisionnement logicielle. Sa force est d'aller au-delà d'un simple « cette dépendance
+    a une CVE » : il indique **quel chemin de dépendances** introduit la faille, s'il existe une version
+    corrigée, et propose souvent un correctif automatique.
+
+    Pensez à un contrôleur sanitaire qui ne se contente pas de dire « un produit de ce plat est périmé » :
+    il vous dit *lequel*, *dans quelle sauce il se cache*, et *par quel produit frais le remplacer*. Cette
+    précision change tout quand une application a 800 dépendances imbriquées.
+
+    Snyk couvre quatre domaines avec la même commande de base : le **code open source** (`snyk test`), les
+    **images de conteneur** (`snyk container`), l'**infrastructure as code** (`snyk iac`) et le suivi continu
+    (`snyk monitor`). Dans cette leçon vous allez lancer ces commandes, écrire un fichier de politique
+    `.snyk` pour ignorer une alerte avec une date d'expiration, et intégrer Snyk en CI avec un seuil de
+    sévérité qui fait échouer le build.
+  en: |
+    **Snyk** is a commercial platform (with a generous free tier) specialised in software supply chain
+    security. Its strength is going beyond a plain "this dependency has a CVE": it tells you **which
+    dependency path** introduces the flaw, whether a fixed version exists, and often offers an automatic fix.
+
+    Think of a food-safety inspector who does not just say "one ingredient in this dish is expired": they
+    tell you *which one*, *which sauce it hides in*, and *which fresh ingredient to replace it with*. That
+    precision changes everything when an application has 800 nested dependencies.
+
+    Snyk covers four areas with the same base command: **open source code** (`snyk test`), **container
+    images** (`snyk container`), **infrastructure as code** (`snyk iac`) and continuous monitoring
+    (`snyk monitor`). In this lesson you will run these commands, write a `.snyk` policy file to ignore an
+    alert with an expiry date, and integrate Snyk in CI with a severity threshold that fails the build.
+
+sections:
+  - heading:
+      fr: "Les quatre commandes de Snyk"
+      en: "Snyk's four commands"
+    body:
+      fr: |
+        Snyk s'installe en CLI (`npm install -g snyk`) ou s'utilise via son image Docker. Une seule
+        authentification (`snyk auth`, ou la variable `SNYK_TOKEN`) débloque les quatre commandes :
+
+        | Commande | Ce qu'elle analyse | Exemple de cible |
+        |---|---|---|
+        | `snyk test` | Les dépendances open source | `package.json`, `requirements.txt`, `pom.xml` |
+        | `snyk container` | Une image de conteneur et son OS | `snyk container test app:1.0` |
+        | `snyk iac` | L'infrastructure as code | Terraform, Kubernetes, CloudFormation |
+        | `snyk monitor` | Prend un *instantané* suivi en continu | Le projet, surveillé côté serveur |
+
+        La différence clé entre `test` et `monitor` : `snyk test` est un contrôle **ponctuel** qui renvoie un
+        code de retour (idéal en CI) ; `snyk monitor` **envoie** l'état du projet à la plateforme Snyk, qui
+        **continue de le surveiller** et alerte quand une **nouvelle** CVE est publiée pour une dépendance
+        déjà présente — même sans nouveau commit. On combine les deux : `test` bloque les régressions dans le
+        pipeline, `monitor` prévient des failles découvertes après la livraison.
+      en: |
+        Snyk installs as a CLI (`npm install -g snyk`) or runs via its Docker image. A single authentication
+        (`snyk auth`, or the `SNYK_TOKEN` variable) unlocks the four commands:
+
+        | Command | What it analyses | Example target |
+        |---|---|---|
+        | `snyk test` | Open source dependencies | `package.json`, `requirements.txt`, `pom.xml` |
+        | `snyk container` | A container image and its OS | `snyk container test app:1.0` |
+        | `snyk iac` | Infrastructure as code | Terraform, Kubernetes, CloudFormation |
+        | `snyk monitor` | Takes a continuously tracked *snapshot* | The project, watched server-side |
+
+        The key difference between `test` and `monitor`: `snyk test` is a **one-off** check that returns an
+        exit code (ideal in CI); `snyk monitor` **sends** the project state to the Snyk platform, which
+        **keeps watching it** and alerts when a **new** CVE is published for an already-present dependency —
+        even with no new commit. You combine both: `test` blocks regressions in the pipeline, `monitor` warns
+        about flaws discovered after delivery.
+  - heading:
+      fr: "Sévérité et seuil de blocage"
+      en: "Severity and the blocking threshold"
+    body:
+      fr: |
+        Comme tout outil SCA, Snyk trouve souvent beaucoup d'alertes sur un projet existant. Le code de
+        retour de `snyk test` est l'interrupteur de la CI :
+
+        | Code | Signification |
+        |---|---|
+        | `0` | Aucune vulnérabilité au-dessus du seuil |
+        | `1` | Des vulnérabilités trouvées au-dessus du seuil |
+        | `2` | Erreur d'exécution (échec du scan lui-même) |
+        | `3` | Aucun projet reconnu dans le dossier |
+
+        On règle le **seuil** avec `--severity-threshold=low|medium|high|critical`. Au démarrage, on bloque
+        sur `high` et au-dessus pour éviter de noyer l'équipe, puis on durcit. L'option `--fail-on=upgradable`
+        est précieuse : elle ne fait échouer que sur les failles pour lesquelles **une correction existe**
+        (une montée de version disponible), ce qui évite de bloquer sur une CVE sans correctif publié.
+
+        Un détail pratique : `snyk test` a besoin des dépendances **résolues**. Pour un projet Node, lancez
+        `npm ci` avant ; pour Python, ayez un environnement avec les paquets installés ou un fichier de
+        verrou complet. Sinon Snyk analyse un arbre de dépendances incomplet.
+      en: |
+        Like any SCA tool, Snyk often finds many alerts on an existing project. The exit code of `snyk test`
+        is the CI switch:
+
+        | Code | Meaning |
+        |---|---|
+        | `0` | No vulnerability above the threshold |
+        | `1` | Vulnerabilities found above the threshold |
+        | `2` | Runtime error (the scan itself failed) |
+        | `3` | No recognised project in the folder |
+
+        You set the **threshold** with `--severity-threshold=low|medium|high|critical`. To start, block on
+        `high` and above to avoid drowning the team, then tighten. The `--fail-on=upgradable` option is
+        valuable: it only fails on flaws that **have a fix** (an available version bump), which avoids
+        blocking on a CVE with no published fix.
+
+        A practical detail: `snyk test` needs the dependencies **resolved**. For a Node project, run `npm ci`
+        first; for Python, have an environment with the packages installed or a complete lockfile. Otherwise
+        Snyk analyses an incomplete dependency tree.
+  - heading:
+      fr: "Le fichier de politique .snyk"
+      en: "The .snyk policy file"
+    body:
+      fr: |
+        Quand une alerte est un faux positif, ou qu'aucune correction n'est encore disponible, on ne la
+        laisse pas bloquer éternellement le build : on l'**ignore** de façon tracée dans le fichier `.snyk`,
+        à la racine du dépôt. Chaque ignore porte :
+
+        - l'**identifiant** précis de la vulnérabilité (`SNYK-JS-...`) ;
+        - une **raison** (`reason`) ;
+        - une date d'**expiration** (`expires`) ;
+        - optionnellement le **chemin** de dépendance concerné.
+
+        L'expiration est essentielle : sans elle, un ignore devient permanent et personne ne réexamine la
+        décision. Avec une date, Snyk **réactive** l'alerte quand elle est passée, forçant une revue. Le
+        fichier `.snyk` est versionné : toute modification passe donc par une revue de code, ce qui empêche
+        d'ignorer une faille en douce.
+
+        À éviter absolument : ignorer globalement une sévérité (« on ne bloque jamais sur high ») au lieu
+        d'ignorer une alerte précise et justifiée. La traçabilité par alerte est ce qui distingue une
+        exception maîtrisée d'un contournement silencieux.
+      en: |
+        When an alert is a false positive, or no fix is available yet, you do not let it block the build
+        forever: you **ignore** it in a traced way in the `.snyk` file, at the repository root. Each ignore
+        carries:
+
+        - the precise vulnerability **identifier** (`SNYK-JS-...`);
+        - a **reason** (`reason`);
+        - an **expiry** date (`expires`);
+        - optionally the affected dependency **path**.
+
+        The expiry is essential: without it, an ignore becomes permanent and nobody re-examines the decision.
+        With a date, Snyk **re-activates** the alert once it has passed, forcing a review. The `.snyk` file is
+        versioned: any change therefore goes through code review, which prevents quietly ignoring a flaw.
+
+        To avoid at all costs: globally ignoring a severity ("we never block on high") instead of ignoring a
+        precise, justified alert. Per-alert traceability is what separates a controlled exception from a
+        silent bypass.
+
+examples:
+  - title:
+      fr: "Les quatre scans en ligne de commande"
+      en: "The four scans on the command line"
+    file: snyk-scans.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Authenticate once; in CI the SNYK_TOKEN env var replaces this interactive step.
+      export SNYK_TOKEN="changeme-in-vault"
+
+      # 1. Open-source dependencies. Resolve them first (npm ci) for a complete tree.
+      npm ci
+      snyk test --severity-threshold=high
+
+      # 2. Container image, including the OS packages of the base image
+      snyk container test myapp:1.0 --file=Dockerfile --severity-threshold=high
+
+      # 3. Infrastructure as code (Terraform, Kubernetes manifests)
+      snyk iac test ./terraform --severity-threshold=medium
+
+      # 4. Send a tracked snapshot so Snyk warns of NEW CVEs after delivery
+      snyk monitor --severity-threshold=high
+    output: |
+      Testing dependencies...
+      ✗ High severity vulnerability found in lodash@4.17.11
+        Path: myapp > lodash@4.17.11
+        Info: Prototype Pollution (SNYK-JS-LODASH-567746)
+        Fixed in: 4.17.12
+      Tested 342 dependencies, found 1 issue.
+      # exit code 1 -> a CI job using this command would fail here
+    note:
+      fr: "Les quatre commandes partagent le même token. `snyk test` indique le **chemin** exact (`myapp > lodash`) et la **version corrigée** (`4.17.12`), pas seulement la CVE. `snyk monitor` ne bloque pas : il enregistre un instantané que Snyk continue de surveiller côté serveur."
+      en: "The four commands share the same token. `snyk test` shows the exact **path** (`myapp > lodash`) and the **fixed version** (`4.17.12`), not just the CVE. `snyk monitor` does not block: it records a snapshot that Snyk keeps watching server-side."
+
+  - title:
+      fr: "Un fichier de politique .snyk avec expiration"
+      en: "A .snyk policy file with expiry"
+    file: .snyk
+    lang: yaml
+    kind: secure
+    code: |
+      # Snyk policy file (.snyk) - versioned, so every change is reviewed.
+      version: v1.25.0
+      ignore:
+        SNYK-JS-LODASH-567746:
+          - "*":   # applies to any dependency path
+              reason: >
+                No upgrade available for our pinned transitive version yet;
+                the affected prototype-pollution sink is not reachable in our code.
+              expires: 2026-09-30T00:00:00.000Z   # Snyk re-activates the alert after this
+        SNYK-PYTHON-PYYAML-42159:
+          - "*":
+              reason: "We never call yaml.load with untrusted input; only safe_load is used."
+              expires: 2026-08-15T00:00:00.000Z
+    output: |
+      $ snyk test --severity-threshold=high
+      Testing dependencies...
+      1 ignored issue (policy .snyk): SNYK-JS-LODASH-567746 (expires 2026-09-30)
+      Tested 342 dependencies, found 0 issues (1 ignored).
+      # exit code 0 -> the build passes, but the decision is traced and will expire
+    note:
+      fr: "Chaque ignore nomme l'alerte précise, donne une raison et une date d'expiration. Après le 30 septembre 2026, l'alerte lodash revient et force une relecture. C'est exactement ce qui distingue une exception maîtrisée d'un `|| true` qui masque tout en silence."
+      en: "Each ignore names the precise alert, gives a reason and an expiry date. After 30 September 2026, the lodash alert returns and forces a re-review. This is exactly what separates a controlled exception from a `|| true` that silently masks everything."
+
+  - title:
+      fr: "Vulnérable vs corrigé : la dépendance à mettre à jour"
+      en: "Vulnerable vs fixed: the dependency to upgrade"
+    file: package.json
+    lang: json
+    kind: vulnerable
+    code: |
+      {
+        "name": "myapp",
+        "version": "1.0.0",
+        "dependencies": {
+          "express": "4.18.2",
+          "lodash": "4.17.11",
+          "jsonwebtoken": "8.5.0"
+        }
+      }
+    output: |
+      ✗ High: Prototype Pollution in lodash@4.17.11   -> fixed in 4.17.12
+      ✗ High: Improper signature verification in jsonwebtoken@8.5.0 -> fixed in 9.0.0
+      Tested 342 dependencies, found 2 issues.
+    note:
+      fr: "`lodash@4.17.11` et `jsonwebtoken@8.5.0` portent des failles connues. Snyk donne la version corrigée pour chacune. La correction consiste à monter ces versions (voir l'exemple suivant), pas à ignorer les alertes."
+      en: "`lodash@4.17.11` and `jsonwebtoken@8.5.0` carry known flaws. Snyk gives the fixed version for each. The fix is to bump those versions (see the next example), not to ignore the alerts."
+
+  - title:
+      fr: "La version corrigée et l'intégration en CI"
+      en: "The fixed version and the CI integration"
+    file: .github/workflows/snyk.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: snyk
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        security:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                node-version: "20"
+
+            # Resolve dependencies so Snyk sees the complete tree
+            - run: npm ci
+
+            - name: Install Snyk
+              run: npm install -g snyk
+
+            # Fail only on high/critical issues that HAVE a fix available.
+            # The token comes from the repository secrets, never from the code.
+            - name: Snyk test
+              run: snyk test --severity-threshold=high --fail-on=upgradable
+              env:
+                SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+            # On the main branch, also record a tracked snapshot for post-merge alerts
+            - name: Snyk monitor
+              if: github.ref == 'refs/heads/main'
+              run: snyk monitor --severity-threshold=high
+              env:
+                SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    output: |
+      # package.json fixed: lodash 4.17.21, jsonwebtoken 9.0.2
+      Testing dependencies...
+      Tested 342 dependencies, found 0 issues.
+      ✓ Everything is OK. Monitoring snapshot recorded.
+      # exit code 0 -> the pull request passes
+    note:
+      fr: "Après la montée de version (`lodash@4.17.21`, `jsonwebtoken@9.0.2`), `snyk test` ne trouve plus rien. Le `--fail-on=upgradable` ne bloque que sur ce qui est corrigeable. Le `SNYK_TOKEN` vient des secrets du dépôt, et `snyk monitor` n'est exécuté que sur `main` pour éviter des instantanés inutiles depuis chaque branche."
+      en: "After the version bump (`lodash@4.17.21`, `jsonwebtoken@9.0.2`), `snyk test` finds nothing. The `--fail-on=upgradable` only blocks on what is fixable. The `SNYK_TOKEN` comes from the repository secrets, and `snyk monitor` runs only on `main` to avoid useless snapshots from every branch."
+
+mistake:
+  fr: |
+    **Lancer `snyk test` sans résoudre les dépendances, ou ignorer globalement une sévérité entière.**
+
+    Si vous lancez `snyk test` sans `npm ci` (ou sans environnement Python installé), Snyk analyse un arbre
+    de dépendances incomplet et peut rater des failles : le « 0 problème » est alors trompeur. L'autre
+    erreur est de « gérer » le bruit en ignorant toute une sévérité (`--severity-threshold=critical` pour ne
+    voir que le critique, ou un ignore fourre-tout) : on perd la visibilité sur des failles réelles. La
+    bonne approche est d'ignorer des **alertes précises**, avec raison et expiration dans `.snyk`, et de
+    résoudre les dépendances avant chaque scan.
+  en: |
+    **Running `snyk test` without resolving dependencies, or globally ignoring a whole severity.**
+
+    If you run `snyk test` without `npm ci` (or without an installed Python environment), Snyk analyses an
+    incomplete dependency tree and may miss flaws: the "0 issues" is then misleading. The other mistake is to
+    "manage" noise by ignoring a whole severity (`--severity-threshold=critical` to see only critical, or a
+    catch-all ignore): you lose visibility on real flaws. The right approach is to ignore **specific alerts**,
+    with a reason and an expiry in `.snyk`, and to resolve dependencies before each scan.
+
+bestPractice:
+  fr: |
+    - **Résolvez les dépendances** (`npm ci`, environnement installé) avant `snyk test`.
+    - **Un seuil clair** : bloquez sur `high`/`critical` au départ, puis durcissez.
+    - **`--fail-on=upgradable`** pour ne bloquer que sur les failles corrigeables.
+    - **Combinez `test` et `monitor`** : l'un bloque les régressions, l'autre alerte après la livraison.
+    - **Ignorez par alerte précise** dans `.snyk`, avec raison et **expiration**, jamais une sévérité entière.
+    - **`SNYK_TOKEN` dans les secrets** de la CI, jamais dans le dépôt.
+  en: |
+    - **Resolve dependencies** (`npm ci`, installed environment) before `snyk test`.
+    - **A clear threshold**: block on `high`/`critical` to start, then tighten.
+    - **`--fail-on=upgradable`** to block only on fixable flaws.
+    - **Combine `test` and `monitor`**: one blocks regressions, the other alerts after delivery.
+    - **Ignore per specific alert** in `.snyk`, with a reason and an **expiry**, never a whole severity.
+    - **`SNYK_TOKEN` in CI secrets**, never in the repository.
+
+exercise:
+  statement:
+    fr: |
+      Un projet Node bloque sa CI à cause d'une vulnérabilité `SNYK-JS-MINIMIST-559764` dans une dépendance
+      **transitive** pour laquelle **aucune** mise à jour n'est encore disponible. L'équipe a analysé le code
+      et confirmé que le chemin vulnérable n'est jamais atteint.
+
+      1. Pourquoi ne faut-il **pas** résoudre le problème en passant `--severity-threshold=critical` ?
+      2. Écrivez l'entrée `.snyk` qui ignore cette alerte précise, avec une raison et une expiration dans
+         six mois.
+      3. Que se passera-t-il à la date d'expiration ?
+    en: |
+      A Node project blocks its CI because of a vulnerability `SNYK-JS-MINIMIST-559764` in a **transitive**
+      dependency for which **no** upgrade is available yet. The team analysed the code and confirmed that the
+      vulnerable path is never reached.
+
+      1. Why should you **not** solve this by passing `--severity-threshold=critical`?
+      2. Write the `.snyk` entry that ignores this precise alert, with a reason and a six-month expiry.
+      3. What will happen at the expiry date?
+  solution:
+    file: .snyk
+    lang: yaml
+    code: |
+      # 1. Raising the threshold to "critical" would hide ALL high findings, not just this
+      #    one: real high-severity flaws would silently slip through. Ignore only this alert.
+
+      # 2. Precise, justified, time-boxed ignore:
+      version: v1.25.0
+      ignore:
+        SNYK-JS-MINIMIST-559764:
+          - "*":
+              reason: >
+                No fix published for this transitive dependency; code review confirmed the
+                vulnerable argument-parsing path is never reached from our application.
+              expires: 2026-11-27T00:00:00.000Z   # six months from the review date
+
+      # 3. On 2026-11-27 Snyk re-activates the alert, the build fails again, and the team
+      #    must re-check: a fix may exist by then, or the exception must be renewed.
+    note:
+      fr: "Monter le seuil masque toute une catégorie de failles, pas seulement l'alerte gênante : c'est une perte de visibilité dangereuse. L'ignore ciblé avec expiration garde la décision tracée et la force à être réexaminée, ce qui est le cœur d'une gestion saine des exceptions."
+      en: "Raising the threshold hides a whole category of flaws, not just the annoying alert: that is a dangerous loss of visibility. The targeted ignore with an expiry keeps the decision traced and forces it to be re-examined, which is the core of healthy exception management."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre `snyk test` et `snyk monitor` ?"
+      en: "What is the difference between `snyk test` and `snyk monitor`?"
+    options:
+      fr:
+        - "Aucune, ce sont des alias"
+        - "`test` est un contrôle ponctuel avec code de retour ; `monitor` enregistre un instantané surveillé en continu"
+        - "`monitor` corrige automatiquement les failles"
+        - "`test` ne fonctionne que sur les images Docker"
+      en:
+        - "None, they are aliases"
+        - "`test` is a one-off check with an exit code; `monitor` records a continuously watched snapshot"
+        - "`monitor` automatically fixes flaws"
+        - "`test` only works on Docker images"
+    answer: 1
+    why:
+      fr: "`snyk test` bloque la CI sur l'instant. `snyk monitor` envoie l'état du projet à Snyk, qui alerte quand une nouvelle CVE touche une dépendance déjà présente, même sans nouveau commit."
+      en: "`snyk test` blocks CI in the moment. `snyk monitor` sends the project state to Snyk, which alerts when a new CVE affects an already-present dependency, even without a new commit."
+  - q:
+      fr: "Pourquoi lancer `npm ci` avant `snyk test` sur un projet Node ?"
+      en: "Why run `npm ci` before `snyk test` on a Node project?"
+    options:
+      fr:
+        - "Pour résoudre les dépendances et donner à Snyk l'arbre complet"
+        - "Pour chiffrer le package.json"
+        - "Parce que Snyk l'exige pour s'authentifier"
+        - "Pour accélérer le token"
+      en:
+        - "To resolve dependencies and give Snyk the complete tree"
+        - "To encrypt package.json"
+        - "Because Snyk requires it to authenticate"
+        - "To speed up the token"
+    answer: 0
+    why:
+      fr: "Sans dépendances résolues, Snyk analyse un arbre incomplet et peut rater des failles. Un « 0 problème » dans ce cas est trompeur."
+      en: "Without resolved dependencies, Snyk analyses an incomplete tree and may miss flaws. A '0 issues' in that case is misleading."
+  - q:
+      fr: "Que fait l'option `--fail-on=upgradable` ?"
+      en: "What does the `--fail-on=upgradable` option do?"
+    options:
+      fr:
+        - "Elle met à jour toutes les dépendances"
+        - "Elle ignore toutes les failles"
+        - "Elle ne fait échouer le build que sur les failles ayant une correction disponible"
+        - "Elle désactive Snyk"
+      en:
+        - "It upgrades all dependencies"
+        - "It ignores all flaws"
+        - "It only fails the build on flaws that have an available fix"
+        - "It disables Snyk"
+    answer: 2
+    why:
+      fr: "`--fail-on=upgradable` évite de bloquer sur une CVE sans correctif publié : on ne fait échouer que ce qui est corrigeable par une montée de version, ce qui est actionnable."
+      en: "`--fail-on=upgradable` avoids blocking on a CVE with no published fix: you only fail on what is fixable by a version bump, which is actionable."
+  - q:
+      fr: "Quel champ est essentiel dans un ignore du fichier .snyk ?"
+      en: "Which field is essential in a `.snyk` ignore?"
+    options:
+      fr:
+        - "La couleur de l'alerte"
+        - "Une date d'expiration (expires) qui force à réexaminer la décision"
+        - "Le nom du développeur en majuscules"
+        - "Le port réseau"
+      en:
+        - "The alert colour"
+        - "An expiry date (expires) that forces a re-review of the decision"
+        - "The developer's name in capitals"
+        - "The network port"
+    answer: 1
+    why:
+      fr: "Sans expiration, un ignore devient permanent et oublié. Avec une date, Snyk réactive l'alerte quand elle est passée, obligeant à revérifier (correctif disponible ? exception à renouveler ?)."
+      en: "Without an expiry, an ignore becomes permanent and forgotten. With a date, Snyk re-activates the alert once it passes, forcing a recheck (fix available? exception to renew?)."
+  - q:
+      fr: "Où doit être stocké le SNYK_TOKEN pour la CI ?"
+      en: "Where should the SNYK_TOKEN be stored for CI?"
+    options:
+      fr:
+        - "Dans le fichier .snyk versionné"
+        - "En clair dans le workflow"
+        - "Dans un commentaire du code"
+        - "Dans le magasin de secrets de la CI, injecté par variable d'environnement"
+      en:
+        - "In the versioned .snyk file"
+        - "In clear text in the workflow"
+        - "In a code comment"
+        - "In the CI secret store, injected as an environment variable"
+    answer: 3
+    why:
+      fr: "Le token est un secret d'accès au compte Snyk. Il vit dans le magasin de secrets de la CI (`secrets.SNYK_TOKEN`) et n'apparaît jamais dans un fichier versionné."
+      en: "The token is an access secret for the Snyk account. It lives in the CI secret store (`secrets.SNYK_TOKEN`) and never appears in a versioned file."

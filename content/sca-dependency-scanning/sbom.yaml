@@ -1,0 +1,458 @@
+description:
+  fr: "Générer un SBOM avec Syft (CycloneDX/SPDX), le scanner avec Grype et trivy sbom, vérifier les licences et l'attester avec Cosign, à la lumière de Log4Shell et de la backdoor xz."
+  en: "Generate an SBOM with Syft (CycloneDX/SPDX), scan it with Grype and trivy sbom, check licenses and attest it with Cosign, in the light of Log4Shell and the xz backdoor."
+duration: 30
+
+intro:
+  fr: |
+    Un **SBOM** (*Software Bill of Materials*, nomenclature logicielle) est la **liste complète des
+    ingrédients** d'un logiciel : chaque bibliothèque, sa version, son éditeur, sa licence. C'est l'étiquette
+    de composition d'un produit alimentaire, appliquée au code.
+
+    Pourquoi est-ce devenu central ? Deux incidents l'ont imposé. En décembre 2021, la faille **Log4Shell**
+    (CVE-2021-44228) dans la bibliothèque Log4j a mis en danger des millions de serveurs — et la première
+    question de chaque entreprise fut : « est-ce que *nous* utilisons Log4j, et *où* ? ». Sans SBOM, répondre
+    prenait des semaines. En 2024, la **backdoor xz** (CVE-2024-3094), insérée volontairement dans un outil
+    de compression quasi universel, a montré qu'un composant de confiance peut être compromis à la source.
+
+    Dans cette leçon vous allez générer un SBOM avec **Syft**, comprendre les formats **CycloneDX** et
+    **SPDX**, scanner le SBOM avec **Grype** et `trivy sbom`, vérifier la conformité des **licences**, et
+    **signer/attester** le SBOM avec **Cosign** pour prouver son authenticité.
+  en: |
+    An **SBOM** (*Software Bill of Materials*) is the **complete list of ingredients** of a piece of software:
+    every library, its version, its publisher, its license. It is a food product's ingredient label, applied
+    to code.
+
+    Why has it become central? Two incidents forced it. In December 2021, the **Log4Shell** flaw
+    (CVE-2021-44228) in the Log4j library endangered millions of servers — and every company's first question
+    was: "do *we* use Log4j, and *where*?". Without an SBOM, answering took weeks. In 2024, the **xz backdoor**
+    (CVE-2024-3094), deliberately inserted into a near-universal compression tool, showed that a trusted
+    component can be compromised at the source.
+
+    In this lesson you will generate an SBOM with **Syft**, understand the **CycloneDX** and **SPDX** formats,
+    scan the SBOM with **Grype** and `trivy sbom`, check **license** compliance, and **sign/attest** the SBOM
+    with **Cosign** to prove its authenticity.
+
+sections:
+  - heading:
+      fr: "Pourquoi un SBOM : les leçons de Log4Shell et xz"
+      en: "Why an SBOM: the lessons of Log4Shell and xz"
+    body:
+      fr: |
+        | Incident | Année | Nature | Ce que le SBOM apporte |
+        |---|---|---|---|
+        | **Log4Shell** (CVE-2021-44228) | 2021 | Exécution de code à distance dans Log4j, dépendance **transitive** quasi partout | Répondre en minutes à « où avons-nous Log4j ? » |
+        | **Backdoor xz** (CVE-2024-3094) | 2024 | Code malveillant inséré volontairement dans `liblzma`/xz | Savoir quelles images embarquent la version piégée |
+
+        La leçon commune : vous ne pouvez pas protéger ce que vous ne connaissez pas. Log4j était rarement
+        une dépendance **directe** ; elle arrivait via d'autres bibliothèques (dépendance transitive), d'où
+        la difficulté à la localiser à la main. Un SBOM, généré à chaque build et **archivé**, transforme une
+        enquête de plusieurs semaines en une simple requête : « quelles versions de quel composant tournent
+        en production ? ».
+
+        Au-delà de la réponse aux incidents, le SBOM est de plus en plus **exigé** : décret américain
+        (Executive Order 14028), Cyber Resilience Act européen, appels d'offres. Fournir un SBOM devient une
+        condition contractuelle, pas seulement une bonne pratique.
+      en: |
+        | Incident | Year | Nature | What the SBOM provides |
+        |---|---|---|---|
+        | **Log4Shell** (CVE-2021-44228) | 2021 | Remote code execution in Log4j, a **transitive** dependency almost everywhere | Answer "where do we have Log4j?" in minutes |
+        | **xz backdoor** (CVE-2024-3094) | 2024 | Malicious code deliberately inserted into `liblzma`/xz | Know which images bundle the booby-trapped version |
+
+        The common lesson: you cannot protect what you do not know about. Log4j was rarely a **direct**
+        dependency; it arrived through other libraries (a transitive dependency), which is why it was so hard
+        to locate by hand. An SBOM, generated on every build and **archived**, turns a weeks-long
+        investigation into a simple query: "which versions of which component are running in production?".
+
+        Beyond incident response, the SBOM is increasingly **required**: a US executive order (Executive Order
+        14028), the European Cyber Resilience Act, procurement tenders. Providing an SBOM is becoming a
+        contractual condition, not just a good practice.
+  - heading:
+      fr: "CycloneDX vs SPDX et Syft"
+      en: "CycloneDX vs SPDX and Syft"
+    body:
+      fr: |
+        Un SBOM suit un **format standard**. Les deux grands sont :
+
+        | | CycloneDX | SPDX |
+        |---|---|---|
+        | Porté par | OWASP | Linux Foundation |
+        | Orientation | Sécurité (VEX, vulnérabilités) | Conformité et licences |
+        | Formats | JSON, XML | JSON, YAML, tag-value, RDF |
+        | Usage typique | Scan de vulnérabilités, supply chain | Audit de licences, open source |
+
+        Les deux décrivent les mêmes composants ; on choisit selon l'usage, et la plupart des outils savent
+        produire l'un et l'autre. CycloneDX est souvent préféré côté sécurité, SPDX côté conformité
+        juridique.
+
+        **Syft** (d'Anchore) est l'outil de référence pour **générer** un SBOM. Il inspecte une image de
+        conteneur, un dossier ou un système de fichiers et liste tous les paquets détectés :
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" anchore/syft:latest /src -o cyclonedx-json=sbom.json
+        ```
+
+        Le format de sortie se choisit avec `-o` (`cyclonedx-json`, `spdx-json`, `syft-json`, `table`).
+        On génère le SBOM à chaque build et on le **conserve** comme artefact : c'est lui qu'on interrogera
+        le jour d'un incident.
+      en: |
+        An SBOM follows a **standard format**. The two major ones are:
+
+        | | CycloneDX | SPDX |
+        |---|---|---|
+        | Led by | OWASP | Linux Foundation |
+        | Focus | Security (VEX, vulnerabilities) | Compliance and licenses |
+        | Formats | JSON, XML | JSON, YAML, tag-value, RDF |
+        | Typical use | Vulnerability scanning, supply chain | License auditing, open source |
+
+        Both describe the same components; you choose by use case, and most tools can produce either.
+        CycloneDX is often preferred on the security side, SPDX on the legal compliance side.
+
+        **Syft** (by Anchore) is the reference tool to **generate** an SBOM. It inspects a container image, a
+        folder or a filesystem and lists all detected packages:
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" anchore/syft:latest /src -o cyclonedx-json=sbom.json
+        ```
+
+        The output format is chosen with `-o` (`cyclonedx-json`, `spdx-json`, `syft-json`, `table`). You
+        generate the SBOM on every build and **keep** it as an artifact: it is what you will query on the day
+        of an incident.
+  - heading:
+      fr: "Scanner, vérifier les licences et attester"
+      en: "Scanning, checking licenses and attesting"
+    body:
+      fr: |
+        Une fois le SBOM généré, trois usages :
+
+        1. **Scanner les vulnérabilités** à partir du SBOM, sans re-analyser le code. **Grype** (d'Anchore)
+           et `trivy sbom` lisent un SBOM et le confrontent aux bases de CVE. Scanner le SBOM plutôt que
+           l'image est plus rapide et permet de re-scanner un ancien build sans le reconstruire — exactement
+           ce qu'on veut face à une nouvelle CVE comme Log4Shell.
+        2. **Vérifier les licences**. Le SBOM liste la licence de chaque composant. On peut ainsi bloquer une
+           licence interdite (par exemple **GPL** dans un produit propriétaire fermé) avant la mise en
+           production.
+        3. **Attester l'authenticité**. Un SBOM n'a de valeur que si on est sûr qu'il n'a pas été falsifié.
+           **Cosign** (du projet Sigstore) **signe** le SBOM et crée une **attestation** liée à l'image :
+           `cosign attest --predicate sbom.json --type cyclonedx`. On peut ensuite **vérifier** la signature
+           avant de déployer, garantissant que le SBOM correspond bien à l'image signée.
+
+        L'ensemble forme une chaîne de confiance : on sait *ce qu'il y a* dans l'image (SBOM), *si c'est
+        vulnérable* (Grype/Trivy), *si les licences sont conformes*, et *que tout cela est authentique*
+        (Cosign).
+      en: |
+        Once the SBOM is generated, three uses:
+
+        1. **Scan for vulnerabilities** from the SBOM, without re-analysing the code. **Grype** (by Anchore)
+           and `trivy sbom` read an SBOM and check it against CVE databases. Scanning the SBOM rather than the
+           image is faster and lets you re-scan an old build without rebuilding it — exactly what you want
+           facing a new CVE like Log4Shell.
+        2. **Check licenses**. The SBOM lists each component's license. You can thus block a forbidden license
+           (for example **GPL** in a closed proprietary product) before production.
+        3. **Attest authenticity**. An SBOM is only valuable if you are sure it has not been tampered with.
+           **Cosign** (from the Sigstore project) **signs** the SBOM and creates an **attestation** tied to
+           the image: `cosign attest --predicate sbom.json --type cyclonedx`. You can then **verify** the
+           signature before deploying, guaranteeing the SBOM really matches the signed image.
+
+        Together they form a chain of trust: you know *what is* in the image (SBOM), *whether it is
+        vulnerable* (Grype/Trivy), *whether the licenses comply*, and *that all of this is authentic*
+        (Cosign).
+
+examples:
+  - title:
+      fr: "Générer un SBOM avec Syft (CycloneDX et SPDX)"
+      en: "Generating an SBOM with Syft (CycloneDX and SPDX)"
+    file: generate-sbom.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Generate a CycloneDX SBOM of a container image (security-oriented)
+      docker run --rm anchore/syft:latest \
+        myregistry/app:1.0 -o cyclonedx-json=sbom.cdx.json
+
+      # Generate an SPDX SBOM of the same image (compliance/licensing-oriented)
+      docker run --rm anchore/syft:latest \
+        myregistry/app:1.0 -o spdx-json=sbom.spdx.json
+
+      # A human-readable table to eyeball the components
+      docker run --rm anchore/syft:latest myregistry/app:1.0 -o table
+    output: |
+      NAME                 VERSION        TYPE
+      ca-certificates      2026.1         deb
+      libssl3              3.0.13         deb
+      express              4.18.2         npm
+      lodash               4.17.21        npm
+      log4j-core           2.17.1         java-archive
+      Generated SBOM with 214 packages.
+    note:
+      fr: "Syft détecte les paquets de plusieurs écosystèmes dans la même image (système d'exploitation, npm, Java…). Le même inventaire s'exporte en CycloneDX **ou** SPDX selon l'usage. La ligne `log4j-core 2.17.1` est précisément ce qu'on voudra interroger en cas de nouvelle faille Log4j."
+      en: "Syft detects packages from several ecosystems in the same image (operating system, npm, Java…). The same inventory exports to CycloneDX **or** SPDX depending on the use. The `log4j-core 2.17.1` line is exactly what you will want to query in case of a new Log4j flaw."
+
+  - title:
+      fr: "Scanner le SBOM avec Grype et trivy sbom"
+      en: "Scanning the SBOM with Grype and trivy sbom"
+    file: scan-sbom.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Scan the SBOM instead of the image: fast, and works on an archived SBOM
+      # long after the build, so a NEW CVE can be checked without rebuilding.
+
+      # Option A: Grype reads the SBOM and matches it against CVE databases
+      docker run --rm -v "$(pwd):/s" anchore/grype:latest \
+        sbom:/s/sbom.cdx.json --fail-on high
+
+      # Option B: Trivy can also scan an SBOM directly
+      docker run --rm -v "$(pwd):/s" aquasec/trivy:latest \
+        sbom /s/sbom.cdx.json --severity HIGH,CRITICAL --exit-code 1
+    output: |
+      NAME         INSTALLED  FIXED-IN  TYPE  VULNERABILITY   SEVERITY
+      log4j-core   2.14.1     2.17.1    java  CVE-2021-44228  Critical
+      1 vulnerability matched; --fail-on high -> exit code 1
+    note:
+      fr: "Les deux outils trouvent Log4Shell (CVE-2021-44228) à partir du seul SBOM. L'avantage décisif : on peut rescanner un SBOM **archivé** d'un build vieux de six mois quand une nouvelle CVE sort, sans reconstruire l'image. `--fail-on high` et `--exit-code 1` bloquent la CI."
+      en: "Both tools find Log4Shell (CVE-2021-44228) from the SBOM alone. The decisive advantage: you can rescan an **archived** SBOM of a six-month-old build when a new CVE appears, without rebuilding the image. `--fail-on high` and `--exit-code 1` block CI."
+
+  - title:
+      fr: "Vérifier la conformité des licences"
+      en: "Checking license compliance"
+    file: license-check.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # The CycloneDX SBOM lists each component's license. Block forbidden licenses
+      # (here any GPL variant) before shipping a closed, proprietary product.
+      FORBIDDEN='GPL-2.0|GPL-3.0|AGPL'
+
+      # Extract "name -> license" pairs and keep only the forbidden ones
+      HITS=$(jq -r '
+        .components[]
+        | select(.licenses != null)
+        | .name as $n
+        | .licenses[].license.id // .licenses[].license.name
+        | select(test("'"$FORBIDDEN"'"))
+        | "\($n): \(.)"' sbom.cdx.json || true)
+
+      if [ -n "$HITS" ]; then
+        echo "Forbidden licenses detected:"
+        echo "$HITS"
+        exit 1
+      fi
+      echo "License check passed: no forbidden licenses."
+    output: |
+      Forbidden licenses detected:
+      some-copyleft-lib: GPL-3.0
+      # exit code 1 -> the pipeline blocks a GPL component in a proprietary product
+    note:
+      fr: "Le SBOM sert ici à la **conformité juridique** : `jq` extrait les licences et bloque toute licence copyleft interdite dans un produit propriétaire. C'est l'usage typique du format SPDX, mais CycloneDX porte aussi l'information de licence. Un composant GPL livré par erreur peut avoir de lourdes conséquences légales."
+      en: "The SBOM here serves **legal compliance**: `jq` extracts the licenses and blocks any copyleft license forbidden in a proprietary product. This is the typical use of the SPDX format, but CycloneDX also carries license information. A GPL component shipped by mistake can have heavy legal consequences."
+
+  - title:
+      fr: "Attester le SBOM avec Cosign"
+      en: "Attesting the SBOM with Cosign"
+    file: attest-sbom.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Cosign ties a signed SBOM attestation to the image, proving it was not tampered with.
+      IMAGE="myregistry/app:1.0"
+
+      # 1. Create and push a signed attestation whose payload is the CycloneDX SBOM.
+      #    Keyless signing uses an OIDC identity (no long-lived private key to leak).
+      COSIGN_EXPERIMENTAL=1 cosign attest --yes \
+        --predicate sbom.cdx.json \
+        --type cyclonedx \
+        "$IMAGE"
+
+      # 2. Before deploying, VERIFY the attestation: the SBOM must match this image
+      #    and be signed by the expected CI identity.
+      COSIGN_EXPERIMENTAL=1 cosign verify-attestation \
+        --type cyclonedx \
+        --certificate-identity-regexp '.*github.com/myorg/.*' \
+        --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+        "$IMAGE"
+    output: |
+      Generating attestation for myregistry/app:1.0
+      tlog entry created with index: 84512203
+      Attestation pushed.
+      # verify-attestation:
+      Verification for myregistry/app:1.0 --
+      The signatures were verified against the identity and OIDC issuer.
+      Certificate subject: https://github.com/myorg/app/.github/workflows/release.yml
+    note:
+      fr: "`cosign attest` lie le SBOM à l'image par une signature ; `cosign verify-attestation` la vérifie avant déploiement. La signature **keyless** s'appuie sur une identité OIDC (par exemple le workflow GitHub Actions), ce qui évite de stocker une clé privée qui pourrait fuir. On n'accepte de déployer qu'une image dont le SBOM est authentique."
+      en: "`cosign attest` ties the SBOM to the image with a signature; `cosign verify-attestation` checks it before deployment. The **keyless** signature relies on an OIDC identity (for example the GitHub Actions workflow), avoiding a stored private key that could leak. You only accept to deploy an image whose SBOM is authentic."
+
+mistake:
+  fr: |
+    **Générer un SBOM une fois, le ranger dans un coin, et ne jamais le regénérer ni le scanner.**
+
+    Un SBOM n'a de valeur que s'il est **à jour** et **archivé** pour chaque version livrée. Un SBOM généré
+    il y a un an ne décrit plus l'image actuelle : interrogé lors d'un incident, il donne de fausses
+    réponses. Pire, un SBOM jamais rescanné ne révèle pas les failles **découvertes après** sa génération —
+    or c'est précisément le cas de Log4Shell, apparue sur des composants présents depuis des années. Le SBOM
+    se regénère à chaque build, s'archive par version, et se rescanne régulièrement contre les bases de CVE
+    mises à jour.
+  en: |
+    **Generating an SBOM once, filing it away, and never regenerating or scanning it.**
+
+    An SBOM is only valuable if it is **up to date** and **archived** for every released version. An SBOM
+    generated a year ago no longer describes the current image: queried during an incident, it gives wrong
+    answers. Worse, an SBOM never rescanned does not reveal flaws **discovered after** its generation — which
+    is exactly the case of Log4Shell, which appeared on components present for years. The SBOM is regenerated
+    on every build, archived per version, and rescanned regularly against updated CVE databases.
+
+bestPractice:
+  fr: |
+    - **Générez un SBOM à chaque build** et archivez-le par version livrée.
+    - **Choisissez le format selon l'usage** : CycloneDX (sécurité), SPDX (conformité) ; les outils font les deux.
+    - **Scannez le SBOM** (Grype, `trivy sbom`), pas seulement l'image : on peut rescanner un ancien build.
+    - **Vérifiez les licences** à partir du SBOM pour bloquer les licences interdites avant la production.
+    - **Signez et attestez** avec Cosign ; **vérifiez** l'attestation avant tout déploiement.
+    - **Préférez la signature keyless** (OIDC) pour ne pas gérer de clé privée exposée.
+  en: |
+    - **Generate an SBOM on every build** and archive it per released version.
+    - **Choose the format by use**: CycloneDX (security), SPDX (compliance); tools do both.
+    - **Scan the SBOM** (Grype, `trivy sbom`), not only the image: you can rescan an old build.
+    - **Check licenses** from the SBOM to block forbidden licenses before production.
+    - **Sign and attest** with Cosign; **verify** the attestation before any deployment.
+    - **Prefer keyless signing** (OIDC) to avoid managing an exposed private key.
+
+exercise:
+  statement:
+    fr: |
+      Une nouvelle faille critique vient d'être publiée dans la bibliothèque `fastjson` (Java). Votre
+      entreprise a livré 40 versions d'images de conteneur ces deux dernières années, et génère un SBOM
+      CycloneDX à chaque build, archivé par version.
+
+      1. Expliquez pourquoi le fait d'avoir archivé les SBOM permet de répondre vite, en lien avec la leçon
+         de Log4Shell.
+      2. Donnez la commande qui scanne un SBOM archivé (`sbom.cdx.json`) et échoue s'il contient une faille
+         `high` ou `critical`.
+      3. Pourquoi est-il préférable de scanner le SBOM archivé plutôt que de reconstruire chaque image ?
+    en: |
+      A new critical flaw has just been published in the `fastjson` library (Java). Your company has shipped
+      40 container image versions over the last two years, and generates a CycloneDX SBOM on every build,
+      archived per version.
+
+      1. Explain why having archived the SBOMs lets you answer quickly, in connection with the Log4Shell
+         lesson.
+      2. Give the command that scans an archived SBOM (`sbom.cdx.json`) and fails if it contains a `high` or
+         `critical` flaw.
+      3. Why is it preferable to scan the archived SBOM rather than rebuild each image?
+  solution:
+    file: incident-response.sh
+    lang: bash
+    code: |
+      # 1. Archived SBOMs = a searchable inventory of every shipped version.
+      #    Like with Log4Shell, the first question is "which versions contain the
+      #    affected library, and at what version?". With archived SBOMs you grep/scan
+      #    the inventory in minutes instead of investigating 40 images by hand.
+
+      # 2. Scan an archived SBOM and fail on high/critical:
+      docker run --rm -v "$(pwd):/s" aquasec/trivy:latest \
+        sbom /s/sbom.cdx.json --severity HIGH,CRITICAL --exit-code 1
+      # (Grype equivalent: grype sbom:/s/sbom.cdx.json --fail-on high)
+
+      # 3. Scanning the archived SBOM is fast and does not require the original build
+      #    environment, base images or network state. Rebuilding 40 images is slow,
+      #    may be impossible (lost build context) and could even pull DIFFERENT
+      #    dependency versions, so it would no longer reflect what actually shipped.
+    note:
+      fr: "Le SBOM archivé est une photographie fidèle de ce qui a réellement été livré. Reconstruire pourrait produire un arbre de dépendances différent (versions flottantes) et ne refléterait plus la version en production. La CVE se vérifie en rescannant l'inventaire, pas en reconstruisant."
+      en: "The archived SBOM is a faithful snapshot of what actually shipped. Rebuilding could produce a different dependency tree (floating versions) and would no longer reflect the production version. The CVE is checked by rescanning the inventory, not by rebuilding."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'un SBOM ?"
+      en: "What is an SBOM?"
+    options:
+      fr:
+        - "Un pare-feu applicatif"
+        - "La liste complète des composants et versions d'un logiciel"
+        - "Un algorithme de chiffrement"
+        - "Un type de conteneur Docker"
+      en:
+        - "An application firewall"
+        - "The complete list of a software's components and versions"
+        - "An encryption algorithm"
+        - "A type of Docker container"
+    answer: 1
+    why:
+      fr: "Le SBOM (*Software Bill of Materials*) est l'inventaire des ingrédients du logiciel : chaque bibliothèque, sa version, sa licence. C'est ce qui a manqué pour répondre vite à Log4Shell."
+      en: "The SBOM (Software Bill of Materials) is the inventory of a software's ingredients: each library, its version, its license. It is what was missing to answer Log4Shell quickly."
+  - q:
+      fr: "Quel outil génère un SBOM à partir d'une image ou d'un dossier ?"
+      en: "Which tool generates an SBOM from an image or a folder?"
+    options:
+      fr:
+        - "Syft"
+        - "Nginx"
+        - "iptables"
+        - "PostgreSQL"
+      en:
+        - "Syft"
+        - "Nginx"
+        - "iptables"
+        - "PostgreSQL"
+    answer: 0
+    why:
+      fr: "Syft (d'Anchore) inspecte une image, un dossier ou un système de fichiers et exporte un SBOM en CycloneDX ou SPDX. Grype, lui, scanne le SBOM à la recherche de vulnérabilités."
+      en: "Syft (by Anchore) inspects an image, a folder or a filesystem and exports an SBOM in CycloneDX or SPDX. Grype, in turn, scans the SBOM for vulnerabilities."
+  - q:
+      fr: "Quelle différence principale entre CycloneDX et SPDX ?"
+      en: "What is the main difference between CycloneDX and SPDX?"
+    options:
+      fr:
+        - "CycloneDX est payant, SPDX gratuit"
+        - "CycloneDX est orienté sécurité, SPDX plutôt conformité et licences"
+        - "SPDX ne décrit pas les versions"
+        - "Ils ne peuvent pas décrire le même logiciel"
+      en:
+        - "CycloneDX is paid, SPDX is free"
+        - "CycloneDX is security-oriented, SPDX leans towards compliance and licenses"
+        - "SPDX does not describe versions"
+        - "They cannot describe the same software"
+    answer: 1
+    why:
+      fr: "CycloneDX (OWASP) est souvent préféré côté sécurité, SPDX (Linux Foundation) côté conformité juridique. Les deux décrivent les mêmes composants et la plupart des outils produisent l'un et l'autre."
+      en: "CycloneDX (OWASP) is often preferred on the security side, SPDX (Linux Foundation) on the legal compliance side. Both describe the same components and most tools produce either."
+  - q:
+      fr: "Pourquoi scanner un SBOM archivé plutôt que l'image à chaque fois ?"
+      en: "Why scan an archived SBOM rather than the image each time?"
+    options:
+      fr:
+        - "Parce que c'est plus lent mais plus sûr"
+        - "Parce qu'on peut rescanner un ancien build contre une nouvelle CVE sans le reconstruire"
+        - "Parce que l'image ne contient pas de dépendances"
+        - "Parce que Cosign l'exige"
+      en:
+        - "Because it is slower but safer"
+        - "Because you can rescan an old build against a new CVE without rebuilding it"
+        - "Because the image contains no dependencies"
+        - "Because Cosign requires it"
+    answer: 1
+    why:
+      fr: "Le SBOM archivé est une photographie de ce qui a été livré. Quand une CVE sort (comme Log4Shell), on rescanne l'inventaire en minutes, sans reconstruire des images qui pourraient d'ailleurs produire un arbre différent."
+      en: "The archived SBOM is a snapshot of what shipped. When a CVE appears (like Log4Shell), you rescan the inventory in minutes, without rebuilding images that could anyway produce a different tree."
+  - q:
+      fr: "Que permet `cosign attest` sur un SBOM ?"
+      en: "What does `cosign attest` enable on an SBOM?"
+    options:
+      fr:
+        - "Il supprime les vulnérabilités"
+        - "Il lie une attestation signée du SBOM à l'image, prouvant son authenticité"
+        - "Il traduit le SBOM en SPDX"
+        - "Il compresse le SBOM"
+      en:
+        - "It removes vulnerabilities"
+        - "It ties a signed SBOM attestation to the image, proving its authenticity"
+        - "It converts the SBOM to SPDX"
+        - "It compresses the SBOM"
+    answer: 1
+    why:
+      fr: "Cosign signe le SBOM et le lie à l'image ; `cosign verify-attestation` permet de vérifier, avant déploiement, que le SBOM est authentique et correspond bien à l'image. La signature keyless évite une clé privée stockée."
+      en: "Cosign signs the SBOM and ties it to the image; `cosign verify-attestation` lets you check, before deployment, that the SBOM is authentic and really matches the image. Keyless signing avoids a stored private key."
