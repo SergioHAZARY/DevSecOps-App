@@ -1,0 +1,509 @@
+description:
+  fr: "Utiliser Semgrep : lancer les rulesets du registre, écrire une règle personnalisée avec pattern/metavariables, une règle en mode teinte, supprimer un faux positif et sortir du SARIF pour la CI."
+  en: "Use Semgrep: run registry rulesets, write a custom rule with pattern/metavariables, a taint-mode rule, suppress a false positive and output SARIF for CI."
+duration: 30
+
+intro:
+  fr: |
+    **Semgrep** (*semantic grep*) est un outil SAST open source qui cherche des motifs **dans la structure**
+    du code, pas dans le texte brut. Là où `grep "eval"` trouve aussi le mot dans un commentaire, Semgrep
+    comprend qu'il s'agit d'un appel de fonction et peut exiger, par exemple, que son argument vienne d'une
+    entrée utilisateur.
+
+    Sa force est que les règles s'écrivent « comme du code » : pour chercher `exec(...)`, on écrit
+    littéralement `exec(...)`. Pas besoin d'apprendre un langage de requête complexe. On combine des
+    conditions (`pattern`, `pattern-not`, `metavariable-regex`) et, pour les injections, un mode **teinte**
+    qui suit une donnée de sa source à son sink.
+
+    Dans cette leçon vous allez lancer Semgrep via Docker sur un code vulnérable, utiliser un ruleset du
+    registre (`p/owasp-top-ten`), écrire votre propre règle YAML, en écrire une en mode teinte, supprimer un
+    faux positif avec `# nosemgrep`, et produire un rapport SARIF qui fait échouer la CI.
+  en: |
+    **Semgrep** (*semantic grep*) is an open source SAST tool that searches for patterns **in the structure**
+    of code, not in raw text. Where `grep "eval"` also finds the word in a comment, Semgrep understands that
+    it is a function call and can require, for example, that its argument come from user input.
+
+    Its strength is that rules are written "like code": to look for `exec(...)`, you literally write
+    `exec(...)`. No need to learn a complex query language. You combine conditions (`pattern`, `pattern-not`,
+    `metavariable-regex`) and, for injections, a **taint** mode that follows data from its source to its sink.
+
+    In this lesson you will run Semgrep via Docker on vulnerable code, use a registry ruleset
+    (`p/owasp-top-ten`), write your own YAML rule, write one in taint mode, suppress a false positive with
+    `# nosemgrep`, and produce a SARIF report that fails CI.
+
+sections:
+  - heading:
+      fr: "Lancer Semgrep et utiliser le registre"
+      en: "Running Semgrep and using the registry"
+    body:
+      fr: |
+        Semgrep s'exécute en une commande, sans configuration de projet. Le plus simple est l'image Docker
+        officielle `semgrep/semgrep`, qui évite toute installation.
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep --config p/owasp-top-ten /src
+        ```
+
+        L'option `--config` choisit les règles :
+
+        | Valeur | Ce qu'elle charge |
+        |---|---|
+        | `auto` | Règles adaptées aux langages détectés (envoie des métadonnées au cloud) |
+        | `p/owasp-top-ten` | Le paquet OWASP Top 10 du registre |
+        | `p/ci` | Un paquet à faible bruit, pensé pour la CI |
+        | `p/python`, `p/javascript` | Paquets par langage |
+        | `./rules/` | Vos règles locales |
+
+        Le **registre** (`semgrep.dev/r`) contient des milliers de règles maintenues par la communauté,
+        regroupées en paquets (`p/...`). On commence par un paquet ciblé (`p/ci` ou `p/owasp-top-ten`) plutôt
+        que `auto`, pour un bruit maîtrisé et sans dépendance au cloud.
+      en: |
+        Semgrep runs in one command, with no project configuration. The simplest way is the official Docker
+        image `semgrep/semgrep`, which avoids any installation.
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep --config p/owasp-top-ten /src
+        ```
+
+        The `--config` option chooses the rules:
+
+        | Value | What it loads |
+        |---|---|
+        | `auto` | Rules matched to detected languages (sends metadata to the cloud) |
+        | `p/owasp-top-ten` | The OWASP Top 10 pack from the registry |
+        | `p/ci` | A low-noise pack, designed for CI |
+        | `p/python`, `p/javascript` | Per-language packs |
+        | `./rules/` | Your local rules |
+
+        The **registry** (`semgrep.dev/r`) holds thousands of community-maintained rules, grouped into packs
+        (`p/...`). Start with a focused pack (`p/ci` or `p/owasp-top-ten`) rather than `auto`, for controlled
+        noise and no cloud dependency.
+  - heading:
+      fr: "Anatomie d'une règle"
+      en: "Anatomy of a rule"
+    body:
+      fr: |
+        Une règle Semgrep est un objet YAML dans une liste `rules`. Les champs essentiels :
+
+        - **`id`** : identifiant unique.
+        - **`languages`** : les langages concernés (`[python]`, `[javascript]`).
+        - **`severity`** : `INFO`, `WARNING` ou `ERROR`.
+        - **`message`** : ce qui est affiché, idéalement avec la correction.
+        - **`pattern`** : le motif à trouver. `$X` est une **métavariable** qui capture n'importe quelle
+          expression ; `...` capture n'importe quels arguments ou instructions.
+
+        On affine avec :
+
+        | Clé | Rôle |
+        |---|---|
+        | `pattern` | Doit correspondre |
+        | `pattern-not` | Exclut une forme (ex. un cas déjà sûr) |
+        | `pattern-inside` | Le motif doit être dans un certain contexte |
+        | `metavariable-regex` | Contraint une métavariable par une regex |
+        | `patterns` | Combine plusieurs conditions (ET) |
+        | `pattern-either` | Plusieurs motifs possibles (OU) |
+
+        C'est la combinaison `pattern` + `pattern-not` qui réduit les faux positifs : on décrit la forme
+        dangereuse **et** on exclut la forme sûre.
+      en: |
+        A Semgrep rule is a YAML object in a `rules` list. The essential fields:
+
+        - **`id`**: a unique identifier.
+        - **`languages`**: the languages concerned (`[python]`, `[javascript]`).
+        - **`severity`**: `INFO`, `WARNING` or `ERROR`.
+        - **`message`**: what is shown, ideally with the fix.
+        - **`pattern`**: the pattern to find. `$X` is a **metavariable** that captures any expression; `...`
+          captures any arguments or statements.
+
+        You refine with:
+
+        | Key | Role |
+        |---|---|
+        | `pattern` | Must match |
+        | `pattern-not` | Excludes a form (e.g. an already safe case) |
+        | `pattern-inside` | The pattern must be in a certain context |
+        | `metavariable-regex` | Constrains a metavariable with a regex |
+        | `patterns` | Combines several conditions (AND) |
+        | `pattern-either` | Several possible patterns (OR) |
+
+        It is the `pattern` + `pattern-not` combination that reduces false positives: you describe the
+        dangerous form **and** exclude the safe one.
+  - heading:
+      fr: "Le mode teinte"
+      en: "Taint mode"
+    body:
+      fr: |
+        Un simple `pattern` trouve `os.system($X)`, mais ne dit pas si `$X` est contrôlé par l'utilisateur.
+        Le **mode teinte** (`mode: taint`) répond à cette question en suivant le flux de données :
+
+        - **`pattern-sources`** : d'où vient une donnée non fiable (`request.args.get(...)`).
+        - **`pattern-sinks`** : où elle devient dangereuse (`os.system(...)`).
+        - **`pattern-sanitizers`** (optionnel) : ce qui la rend sûre (`shlex.quote(...)`).
+
+        Semgrep signale une alerte uniquement s'il existe un chemin **source → sink** sans passer par un
+        sanitizer. Cela élimine beaucoup de faux positifs : un `os.system("ls")` avec une constante n'est
+        pas signalé, car la constante n'est pas une source.
+
+        Le mode teinte est plus coûteux mais bien plus précis pour les injections (SQL, commande, XSS). On
+        l'utilise pour les règles les plus importantes, et le mode `search` (motif simple) pour le reste,
+        comme les secrets en dur ou les appels de cryptographie faible.
+      en: |
+        A simple `pattern` finds `os.system($X)`, but does not say whether `$X` is user-controlled. **Taint
+        mode** (`mode: taint`) answers that question by following the data flow:
+
+        - **`pattern-sources`**: where untrusted data comes from (`request.args.get(...)`).
+        - **`pattern-sinks`**: where it becomes dangerous (`os.system(...)`).
+        - **`pattern-sanitizers`** (optional): what makes it safe (`shlex.quote(...)`).
+
+        Semgrep reports an alert only if there is a **source → sink** path that does not pass through a
+        sanitizer. This removes many false positives: an `os.system("ls")` with a constant is not reported,
+        because the constant is not a source.
+
+        Taint mode is more expensive but far more precise for injections (SQL, command, XSS). Use it for the
+        most important rules, and `search` mode (a simple pattern) for the rest, such as hard-coded secrets
+        or weak cryptography calls.
+
+examples:
+  - title:
+      fr: "Le code vulnérable à analyser"
+      en: "The vulnerable code to analyse"
+    file: app.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import hashlib
+      import os
+      import subprocess
+
+      from flask import Flask, request
+
+      app = Flask(__name__)
+
+
+      @app.route("/ping")
+      def ping():
+          host = request.args.get("host", "")
+          # Command injection: tainted "host" reaches a shell
+          return subprocess.check_output("ping -c1 " + host, shell=True)
+
+
+      @app.route("/hash")
+      def make_hash():
+          data = request.args.get("data", "")
+          # Weak hash for a security purpose
+          return hashlib.md5(data.encode()).hexdigest()
+
+
+      def ok():
+          # Safe: constant argument, no user input
+          return subprocess.check_output(["uptime"])
+    note:
+      fr: "Deux vraies failles : une injection de commande (`host` arrive dans un shell) et un hachage MD5 utilisé comme fonction de sécurité. La fonction `ok()` est sûre : elle sert à vérifier que nos règles ne la signalent pas (pas de faux positif)."
+      en: "Two real flaws: a command injection (`host` reaches a shell) and an MD5 hash used as a security function. The `ok()` function is safe: it is there to check that our rules do not flag it (no false positive)."
+
+  - title:
+      fr: "Lancer un ruleset du registre"
+      en: "Running a registry ruleset"
+    file: scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Run Semgrep via Docker, no install needed. The current dir is mounted on /src.
+      docker run --rm -v "$(pwd):/src" semgrep/semgrep \
+        semgrep --config p/owasp-top-ten --config p/python /src
+
+      # In CI, --error makes Semgrep exit non-zero when findings exist (fail the build).
+      # --sarif writes a report consumable by code-scanning dashboards.
+      docker run --rm -v "$(pwd):/src" semgrep/semgrep \
+        semgrep --config p/ci --error --sarif --output /src/semgrep.sarif /src
+      echo "exit code: $?"
+    output: |
+      Scanning 1 file with 142 rules.
+
+        app.py
+           python.lang.security.audit.dangerous-subprocess-use.dangerous-subprocess-use
+             Detected subprocess function 'check_output' with shell=True. This is dangerous
+             because user input can reach the shell.
+             12| return subprocess.check_output("ping -c1 " + host, shell=True)
+
+           python.lang.security.audit.insecure-hash-algorithms.insecure-hash-algorithm-md5
+             Detected MD5 hash algorithm which is considered insecure.
+             20| return hashlib.md5(data.encode()).hexdigest()
+
+      Findings: 2 (2 blocking)
+      exit code: 1
+    note:
+      fr: "Les règles du registre trouvent les deux failles et pas la fonction `ok()`. L'identifiant complet de la règle (`python.lang.security...`) sert à cibler une suppression ou une exception. `--error` renvoie le code `1` : la CI échoue."
+      en: "The registry rules find both flaws and not the `ok()` function. The rule's full identifier (`python.lang.security...`) is used to target a suppression or an exception. `--error` returns exit code `1`: CI fails."
+
+  - title:
+      fr: "Une règle personnalisée avec pattern, pattern-not et metavariable"
+      en: "A custom rule with pattern, pattern-not and metavariable"
+    file: no-hardcoded-token.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      rules:
+        - id: hardcoded-bearer-token
+          languages: [python]
+          severity: ERROR
+          message: >
+            Hard-coded credential assigned to $VAR. Read it from the environment
+            or a secret manager instead of writing it in the source.
+          patterns:
+            # Match an assignment whose value is a string literal...
+            - pattern: $VAR = "..."
+            # ...but only when the variable name looks like a secret
+            - metavariable-regex:
+                metavariable: $VAR
+                regex: (?i).*(token|secret|password|api_key).*
+            # ...and ignore an obviously fake placeholder used in examples
+            - pattern-not: $VAR = "changeme-in-vault"
+    output: |
+      settings.py
+         hardcoded-bearer-token
+           Hard-coded credential assigned to API_TOKEN. Read it from the environment
+           or a secret manager instead of writing it in the source.
+           3| API_TOKEN = "glpat-xxxxxxxxxxxxxxxxxxxx"
+
+      Findings: 1 (1 blocking)
+    note:
+      fr: "`patterns` combine trois conditions : l'affectation d'une chaîne, un nom de variable évoquant un secret (via `metavariable-regex`), et l'exclusion du placeholder `changeme-in-vault`. Cette dernière condition (`pattern-not`) évite un faux positif sur les exemples de documentation."
+      en: "`patterns` combines three conditions: a string assignment, a variable name suggesting a secret (via `metavariable-regex`), and the exclusion of the `changeme-in-vault` placeholder. That last condition (`pattern-not`) avoids a false positive on documentation examples."
+
+  - title:
+      fr: "Une règle en mode teinte pour l'injection de commande"
+      en: "A taint-mode rule for command injection"
+    file: command-injection.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      rules:
+        - id: flask-command-injection
+          languages: [python]
+          severity: ERROR
+          message: >
+            User-controlled data reaches a shell command. Pass arguments as a list
+            without shell=True, and validate the input with an allow-list.
+          mode: taint
+          pattern-sources:
+            # Untrusted data: anything coming from the Flask request
+            - pattern: request.args.get(...)
+            - pattern: request.form.get(...)
+          pattern-sanitizers:
+            # If the value goes through shlex.quote, the taint stops
+            - pattern: shlex.quote(...)
+          pattern-sinks:
+            # Dangerous destinations: a subprocess call with shell=True
+            - pattern: subprocess.$FUNC(..., shell=True, ...)
+            - pattern: os.system(...)
+    output: |
+      app.py
+         flask-command-injection
+           User-controlled data reaches a shell command. Pass arguments as a list
+           without shell=True, and validate the input with an allow-list.
+           11| host = request.args.get("host", "")
+           12| return subprocess.check_output("ping -c1 " + host, shell=True)
+
+      Findings: 1 (1 blocking)
+    note:
+      fr: "Le mode teinte relie la **source** (`request.args.get`) au **sink** (`subprocess(..., shell=True)`) à travers la concaténation. Il ne signalerait pas `ok()` (constante) ni un appel protégé par `shlex.quote`. C'est la différence entre « il y a un appel dangereux » et « une donnée utilisateur l'atteint réellement »."
+      en: "Taint mode links the **source** (`request.args.get`) to the **sink** (`subprocess(..., shell=True)`) through the concatenation. It would not flag `ok()` (constant) or a call protected by `shlex.quote`. That is the difference between 'there is a dangerous call' and 'user data actually reaches it'."
+
+  - title:
+      fr: "Supprimer un faux positif avec # nosemgrep"
+      en: "Suppressing a false positive with # nosemgrep"
+    file: legacy.py
+    lang: python
+    kind: neutral
+    code: |
+      import hashlib
+
+
+      def file_checksum(path):
+          with open(path, "rb") as f:
+              # nosemgrep: insecure-hash-algorithm-md5
+              # MD5 here is a non-security checksum to detect accidental file corruption,
+              # not a password or signature. Reviewed and accepted on 2026-02-10.
+              return hashlib.md5(f.read()).hexdigest()
+    output: |
+      Scanning 1 file.
+      Findings: 0
+      Ran 142 rules on 1 file: 0 findings (1 suppressed)
+    note:
+      fr: "Le commentaire `# nosemgrep: <id>` sur (ou juste au-dessus de) la ligne supprime une règle précise, pas toutes. La justification obligatoire en commentaire transforme la suppression en décision tracée et revue, pas en contournement silencieux. Sans identifiant, `# nosemgrep` supprime toutes les règles sur la ligne : à éviter."
+      en: "The `# nosemgrep: <id>` comment on (or just above) the line suppresses one precise rule, not all of them. The mandatory justification in the comment turns the suppression into a traced, reviewed decision, not a silent bypass. Without an identifier, `# nosemgrep` suppresses every rule on the line: avoid that."
+
+mistake:
+  fr: |
+    **Lancer `semgrep --config auto` sur tout le dépôt et faire échouer la CI sur chaque alerte dès le
+    premier jour.**
+
+    `auto` charge un très grand nombre de règles, dont beaucoup produisent du bruit sur une base de code
+    existante. Si la CI bloque d'emblée sur des centaines d'alertes, dont des faux positifs, l'équipe perd
+    confiance et désactive l'outil. Il vaut mieux démarrer avec un paquet ciblé à faible bruit (`p/ci`),
+    ne bloquer que sur les règles `ERROR`, et traiter l'existant comme une **baseline** que l'on réduit
+    progressivement.
+  en: |
+    **Running `semgrep --config auto` on the whole repository and failing CI on every alert from day one.**
+
+    `auto` loads a very large number of rules, many of which are noisy on an existing codebase. If CI blocks
+    immediately on hundreds of alerts, including false positives, the team loses trust and disables the tool.
+    Better to start with a focused, low-noise pack (`p/ci`), only block on `ERROR` rules, and treat the
+    existing findings as a **baseline** that you reduce gradually.
+
+bestPractice:
+  fr: |
+    - **Commencez par un paquet ciblé** (`p/ci`, `p/owasp-top-ten`) plutôt que `auto`.
+    - **Faites échouer la CI sur `ERROR`** d'abord ; gardez `WARNING` en visibilité.
+    - **Écrivez des règles maison** pour vos conventions internes (noms de secrets, appels interdits).
+    - **Utilisez le mode teinte** pour les injections, plus précis que les motifs simples.
+    - **Combinez `pattern` et `pattern-not`** pour réduire les faux positifs à la source.
+    - **Justifiez chaque `# nosemgrep`** avec l'identifiant de la règle et une raison datée.
+    - **Produisez du SARIF** pour centraliser les résultats et suivre les tendances.
+  en: |
+    - **Start with a focused pack** (`p/ci`, `p/owasp-top-ten`) rather than `auto`.
+    - **Fail CI on `ERROR`** first; keep `WARNING` for visibility.
+    - **Write custom rules** for your internal conventions (secret names, forbidden calls).
+    - **Use taint mode** for injections, more precise than simple patterns.
+    - **Combine `pattern` and `pattern-not`** to cut false positives at the source.
+    - **Justify every `# nosemgrep`** with the rule identifier and a dated reason.
+    - **Produce SARIF** to centralise results and track trends.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe interdit l'usage de `eval()` en JavaScript, **sauf** lorsqu'on évalue une constante
+      littérale (ce qui arrive dans un vieux module de configuration).
+
+      Écrivez une règle Semgrep (`no-eval.yaml`) qui :
+
+      1. s'applique au JavaScript ;
+      2. a la sévérité `ERROR` ;
+      3. signale tout appel `eval(...)` ;
+      4. **n'alerte pas** lorsque l'argument est une chaîne littérale (ex. `eval("1 + 1")`).
+
+      Donnez le fichier YAML complet.
+    en: |
+      Your team forbids `eval()` in JavaScript, **except** when evaluating a literal constant (which happens
+      in an old configuration module).
+
+      Write a Semgrep rule (`no-eval.yaml`) that:
+
+      1. applies to JavaScript;
+      2. has severity `ERROR`;
+      3. flags any `eval(...)` call;
+      4. **does not alert** when the argument is a string literal (e.g. `eval("1 + 1")`).
+
+      Give the complete YAML file.
+  solution:
+    file: no-eval.yaml
+    lang: yaml
+    code: |
+      rules:
+        - id: no-dynamic-eval
+          languages: [javascript]
+          severity: ERROR
+          message: >
+            Avoid eval() with a dynamic argument: it can execute attacker-controlled
+            code. Use JSON.parse or a safe lookup instead.
+          patterns:
+            # Flag any eval call...
+            - pattern: eval(...)
+            # ...but not when the argument is a plain string literal (safe constant)
+            - pattern-not: eval("...")
+    note:
+      fr: "`pattern: eval(...)` capture tous les appels, puis `pattern-not: eval(\"...\")` retire le cas sûr de la constante littérale. Le combo `patterns` (ET) laisse donc passer `eval(\"1 + 1\")` mais signale `eval(userInput)`."
+      en: "`pattern: eval(...)` captures every call, then `pattern-not: eval(\"...\")` removes the safe literal-constant case. The `patterns` (AND) combo therefore lets `eval(\"1 + 1\")` through but flags `eval(userInput)`."
+
+quiz:
+  - q:
+      fr: "En quoi Semgrep diffère-t-il de `grep` ?"
+      en: "How does Semgrep differ from `grep`?"
+    options:
+      fr:
+        - "Il cherche des motifs dans la structure du code, pas dans le texte brut"
+        - "Il ne fonctionne que sur du Python"
+        - "Il exécute le code pour l'analyser"
+        - "Il ne peut chercher qu'un seul mot à la fois"
+      en:
+        - "It searches for patterns in the code structure, not in raw text"
+        - "It only works on Python"
+        - "It runs the code to analyse it"
+        - "It can only search for a single word at a time"
+    answer: 0
+    why:
+      fr: "Semgrep comprend l'AST : `eval(...)` désigne un appel de fonction, pas le mot « eval » dans un commentaire. Il reste statique (il n'exécute pas le code) et couvre de nombreux langages."
+      en: "Semgrep understands the AST: `eval(...)` means a function call, not the word 'eval' in a comment. It stays static (it does not run the code) and covers many languages."
+  - q:
+      fr: "À quoi sert `pattern-not` dans une règle ?"
+      en: "What is `pattern-not` for in a rule?"
+    options:
+      fr:
+        - "À exécuter la règle deux fois"
+        - "À exclure une forme sûre et réduire les faux positifs"
+        - "À inverser la sévérité"
+        - "À désactiver la règle"
+      en:
+        - "To run the rule twice"
+        - "To exclude a safe form and reduce false positives"
+        - "To invert the severity"
+        - "To disable the rule"
+    answer: 1
+    why:
+      fr: "Combiné à `pattern` dans un bloc `patterns`, `pattern-not` retire les cas déjà sûrs (par exemple un placeholder ou une constante), ce qui diminue le bruit."
+      en: "Combined with `pattern` in a `patterns` block, `pattern-not` removes already-safe cases (for example a placeholder or a constant), which lowers noise."
+  - q:
+      fr: "Dans le mode teinte, que décrit `pattern-sinks` ?"
+      en: "In taint mode, what does `pattern-sinks` describe?"
+    options:
+      fr:
+        - "L'origine de la donnée non fiable"
+        - "La fonction qui nettoie la donnée"
+        - "La destination dangereuse où la donnée teintée ne doit pas arriver"
+        - "La sévérité de la règle"
+      en:
+        - "The origin of the untrusted data"
+        - "The function that cleans the data"
+        - "The dangerous destination where tainted data must not arrive"
+        - "The rule's severity"
+    answer: 2
+    why:
+      fr: "Les sinks sont les points dangereux (`os.system`, `subprocess(..., shell=True)`). Une alerte n'apparaît que s'il existe un chemin d'une source vers un sink sans sanitizer."
+      en: "Sinks are the dangerous points (`os.system`, `subprocess(..., shell=True)`). An alert appears only if there is a path from a source to a sink with no sanitizer."
+  - q:
+      fr: "Comment supprimer une seule règle sur une ligne précise ?"
+      en: "How do you suppress a single rule on a specific line?"
+    options:
+      fr:
+        - "En supprimant la ligne de code"
+        - "Avec un commentaire `# nosemgrep: <id-de-la-règle>` et une justification"
+        - "En renommant le fichier"
+        - "En passant la sévérité à INFO globalement"
+      en:
+        - "By deleting the line of code"
+        - "With a `# nosemgrep: <rule-id>` comment and a justification"
+        - "By renaming the file"
+        - "By setting severity to INFO globally"
+    answer: 1
+    why:
+      fr: "`# nosemgrep: <id>` cible une règle précise sur la ligne concernée. Sans identifiant, il supprime toutes les règles de la ligne. La justification en commentaire garde la décision traçable."
+      en: "`# nosemgrep: <id>` targets one precise rule on the relevant line. Without an identifier it suppresses every rule on the line. The comment justification keeps the decision traceable."
+  - q:
+      fr: "Pourquoi éviter de bloquer la CI sur `--config auto` dès le premier jour ?"
+      en: "Why avoid blocking CI on `--config auto` from day one?"
+    options:
+      fr:
+        - "Parce que `auto` ne trouve aucune faille"
+        - "Parce qu'il charge beaucoup de règles bruyantes et noie l'équipe sous les alertes"
+        - "Parce qu'il ne fonctionne pas avec Docker"
+        - "Parce qu'il est payant"
+      en:
+        - "Because `auto` finds no flaws"
+        - "Because it loads many noisy rules and drowns the team in alerts"
+        - "Because it does not work with Docker"
+        - "Because it is paid"
+    answer: 1
+    why:
+      fr: "Sur un code existant, `auto` produit souvent des centaines d'alertes dont des faux positifs. Bloquer la CI d'emblée fait perdre confiance ; on démarre avec un paquet ciblé et une baseline."
+      en: "On existing code, `auto` often produces hundreds of alerts including false positives. Blocking CI immediately erodes trust; start with a focused pack and a baseline."

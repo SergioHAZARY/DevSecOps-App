@@ -1,0 +1,482 @@
+description:
+  fr: "Déployer SonarQube avec Docker Compose, analyser un projet avec sonar-scanner, distinguer vulnérabilités et Security Hotspots, et bloquer la CI sur un Quality Gate du nouveau code."
+  en: "Deploy SonarQube with Docker Compose, analyse a project with sonar-scanner, tell vulnerabilities from Security Hotspots, and fail CI on a new-code Quality Gate."
+duration: 30
+
+intro:
+  fr: |
+    **SonarQube** n'est pas qu'un scanner : c'est une **plateforme** qui conserve l'historique de la qualité
+    et de la sécurité d'un projet dans le temps. Là où Semgrep répond « voici les failles de ce commit »,
+    SonarQube répond aussi « voici comment la dette évolue, et le nouveau code respecte-t-il nos règles ? ».
+
+    Imaginez le carnet de santé d'un patient, mis à jour à chaque visite. Le médecin ne regarde pas
+    seulement les analyses du jour : il compare à la dernière fois et s'alarme surtout de ce qui **empire**.
+    Le concept clé de SonarQube, le **Quality Gate sur le nouveau code**, suit exactement cette logique : on
+    tolère la dette existante, mais on exige que tout code **ajouté** soit propre.
+
+    Dans cette leçon vous allez lancer SonarQube avec une base PostgreSQL via Docker Compose, configurer un
+    projet avec `sonar-project.properties`, lancer `sonar-scanner`, comprendre la différence entre une
+    **vulnérabilité** et un **Security Hotspot**, et faire échouer la CI quand le Quality Gate est rouge.
+  en: |
+    **SonarQube** is not just a scanner: it is a **platform** that keeps a project's quality and security
+    history over time. Where Semgrep answers "here are this commit's flaws", SonarQube also answers "here is
+    how the debt is trending, and does the new code respect our rules?".
+
+    Picture a patient's health record, updated at every visit. The doctor does not only look at today's
+    results: they compare with last time and are especially alarmed by what is **getting worse**. SonarQube's
+    key concept, the **Quality Gate on new code**, follows exactly that logic: you tolerate existing debt but
+    require that any **added** code be clean.
+
+    In this lesson you will launch SonarQube with a PostgreSQL database via Docker Compose, configure a
+    project with `sonar-project.properties`, run `sonar-scanner`, understand the difference between a
+    **vulnerability** and a **Security Hotspot**, and fail CI when the Quality Gate is red.
+
+sections:
+  - heading:
+      fr: "Déployer SonarQube"
+      en: "Deploying SonarQube"
+    body:
+      fr: |
+        SonarQube a besoin d'une base de données pour stocker l'historique. En production, c'est
+        **PostgreSQL** ; la base H2 embarquée ne sert qu'à un test jetable. L'architecture minimale est donc
+        deux conteneurs : le serveur SonarQube et PostgreSQL.
+
+        Deux pièges fréquents au démarrage :
+
+        1. SonarQube utilise Elasticsearch en interne, qui exige un `vm.max_map_count` élevé sur l'hôte
+           Linux : `sudo sysctl -w vm.max_map_count=262144`. Sinon le conteneur redémarre en boucle.
+        2. Les données (base PostgreSQL, extensions, index Elasticsearch) doivent être dans des **volumes**
+           persistants, sinon tout l'historique disparaît au redémarrage.
+
+        Au premier lancement, le serveur écoute sur le port **9000**. L'identifiant initial est
+        `admin`/`admin` : **changez-le immédiatement** et créez un **token** d'analyse pour la CI (plutôt
+        qu'un mot de passe). Ce token est un secret : il va dans le magasin de secrets de la CI, jamais dans
+        le dépôt.
+      en: |
+        SonarQube needs a database to store history. In production that is **PostgreSQL**; the embedded H2
+        database is only for a throwaway test. The minimal architecture is therefore two containers: the
+        SonarQube server and PostgreSQL.
+
+        Two common startup pitfalls:
+
+        1. SonarQube uses Elasticsearch internally, which requires a high `vm.max_map_count` on the Linux
+           host: `sudo sysctl -w vm.max_map_count=262144`. Otherwise the container restarts in a loop.
+        2. The data (PostgreSQL database, extensions, Elasticsearch index) must live in persistent
+           **volumes**, otherwise all history vanishes on restart.
+
+        On first launch, the server listens on port **9000**. The initial login is `admin`/`admin`:
+        **change it immediately** and create an analysis **token** for CI (rather than a password). This
+        token is a secret: it goes into the CI secret store, never into the repository.
+  - heading:
+      fr: "Analyser un projet avec sonar-scanner"
+      en: "Analysing a project with sonar-scanner"
+    body:
+      fr: |
+        L'analyse est lancée par le **scanner**, séparé du serveur. Il lit un fichier
+        `sonar-project.properties` à la racine du dépôt, analyse les sources, puis **envoie** les résultats
+        au serveur, qui les calcule et les stocke.
+
+        | Propriété | Rôle |
+        |---|---|
+        | `sonar.projectKey` | Clé unique du projet sur le serveur |
+        | `sonar.sources` | Dossiers de code à analyser |
+        | `sonar.tests` | Dossiers de tests |
+        | `sonar.<lang>.coverage.reportPaths` | Rapport de couverture importé |
+        | `sonar.newCode.referenceBranch` | Branche de référence pour le « nouveau code » |
+
+        L'URL du serveur (`sonar.host.url`) et le token (`sonar.token`) ne vont **pas** dans ce fichier
+        versionné : on les passe en ligne de commande ou par variables d'environnement. Le scanner existe en
+        image Docker (`sonarsource/sonar-scanner-cli`), ce qui évite de l'installer.
+
+        Point crucial : l'analyse est **asynchrone**. `sonar-scanner` renvoie « analyse envoyée », pas le
+        verdict. Le résultat (le Quality Gate) se récupère ensuite, soit via l'API, soit via le plugin CI.
+      en: |
+        The analysis is run by the **scanner**, separate from the server. It reads a
+        `sonar-project.properties` file at the repository root, analyses the sources, then **sends** the
+        results to the server, which computes and stores them.
+
+        | Property | Role |
+        |---|---|
+        | `sonar.projectKey` | The project's unique key on the server |
+        | `sonar.sources` | Code folders to analyse |
+        | `sonar.tests` | Test folders |
+        | `sonar.<lang>.coverage.reportPaths` | Imported coverage report |
+        | `sonar.newCode.referenceBranch` | Reference branch for "new code" |
+
+        The server URL (`sonar.host.url`) and the token (`sonar.token`) do **not** go into this versioned
+        file: pass them on the command line or through environment variables. The scanner comes as a Docker
+        image (`sonarsource/sonar-scanner-cli`), which avoids installing it.
+
+        Crucial point: the analysis is **asynchronous**. `sonar-scanner` returns "analysis submitted", not
+        the verdict. The result (the Quality Gate) is retrieved afterwards, either via the API or via the CI
+        plugin.
+  - heading:
+      fr: "Vulnérabilités, Security Hotspots et Quality Gate"
+      en: "Vulnerabilities, Security Hotspots and the Quality Gate"
+    body:
+      fr: |
+        SonarQube distingue deux notions de sécurité qu'il ne faut pas confondre :
+
+        | | Vulnerability | Security Hotspot |
+        |---|---|---|
+        | Nature | Faille confirmée, exploitable | Code **sensible** à **revoir** par un humain |
+        | Exemple | Injection SQL par concaténation | Usage de cryptographie, désactivation d'une protection |
+        | Action | Corriger | Examiner : est-ce réellement dangereux ici ? |
+        | Décision | Automatique | Manuelle (*Safe* / *To review* / *Fixed*) |
+
+        Un **Hotspot** n'est pas forcément une faille : c'est un endroit où une erreur de contexte serait
+        grave, et où SonarQube demande un avis humain. Cela réduit le bruit tout en gardant la traçabilité.
+
+        Le **Quality Gate** est l'ensemble de conditions qui décide si une analyse passe. La porte par défaut
+        « Sonar way » se concentre sur le **nouveau code** : zéro nouvelle vulnérabilité, tous les nouveaux
+        Hotspots revus, couverture minimale sur le code ajouté. Cette approche *Clean as You Code* évite de
+        bloquer sur l'immense dette existante tout en empêchant d'en ajouter. C'est l'état du Quality Gate
+        (`OK` ou `ERROR`) que la CI consulte pour décider de bloquer ou non.
+      en: |
+        SonarQube distinguishes two security notions that must not be confused:
+
+        | | Vulnerability | Security Hotspot |
+        |---|---|---|
+        | Nature | Confirmed, exploitable flaw | **Sensitive** code to be **reviewed** by a human |
+        | Example | SQL injection through concatenation | Use of cryptography, disabling a protection |
+        | Action | Fix | Examine: is it really dangerous here? |
+        | Decision | Automatic | Manual (*Safe* / *To review* / *Fixed*) |
+
+        A **Hotspot** is not necessarily a flaw: it is a place where a context mistake would be serious, and
+        where SonarQube asks for a human opinion. This reduces noise while keeping traceability.
+
+        The **Quality Gate** is the set of conditions that decides whether an analysis passes. The default
+        "Sonar way" gate focuses on **new code**: zero new vulnerabilities, all new Hotspots reviewed,
+        minimum coverage on added code. This *Clean as You Code* approach avoids blocking on the huge existing
+        debt while preventing you from adding more. It is the Quality Gate status (`OK` or `ERROR`) that CI
+        reads to decide whether to block.
+
+examples:
+  - title:
+      fr: "SonarQube + PostgreSQL avec Docker Compose"
+      en: "SonarQube + PostgreSQL with Docker Compose"
+    file: docker-compose.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      services:
+        sonarqube:
+          image: sonarqube:10.6-community
+          depends_on: [db]
+          ports:
+            - "127.0.0.1:9000:9000"   # UI on localhost only
+          environment:
+            SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonar
+            SONAR_JDBC_USERNAME: sonar
+            SONAR_JDBC_PASSWORD: "${SONAR_DB_PASSWORD}"   # from the environment
+          volumes:
+            - sonar_data:/opt/sonarqube/data
+            - sonar_exts:/opt/sonarqube/extensions
+
+        db:
+          image: postgres:16
+          environment:
+            POSTGRES_USER: sonar
+            POSTGRES_PASSWORD: "${SONAR_DB_PASSWORD}"
+            POSTGRES_DB: sonar
+          volumes:
+            - pg_data:/var/lib/postgresql/data
+
+      volumes:
+        sonar_data:
+        sonar_exts:
+        pg_data:
+    output: |
+      $ sudo sysctl -w vm.max_map_count=262144   # required by the embedded Elasticsearch
+      $ export SONAR_DB_PASSWORD='changeme-in-vault'
+      $ docker compose up -d
+      [+] Running 4/4
+       Container sonar-db-1         Started
+       Container sonar-sonarqube-1  Started
+      $ curl -s localhost:9000/api/system/status
+      {"status":"UP"}
+    note:
+      fr: "Les volumes persistent la base, les extensions et les index : l'historique survit aux redémarrages. Le `vm.max_map_count` élevé est requis par l'Elasticsearch interne de SonarQube. Au premier accès sur `:9000`, on change le mot de passe `admin` et on crée un token d'analyse."
+      en: "The volumes persist the database, extensions and indexes: history survives restarts. The high `vm.max_map_count` is required by SonarQube's internal Elasticsearch. On first access on `:9000`, change the `admin` password and create an analysis token."
+
+  - title:
+      fr: "sonar-project.properties et lancement du scanner"
+      en: "sonar-project.properties and running the scanner"
+    file: sonar-project.properties
+    lang: ini
+    kind: neutral
+    code: |
+      sonar.projectKey=example-app
+      sonar.projectName=Example App
+
+      # Code and tests
+      sonar.sources=src
+      sonar.tests=tests
+      sonar.python.version=3.12
+
+      # Import coverage produced by the test step
+      sonar.python.coverage.reportPaths=coverage.xml
+
+      # New code = everything that differs from main -> the Quality Gate focuses on it
+      sonar.newCode.referenceBranch=main
+
+      # NOTE: sonar.host.url and sonar.token are NOT here (secrets) -> passed at run time
+    output: |
+      # Run the scanner via Docker; URL and token are injected, never committed:
+      $ docker run --rm -v "$(pwd):/usr/src" \
+          -e SONAR_HOST_URL="http://sonarqube:9000" \
+          -e SONAR_TOKEN="$SONAR_TOKEN" \
+          sonarsource/sonar-scanner-cli
+      INFO: Analysis total time: 24.512 s
+      INFO: ANALYSIS SUCCESSFUL, you can find the results at:
+            http://sonarqube:9000/dashboard?id=example-app
+      INFO: Note that you will be able to access the report after the server processed it.
+    note:
+      fr: "Le fichier versionné ne contient que la configuration d'analyse, jamais l'URL ni le token : ces deux secrets sont passés par variables d'environnement. Le message « after the server processed it » rappelle que l'analyse est **asynchrone** : le verdict n'est pas encore connu."
+      en: "The versioned file holds only analysis configuration, never the URL or the token: those two secrets are passed through environment variables. The message 'after the server processed it' is a reminder that the analysis is **asynchronous**: the verdict is not known yet."
+
+  - title:
+      fr: "Le code que SonarQube classe différemment"
+      en: "The code SonarQube classifies differently"
+    file: views.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import subprocess
+
+      from django.http import HttpResponse
+
+
+      def search(request):
+          term = request.GET.get("q", "")
+          # VULNERABILITY: user input concatenated into a shell command
+          out = subprocess.check_output("grep " + term + " data.txt", shell=True)
+          return HttpResponse(out)
+
+
+      def allow_cors(request):
+          resp = HttpResponse("ok")
+          # SECURITY HOTSPOT: a very permissive CORS header -> review required.
+          # Safe for a fully public, read-only API; dangerous with credentials.
+          resp["Access-Control-Allow-Origin"] = "*"
+          return resp
+    note:
+      fr: "`search` contient une **vulnérabilité** : une injection de commande, à corriger sans discussion. `allow_cors` est un **Security Hotspot** : `Allow-Origin: *` peut être acceptable (API publique en lecture seule) ou dangereux (API avec credentials). SonarQube demande une revue humaine plutôt que d'affirmer une faille."
+      en: "`search` contains a **vulnerability**: a command injection, to fix without discussion. `allow_cors` is a **Security Hotspot**: `Allow-Origin: *` may be acceptable (public read-only API) or dangerous (API with credentials). SonarQube asks for a human review rather than asserting a flaw."
+
+  - title:
+      fr: "Bloquer la CI sur le Quality Gate"
+      en: "Failing CI on the Quality Gate"
+    file: .github/workflows/sonar.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: sonarqube
+      on: [push, pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        analysis:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0   # full history, needed for accurate new-code detection
+
+            # 1. Run the analysis and submit it to the server
+            - name: SonarQube scan
+              uses: SonarSource/sonarqube-scan-action@v4
+              env:
+                SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+                SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+            # 2. Wait for the server's verdict and FAIL the job if the gate is red.
+            # The server calls back via a webhook, so this is near-instant.
+            - name: Quality Gate check
+              uses: SonarSource/sonarqube-quality-gate-action@v1
+              timeout-minutes: 5
+              env:
+                SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    output: |
+      Run SonarSource/sonarqube-quality-gate-action@v1
+      Quality Gate status: ERROR
+      Failed conditions:
+        - New Security Hotspots Reviewed: 50.0% < 100%
+        - New Vulnerabilities: 1 > 0
+      Error: Quality Gate has FAILED.
+      ##[error]Process completed with exit code 1.
+    note:
+      fr: "Deux étapes distinctes : l'analyse, puis l'attente du verdict. Le `quality-gate-action` échoue car le nouveau code introduit une vulnérabilité et un Hotspot non revu. Le `timeout-minutes` évite de bloquer si le serveur ne répond pas. Le token vient des secrets, jamais du dépôt."
+      en: "Two distinct steps: the analysis, then waiting for the verdict. The `quality-gate-action` fails because the new code introduces a vulnerability and an unreviewed Hotspot. The `timeout-minutes` avoids hanging if the server does not answer. The token comes from secrets, never from the repository."
+
+mistake:
+  fr: |
+    **Mettre un Quality Gate strict sur l'ensemble du code (*overall code*) au lieu du nouveau code.**
+
+    Appliqué à tout l'historique, un gate « zéro vulnérabilité » rend rouge n'importe quel projet existant
+    dès le premier scan, à cause de la dette accumulée que personne n'a le temps de résorber d'un coup. La
+    CI est bloquée en permanence, l'équipe la contourne, et SonarQube ne sert plus à rien. La bonne approche
+    *Clean as You Code* cible le **nouveau code** : on tolère l'existant, mais on exige que tout ajout soit
+    propre, ce qui fait baisser la dette naturellement au fil des modifications.
+  en: |
+    **Setting a strict Quality Gate on the whole code (*overall code*) instead of new code.**
+
+    Applied to the entire history, a "zero vulnerabilities" gate turns any existing project red on the first
+    scan, because of accumulated debt that nobody can clear at once. CI is permanently blocked, the team
+    bypasses it, and SonarQube becomes useless. The right *Clean as You Code* approach targets **new code**:
+    you tolerate the existing debt but require every addition to be clean, which drives the debt down
+    naturally as the code changes.
+
+bestPractice:
+  fr: |
+    - **PostgreSQL et volumes persistants** : la base H2 et un conteneur sans volume perdent tout l'historique.
+    - **Changez `admin/admin`** et utilisez un **token** d'analyse stocké dans les secrets de la CI.
+    - **Quality Gate sur le nouveau code** (*Clean as You Code*), pas sur tout l'historique.
+    - **Deux étapes en CI** : analyse puis `quality-gate-action`, avec un `timeout`.
+    - **Revoyez les Security Hotspots** au lieu de les ignorer : chacun reçoit un statut tracé.
+    - **`fetch-depth: 0`** pour une détection fiable du nouveau code par rapport à la branche de référence.
+  en: |
+    - **PostgreSQL and persistent volumes**: the H2 database and a volume-less container lose all history.
+    - **Change `admin/admin`** and use an analysis **token** stored in CI secrets.
+    - **Quality Gate on new code** (*Clean as You Code*), not on the whole history.
+    - **Two CI steps**: analysis then `quality-gate-action`, with a `timeout`.
+    - **Review Security Hotspots** instead of ignoring them: each gets a traced status.
+    - **`fetch-depth: 0`** for reliable new-code detection against the reference branch.
+
+exercise:
+  statement:
+    fr: |
+      Vous intégrez SonarQube à un dépôt existant de 200 000 lignes qui contient déjà beaucoup de dette.
+      L'équipe veut :
+
+      1. ne **pas** bloquer la CI à cause de l'ancien code ;
+      2. mais **interdire** toute nouvelle vulnérabilité et exiger la revue des nouveaux Security Hotspots ;
+      3. éviter de stocker le token SonarQube dans le dépôt.
+
+      Décrivez le réglage du Quality Gate à choisir et expliquez, pour chacun des trois besoins, comment il
+      est satisfait.
+    en: |
+      You are integrating SonarQube into an existing 200,000-line repository that already carries a lot of
+      debt. The team wants to:
+
+      1. **not** block CI because of old code;
+      2. but **forbid** any new vulnerability and require review of new Security Hotspots;
+      3. avoid storing the SonarQube token in the repository.
+
+      Describe the Quality Gate setting to choose and explain, for each of the three needs, how it is met.
+  solution:
+    file: answer.md
+    lang: markdown
+    code: |
+      # Setting: use the default "Sonar way" gate, which applies to NEW CODE only.
+
+      1. Not blocking on old code
+         The "Sonar way" gate evaluates conditions on *new code* (the diff against the reference
+         branch), not on *overall code*. The 200k lines of existing debt never turn the gate red,
+         so CI is not blocked by history.
+
+      2. Forbidding new vulnerabilities and requiring Hotspot review
+         Keep the conditions "New Vulnerabilities = 0" and "New Security Hotspots Reviewed = 100%".
+         Any new flaw or unreviewed Hotspot makes the gate ERROR, which fails the CI job.
+
+      3. Keeping the token out of the repository
+         Store SONAR_TOKEN in the CI secret store (GitHub Actions secret / Jenkins credential).
+         sonar-project.properties keeps only sonar.projectKey / sources / newCode.referenceBranch;
+         the token and host URL are injected as environment variables at run time.
+    note:
+      fr: "La clé est le périmètre « nouveau code » : il réconcilie la tolérance de la dette existante avec l'exigence de propreté sur les ajouts. Le token reste un secret de CI, et le fichier versionné ne contient aucune donnée sensible."
+      en: "The key is the 'new code' scope: it reconciles tolerance of existing debt with a cleanliness requirement on additions. The token stays a CI secret, and the versioned file holds no sensitive data."
+
+quiz:
+  - q:
+      fr: "Pourquoi SonarQube a-t-il besoin d'une base PostgreSQL en production ?"
+      en: "Why does SonarQube need a PostgreSQL database in production?"
+    options:
+      fr:
+        - "Pour exécuter le code analysé"
+        - "Pour stocker l'historique de qualité et de sécurité dans le temps"
+        - "Pour remplacer le scanner"
+        - "Pour chiffrer le code source"
+      en:
+        - "To run the analysed code"
+        - "To store the quality and security history over time"
+        - "To replace the scanner"
+        - "To encrypt the source code"
+    answer: 1
+    why:
+      fr: "SonarQube est une plateforme qui suit l'évolution du projet. La base conserve les analyses passées ; la base H2 embarquée ne convient qu'à un test jetable."
+      en: "SonarQube is a platform that tracks a project over time. The database keeps past analyses; the embedded H2 database only suits a throwaway test."
+  - q:
+      fr: "Quelle est la différence entre une Vulnerability et un Security Hotspot ?"
+      en: "What is the difference between a Vulnerability and a Security Hotspot?"
+    options:
+      fr:
+        - "Aucune, ce sont des synonymes"
+        - "La Vulnerability est une faille confirmée ; le Hotspot est du code sensible à faire revoir par un humain"
+        - "Le Hotspot est toujours plus grave"
+        - "La Vulnerability ne concerne que les tests"
+      en:
+        - "None, they are synonyms"
+        - "A Vulnerability is a confirmed flaw; a Hotspot is sensitive code to be reviewed by a human"
+        - "A Hotspot is always more severe"
+        - "A Vulnerability only concerns tests"
+    answer: 1
+    why:
+      fr: "Une vulnérabilité se corrige ; un Hotspot demande un avis contextuel (un `Allow-Origin: *` peut être sûr ou dangereux). Le Hotspot reçoit un statut manuel : Safe, To review ou Fixed."
+      en: "A vulnerability is fixed; a Hotspot needs a contextual opinion (an `Allow-Origin: *` may be safe or dangerous). The Hotspot gets a manual status: Safe, To review or Fixed."
+  - q:
+      fr: "Que signifie « Quality Gate sur le nouveau code » ?"
+      en: "What does 'Quality Gate on new code' mean?"
+    options:
+      fr:
+        - "On évalue surtout le code ajouté/modifié par rapport à une branche de référence"
+        - "On supprime tout le code existant"
+        - "On n'analyse que les fichiers de tests"
+        - "On bloque la CI sur chaque ligne du dépôt"
+      en:
+        - "Mostly the added/changed code is evaluated against a reference branch"
+        - "All existing code is deleted"
+        - "Only test files are analysed"
+        - "CI is blocked on every line of the repository"
+    answer: 0
+    why:
+      fr: "L'approche *Clean as You Code* tolère la dette existante et exige que les ajouts soient propres. Le gate devient rouge si le **nouveau** code introduit une faille, pas à cause de l'historique."
+      en: "The *Clean as You Code* approach tolerates existing debt and requires additions to be clean. The gate turns red if the **new** code introduces a flaw, not because of history."
+  - q:
+      fr: "Pourquoi deux étapes distinctes en CI (analyse puis attente du Quality Gate) ?"
+      en: "Why two distinct CI steps (analysis then Quality Gate wait)?"
+    options:
+      fr:
+        - "Parce que l'analyse est asynchrone : le scanner envoie, le serveur calcule le verdict ensuite"
+        - "Parce que SonarQube refuse une seule étape"
+        - "Pour analyser le code deux fois"
+        - "Pour chiffrer les résultats"
+      en:
+        - "Because the analysis is asynchronous: the scanner submits, the server computes the verdict afterwards"
+        - "Because SonarQube refuses a single step"
+        - "To analyse the code twice"
+        - "To encrypt the results"
+    answer: 0
+    why:
+      fr: "`sonar-scanner` renvoie « analyse envoyée », pas le résultat. La seconde étape récupère l'état du Quality Gate et fait échouer le job s'il est rouge. Un `timeout` évite de bloquer si le serveur ne répond pas."
+      en: "`sonar-scanner` returns 'analysis submitted', not the result. The second step fetches the Quality Gate status and fails the job if it is red. A `timeout` avoids hanging if the server does not answer."
+  - q:
+      fr: "Où doit être stocké le token d'analyse SonarQube ?"
+      en: "Where should the SonarQube analysis token be stored?"
+    options:
+      fr:
+        - "Dans sonar-project.properties, versionné avec le code"
+        - "En clair dans le README"
+        - "Dans le magasin de secrets de la CI, injecté par variable d'environnement"
+        - "Dans un commentaire du code"
+      en:
+        - "In sonar-project.properties, versioned with the code"
+        - "In clear text in the README"
+        - "In the CI secret store, injected as an environment variable"
+        - "In a code comment"
+    answer: 2
+    why:
+      fr: "Le token est un secret d'accès au serveur. Il vit dans le magasin de secrets de la CI (`SONAR_TOKEN`) et n'apparaît jamais dans un fichier versionné."
+      en: "The token is a server access secret. It lives in the CI secret store (`SONAR_TOKEN`) and never appears in a versioned file."

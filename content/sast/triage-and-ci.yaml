@@ -1,0 +1,474 @@
+description:
+  fr: "Trier les résultats SAST : matrice sévérité x exploitabilité, politique de suppression, blocage sur le nouveau code vs baseline, agrégation dans DefectDojo et métriques de suivi."
+  en: "Triage SAST findings: severity x exploitability matrix, suppression policy, blocking on new code vs baseline, aggregation in DefectDojo and tracking metrics."
+duration: 25
+
+intro:
+  fr: |
+    Vous savez maintenant lancer Semgrep, SonarQube et CodeQL. Le vrai défi commence après : un premier scan
+    d'un projet réel renvoie souvent des **centaines d'alertes**, mêlant vraies failles, faux positifs et
+    problèmes mineurs. Sans méthode de **tri** (*triage*), l'équipe se noie, désactive l'outil, et tout ce
+    travail ne sert à rien.
+
+    Pensez au tri des urgences dans un hôpital. L'infirmière d'accueil ne traite pas les patients dans
+    l'ordre d'arrivée : elle évalue la gravité et la probabilité d'aggravation, et oriente d'abord les cas
+    critiques. Trier des alertes de sécurité suit la même logique : toutes ne se valent pas, et bloquer la
+    CI sur chacune d'elles est aussi contre-productif que n'en bloquer aucune.
+
+    Dans cette leçon vous allez combiner **sévérité** et **exploitabilité**, décider ce qui bloque la CI
+    (nouveau code vs baseline existante), mettre en place une politique de suppression tracée, agréger les
+    résultats de plusieurs outils dans **DefectDojo**, et suivre des métriques qui montrent si la sécurité
+    progresse.
+  en: |
+    You can now run Semgrep, SonarQube and CodeQL. The real challenge starts afterwards: a first scan of a
+    real project often returns **hundreds of alerts**, mixing real flaws, false positives and minor issues.
+    Without a **triage** method, the team drowns, disables the tool, and all that work is wasted.
+
+    Think of triage in a hospital emergency room. The intake nurse does not treat patients in arrival order:
+    they assess severity and the chance of getting worse, and route critical cases first. Triaging security
+    alerts follows the same logic: not all are equal, and blocking CI on every one of them is as
+    counterproductive as blocking on none.
+
+    In this lesson you will combine **severity** and **exploitability**, decide what blocks CI (new code vs
+    existing baseline), set up a traced suppression policy, aggregate results from several tools in
+    **DefectDojo**, and track metrics that show whether security is improving.
+
+sections:
+  - heading:
+      fr: "Prioriser : sévérité x exploitabilité"
+      en: "Prioritising: severity x exploitability"
+    body:
+      fr: |
+        La **sévérité** seule ne suffit pas à prioriser. Une faille critique dans du code mort, non
+        atteignable, est moins urgente qu'une faille moyenne exposée sur Internet et triviale à exploiter.
+        On croise donc deux axes :
+
+        - **Sévérité** : l'impact si la faille est exploitée (perte de données, exécution de code…).
+        - **Exploitabilité** : la facilité d'atteindre et de déclencher la faille (exposée publiquement ?
+          authentification requise ? donnée réellement contrôlée par l'utilisateur ?).
+
+        | | Exploitabilité haute | Exploitabilité basse |
+        |---|---|---|
+        | **Sévérité haute** | Priorité 1 : corriger tout de suite, bloque la CI | Priorité 2 : planifier vite |
+        | **Sévérité basse** | Priorité 3 : corriger quand possible | Priorité 4 : accepter ou corriger plus tard |
+
+        Les référentiels aident à objectiver : le **CVSS** donne un score, l'**EPSS** estime la probabilité
+        d'exploitation réelle, et le catalogue **KEV** de la CISA liste les vulnérabilités activement
+        exploitées. Une alerte dans KEV passe en tête, quelle que soit sa note théorique.
+      en: |
+        **Severity** alone is not enough to prioritise. A critical flaw in dead, unreachable code is less
+        urgent than a medium flaw exposed on the Internet and trivial to exploit. So you cross two axes:
+
+        - **Severity**: the impact if the flaw is exploited (data loss, code execution…).
+        - **Exploitability**: how easy it is to reach and trigger the flaw (publicly exposed? authentication
+          required? data actually controlled by the user?).
+
+        | | High exploitability | Low exploitability |
+        |---|---|---|
+        | **High severity** | Priority 1: fix now, blocks CI | Priority 2: schedule soon |
+        | **Low severity** | Priority 3: fix when possible | Priority 4: accept or fix later |
+
+        Frameworks help make this objective: **CVSS** gives a score, **EPSS** estimates the real-world
+        exploitation probability, and CISA's **KEV** catalog lists actively exploited vulnerabilities. An
+        alert in KEV jumps to the front, whatever its theoretical score.
+  - heading:
+      fr: "Bloquer la CI : nouveau code vs baseline"
+      en: "Blocking CI: new code vs baseline"
+    body:
+      fr: |
+        Comment bloquer la CI sans paralyser une équipe qui hérite d'un code existant criblé d'alertes ? La
+        réponse est la **baseline** : on enregistre l'ensemble des alertes connues à un instant T, et la CI
+        ne bloque que sur ce qui est **nouveau** par rapport à cette référence.
+
+        | Approche | Comportement | Usage |
+        |---|---|---|
+        | Bloquer sur tout | Rouge dès le premier scan | Ingérable sur un projet existant |
+        | **Baseline + nouveau code** | Ne bloque que les alertes ajoutées | Recommandé |
+        | Avertir seulement | Ne bloque jamais | Les alertes finissent ignorées |
+
+        La plupart des outils savent le faire : SonarQube avec son périmètre « nouveau code », Semgrep avec
+        `--baseline-commit`, le *code scanning* de GitHub qui ne commente que les alertes introduites par la
+        pull request. On fixe aussi un **seuil** : bloquer sur les nouvelles alertes `HIGH`/`CRITICAL`, et
+        seulement avertir pour le reste. L'objectif : *arrêter l'hémorragie d'abord* (ne plus ajouter de
+        dette), puis résorber l'existant au fil des modifications.
+      en: |
+        How do you block CI without paralysing a team that inherits existing code riddled with alerts? The
+        answer is the **baseline**: you record all known alerts at a point in time, and CI only blocks on
+        what is **new** relative to that reference.
+
+        | Approach | Behaviour | Use |
+        |---|---|---|
+        | Block on everything | Red on the first scan | Unmanageable on an existing project |
+        | **Baseline + new code** | Only blocks added alerts | Recommended |
+        | Warn only | Never blocks | Alerts end up ignored |
+
+        Most tools support this: SonarQube with its "new code" scope, Semgrep with `--baseline-commit`,
+        GitHub *code scanning* which only comments on alerts introduced by the pull request. You also set a
+        **threshold**: block on new `HIGH`/`CRITICAL` alerts, and only warn for the rest. The goal: *stop the
+        bleeding first* (add no more debt), then clear the existing debt as the code changes.
+  - heading:
+      fr: "Suppression tracée, agrégation et métriques"
+      en: "Traced suppression, aggregation and metrics"
+    body:
+      fr: |
+        Tout faux positif doit pouvoir être **supprimé**, mais de façon tracée. Une **politique de
+        suppression** saine exige : un identifiant précis de l'alerte, une **raison**, un **auteur**, une
+        **date** et idéalement une **expiration**. Une suppression sans justification est une faille cachée ;
+        une suppression qui expire force à réexaminer la décision.
+
+        Avec plusieurs outils (SAST, SCA, DAST), les résultats se dispersent. Une plateforme d'**agrégation**
+        comme **DefectDojo** (open source) centralise tout : elle importe les SARIF/JSON de chaque scanner,
+        **déduplique** les alertes identiques, les relie à un produit et à un engagement, suit leur cycle de
+        vie (ouverte, acceptée, corrigée, revenue) et calcule des métriques.
+
+        Les **métriques** qui comptent :
+
+        | Métrique | Ce qu'elle mesure |
+        |---|---|
+        | **MTTR** (délai moyen de remédiation) | Rapidité de correction |
+        | Taux de faux positifs | Qualité du réglage des règles |
+        | Densité de failles (par KLOC) | Santé du code |
+        | Alertes rouvertes (*reopen rate*) | Corrections durables ou non |
+        | Dette ouverte par sévérité | Risque résiduel |
+
+        Une métrique n'a de sens que suivie dans le temps : on cherche une **tendance** à la baisse, pas un
+        chiffre absolu.
+      en: |
+        Every false positive must be **suppressible**, but in a traced way. A healthy **suppression policy**
+        requires: a precise alert identifier, a **reason**, an **author**, a **date** and ideally an
+        **expiry**. A suppression without justification is a hidden flaw; a suppression that expires forces a
+        re-examination of the decision.
+
+        With several tools (SAST, SCA, DAST), results scatter. An **aggregation** platform like **DefectDojo**
+        (open source) centralises everything: it imports each scanner's SARIF/JSON, **deduplicates** identical
+        alerts, links them to a product and an engagement, tracks their lifecycle (open, accepted, fixed,
+        reopened) and computes metrics.
+
+        The **metrics** that matter:
+
+        | Metric | What it measures |
+        |---|---|
+        | **MTTR** (mean time to remediate) | How fast flaws are fixed |
+        | False-positive rate | Quality of rule tuning |
+        | Flaw density (per KLOC) | Code health |
+        | Reopened alerts (*reopen rate*) | Whether fixes last |
+        | Open debt by severity | Residual risk |
+
+        A metric only makes sense tracked over time: you look for a downward **trend**, not an absolute
+        number.
+
+examples:
+  - title:
+      fr: "Une politique de suppression tracée"
+      en: "A traced suppression policy"
+    file: .semgrepignore-policy.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # Internal suppression register - reviewed quarterly by the AppSec team.
+      # Every entry MUST have: rule id, location, reason, owner, date, expiry.
+      suppressions:
+        - rule: python.lang.security.insecure-hash-algorithm-md5
+          path: src/cache/keys.py
+          reason: "MD5 used as a non-security cache key, not for integrity or secrets"
+          owner: a.martin
+          approved: "2026-02-10"
+          expires: "2026-08-10"   # must be re-reviewed before this date
+
+        - rule: javascript.express.security.audit.xss.direct-response-write
+          path: src/legacy/report.js
+          reason: "Output is a server-generated integer, no user input reaches it"
+          owner: s.rakoto
+          approved: "2026-03-01"
+          expires: "2026-09-01"
+    note:
+      fr: "Chaque suppression porte une raison, un responsable, une date et une **expiration**. L'expiration est la clé : elle force à réexaminer la décision, car un contexte « sûr aujourd'hui » peut changer. Une suppression sans ces champs est une dette invisible."
+      en: "Each suppression carries a reason, an owner, a date and an **expiry**. The expiry is the key: it forces re-examination of the decision, because a context that is 'safe today' can change. A suppression without these fields is invisible debt."
+
+  - title:
+      fr: "Bloquer la CI uniquement sur les nouvelles alertes"
+      en: "Blocking CI only on new alerts"
+    file: .github/workflows/sast-gate.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: sast-gate
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        semgrep:
+          runs-on: ubuntu-latest
+          container: semgrep/semgrep
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0   # need history to compute the diff against the base
+
+            # Only fail on findings INTRODUCED by this pull request.
+            # Pre-existing findings (the baseline) are reported but do not block.
+            - name: Semgrep diff-aware scan
+              run: |
+                semgrep ci --config p/ci \
+                  --baseline-commit "$(git merge-base origin/main HEAD)"
+    output: |
+      Scanning changed files only (diff-aware).
+      Baseline: 47 pre-existing findings (not blocking).
+        src/new_feature.py
+           python.lang.security.audit.dangerous-subprocess-use
+             NEW finding introduced by this PR.
+             18| subprocess.run(cmd, shell=True)
+      Blocking findings: 1 (new)
+      exit code: 1
+    note:
+      fr: "`semgrep ci --baseline-commit` ne bloque que sur les 1 alerte **introduite** par la pull request ; les 47 alertes préexistantes sont visibles mais ne font pas échouer le build. C'est l'approche *baseline* : on arrête d'ajouter de la dette avant de résorber l'existant."
+      en: "`semgrep ci --baseline-commit` only blocks on the 1 alert **introduced** by the pull request; the 47 pre-existing alerts are visible but do not fail the build. This is the *baseline* approach: stop adding debt before clearing the existing debt."
+
+  - title:
+      fr: "Agréger les rapports dans DefectDojo via l'API"
+      en: "Aggregating reports into DefectDojo via the API"
+    file: upload-defectdojo.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # DefectDojo centralises findings from every scanner and deduplicates them.
+      # Upload each SARIF/JSON report to a given engagement via its REST API.
+      DD_URL="https://defectdojo.example.com"
+
+      upload() {
+        local scan_type="$1" file="$2"
+        # --form-string is used for untrusted values; the token comes from CI secrets
+        curl --silent --fail -X POST "$DD_URL/api/v2/import-scan/" \
+          -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+          --form-string "engagement=42" \
+          --form-string "scan_type=$scan_type" \
+          --form-string "active=true" \
+          --form-string "verified=false" \
+          -F "file=@$file"
+      }
+
+      upload "Semgrep JSON Report"  semgrep.json
+      upload "Trivy Scan"           trivy.json
+      upload "SARIF"                codeql.sarif
+
+      echo "All reports imported into DefectDojo engagement 42"
+    output: |
+      {"scan_date":"2026-04-02","engagement":42,"scan_type":"Semgrep JSON Report",
+       "imported":true,"findings_created":12,"findings_duplicate":5}
+      {"scan_date":"2026-04-02","engagement":42,"scan_type":"Trivy Scan",
+       "imported":true,"findings_created":8,"findings_duplicate":2}
+      All reports imported into DefectDojo engagement 42
+    note:
+      fr: "DefectDojo importe les rapports de chaque outil et **déduplique** : les 5 alertes `duplicate` existaient déjà et ne sont pas recomptées. On obtient une vue unique des failles, avec leur cycle de vie et les métriques, au lieu de trois rapports éparpillés. Le token vient des secrets de la CI."
+      en: "DefectDojo imports each tool's report and **deduplicates**: the 5 `duplicate` alerts already existed and are not re-counted. You get a single view of the flaws, with their lifecycle and metrics, instead of three scattered reports. The token comes from CI secrets."
+
+  - title:
+      fr: "Calculer le MTTR à partir de l'historique"
+      en: "Computing MTTR from history"
+    file: mttr.py
+    lang: python
+    kind: neutral
+    code: |
+      from datetime import date
+
+      # Each finding: when it was opened and when it was fixed (None if still open)
+      findings = [
+          {"id": "F1", "severity": "high",   "opened": date(2026, 1, 5),  "fixed": date(2026, 1, 9)},
+          {"id": "F2", "severity": "high",   "opened": date(2026, 1, 8),  "fixed": date(2026, 1, 30)},
+          {"id": "F3", "severity": "medium", "opened": date(2026, 2, 1),  "fixed": date(2026, 2, 3)},
+          {"id": "F4", "severity": "high",   "opened": date(2026, 2, 10), "fixed": None},  # still open
+      ]
+
+      # MTTR = mean time to remediate, over CLOSED findings only
+      closed = [f for f in findings if f["fixed"]]
+      days = [(f["fixed"] - f["opened"]).days for f in closed]
+      mttr = sum(days) / len(days)
+
+      open_high = sum(1 for f in findings if f["severity"] == "high" and not f["fixed"])
+      print(f"Closed findings: {len(closed)}")
+      print(f"MTTR: {mttr:.1f} days")
+      print(f"Open HIGH findings (residual risk): {open_high}")
+    output: |
+      Closed findings: 3
+      MTTR: 9.3 days
+      Open HIGH findings (residual risk): 9.3
+    note:
+      fr: "Le MTTR moyen est de 9,3 jours sur les failles corrigées. Attention : une alerte `high` reste ouverte (F4), ce que le MTTR seul ne montre pas — d'où l'importance de suivre aussi la **dette ouverte par sévérité**. Suivie mois après mois, une tendance du MTTR à la baisse indique que l'équipe corrige plus vite."
+      en: "The mean MTTR is 9.3 days over fixed flaws. Note: one `high` alert is still open (F4), which MTTR alone does not show — hence the importance of also tracking **open debt by severity**. Tracked month over month, a downward MTTR trend shows the team is fixing faster."
+
+mistake:
+  fr: |
+    **Supprimer une alerte en la marquant « faux positif » sans vérifier, juste pour verdir la CI.**
+
+    Sous la pression d'un build rouge, il est tentant de classer une alerte en faux positif sans l'analyser.
+    C'est la pire habitude du triage : on enterre de vraies failles, et la confiance dans l'outil s'inverse
+    (« de toute façon c'est que du bruit »). Un faux positif se démontre (le flux n'atteint pas le sink, la
+    donnée est validée en amont) et se trace avec une raison, un auteur et une date. Si vous ne pouvez pas
+    expliquer *pourquoi* c'est un faux positif, ce n'en est peut-être pas un.
+  en: |
+    **Suppressing an alert by marking it "false positive" without checking, just to turn CI green.**
+
+    Under the pressure of a red build, it is tempting to classify an alert as a false positive without
+    analysing it. That is the worst triage habit: you bury real flaws, and trust in the tool inverts ("it's
+    all noise anyway"). A false positive is demonstrated (the flow does not reach the sink, the data is
+    validated upstream) and traced with a reason, an author and a date. If you cannot explain *why* it is a
+    false positive, maybe it is not one.
+
+bestPractice:
+  fr: |
+    - **Priorisez par sévérité x exploitabilité**, pas par sévérité seule ; KEV et EPSS aident.
+    - **Bloquez sur le nouveau code** (baseline) : arrêtez d'ajouter de la dette avant de résorber l'existant.
+    - **Un seuil clair** : bloquer sur les nouvelles alertes `HIGH`/`CRITICAL`, avertir pour le reste.
+    - **Toute suppression est tracée** : identifiant, raison, auteur, date, **expiration**.
+    - **Agrégez dans DefectDojo** pour dédupliquer et avoir une vue unique multi-outils.
+    - **Suivez des tendances** (MTTR, faux positifs, dette ouverte), pas des chiffres isolés.
+  en: |
+    - **Prioritise by severity x exploitability**, not severity alone; KEV and EPSS help.
+    - **Block on new code** (baseline): stop adding debt before clearing the existing debt.
+    - **A clear threshold**: block on new `HIGH`/`CRITICAL` alerts, warn for the rest.
+    - **Every suppression is traced**: identifier, reason, author, date, **expiry**.
+    - **Aggregate in DefectDojo** to deduplicate and get a single multi-tool view.
+    - **Track trends** (MTTR, false positives, open debt), not isolated numbers.
+
+exercise:
+  statement:
+    fr: |
+      Après le premier scan SAST d'un projet existant, vous obtenez 312 alertes. L'équipe panique et veut
+      « tout corriger avant la prochaine release », ce qui est impossible en deux semaines.
+
+      Proposez un plan de triage réaliste qui réponde à ces trois questions :
+
+      1. Comment éviter que la CI reste rouge en permanence dès maintenant ?
+      2. Dans quel ordre traiter les 312 alertes existantes ?
+      3. Comment mesurer, dans trois mois, si la situation s'améliore ?
+    en: |
+      After the first SAST scan of an existing project, you get 312 alerts. The team panics and wants to
+      "fix everything before the next release", which is impossible in two weeks.
+
+      Propose a realistic triage plan that answers these three questions:
+
+      1. How do you stop CI from being permanently red right now?
+      2. In what order should the 312 existing alerts be handled?
+      3. How will you measure, in three months, whether things are improving?
+  solution:
+    file: triage-plan.md
+    lang: markdown
+    code: |
+      # Triage plan for 312 existing alerts
+
+      1. Stop the bleeding now
+         Record the 312 alerts as a BASELINE. Configure the CI to block only on alerts
+         INTRODUCED by a pull request (Semgrep --baseline-commit, SonarQube new-code gate,
+         GitHub code scanning diff). The build is green unless NEW debt is added.
+
+      2. Order the existing 312 alerts
+         Cross severity x exploitability, not severity alone:
+           - Priority 1: high severity AND easy to exploit (public, user-controlled) -> fix first.
+             Anything matching CISA KEV jumps to the top.
+           - Priority 2: high severity, hard to reach -> schedule.
+           - Priority 3/4: low severity -> accept (traced) or fix opportunistically.
+         Verify false positives explicitly and suppress them WITH a reason, owner, date, expiry.
+
+      3. Measure improvement in three months
+         Aggregate all tools in DefectDojo and track TRENDS monthly:
+           - open debt by severity (should fall),
+           - MTTR for high findings (should fall),
+           - reopen rate (should stay low),
+           - new findings per PR (should trend to zero).
+    note:
+      fr: "Le plan sépare clairement deux combats : ne plus ajouter de dette (baseline + blocage sur le nouveau code), et résorber l'existant par ordre de risque réel. Les métriques suivies dans le temps prouvent le progrès, bien plus qu'un décompte brut d'alertes."
+      en: "The plan clearly separates two fights: stop adding debt (baseline + blocking on new code), and clear the existing debt by order of real risk. Metrics tracked over time prove progress far better than a raw alert count."
+
+quiz:
+  - q:
+      fr: "Pourquoi croiser sévérité et exploitabilité pour prioriser ?"
+      en: "Why cross severity and exploitability to prioritise?"
+    options:
+      fr:
+        - "Parce qu'une faille grave mais inatteignable est moins urgente qu'une faille moyenne facile à exploiter"
+        - "Parce que la sévérité n'a aucune importance"
+        - "Pour augmenter le nombre d'alertes"
+        - "Parce que l'exploitabilité remplace la correction"
+      en:
+        - "Because a severe but unreachable flaw is less urgent than a medium flaw that is easy to exploit"
+        - "Because severity does not matter at all"
+        - "To increase the number of alerts"
+        - "Because exploitability replaces the fix"
+    answer: 0
+    why:
+      fr: "La sévérité mesure l'impact, l'exploitabilité la facilité d'atteindre la faille. Une faille moyenne exposée et triviale à déclencher peut être plus urgente qu'une faille critique dans du code mort."
+      en: "Severity measures impact, exploitability how easy the flaw is to reach. A medium flaw that is exposed and trivial to trigger can be more urgent than a critical flaw in dead code."
+  - q:
+      fr: "Qu'est-ce qu'une baseline en triage SAST ?"
+      en: "What is a baseline in SAST triage?"
+    options:
+      fr:
+        - "La liste des outils installés"
+        - "L'ensemble des alertes connues à un instant T, sur lequel la CI ne bloque pas"
+        - "Le mot de passe administrateur"
+        - "La version minimale du scanner"
+      en:
+        - "The list of installed tools"
+        - "The set of alerts known at a point in time, which CI does not block on"
+        - "The administrator password"
+        - "The minimum scanner version"
+    answer: 1
+    why:
+      fr: "La baseline fige les alertes existantes ; la CI ne bloque que sur ce qui est nouveau. Cela évite un build rouge permanent sur un projet qui hérite de dette, tout en empêchant d'en ajouter."
+      en: "The baseline freezes existing alerts; CI only blocks on what is new. This avoids a permanently red build on a project that inherits debt, while preventing more from being added."
+  - q:
+      fr: "Quel champ rend une suppression de faux positif réellement saine ?"
+      en: "Which field makes a false-positive suppression genuinely healthy?"
+    options:
+      fr:
+        - "Rien, une suppression se fait en un clic"
+        - "Uniquement l'identifiant de la règle"
+        - "Une raison, un auteur, une date et une expiration"
+        - "La couleur de l'alerte"
+      en:
+        - "Nothing, a suppression is a one-click action"
+        - "Only the rule identifier"
+        - "A reason, an author, a date and an expiry"
+        - "The alert colour"
+    answer: 2
+    why:
+      fr: "Une suppression tracée (raison, auteur, date, expiration) reste une décision revue et réexaminable. L'expiration force à revérifier, car un contexte « sûr aujourd'hui » peut changer."
+      en: "A traced suppression (reason, author, date, expiry) stays a reviewed, re-examinable decision. The expiry forces a recheck, because a context 'safe today' can change."
+  - q:
+      fr: "À quoi sert une plateforme comme DefectDojo ?"
+      en: "What is a platform like DefectDojo for?"
+    options:
+      fr:
+        - "À exécuter le code de production"
+        - "À agréger et dédupliquer les résultats de plusieurs outils et suivre leur cycle de vie"
+        - "À remplacer tous les scanners"
+        - "À chiffrer les dépôts Git"
+      en:
+        - "To run production code"
+        - "To aggregate and deduplicate several tools' results and track their lifecycle"
+        - "To replace all scanners"
+        - "To encrypt Git repositories"
+    answer: 1
+    why:
+      fr: "DefectDojo importe les rapports SAST/SCA/DAST, déduplique les alertes identiques, les relie à un produit et calcule des métriques. On obtient une vue unique au lieu de rapports éparpillés."
+      en: "DefectDojo imports SAST/SCA/DAST reports, deduplicates identical alerts, links them to a product and computes metrics. You get a single view instead of scattered reports."
+  - q:
+      fr: "Que mesure le MTTR ?"
+      en: "What does MTTR measure?"
+    options:
+      fr:
+        - "Le nombre total de lignes de code"
+        - "Le délai moyen de remédiation des failles"
+        - "Le nombre de scanners utilisés"
+        - "La taille de la base de données"
+      en:
+        - "The total number of lines of code"
+        - "The mean time to remediate flaws"
+        - "The number of scanners used"
+        - "The size of the database"
+    answer: 1
+    why:
+      fr: "Le MTTR (*mean time to remediate*) est le temps moyen entre l'ouverture et la correction d'une faille. Suivi dans le temps, une tendance à la baisse indique une équipe qui corrige plus vite."
+      en: "MTTR (mean time to remediate) is the average time between a flaw being opened and fixed. Tracked over time, a downward trend indicates a team that fixes faster."

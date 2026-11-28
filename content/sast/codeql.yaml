@@ -1,0 +1,483 @@
+description:
+  fr: "Comprendre CodeQL : le code transformé en base de données interrogeable, le workflow GitHub init/autobuild/analyze, la suite security-extended, une requête .ql simple et la CLI."
+  en: "Understand CodeQL: code turned into a queryable database, the GitHub init/autobuild/analyze workflow, the security-extended suite, a simple .ql query and the CLI."
+duration: 30
+
+intro:
+  fr: |
+    **CodeQL** est le moteur SAST de GitHub. Son idée est radicalement différente des outils à motifs :
+    plutôt que de chercher des formes dans le texte, il transforme tout le code en une **base de données
+    relationnelle**, puis on l'interroge avec un langage de requête, **QL**, comme on interrogerait du SQL.
+
+    L'analogie : au lieu de lire un énorme livre page par page pour trouver des erreurs, on en construit
+    d'abord un index complet (chaque fonction, chaque variable, chaque appel, qui appelle qui), puis on pose
+    des questions précises à cet index : « montre-moi toute donnée qui va d'une entrée HTTP jusqu'à une
+    requête SQL sans être échappée ». Cette approche est lente à construire mais très puissante pour suivre
+    des flux complexes entre fichiers et fonctions.
+
+    Dans cette leçon vous allez comprendre ce qu'est une base CodeQL, mettre en place l'analyse dans GitHub
+    Actions (`init` / `autobuild` / `analyze`), activer la suite `security-extended`, lire une courte
+    requête `.ql`, et lancer CodeQL en ligne de commande avec la CLI.
+  en: |
+    **CodeQL** is GitHub's SAST engine. Its idea is radically different from pattern-based tools: instead of
+    searching for shapes in text, it turns all the code into a **relational database**, which you then query
+    with a query language, **QL**, the way you would query SQL.
+
+    The analogy: rather than reading a huge book page by page to find mistakes, you first build a full index
+    of it (every function, every variable, every call, who calls whom), then ask the index precise questions:
+    "show me any data that goes from an HTTP input to a SQL query without being escaped". This approach is
+    slow to build but very powerful for following complex flows across files and functions.
+
+    In this lesson you will understand what a CodeQL database is, set up the analysis in GitHub Actions
+    (`init` / `autobuild` / `analyze`), enable the `security-extended` suite, read a short `.ql` query, and
+    run CodeQL from the command line with the CLI.
+
+sections:
+  - heading:
+      fr: "Qu'est-ce qu'une base CodeQL ?"
+      en: "What is a CodeQL database?"
+    body:
+      fr: |
+        CodeQL fonctionne en deux temps : **créer la base**, puis **l'interroger**.
+
+        Pour les langages compilés (Java, C/C++, C#, Go), CodeQL observe la **compilation** pour comprendre
+        exactement ce qui est construit : il faut donc que le projet compile. Pour les langages interprétés
+        (Python, JavaScript/TypeScript, Ruby), il extrait directement la structure du code source. Le
+        résultat est une base contenant des tables : les expressions, les appels, les types, le graphe de
+        flux de données.
+
+        | Étape | Rôle |
+        |---|---|
+        | **Extraction** | Le code devient une base de données relationnelle |
+        | **Requêtes (QL)** | Des `.ql` interrogent cette base pour trouver des motifs de vulnérabilité |
+        | **Résultats** | Chaque alerte pointe un chemin source → sink, exporté en SARIF |
+
+        La grande force est l'**analyse de flux inter-procédurale** : CodeQL suit une donnée à travers
+        plusieurs fonctions et fichiers. C'est ce qui lui permet de trouver des injections que des outils à
+        motifs simples ratent, au prix d'un temps d'analyse plus long.
+      en: |
+        CodeQL works in two phases: **build the database**, then **query it**.
+
+        For compiled languages (Java, C/C++, C#, Go), CodeQL watches the **build** to understand exactly what
+        is produced: the project must therefore compile. For interpreted languages (Python,
+        JavaScript/TypeScript, Ruby), it extracts the structure directly from the source. The result is a
+        database with tables: expressions, calls, types, the data-flow graph.
+
+        | Step | Role |
+        |---|---|
+        | **Extraction** | The code becomes a relational database |
+        | **Queries (QL)** | `.ql` files query that database to find vulnerability patterns |
+        | **Results** | Each alert points to a source → sink path, exported as SARIF |
+
+        The great strength is **inter-procedural flow analysis**: CodeQL follows data across several functions
+        and files. That is what lets it find injections that simple pattern tools miss, at the cost of a
+        longer analysis time.
+  - heading:
+      fr: "CodeQL dans GitHub Actions"
+      en: "CodeQL in GitHub Actions"
+    body:
+      fr: |
+        Sur GitHub, l'analyse se branche en trois étapes avec l'action officielle `github/codeql-action` :
+
+        1. **`init`** : crée la base vide et choisit les langages et la suite de requêtes.
+        2. **`autobuild`** : tente de compiler automatiquement le projet (utile pour Java, Go…). Pour un
+           langage interprété, cette étape ne fait presque rien. Si l'autobuild échoue, on la remplace par
+           ses propres commandes de build.
+        3. **`analyze`** : lance les requêtes sur la base et **téléverse** le SARIF vers l'onglet *Security →
+           Code scanning* du dépôt.
+
+        Deux réglages de sécurité à ne pas oublier :
+
+        - la permission `security-events: write` est nécessaire pour publier les résultats ;
+        - on choisit la **suite de requêtes** avec `queries:`. Les suites vont de `default` (rapide, peu de
+          bruit) à `security-extended` (plus de règles, plus de couverture) et `security-and-quality` (qui
+          ajoute des règles de qualité).
+
+        L'action peut aussi tourner sur un déclencheur **planifié** (`schedule`) pour une analyse complète
+        hebdomadaire, en plus de l'analyse de chaque pull request.
+      en: |
+        On GitHub, the analysis plugs in as three steps with the official `github/codeql-action`:
+
+        1. **`init`**: creates the empty database and chooses the languages and the query suite.
+        2. **`autobuild`**: tries to build the project automatically (useful for Java, Go…). For an
+           interpreted language this step does almost nothing. If autobuild fails, you replace it with your
+           own build commands.
+        3. **`analyze`**: runs the queries against the database and **uploads** the SARIF to the repository's
+           *Security → Code scanning* tab.
+
+        Two security settings not to forget:
+
+        - the `security-events: write` permission is required to publish results;
+        - you choose the **query suite** with `queries:`. Suites range from `default` (fast, low noise) to
+          `security-extended` (more rules, more coverage) and `security-and-quality` (which adds quality
+          rules).
+
+        The action can also run on a **scheduled** trigger (`schedule`) for a full weekly analysis, on top of
+        the per-pull-request analysis.
+  - heading:
+      fr: "QL et la CLI CodeQL"
+      en: "QL and the CodeQL CLI"
+    body:
+      fr: |
+        Une requête `.ql` ressemble à du SQL orienté objet. Elle déclare une classe de nœuds, une ou des
+        conditions, et un `select` qui produit les alertes. GitHub fournit des centaines de requêtes prêtes à
+        l'emploi (les *query packs*), mais on peut écrire les siennes pour une règle maison — par exemple
+        interdire un appel interne dangereux propre à votre entreprise.
+
+        Pour analyser hors de GitHub (poste local, autre CI), la **CLI CodeQL** fait tout :
+
+        ```bash
+        # 1. Build the database (for Python, no compilation needed)
+        codeql database create app-db --language=python --source-root .
+
+        # 2. Run a query suite and export SARIF
+        codeql database analyze app-db \
+          codeql/python-queries:codeql-suites/python-security-extended.qls \
+          --format=sarif-latest --output=results.sarif
+        ```
+
+        Le SARIF produit par la CLI est le même format que celui du workflow : on peut l'importer dans
+        n'importe quel tableau de bord qui lit le SARIF, ou le téléverser vers le *code scanning* de GitHub
+        avec `codeql github upload-results`. CodeQL est gratuit pour les dépôts publics et dans le cadre de
+        GitHub Advanced Security pour le privé.
+      en: |
+        A `.ql` query looks like object-oriented SQL. It declares a class of nodes, one or more conditions,
+        and a `select` that produces the alerts. GitHub ships hundreds of ready-made queries (the *query
+        packs*), but you can write your own for a house rule — for example forbidding a dangerous internal
+        call specific to your company.
+
+        To analyse outside GitHub (local machine, other CI), the **CodeQL CLI** does everything:
+
+        ```bash
+        # 1. Build the database (for Python, no compilation needed)
+        codeql database create app-db --language=python --source-root .
+
+        # 2. Run a query suite and export SARIF
+        codeql database analyze app-db \
+          codeql/python-queries:codeql-suites/python-security-extended.qls \
+          --format=sarif-latest --output=results.sarif
+        ```
+
+        The SARIF produced by the CLI is the same format as the workflow's: you can import it into any
+        dashboard that reads SARIF, or upload it to GitHub *code scanning* with `codeql github
+        upload-results`. CodeQL is free for public repositories and, for private ones, under GitHub Advanced
+        Security.
+
+examples:
+  - title:
+      fr: "Le workflow CodeQL dans GitHub Actions"
+      en: "The CodeQL workflow in GitHub Actions"
+    file: .github/workflows/codeql.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: codeql
+      on:
+        push:
+          branches: [main]
+        pull_request:
+          branches: [main]
+        schedule:
+          - cron: "0 3 * * 1"   # full analysis every Monday at 03:00
+
+      jobs:
+        analyze:
+          runs-on: ubuntu-latest
+          permissions:
+            security-events: write   # required to publish SARIF to code scanning
+            contents: read
+          strategy:
+            matrix:
+              language: [python, javascript]
+          steps:
+            - uses: actions/checkout@v4
+
+            # 1. Create the database, pick the language and the broader rule suite
+            - name: Initialize CodeQL
+              uses: github/codeql-action/init@v3
+              with:
+                languages: ${{ matrix.language }}
+                queries: security-extended
+
+            # 2. Try to build automatically (no-op for Python/JS)
+            - name: Autobuild
+              uses: github/codeql-action/autobuild@v3
+
+            # 3. Run the queries and upload the results
+            - name: Analyze
+              uses: github/codeql-action/analyze@v3
+    output: |
+      Initializing CodeQL
+      Running queries for python (security-extended suite, 198 queries)
+      Analysis produced the following alerts:
+        - py/command-line-injection (error) in app/views.py:12
+        - py/clear-text-logging-sensitive-data (warning) in app/auth.py:40
+      Uploading results to code scanning
+      Successfully uploaded results (2 alerts)
+    note:
+      fr: "Les trois étapes `init`, `autobuild`, `analyze` forment le squelette standard. La matrice analyse deux langages en parallèle. Le déclencheur `schedule` ajoute une analyse hebdomadaire complète, et la permission `security-events: write` autorise la publication dans l'onglet *Code scanning*."
+      en: "The three steps `init`, `autobuild`, `analyze` form the standard skeleton. The matrix analyses two languages in parallel. The `schedule` trigger adds a full weekly analysis, and the `security-events: write` permission authorises publishing to the *Code scanning* tab."
+
+  - title:
+      fr: "La faille que CodeQL suit entre deux fonctions"
+      en: "The flaw CodeQL follows across two functions"
+    file: views.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import subprocess
+
+      from flask import Flask, request
+
+      app = Flask(__name__)
+
+
+      def build_command(user_value):
+          # The taint travels through this helper to the caller
+          return "host " + user_value
+
+
+      @app.route("/lookup")
+      def lookup():
+          # SOURCE: user-controlled query parameter
+          target = request.args.get("target", "")
+          cmd = build_command(target)     # taint crosses a function boundary here
+          # SINK: the tainted string reaches a shell
+          return subprocess.check_output(cmd, shell=True)
+    note:
+      fr: "La donnée passe par la fonction `build_command` avant d'atteindre le shell. Un outil à motif simple, qui regarde une ligne à la fois, peut rater ce chemin. CodeQL, grâce à son analyse **inter-procédurale**, suit la teinte de `request.args` jusqu'à `subprocess` à travers l'appel de fonction."
+      en: "The data passes through the `build_command` function before reaching the shell. A simple pattern tool, looking one line at a time, can miss this path. CodeQL, with its **inter-procedural** analysis, follows the taint from `request.args` to `subprocess` across the function call."
+
+  - title:
+      fr: "Une courte requête .ql personnalisée"
+      en: "A short custom .ql query"
+    file: ForbidEval.ql
+    lang: text
+    kind: neutral
+    code: |
+      /**
+       * @name Use of eval()
+       * @description Flags calls to the built-in eval(), which can run arbitrary code.
+       * @kind problem
+       * @problem.severity error
+       * @id py/custom/forbid-eval
+       */
+
+      import python
+
+      // Find every call whose target is the global function named "eval"
+      from CallNode call
+      where call.getFunction().(NameNode).getId() = "eval"
+      select call, "Avoid eval(): it can execute arbitrary code. Use a safe parser instead."
+    output: |
+      $ codeql query run ForbidEval.ql -d app-db
+      | call                 | message                                              |
+      +----------------------+------------------------------------------------------+
+      | eval(user_input)     | Avoid eval(): it can execute arbitrary code. ...     |
+      1 result
+    note:
+      fr: "Une requête QL a un en-tête de métadonnées (nom, sévérité, id) puis une logique `from / where / select`. Celle-ci trouve tout appel à `eval`. On écrit des requêtes maison pour les règles spécifiques à son organisation ; pour l'usage courant, les query packs de GitHub suffisent."
+      en: "A QL query has a metadata header (name, severity, id) then a `from / where / select` body. This one finds every call to `eval`. You write custom queries for rules specific to your organisation; for everyday use, GitHub's query packs are enough."
+
+  - title:
+      fr: "Analyser en local avec la CLI CodeQL"
+      en: "Analysing locally with the CodeQL CLI"
+    file: codeql-local.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # The CLI lets you analyse outside GitHub (local machine, any CI).
+
+      # 1. Build the database. Python needs no compilation; the source is extracted directly.
+      codeql database create app-db --language=python --source-root .
+
+      # 2. Run the security-extended suite and export SARIF
+      codeql database analyze app-db \
+        codeql/python-queries:codeql-suites/python-security-extended.qls \
+        --format=sarif-latest --output=results.sarif
+
+      # 3. In CI, fail the job when the SARIF contains any result (jq counts them)
+      COUNT=$(jq '[.runs[].results[]] | length' results.sarif)
+      echo "CodeQL findings: $COUNT"
+      test "$COUNT" -eq 0
+    output: |
+      Creating database at app-db.
+      Running extractor on 18 files.
+      Interpreting results.
+      Analysis complete.
+      CodeQL findings: 1
+      # test "1" -eq 0 -> exit code 1 : the CI job fails
+    note:
+      fr: "La CLI fait les deux phases : `database create` puis `database analyze`. Le SARIF est le même format que celui du workflow. On transforme le résultat en décision de CI en comptant les alertes avec `jq` : zéro alerte passe, sinon le job échoue."
+      en: "The CLI does both phases: `database create` then `database analyze`. The SARIF is the same format as the workflow's. You turn the result into a CI decision by counting alerts with `jq`: zero alert passes, otherwise the job fails."
+
+mistake:
+  fr: |
+    **Lancer `autobuild` sur un langage compilé et ignorer que la base est vide quand le build échoue.**
+
+    Pour Java, C/C++, Go ou C#, CodeQL doit **observer** la compilation. Si `autobuild` ne parvient pas à
+    construire le projet (dépendances manquantes, étape de build spécifique), la base ne contient presque
+    rien : l'analyse se termine « sans alerte », ce qui ressemble à un succès mais signifie en réalité que
+    *rien n'a été analysé*. Il faut vérifier les logs d'extraction, et remplacer `autobuild` par ses propres
+    commandes de build quand l'auto-détection échoue.
+  en: |
+    **Running `autobuild` on a compiled language and missing that the database is empty when the build
+    fails.**
+
+    For Java, C/C++, Go or C#, CodeQL must **watch** the compilation. If `autobuild` fails to build the
+    project (missing dependencies, a specific build step), the database contains almost nothing: the analysis
+    ends "with no alert", which looks like success but actually means *nothing was analysed*. Check the
+    extraction logs, and replace `autobuild` with your own build commands when auto-detection fails.
+
+bestPractice:
+  fr: |
+    - **Choisissez la bonne suite** : `default` pour un bruit faible, `security-extended` pour plus de couverture.
+    - **Vérifiez l'extraction** sur les langages compilés : une base vide donne un faux sentiment de sécurité.
+    - **Activez la permission `security-events: write`** pour publier dans *Code scanning*.
+    - **Ajoutez un déclencheur `schedule`** pour une analyse complète régulière, en plus des pull requests.
+    - **Écrivez des requêtes maison** seulement pour vos règles spécifiques ; les query packs couvrent le reste.
+    - **Traitez le SARIF comme la source unique** : même format en workflow et en CLI.
+  en: |
+    - **Pick the right suite**: `default` for low noise, `security-extended` for more coverage.
+    - **Check extraction** on compiled languages: an empty database gives a false sense of security.
+    - **Enable the `security-events: write` permission** to publish to *Code scanning*.
+    - **Add a `schedule` trigger** for a regular full analysis, on top of pull requests.
+    - **Write custom queries** only for your specific rules; the query packs cover the rest.
+    - **Treat SARIF as the single source**: same format in the workflow and the CLI.
+
+exercise:
+  statement:
+    fr: |
+      Un dépôt GitHub contient une application **Go**. Un collègue a copié un workflow CodeQL prévu pour
+      Python, avec `languages: python` et l'étape `autobuild`. L'analyse se termine « 0 alerte », mais
+      personne ne fait confiance à ce résultat.
+
+      1. Expliquez pourquoi « 0 alerte » est ici probablement trompeur.
+      2. Que faut-il changer dans l'étape `init` ?
+      3. Pour Go, que faire si `autobuild` n'arrive pas à construire le projet ?
+    en: |
+      A GitHub repository contains a **Go** application. A colleague copied a CodeQL workflow meant for
+      Python, with `languages: python` and the `autobuild` step. The analysis ends "0 alerts", but nobody
+      trusts the result.
+
+      1. Explain why "0 alerts" is probably misleading here.
+      2. What must change in the `init` step?
+      3. For Go, what should you do if `autobuild` cannot build the project?
+  solution:
+    file: answer.md
+    lang: markdown
+    code: |
+      # Why "0 alerts" is misleading and how to fix it
+
+      1. Wrong language = empty database
+         The workflow declares `languages: python` but the code is Go. CodeQL's Python extractor
+         finds no Python files, so the database is essentially empty. "0 alerts" does not mean the
+         Go code is clean; it means nothing was analysed.
+
+      2. Fix the init step
+         Set the correct language:
+           - uses: github/codeql-action/init@v3
+             with:
+               languages: go
+               queries: security-extended
+
+      3. If autobuild fails for Go
+         Go is a compiled language: CodeQL must observe the build. Replace the autobuild step with
+         the project's real build commands between init and analyze, e.g.:
+           - run: go build ./...
+         Then confirm the extraction logs show files were processed before trusting the result.
+    note:
+      fr: "La leçon centrale : sur un langage compilé, une analyse « sans alerte » peut simplement vouloir dire que la base est vide. On vérifie toujours que l'extraction a bien traité des fichiers."
+      en: "The central lesson: on a compiled language, an analysis 'with no alert' may simply mean the database is empty. Always confirm that extraction actually processed files."
+
+quiz:
+  - q:
+      fr: "Quelle est l'idée centrale de CodeQL ?"
+      en: "What is CodeQL's core idea?"
+    options:
+      fr:
+        - "Exécuter l'application et observer son trafic"
+        - "Transformer le code en base de données interrogeable avec des requêtes QL"
+        - "Comparer les dépendances à une base de CVE"
+        - "Chercher des mots-clés avec des expressions régulières"
+      en:
+        - "Run the application and watch its traffic"
+        - "Turn the code into a queryable database queried with QL queries"
+        - "Compare dependencies against a CVE database"
+        - "Search for keywords with regular expressions"
+    answer: 1
+    why:
+      fr: "CodeQL extrait le code dans une base relationnelle puis l'interroge avec QL. Cela permet une analyse de flux inter-procédurale que les outils à motifs simples ne font pas."
+      en: "CodeQL extracts the code into a relational database then queries it with QL. This enables inter-procedural flow analysis that simple pattern tools do not perform."
+  - q:
+      fr: "Pour un langage compilé comme Java, pourquoi l'étape de build est-elle importante ?"
+      en: "For a compiled language like Java, why does the build step matter?"
+    options:
+      fr:
+        - "Parce que CodeQL doit observer la compilation pour construire la base"
+        - "Parce que le build chiffre le code"
+        - "Parce que sinon l'analyse est trop rapide"
+        - "Le build n'a aucune importance"
+      en:
+        - "Because CodeQL must watch the build to construct the database"
+        - "Because the build encrypts the code"
+        - "Because otherwise the analysis is too fast"
+        - "The build does not matter at all"
+    answer: 0
+    why:
+      fr: "Sur les langages compilés, CodeQL extrait la base en observant la compilation. Si le build échoue, la base est quasi vide et l'analyse ne trouve rien, à tort."
+      en: "On compiled languages, CodeQL extracts the database by watching the build. If the build fails, the database is nearly empty and the analysis finds nothing, wrongly."
+  - q:
+      fr: "Quelle suite de requêtes offre le plus de couverture sécurité ?"
+      en: "Which query suite offers the most security coverage?"
+    options:
+      fr:
+        - "default"
+        - "security-extended"
+        - "none"
+        - "coverage-only"
+      en:
+        - "default"
+        - "security-extended"
+        - "none"
+        - "coverage-only"
+    answer: 1
+    why:
+      fr: "`security-extended` ajoute des règles par rapport à `default`, au prix d'un peu plus de bruit. `security-and-quality` va plus loin en ajoutant des règles de qualité."
+      en: "`security-extended` adds rules over `default`, at the cost of a bit more noise. `security-and-quality` goes further by adding quality rules."
+  - q:
+      fr: "Quelle permission le workflow doit-il accorder pour publier les résultats dans Code scanning ?"
+      en: "Which permission must the workflow grant to publish results to Code scanning?"
+    options:
+      fr:
+        - "contents: write"
+        - "packages: write"
+        - "security-events: write"
+        - "actions: write"
+      en:
+        - "contents: write"
+        - "packages: write"
+        - "security-events: write"
+        - "actions: write"
+    answer: 2
+    why:
+      fr: "`security-events: write` autorise l'action `analyze` à téléverser le SARIF vers l'onglet *Security → Code scanning*. Sans elle, la publication échoue."
+      en: "`security-events: write` authorises the `analyze` action to upload the SARIF to the *Security → Code scanning* tab. Without it, publishing fails."
+  - q:
+      fr: "Que fait `codeql database create` ?"
+      en: "What does `codeql database create` do?"
+    options:
+      fr:
+        - "Il interroge une base existante"
+        - "Il extrait le code dans une base CodeQL, première phase de l'analyse"
+        - "Il supprime les vulnérabilités automatiquement"
+        - "Il déploie l'application"
+      en:
+        - "It queries an existing database"
+        - "It extracts the code into a CodeQL database, the first phase of the analysis"
+        - "It removes vulnerabilities automatically"
+        - "It deploys the application"
+    answer: 1
+    why:
+      fr: "La CLI procède en deux temps : `database create` extrait le code, puis `database analyze` exécute les requêtes. Le résultat est un SARIF, même format que le workflow GitHub."
+      en: "The CLI works in two phases: `database create` extracts the code, then `database analyze` runs the queries. The result is a SARIF, the same format as the GitHub workflow."
