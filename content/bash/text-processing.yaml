@@ -1,0 +1,454 @@
+description:
+  fr: "Analyser des journaux et des fichiers de configuration avec les trois outils rois du shell : grep pour chercher, sed pour transformer, awk pour extraire par colonnes."
+  en: "Analyse logs and configuration files with the shell's three royal tools: grep to search, sed to transform, awk to extract by columns."
+duration: 30
+
+intro:
+  fr: |
+    Une grande partie du travail DevSecOps consiste à **lire des journaux** : qui s'est connecté, quelles
+    requêtes ont échoué, quelles adresses IP reviennent sans cesse. Les journaux sont du texte, souvent
+    énorme, et trois outils Unix permettent de le fouiller à la vitesse de l'éclair : **grep**, **sed** et
+    **awk**.
+
+    Imaginez un classeur de milliers de fiches. **grep** est le surligneur : il ne garde que les fiches
+    contenant un mot. **sed** est le correcteur : il remplace un mot par un autre sur chaque fiche. **awk**
+    est le comptable : il lit chaque fiche en colonnes et fait des totaux. Ensemble, reliés par des pipes,
+    ils répondent à presque toutes les questions d'analyse de texte.
+
+    Dans cette leçon, vous apprendrez à filtrer avec grep (et ses expressions régulières), à transformer avec
+    sed, et à extraire et agréger des colonnes avec awk. Les exemples portent sur des cas de sécurité réels :
+    compter les connexions SSH échouées, repérer les adresses IP les plus actives, extraire des champs d'un
+    journal d'accès web. Tous les scripts restent en mode strict.
+  en: |
+    A large part of DevSecOps work is **reading logs**: who logged in, which requests failed, which IP
+    addresses keep coming back. Logs are text, often huge, and three Unix tools let you dig through it at
+    lightning speed: **grep**, **sed** and **awk**.
+
+    Picture a binder of thousands of cards. **grep** is the highlighter: it keeps only the cards containing a
+    word. **sed** is the proofreader: it replaces one word with another on each card. **awk** is the
+    accountant: it reads each card in columns and computes totals. Together, linked by pipes, they answer
+    almost every text-analysis question.
+
+    In this lesson you will learn to filter with grep (and its regular expressions), transform with sed, and
+    extract and aggregate columns with awk. The examples cover real security cases: counting failed SSH
+    logins, spotting the busiest IP addresses, extracting fields from a web access log. All scripts stay in
+    strict mode.
+
+sections:
+  - heading:
+      fr: "grep : chercher des motifs"
+      en: "grep: searching for patterns"
+    body:
+      fr: |
+        `grep` affiche les lignes qui contiennent un motif. C'est l'outil de recherche par excellence :
+
+        ```bash
+        grep "Failed password" /var/log/auth.log     # lines with this text
+        grep -i "error" app.log                       # -i : case-insensitive
+        grep -c "Failed" auth.log                      # -c : count matching lines
+        grep -v "healthcheck" access.log               # -v : INVERT (lines NOT matching)
+        grep -rn "api_key" ./src                        # -r recursive, -n show line numbers
+        ```
+
+        | Option | Effet |
+        |---|---|
+        | `-i` | ignore la casse |
+        | `-v` | inverse : lignes qui **ne** correspondent **pas** |
+        | `-c` | compte les lignes correspondantes |
+        | `-n` | affiche le numéro de ligne |
+        | `-r` | recherche récursive dans un dossier |
+        | `-E` | active les expressions régulières étendues |
+
+        Avec `-E`, on utilise des **expressions régulières** : `grep -E "^Failed|Invalid"` trouve les lignes
+        commençant par `Failed` **ou** contenant `Invalid`. Les ancres `^` (début) et `$` (fin), les classes
+        `[0-9]`, et le `|` (ou) sont les briques de base. `grep -oE "[0-9]{1,3}(\.[0-9]{1,3}){3}"` extrait les
+        adresses IPv4 d'un fichier : `-o` n'affiche que la partie qui correspond.
+      en: |
+        `grep` prints the lines that contain a pattern. It is the search tool par excellence:
+
+        ```bash
+        grep "Failed password" /var/log/auth.log     # lines with this text
+        grep -i "error" app.log                       # -i : case-insensitive
+        grep -c "Failed" auth.log                      # -c : count matching lines
+        grep -v "healthcheck" access.log               # -v : INVERT (lines NOT matching)
+        grep -rn "api_key" ./src                        # -r recursive, -n show line numbers
+        ```
+
+        | Option | Effect |
+        |---|---|
+        | `-i` | ignore case |
+        | `-v` | invert: lines that do **not** match |
+        | `-c` | count matching lines |
+        | `-n` | show the line number |
+        | `-r` | search recursively in a folder |
+        | `-E` | enable extended regular expressions |
+
+        With `-E` you use **regular expressions**: `grep -E "^Failed|Invalid"` finds lines starting with
+        `Failed` **or** containing `Invalid`. The anchors `^` (start) and `$` (end), classes `[0-9]`, and the
+        `|` (or) are the basic bricks. `grep -oE "[0-9]{1,3}(\.[0-9]{1,3}){3}"` extracts IPv4 addresses from a
+        file: `-o` prints only the matching part.
+  - heading:
+      fr: "sed : transformer le texte"
+      en: "sed: transforming text"
+    body:
+      fr: |
+        `sed` (*stream editor*) applique des transformations ligne par ligne. Son usage le plus courant est la
+        **substitution** `s/motif/remplacement/` :
+
+        ```bash
+        sed 's/error/ERROR/g' app.log          # replace every 'error' with 'ERROR' (g = all)
+        sed -n '10,20p' big.log                 # print only lines 10 to 20 (-n + p)
+        sed '/^#/d' config.conf                  # delete comment lines (starting with #)
+        sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g' access.log   # anonymise IPs
+        ```
+
+        Points clés : le `g` final remplace **toutes** les occurrences d'une ligne (sinon seulement la
+        première) ; `-n` combiné à `p` n'affiche que les lignes voulues ; `/motif/d` supprime les lignes qui
+        correspondent ; et `-E` active les expressions régulières étendues.
+
+        Une règle de sécurité importante : par défaut, `sed` écrit sur la sortie standard et **ne modifie pas**
+        le fichier. L'option `-i` modifie le fichier **sur place**, ce qui est irréversible. Avant d'utiliser
+        `-i` sur un fichier de production, testez sans `-i` pour voir le résultat, et gardez une sauvegarde
+        (`sed -i.bak` crée une copie `.bak`). Le dernier exemple ci-dessus **anonymise** les adresses IP d'un
+        journal, un besoin fréquent avant de partager des logs.
+      en: |
+        `sed` (*stream editor*) applies line-by-line transformations. Its most common use is the
+        **substitution** `s/pattern/replacement/`:
+
+        ```bash
+        sed 's/error/ERROR/g' app.log          # replace every 'error' with 'ERROR' (g = all)
+        sed -n '10,20p' big.log                 # print only lines 10 to 20 (-n + p)
+        sed '/^#/d' config.conf                  # delete comment lines (starting with #)
+        sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g' access.log   # anonymise IPs
+        ```
+
+        Key points: the trailing `g` replaces **every** occurrence on a line (otherwise only the first); `-n`
+        combined with `p` prints only the wanted lines; `/pattern/d` deletes matching lines; and `-E` enables
+        extended regular expressions.
+
+        An important safety rule: by default, `sed` writes to standard output and **does not change** the file.
+        The `-i` option edits the file **in place**, which is irreversible. Before using `-i` on a production
+        file, test without `-i` to see the result, and keep a backup (`sed -i.bak` creates a `.bak` copy). The
+        last example above **anonymises** IP addresses in a log, a frequent need before sharing logs.
+  - heading:
+      fr: "awk : penser en colonnes"
+      en: "awk: thinking in columns"
+    body:
+      fr: |
+        `awk` lit chaque ligne comme une suite de **champs** séparés par des espaces (par défaut). `$1` est le
+        premier champ, `$2` le deuxième, `$NF` le dernier, `$0` la ligne entière :
+
+        ```bash
+        awk '{ print $1, $NF }' access.log          # first and last field of each line
+        awk -F: '{ print $1 }' /etc/passwd           # -F: sets ':' as the field separator
+        awk '$9 == 500 { print $7 }' access.log       # URLs ($7) with HTTP status 500 ($9)
+        awk '{ count[$1]++ } END { for (ip in count) print count[ip], ip }' access.log
+        ```
+
+        La vraie puissance d'awk est l'**agrégation**. Le dernier exemple compte les occurrences de chaque
+        adresse IP (`$1`) dans un tableau associatif `count`, puis, dans le bloc `END` (exécuté une fois à la
+        fin), affiche le total par IP. C'est exactement ce qu'il faut pour trouver l'IP qui martèle un serveur.
+
+        | Variable awk | Signification |
+        |---|---|
+        | `$1`, `$2`, … | les champs de la ligne |
+        | `$NF` | le dernier champ (`NF` = nombre de champs) |
+        | `$0` | la ligne entière |
+        | `NR` | le numéro de la ligne courante |
+        | `-F','` | définit la virgule comme séparateur |
+
+        Reliés par des pipes à `sort` et `uniq`, ces trois outils forment une chaîne d'analyse complète :
+        `grep ... | awk ... | sort | uniq -c | sort -rn`.
+      en: |
+        `awk` reads each line as a series of **fields** separated by spaces (by default). `$1` is the first
+        field, `$2` the second, `$NF` the last, `$0` the whole line:
+
+        ```bash
+        awk '{ print $1, $NF }' access.log          # first and last field of each line
+        awk -F: '{ print $1 }' /etc/passwd           # -F: sets ':' as the field separator
+        awk '$9 == 500 { print $7 }' access.log       # URLs ($7) with HTTP status 500 ($9)
+        awk '{ count[$1]++ } END { for (ip in count) print count[ip], ip }' access.log
+        ```
+
+        The real power of awk is **aggregation**. The last example counts occurrences of each IP address
+        (`$1`) in an associative array `count`, then, in the `END` block (run once at the end), prints the
+        total per IP. This is exactly what you need to find the IP hammering a server.
+
+        | awk variable | Meaning |
+        |---|---|
+        | `$1`, `$2`, … | the fields of the line |
+        | `$NF` | the last field (`NF` = number of fields) |
+        | `$0` | the whole line |
+        | `NR` | the current line number |
+        | `-F','` | set the comma as separator |
+
+        Linked by pipes to `sort` and `uniq`, these three tools form a complete analysis chain:
+        `grep ... | awk ... | sort | uniq -c | sort -rn`.
+
+examples:
+  - title:
+      fr: "Compter les connexions SSH échouées par IP"
+      en: "Counting failed SSH logins per IP"
+    file: failed-ssh.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      log="${1:-/var/log/auth.log}"
+
+      # Pipeline: find failures -> extract the IP (last-but-3 field) -> count -> sort.
+      # grep narrows, awk extracts, sort+uniq -c aggregate, sort -rn ranks.
+      grep "Failed password" "$log" |
+          grep -oE "[0-9]{1,3}(\.[0-9]{1,3}){3}" |   # extract any IPv4 on the line
+          sort |
+          uniq -c |                                   # count identical IPs (needs sort first)
+          sort -rn |                                  # most frequent first
+          head -5                                     # top 5 attackers
+    output: |
+      43 192.0.2.66
+      31 198.51.100.7
+      12 203.0.113.9
+       4 192.0.2.10
+       1 198.51.100.30
+    note:
+      fr: "`grep -oE` extrait l'IPv4 de chaque ligne d'échec. `uniq -c` compte les lignes identiques (d'où le `sort` juste avant, obligatoire). `sort -rn` classe par nombre décroissant : l'IP en tête est la plus agressive, candidate à un blocage."
+      en: "`grep -oE` extracts the IPv4 from each failure line. `uniq -c` counts identical lines (hence the preceding `sort`, which is required). `sort -rn` ranks by descending count: the top IP is the most aggressive, a candidate for blocking."
+
+  - title:
+      fr: "Extraire des colonnes avec awk"
+      en: "Extracting columns with awk"
+    file: top-urls.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      log="${1:-access.log}"
+
+      # In a common web log: $1 = client IP, $7 = URL, $9 = HTTP status.
+      # Keep only server errors (5xx), then rank the URLs that caused them.
+      awk '$9 ~ /^5[0-9][0-9]$/ { print $7 }' "$log" |   # ~ matches a regex on the status
+          sort |
+          uniq -c |
+          sort -rn |
+          head -5
+    output: |
+       27 /api/payment
+       14 /api/users/export
+        9 /login
+        3 /admin/backup
+        1 /search
+    note:
+      fr: "`$9 ~ /^5[0-9][0-9]$/` sélectionne les lignes dont le statut HTTP est un 5xx. awk pense en colonnes : `$7` est l'URL, qu'on agrège ensuite. On identifie ainsi les points de l'API qui tombent en erreur serveur."
+      en: "`$9 ~ /^5[0-9][0-9]$/` selects lines whose HTTP status is a 5xx. awk thinks in columns: `$7` is the URL, which we then aggregate. This identifies the API endpoints throwing server errors."
+
+  - title:
+      fr: "sed : anonymiser des journaux avant partage"
+      en: "sed: anonymising logs before sharing"
+    file: anonymise.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      src="${1:?usage: anonymise.sh <logfile>}"
+
+      # Replace every IPv4 and every email with a placeholder, WITHOUT touching
+      # the original file (output goes to stdout; redirect it if you want a copy).
+      sed -E \
+          -e 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/[IP]/g' \
+          -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[EMAIL]/g' \
+          "$src"
+    output: |
+      $ ./anonymise.sh access.log | head -2
+      [IP] - - [27/Nov/2026:10:01:14] "GET /login" 200 user=[EMAIL]
+      [IP] - - [27/Nov/2026:10:01:15] "GET /api/users" 403
+    note:
+      fr: "Deux substitutions `-e` enchaînées masquent IP et e-mails. On n'utilise **pas** `-i` : le fichier d'origine est préservé et le résultat part sur stdout. C'est la bonne pratique avant d'envoyer des logs à un tiers."
+      en: "Two chained `-e` substitutions mask IPs and emails. We do **not** use `-i`: the original file is preserved and the result goes to stdout. This is the good practice before sending logs to a third party."
+
+  - title:
+      fr: "Lire /etc/passwd : comptes avec shell de connexion"
+      en: "Reading /etc/passwd: accounts with a login shell"
+    file: login-shells.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # /etc/passwd fields are colon-separated: name:x:uid:gid:info:home:shell
+      # List accounts whose shell ($7) allows interactive login (a security review item).
+      awk -F: '$7 ~ /(bash|sh|zsh)$/ { print $1, "uid="$3, "shell="$7 }' /etc/passwd |
+          sort
+    output: |
+      devops uid=1000 shell=/bin/bash
+      jdoe uid=1001 shell=/bin/bash
+      root uid=0 shell=/bin/bash
+    note:
+      fr: "`-F:` fixe le `:` comme séparateur de /etc/passwd. On ne garde que les comptes dont le shell ($7) permet une connexion interactive : les comptes de service devraient plutôt avoir `/usr/sbin/nologin`. C'est un point d'audit classique."
+      en: "`-F:` sets `:` as the separator of /etc/passwd. We keep only accounts whose shell ($7) allows an interactive login: service accounts should instead have `/usr/sbin/nologin`. This is a classic audit point."
+
+mistake:
+  fr: |
+    **Utiliser `sed -i` sans sauvegarde ni test préalable.**
+
+    `sed -i` modifie le fichier **sur place**, de façon irréversible. Sur un fichier de configuration de
+    production, une expression régulière un peu trop large peut corrompre le fichier en une fraction de
+    seconde. La bonne démarche : d'abord exécuter `sed` **sans** `-i` pour vérifier la sortie, puis, si tout
+    est correct, utiliser `sed -i.bak` qui crée une copie `.bak` avant de modifier. Autre piège fréquent :
+    oublier le `sort` avant `uniq -c`. `uniq` ne regroupe que les lignes **adjacentes** identiques ; sans tri
+    préalable, le comptage est faux.
+  en: |
+    **Using `sed -i` with no backup and no prior test.**
+
+    `sed -i` edits the file **in place**, irreversibly. On a production configuration file, a slightly too
+    broad regular expression can corrupt the file in a fraction of a second. The right approach: first run
+    `sed` **without** `-i` to check the output, then, if all is correct, use `sed -i.bak` which creates a
+    `.bak` copy before editing. Another frequent trap: forgetting the `sort` before `uniq -c`. `uniq` only
+    groups **adjacent** identical lines; without a prior sort, the count is wrong.
+
+bestPractice:
+  fr: |
+    - **Choisissez le bon outil** : grep pour filtrer, sed pour transformer, awk pour extraire et agréger des
+      colonnes.
+    - **Triez avant `uniq -c`** : `sort | uniq -c | sort -rn` est l'idiome standard pour classer des
+      occurrences.
+    - **Testez `sed` sans `-i`** d'abord, puis utilisez `sed -i.bak` pour garder une sauvegarde sur place.
+    - **Préférez `grep -E` et `sed -E`** pour des expressions régulières lisibles (classes, `|`, quantifieurs).
+    - **Anonymisez les journaux** (IP, e-mails) avant de les partager, avec des substitutions `sed`.
+    - **Ancrez vos motifs** (`^`, `$`, `\b`) pour éviter les correspondances trop larges qui faussent les
+      résultats.
+  en: |
+    - **Pick the right tool**: grep to filter, sed to transform, awk to extract and aggregate columns.
+    - **Sort before `uniq -c`**: `sort | uniq -c | sort -rn` is the standard idiom to rank occurrences.
+    - **Test `sed` without `-i`** first, then use `sed -i.bak` to keep an on-disk backup.
+    - **Prefer `grep -E` and `sed -E`** for readable regular expressions (classes, `|`, quantifiers).
+    - **Anonymise logs** (IPs, emails) before sharing them, with `sed` substitutions.
+    - **Anchor your patterns** (`^`, `$`, `\b`) to avoid overly broad matches that skew results.
+
+exercise:
+  statement:
+    fr: |
+      Vous disposez d'un fichier `auth.log` contenant des lignes comme :
+
+      ```text
+      Nov 27 10:14:02 web-01 sshd[2211]: Failed password for invalid user admin from 192.0.2.66 port 51022 ssh2
+      ```
+
+      Écrivez un pipeline (dans un script `top-users.sh`) qui affiche les **5 noms d'utilisateur** les plus
+      visés par des tentatives échouées, avec leur nombre, du plus fréquent au moins fréquent. Le nom
+      d'utilisateur suit le mot `user` dans ces lignes.
+
+      Indice : combinez `grep`, `awk` (le nom est le champ juste après `user`), `sort`, `uniq -c`.
+    en: |
+      You have an `auth.log` file containing lines like:
+
+      ```text
+      Nov 27 10:14:02 web-01 sshd[2211]: Failed password for invalid user admin from 192.0.2.66 port 51022 ssh2
+      ```
+
+      Write a pipeline (in a script `top-users.sh`) that prints the **5 usernames** most targeted by failed
+      attempts, with their count, from most to least frequent. The username follows the word `user` in these
+      lines.
+
+      Hint: combine `grep`, `awk` (the name is the field right after `user`), `sort`, `uniq -c`.
+  solution:
+    file: top-users.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      log="${1:-auth.log}"
+
+      # Keep failed attempts, then for each line print the field that follows "user".
+      grep "Failed password" "$log" |
+          awk '{ for (i = 1; i < NF; i++) if ($i == "user") print $(i+1) }' |
+          sort |
+          uniq -c |
+          sort -rn |
+          head -5
+    note:
+      fr: "La boucle `for` dans awk cherche le champ `user` et affiche le suivant (`$(i+1)`), ce qui marche même si la position varie selon le format de la ligne. Ensuite `sort | uniq -c | sort -rn` classe les noms les plus visés."
+      en: "The `for` loop in awk finds the `user` field and prints the next one (`$(i+1)`), which works even if the position varies with the line format. Then `sort | uniq -c | sort -rn` ranks the most targeted names."
+
+quiz:
+  - q:
+      fr: "Quelle option de grep inverse la sélection (lignes qui ne correspondent pas) ?"
+      en: "Which grep option inverts the selection (lines that do NOT match)?"
+    options:
+      fr: ["-i", "-v", "-c", "-n"]
+      en: ["-i", "-v", "-c", "-n"]
+    answer: 1
+    why:
+      fr: "`-v` inverse le filtre : grep affiche les lignes qui ne contiennent pas le motif. Pratique pour exclure le bruit (healthchecks, lignes connues)."
+      en: "`-v` inverts the filter: grep prints the lines that do NOT contain the pattern. Handy to exclude noise (healthchecks, known lines)."
+  - q:
+      fr: "Dans awk, que représente `$NF` ?"
+      en: "In awk, what does `$NF` represent?"
+    options:
+      fr:
+        - "Le premier champ"
+        - "Le numéro de ligne"
+        - "Le dernier champ de la ligne"
+        - "Le fichier courant"
+      en:
+        - "The first field"
+        - "The line number"
+        - "The last field of the line"
+        - "The current file"
+    answer: 2
+    why:
+      fr: "`NF` est le nombre de champs ; `$NF` désigne donc le dernier champ, utile quand le nombre de colonnes varie."
+      en: "`NF` is the number of fields; `$NF` therefore refers to the last field, useful when the number of columns varies."
+  - q:
+      fr: "Pourquoi faut-il un `sort` avant `uniq -c` ?"
+      en: "Why do you need a `sort` before `uniq -c`?"
+    options:
+      fr:
+        - "Parce que uniq ne regroupe que les lignes identiques adjacentes"
+        - "Parce que uniq est plus rapide trié"
+        - "Parce que sort chiffre les données"
+        - "Ce n'est pas nécessaire"
+      en:
+        - "Because uniq only groups adjacent identical lines"
+        - "Because uniq is faster when sorted"
+        - "Because sort encrypts the data"
+        - "It is not necessary"
+    answer: 0
+    why:
+      fr: "`uniq` compare uniquement les lignes voisines ; sans tri préalable, des occurrences identiques mais dispersées ne sont pas regroupées et le comptage est faux."
+      en: "`uniq` only compares neighbouring lines; without a prior sort, identical but scattered occurrences are not grouped and the count is wrong."
+  - q:
+      fr: "Quel est le risque de `sed -i` ?"
+      en: "What is the risk of `sed -i`?"
+    options:
+      fr:
+        - "Il est trop lent"
+        - "Il modifie le fichier sur place de façon irréversible"
+        - "Il n'accepte pas les expressions régulières"
+        - "Il affiche toujours tout le fichier"
+      en:
+        - "It is too slow"
+        - "It edits the file in place, irreversibly"
+        - "It does not accept regular expressions"
+        - "It always prints the whole file"
+    answer: 1
+    why:
+      fr: "`-i` écrit directement dans le fichier ; une regex trop large peut le corrompre sans retour possible. On teste sans `-i` puis on utilise `sed -i.bak` pour garder une sauvegarde."
+      en: "`-i` writes straight into the file; an overly broad regex can corrupt it with no undo. Test without `-i`, then use `sed -i.bak` to keep a backup."
+  - q:
+      fr: "Quel outil est le mieux adapté pour additionner ou compter des valeurs par colonne ?"
+      en: "Which tool is best suited to sum or count values by column?"
+    options:
+      fr: ["grep", "sed", "awk", "cat"]
+      en: ["grep", "sed", "awk", "cat"]
+    answer: 2
+    why:
+      fr: "awk lit chaque ligne en champs et peut agréger dans des tableaux associatifs, puis produire des totaux dans un bloc `END` : c'est l'outil des colonnes et des calculs."
+      en: "awk reads each line into fields and can aggregate in associative arrays, then produce totals in an `END` block: it is the tool for columns and calculations."

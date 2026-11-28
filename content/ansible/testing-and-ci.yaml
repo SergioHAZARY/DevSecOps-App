@@ -1,0 +1,457 @@
+description:
+  fr: "Tester ses rôles Ansible avec yamllint, ansible-lint et Molecule, puis automatiser lint et tests dans un pipeline d'intégration continue."
+  en: "Test your Ansible roles with yamllint, ansible-lint and Molecule, then automate linting and tests in a continuous integration pipeline."
+duration: 40
+
+intro:
+  fr: |
+    Un playbook qui tourne sur votre portable n'est pas la même chose qu'un playbook *fiable*. Comment
+    savoir qu'il est idempotent, qu'il respecte les bonnes pratiques et qu'il fonctionnera sur un serveur
+    neuf ? En le **testant automatiquement**, comme on teste du code applicatif.
+
+    Pensez à un contrôle technique de voiture : avant de prendre la route, on vérifie les freins, les feux,
+    les pneus. L'automatisation Ansible mérite le même soin, car elle s'exécute en root sur vos serveurs.
+    Trois outils forment ce contrôle technique : **yamllint** (le YAML est-il propre ?), **ansible-lint**
+    (le playbook respecte-t-il les bonnes pratiques ?) et **Molecule** (le rôle fait-il vraiment ce qu'il
+    prétend, dans un conteneur jetable ?).
+
+    Vous allez configurer ces trois outils, lancer un test Molecule complet, puis les intégrer dans un
+    workflow GitHub Actions pour que chaque modification soit vérifiée avant d'atteindre la production.
+  en: |
+    A playbook that runs on your laptop is not the same thing as a *reliable* playbook. How do you know it
+    is idempotent, follows best practice, and will work on a fresh server? By **testing it automatically**,
+    like application code.
+
+    Think of a car inspection: before hitting the road you check the brakes, the lights, the tyres. Ansible
+    automation deserves the same care, because it runs as root on your servers. Three tools form this
+    inspection: **yamllint** (is the YAML clean?), **ansible-lint** (does the playbook follow best
+    practice?) and **Molecule** (does the role really do what it claims, in a throwaway container?).
+
+    You will configure these three tools, run a full Molecule test, then integrate them into a GitHub
+    Actions workflow so every change is checked before it reaches production.
+
+sections:
+  - heading:
+      fr: "Lint : yamllint et ansible-lint"
+      en: "Linting: yamllint and ansible-lint"
+    body:
+      fr: |
+        Le *linting* détecte les problèmes sans exécuter le code. Deux outils se complètent :
+
+        | Outil | Ce qu'il vérifie | Exemple de problème détecté |
+        |---|---|---|
+        | `yamllint` | La forme du YAML | Indentation, lignes trop longues, `yes`/`no` ambigus |
+        | `ansible-lint` | Les bonnes pratiques Ansible | Nom court au lieu du FQCN, `shell` au lieu d'un module, tâche sans `name` |
+
+        `yamllint` attrape les erreurs de syntaxe et de style du fichier ; `ansible-lint` connaît la
+        sémantique d'Ansible et signale par exemple une permission `mode` non entre guillemets ou l'usage de
+        `command` là où un module idempotent existe. Ces deux outils s'exécutent en quelques secondes et se
+        branchent aussi bien dans un hook pre-commit que dans la CI.
+      en: |
+        *Linting* detects problems without running the code. Two tools complement each other:
+
+        | Tool | What it checks | Example problem caught |
+        |---|---|---|
+        | `yamllint` | The YAML's form | Indentation, over-long lines, ambiguous `yes`/`no` |
+        | `ansible-lint` | Ansible best practices | Short name instead of FQCN, `shell` instead of a module, task with no `name` |
+
+        `yamllint` catches the file's syntax and style errors; `ansible-lint` knows Ansible's semantics and
+        flags, for example, a `mode` permission that is not quoted or the use of `command` where an
+        idempotent module exists. Both run in seconds and plug equally well into a pre-commit hook or CI.
+  - heading:
+      fr: "Molecule : tester un rôle pour de vrai"
+      en: "Molecule: really testing a role"
+    body:
+      fr: |
+        Le lint ne vérifie que la forme. **Molecule** va plus loin : il crée une **instance jetable** (un
+        conteneur Docker), y applique le rôle, puis contrôle le résultat. Il teste aussi l'**idempotence**
+        en rejouant le rôle et en vérifiant que rien ne change au second passage.
+
+        Un scénario Molecule vit dans `molecule/default/` et enchaîne des étapes :
+
+        | Étape (`molecule <étape>`) | Rôle |
+        |---|---|
+        | `create` | Démarrer le conteneur de test |
+        | `converge` | Appliquer le rôle sur le conteneur |
+        | `idempotence` | Rejouer et exiger `changed=0` |
+        | `verify` | Lancer les assertions (le service tourne-t-il ?) |
+        | `destroy` | Supprimer le conteneur |
+
+        La commande `molecule test` exécute tout le cycle d'un coup. C'est le test le plus proche de la
+        réalité : il prouve que le rôle part bien d'un système neuf et aboutit à l'état voulu.
+      en: |
+        Linting only checks the form. **Molecule** goes further: it creates a **throwaway instance** (a
+        Docker container), applies the role to it, then checks the result. It also tests **idempotence** by
+        replaying the role and verifying nothing changes on the second pass.
+
+        A Molecule scenario lives in `molecule/default/` and chains stages:
+
+        | Stage (`molecule <stage>`) | Purpose |
+        |---|---|
+        | `create` | Start the test container |
+        | `converge` | Apply the role to the container |
+        | `idempotence` | Replay and require `changed=0` |
+        | `verify` | Run the assertions (is the service up?) |
+        | `destroy` | Remove the container |
+
+        The `molecule test` command runs the whole cycle at once. It is the test closest to reality: it
+        proves the role starts from a fresh system and reaches the desired state.
+  - heading:
+      fr: "Intégrer dans la CI"
+      en: "Integrating into CI"
+    body:
+      fr: |
+        Lancer les tests à la main, on l'oublie. L'**intégration continue** (CI) les exécute
+        automatiquement à chaque `push` et chaque *pull request*, et bloque la fusion si un test échoue.
+        C'est le cœur de l'approche DevSecOps appliquée à l'infrastructure : on ne fusionne jamais une
+        automatisation non vérifiée.
+
+        Un bon pipeline enchaîne, du plus rapide au plus lent :
+
+        1. **yamllint** et **ansible-lint** — quelques secondes, retour immédiat.
+        2. **molecule test** — plus long (il démarre des conteneurs), mais décisif.
+
+        Dans GitHub Actions, on installe les outils avec `pip`, puis on lance chaque étape. Le workflow
+        reçoit des permissions minimales (`contents: read`) : il n'a besoin que de lire le code, jamais de
+        l'écrire. On épingle aussi les actions utilisées à une version précise, par principe de chaîne
+        d'approvisionnement.
+      en: |
+        Running tests by hand gets forgotten. **Continuous integration** (CI) runs them automatically on
+        every `push` and every pull request, and blocks the merge if a test fails. This is the heart of the
+        DevSecOps approach applied to infrastructure: you never merge unverified automation.
+
+        A good pipeline chains, from fastest to slowest:
+
+        1. **yamllint** and **ansible-lint** — a few seconds, instant feedback.
+        2. **molecule test** — longer (it starts containers), but decisive.
+
+        In GitHub Actions you install the tools with `pip`, then run each step. The workflow gets minimal
+        permissions (`contents: read`): it only needs to read the code, never to write it. You also pin the
+        actions used to a precise version, on supply-chain principle.
+
+examples:
+  - title:
+      fr: "Configurer yamllint et ansible-lint"
+      en: "Configure yamllint and ansible-lint"
+    file: lint-config.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      # .yamllint
+      ---
+      extends: default
+      rules:
+        line-length:
+          max: 160 # Ansible playbooks often have long module arguments
+        truthy:
+          # Force real booleans, reject the ambiguous yes/no/on/off
+          allowed-values: ["true", "false"]
+        comments:
+          min-spaces-from-content: 1
+
+      # .ansible-lint
+      # ---
+      # profile: production   # the strictest built-in rule set
+      # exclude_paths:
+      #   - .github/
+      #   - molecule/
+    output: |
+      $ yamllint . && ansible-lint
+      Passed: 0 failure(s), 0 warning(s) on 7 files.
+    note:
+      fr: "`truthy` force `true`/`false` et interdit `yes`/`no`, source classique de bugs YAML. Le profil `production` d'ansible-lint applique le jeu de règles le plus strict."
+      en: "`truthy` forces `true`/`false` and forbids `yes`/`no`, a classic source of YAML bugs. ansible-lint's `production` profile applies the strictest rule set."
+
+  - title:
+      fr: "Le scénario Molecule avec le driver Docker"
+      en: "The Molecule scenario with the Docker driver"
+    file: molecule/default/molecule.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      ---
+      # molecule/default/molecule.yml
+      dependency:
+        name: galaxy
+      driver:
+        name: docker # spin up a disposable container to test the role
+      platforms:
+        - name: instance
+          image: geerlingguy/docker-ubuntu2404-ansible:latest
+          pre_build_image: true
+          # systemd needs these to manage services inside the container
+          cgroupns_mode: host
+          privileged: true
+          volumes:
+            - /sys/fs/cgroup:/sys/fs/cgroup:rw
+          command: /usr/sbin/init
+      provisioner:
+        name: ansible
+      verifier:
+        name: ansible # assertions live in verify.yml
+    note:
+      fr: "Le driver `docker` crée une instance jetable. L'image `geerlingguy/docker-ubuntu2404-ansible` embarque systemd, indispensable pour tester un rôle qui démarre des services."
+      en: "The `docker` driver creates a throwaway instance. The `geerlingguy/docker-ubuntu2404-ansible` image bundles systemd, needed to test a role that starts services."
+
+  - title:
+      fr: "converge, verify et le cycle complet"
+      en: "converge, verify and the full cycle"
+    file: molecule/default/verify.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      # molecule/default/converge.yml : apply the role under test
+      # - name: Converge
+      #   hosts: all
+      #   become: true
+      #   roles:
+      #     - role: webserver
+
+      # molecule/default/verify.yml : assert the result
+      - name: Verify
+        hosts: all
+        become: true
+        tasks:
+          - name: Gather the service state
+            ansible.builtin.service_facts:
+
+          - name: Assert nginx is running
+            ansible.builtin.assert:
+              that:
+                - "'nginx.service' in ansible_facts.services"
+                - "ansible_facts.services['nginx.service'].state == 'running'"
+              fail_msg: "nginx is not running after the role ran"
+
+          - name: Check the port answers
+            ansible.builtin.uri:
+              url: http://localhost
+              status_code: 200
+    output: |
+      $ molecule test
+      ...
+      TASK [Verify : Assert nginx is running] ************************
+      ok: [instance] => { "changed": false, "msg": "All assertions passed" }
+      INFO     Idempotence completed successfully.
+      INFO     Verifier completed successfully.
+    note:
+      fr: "`converge` applique le rôle, `verify` affirme le résultat avec `assert` et `uri`. Entre les deux, Molecule rejoue le rôle pour prouver l'idempotence (`changed=0`)."
+      en: "`converge` applies the role, `verify` asserts the result with `assert` and `uri`. In between, Molecule replays the role to prove idempotence (`changed=0`)."
+
+  - title:
+      fr: "Le workflow GitHub Actions : lint puis Molecule"
+      en: "The GitHub Actions workflow: lint then Molecule"
+    file: .github/workflows/ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      name: ansible-ci
+
+      on: [push, pull_request]
+
+      # Least privilege: the pipeline only needs to read the repository
+      permissions:
+        contents: read
+
+      jobs:
+        lint:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - name: Install linters
+              run: pip install "ansible-lint==24.9.2" "yamllint==1.35.1"
+            - name: Run yamllint
+              run: yamllint .
+            - name: Run ansible-lint
+              run: ansible-lint
+
+        molecule:
+          runs-on: ubuntu-latest
+          needs: lint # only run the slow tests if linting passed
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - name: Install Molecule
+              run: pip install "molecule==24.9.0" "molecule-plugins[docker]==23.5.3" ansible-core
+            - name: Run the full Molecule cycle
+              run: molecule test
+    note:
+      fr: "`needs: lint` n'enchaîne Molecule que si le lint passe : retour rapide d'abord, tests lourds ensuite. `permissions: contents: read` applique le moindre privilège, et les versions sont épinglées."
+      en: "`needs: lint` only chains Molecule if linting passed: fast feedback first, heavy tests next. `permissions: contents: read` enforces least privilege, and versions are pinned."
+
+mistake:
+  fr: |
+    **Croire que « le playbook s'exécute sans erreur » prouve qu'il est correct.**
+
+    Un playbook peut s'exécuter, être non idempotent, utiliser `shell` partout et planter sur un serveur
+    neuf dont l'état diffère du vôtre. Le lint attrape les mauvaises pratiques, mais seul Molecule prouve
+    que le rôle part d'un système vierge et atteint l'état voulu, puis reste stable au second passage.
+    Négliger les tests, c'est découvrir les bugs en production, en root, sur de vrais serveurs. Branchez
+    yamllint, ansible-lint et Molecule dans la CI pour qu'aucune automatisation non vérifiée ne soit
+    fusionnée.
+  en: |
+    **Believing that "the playbook runs without error" proves it is correct.**
+
+    A playbook can run, be non-idempotent, use `shell` everywhere and fail on a fresh server whose state
+    differs from yours. Linting catches bad practices, but only Molecule proves the role starts from a
+    clean system and reaches the desired state, then stays stable on a second pass. Neglecting tests means
+    discovering bugs in production, as root, on real servers. Plug yamllint, ansible-lint and Molecule into
+    CI so no unverified automation gets merged.
+
+bestPractice:
+  fr: |
+    - **yamllint + ansible-lint** dans un hook pre-commit et dans la CI, profil `production`.
+    - **`truthy: [true, false]`** dans yamllint pour bannir les `yes`/`no` ambigus.
+    - **Un scénario Molecule par rôle**, avec une étape `verify` qui affirme le résultat.
+    - **Testez l'idempotence** : Molecule exige `changed=0` au second passage.
+    - **CI par étapes** : lint rapide d'abord (`needs: lint`), Molecule ensuite.
+    - **`permissions: contents: read`** et **versions d'actions/outils épinglées**.
+  en: |
+    - **yamllint + ansible-lint** in a pre-commit hook and in CI, `production` profile.
+    - **`truthy: [true, false]`** in yamllint to ban ambiguous `yes`/`no`.
+    - **One Molecule scenario per role**, with a `verify` step asserting the result.
+    - **Test idempotence**: Molecule requires `changed=0` on the second pass.
+    - **Staged CI**: fast lint first (`needs: lint`), Molecule next.
+    - **`permissions: contents: read`** and **pinned action/tool versions**.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez un rôle `firewall`. Écrivez un fichier `molecule/default/verify.yml` qui, après l'exécution
+      du rôle :
+
+      1. Collecte les faits des paquets installés.
+      2. Affirme avec `ansible.builtin.assert` que le paquet `ufw` est présent.
+      3. Échoue avec un message clair si ce n'est pas le cas.
+
+      Donnez aussi la commande qui lance l'intégralité du cycle de test Molecule.
+    en: |
+      You have a `firewall` role. Write a `molecule/default/verify.yml` that, after the role has run:
+
+      1. Gathers the installed-package facts.
+      2. Asserts with `ansible.builtin.assert` that the `ufw` package is present.
+      3. Fails with a clear message otherwise.
+
+      Also give the command that runs the entire Molecule test cycle.
+  solution:
+    file: verify.yml
+    lang: yaml
+    code: |
+      ---
+      - name: Verify
+        hosts: all
+        become: true
+        tasks:
+          - name: Gather installed package facts
+            ansible.builtin.package_facts:
+              manager: auto
+
+          - name: Assert ufw is installed
+            ansible.builtin.assert:
+              that:
+                - "'ufw' in ansible_facts.packages"
+              fail_msg: "ufw was not installed by the firewall role"
+              success_msg: "ufw is present as expected"
+      # Run the whole cycle (create, converge, idempotence, verify, destroy):
+      #   molecule test
+    note:
+      fr: "`package_facts` remplit `ansible_facts.packages` ; l'`assert` vérifie la présence de `ufw` et donne un message explicite en cas d'échec. `molecule test` enchaîne tout le cycle."
+      en: "`package_facts` populates `ansible_facts.packages`; the `assert` checks `ufw` is present and gives an explicit message on failure. `molecule test` runs the whole cycle."
+
+quiz:
+  - q:
+      fr: "Quelle différence principale entre yamllint et ansible-lint ?"
+      en: "What is the main difference between yamllint and ansible-lint?"
+    options:
+      fr:
+        - "yamllint vérifie la forme du YAML, ansible-lint les bonnes pratiques Ansible"
+        - "Ils font exactement la même chose"
+        - "yamllint exécute le playbook, ansible-lint non"
+        - "ansible-lint ne fonctionne que sur Windows"
+      en:
+        - "yamllint checks the YAML's form, ansible-lint checks Ansible best practices"
+        - "They do exactly the same thing"
+        - "yamllint runs the playbook, ansible-lint does not"
+        - "ansible-lint only works on Windows"
+    answer: 0
+    why:
+      fr: "yamllint juge la syntaxe et le style du YAML ; ansible-lint connaît la sémantique d'Ansible (FQCN, idempotence, `name` manquant)."
+      en: "yamllint judges the YAML's syntax and style; ansible-lint knows Ansible's semantics (FQCN, idempotence, missing `name`)."
+  - q:
+      fr: "Que crée Molecule pour tester un rôle ?"
+      en: "What does Molecule create to test a role?"
+    options:
+      fr:
+        - "Un nouveau dépôt Git"
+        - "Une instance jetable (par ex. un conteneur Docker) où appliquer le rôle"
+        - "Un fichier d'inventaire chiffré"
+        - "Une machine virtuelle permanente"
+      en:
+        - "A new Git repository"
+        - "A throwaway instance (e.g. a Docker container) to apply the role to"
+        - "An encrypted inventory file"
+        - "A permanent virtual machine"
+    answer: 1
+    why:
+      fr: "Molecule démarre une instance jetable, y applique le rôle, vérifie le résultat et la détruit : un test proche d'un déploiement réel sur système neuf."
+      en: "Molecule starts a throwaway instance, applies the role, checks the result and destroys it: a test close to a real deployment on a fresh system."
+  - q:
+      fr: "Que vérifie l'étape `idempotence` de Molecule ?"
+      en: "What does Molecule's `idempotence` stage check?"
+    options:
+      fr:
+        - "Que le conteneur démarre vite"
+        - "Que le rôle est signé"
+        - "Que rejouer le rôle ne change plus rien (`changed=0`)"
+        - "Que le YAML est bien indenté"
+      en:
+        - "That the container starts fast"
+        - "That the role is signed"
+        - "That replaying the role changes nothing (`changed=0`)"
+        - "That the YAML is well indented"
+    answer: 2
+    why:
+      fr: "Molecule rejoue le rôle et exige `changed=0` au second passage : c'est la preuve automatisée de l'idempotence."
+      en: "Molecule replays the role and requires `changed=0` on the second pass: that is the automated proof of idempotence."
+  - q:
+      fr: "Pourquoi mettre `needs: lint` sur le job Molecule dans la CI ?"
+      en: "Why put `needs: lint` on the Molecule job in CI?"
+    options:
+      fr:
+        - "Pour chiffrer les secrets"
+        - "Pour n'exécuter les tests lents que si le lint rapide a réussi"
+        - "Pour lancer Molecule deux fois"
+        - "Parce que Molecule ne fonctionne pas sans lint"
+      en:
+        - "To encrypt the secrets"
+        - "To run the slow tests only if the fast lint passed"
+        - "To run Molecule twice"
+        - "Because Molecule cannot work without linting"
+    answer: 1
+    why:
+      fr: "`needs: lint` ordonne le pipeline : retour rapide du lint d'abord, et on n'engage les tests coûteux de Molecule que s'il passe."
+      en: "`needs: lint` orders the pipeline: fast lint feedback first, and the costly Molecule tests only run if it passes."
+  - q:
+      fr: "Quelle permission accorder au workflow CI qui ne fait que lire le code ?"
+      en: "What permission should the CI workflow that only reads the code be given?"
+    options:
+      fr:
+        - "`contents: write`"
+        - "`admin: true`"
+        - "Toutes les permissions par défaut"
+        - "`contents: read`"
+      en:
+        - "`contents: write`"
+        - "`admin: true`"
+        - "All default permissions"
+        - "`contents: read`"
+    answer: 3
+    why:
+      fr: "Le moindre privilège : un pipeline de test n'a besoin que de lire le dépôt, donc `contents: read` et rien de plus."
+      en: "Least privilege: a test pipeline only needs to read the repository, so `contents: read` and nothing more."

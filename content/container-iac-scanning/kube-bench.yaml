@@ -1,0 +1,524 @@
+description:
+  fr: "Auditer un cluster Kubernetes avec kube-bench (CIS Benchmark, exécuté en Job, résultats PASS/FAIL/WARN) et Kubescape (frameworks NSA et MITRE ATT&CK)."
+  en: "Audit a Kubernetes cluster with kube-bench (CIS Benchmark, run as a Job, PASS/FAIL/WARN results) and Kubescape (NSA and MITRE ATT&CK frameworks)."
+duration: 25
+
+intro:
+  fr: |
+    Scanner les fichiers d'infrastructure (leçon précédente) vérifie les **plans**. Mais une fois le cluster
+    Kubernetes **en fonctionnement**, il faut aussi auditer sa configuration réelle : les composants du plan
+    de contrôle sont-ils durcis ? les permissions sont-elles trop larges ? **kube-bench** et **Kubescape**
+    répondent à cette question, chacun selon un référentiel reconnu.
+
+    L'analogie : un plan de maison conforme (l'IaC) ne garantit pas que la maison construite respecte les
+    normes. Un contrôleur vient donc sur place, liste en main, vérifier que l'installation électrique réelle,
+    les détecteurs posés et les issues de secours correspondent bien aux exigences. kube-bench est ce
+    contrôleur, muni du **CIS Kubernetes Benchmark** ; Kubescape élargit l'inspection aux cadres **NSA** et
+    **MITRE ATT&CK**.
+
+    Dans cette leçon vous allez exécuter kube-bench **comme un Job Kubernetes**, lire ses résultats
+    `[PASS]`/`[FAIL]`/`[WARN]`, comprendre à quel référentiel ils se rattachent, puis lancer Kubescape avec
+    le framework NSA et le framework MITRE pour une vue complémentaire orientée menaces.
+  en: |
+    Scanning infrastructure files (previous lesson) checks the **plans**. But once the Kubernetes cluster is
+    **running**, you must also audit its real configuration: are the control-plane components hardened? are
+    permissions too broad? **kube-bench** and **Kubescape** answer this question, each against a recognised
+    framework.
+
+    The analogy: a compliant house plan (the IaC) does not guarantee that the built house meets the
+    standards. An inspector therefore comes on site, checklist in hand, to verify that the actual wiring, the
+    fitted detectors and the fire exits really match the requirements. kube-bench is that inspector, armed
+    with the **CIS Kubernetes Benchmark**; Kubescape broadens the inspection to the **NSA** and **MITRE
+    ATT&CK** frameworks.
+
+    In this lesson you will run kube-bench **as a Kubernetes Job**, read its `[PASS]`/`[FAIL]`/`[WARN]`
+    results, understand which framework they map to, then run Kubescape with the NSA framework and the MITRE
+    framework for a complementary, threat-oriented view.
+
+sections:
+  - heading:
+      fr: "kube-bench et le CIS Benchmark"
+      en: "kube-bench and the CIS Benchmark"
+    body:
+      fr: |
+        Le **CIS Kubernetes Benchmark** est un document de référence, publié par le *Center for Internet
+        Security*, qui liste des centaines de contrôles de durcissement : permissions des fichiers du plan de
+        contrôle, options de l'API server, chiffrement des Secrets, configuration de kubelet, politiques
+        RBAC… **kube-bench** (d'Aqua Security) **automatise** la vérification de ces contrôles contre un
+        cluster réel.
+
+        kube-bench doit s'exécuter **sur les nœuds** (ou avec accès à leur configuration), car beaucoup de
+        contrôles portent sur des fichiers locaux (`/etc/kubernetes/...`) et des paramètres de processus. La
+        méthode recommandée est donc de le lancer **comme un Job Kubernetes**, qui place un pod sur le nœud et
+        lit la configuration depuis l'intérieur.
+
+        Chaque contrôle produit un verdict :
+
+        | Résultat | Signification |
+        |---|---|
+        | `[PASS]` | Le contrôle est respecté |
+        | `[FAIL]` | Le contrôle échoue : à corriger |
+        | `[WARN]` | À vérifier manuellement (kube-bench ne peut pas trancher automatiquement) |
+        | `[INFO]` | Information, pas de verdict |
+
+        Les `[WARN]` sont nombreux et **normaux** : ils signalent les contrôles qui dépendent du contexte
+        (par exemple une valeur à confirmer manuellement). On les examine, mais ils ne bloquent pas
+        forcément.
+      en: |
+        The **CIS Kubernetes Benchmark** is a reference document, published by the *Center for Internet
+        Security*, listing hundreds of hardening controls: control-plane file permissions, API server
+        options, Secret encryption, kubelet configuration, RBAC policies… **kube-bench** (by Aqua Security)
+        **automates** the verification of these controls against a real cluster.
+
+        kube-bench must run **on the nodes** (or with access to their configuration), because many controls
+        concern local files (`/etc/kubernetes/...`) and process parameters. The recommended method is
+        therefore to run it **as a Kubernetes Job**, which places a pod on the node and reads the
+        configuration from the inside.
+
+        Each control produces a verdict:
+
+        | Result | Meaning |
+        |---|---|
+        | `[PASS]` | The control is met |
+        | `[FAIL]` | The control fails: to fix |
+        | `[WARN]` | To check manually (kube-bench cannot decide automatically) |
+        | `[INFO]` | Information, no verdict |
+
+        `[WARN]`s are numerous and **normal**: they flag controls that depend on context (for example a value
+        to confirm manually). You examine them, but they do not necessarily block.
+  - heading:
+      fr: "Exécuter kube-bench comme un Job"
+      en: "Running kube-bench as a Job"
+    body:
+      fr: |
+        On déploie kube-bench via un manifeste de **Job**. Points clés du manifeste :
+
+        - l'image `aquasec/kube-bench` et la commande qui sélectionne la cible
+          (`node`, `master`, ou autodétection) ;
+        - `hostPID: true` pour voir les processus de l'hôte ;
+        - des **montages en lecture seule** des dossiers de configuration du nœud
+          (`/etc/kubernetes`, `/var/lib/etcd`…), en `readOnly` : kube-bench **lit** sans jamais modifier ;
+        - `restartPolicy: Never` : le Job tourne une fois et s'arrête.
+
+        ```bash
+        kubectl apply -f kube-bench-job.yaml
+        kubectl logs job/kube-bench
+        ```
+
+        On consulte le résultat dans les **logs** du pod. kube-bench choisit automatiquement la version du
+        Benchmark adaptée à la version du cluster. Pour une distribution managée (EKS, GKE, AKS), où le plan
+        de contrôle n'est pas accessible, on utilise la cible dédiée (`--benchmark eks-1.x` par exemple), qui
+        ne teste que ce que le client peut voir.
+
+        Important : kube-bench demande des **montages en lecture seule** et ne modifie rien. Lui donner plus
+        de privilèges que nécessaire irait à l'encontre du durcissement qu'on cherche à vérifier.
+      en: |
+        You deploy kube-bench via a **Job** manifest. Key points of the manifest:
+
+        - the `aquasec/kube-bench` image and the command selecting the target (`node`, `master`, or
+          autodetection);
+        - `hostPID: true` to see the host processes;
+        - **read-only mounts** of the node's configuration folders (`/etc/kubernetes`, `/var/lib/etcd`…), as
+          `readOnly`: kube-bench **reads** without ever modifying;
+        - `restartPolicy: Never`: the Job runs once and stops.
+
+        ```bash
+        kubectl apply -f kube-bench-job.yaml
+        kubectl logs job/kube-bench
+        ```
+
+        You read the result in the pod **logs**. kube-bench automatically picks the Benchmark version matching
+        the cluster version. For a managed distribution (EKS, GKE, AKS), where the control plane is not
+        accessible, you use the dedicated target (`--benchmark eks-1.x` for example), which only tests what
+        the customer can see.
+
+        Important: kube-bench requires **read-only mounts** and modifies nothing. Giving it more privileges
+        than necessary would go against the very hardening you are trying to verify.
+  - heading:
+      fr: "Kubescape : NSA et MITRE ATT&CK"
+      en: "Kubescape: NSA and MITRE ATT&CK"
+    body:
+      fr: |
+        **Kubescape** (projet de la CNCF, soutenu par ARMO) complète kube-bench avec une approche orientée
+        **menaces**. Il évalue le cluster contre plusieurs **frameworks** :
+
+        | Framework | Angle |
+        |---|---|
+        | **NSA-CISA** | Durcissement recommandé par la NSA et la CISA |
+        | **MITRE ATT&CK** | Techniques d'attaque réelles mappées sur Kubernetes |
+        | **CIS** | Le même CIS Benchmark que kube-bench |
+
+        Là où kube-bench se concentre sur la conformité CIS du plan de contrôle et des nœuds, Kubescape
+        regarde aussi les **workloads** (pods, déploiements) et relie les faiblesses à des **techniques
+        d'attaque** : « cette configuration permet une évasion de conteneur », « ce RBAC autorise une
+        élévation de privilèges ». C'est précieux pour prioriser : on corrige d'abord ce qui ouvre un chemin
+        d'attaque concret.
+
+        ```bash
+        kubescape scan framework nsa --format sarif --output kubescape.sarif
+        kubescape scan framework mitre
+        ```
+
+        Kubescape produit un **score** global et un rapport par contrôle, exportable en SARIF/JSON/HTML pour
+        la CI. Les deux outils sont **complémentaires** : kube-bench pour la conformité CIS fine du cluster,
+        Kubescape pour la lecture menaces (NSA, MITRE) et les workloads.
+      en: |
+        **Kubescape** (a CNCF project, backed by ARMO) complements kube-bench with a **threat**-oriented
+        approach. It evaluates the cluster against several **frameworks**:
+
+        | Framework | Angle |
+        |---|---|
+        | **NSA-CISA** | Hardening recommended by the NSA and CISA |
+        | **MITRE ATT&CK** | Real attack techniques mapped onto Kubernetes |
+        | **CIS** | The same CIS Benchmark as kube-bench |
+
+        Where kube-bench focuses on CIS compliance of the control plane and nodes, Kubescape also looks at the
+        **workloads** (pods, deployments) and links weaknesses to **attack techniques**: "this configuration
+        allows a container escape", "this RBAC allows a privilege escalation". This is valuable for
+        prioritising: you fix first what opens a concrete attack path.
+
+        ```bash
+        kubescape scan framework nsa --format sarif --output kubescape.sarif
+        kubescape scan framework mitre
+        ```
+
+        Kubescape produces an overall **score** and a per-control report, exportable to SARIF/JSON/HTML for
+        CI. The two tools are **complementary**: kube-bench for fine CIS compliance of the cluster, Kubescape
+        for the threat reading (NSA, MITRE) and the workloads.
+
+examples:
+  - title:
+      fr: "Le Job kube-bench"
+      en: "The kube-bench Job"
+    file: kube-bench-job.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: kube-bench
+      spec:
+        template:
+          spec:
+            hostPID: true            # needed to inspect host processes
+            restartPolicy: Never     # run once, then stop
+            containers:
+              - name: kube-bench
+                image: aquasec/kube-bench:latest
+                command: ["kube-bench", "run", "--targets", "node"]
+                volumeMounts:
+                  # Read-only: kube-bench inspects, it never changes anything
+                  - name: etc-kubernetes
+                    mountPath: /etc/kubernetes
+                    readOnly: true
+                  - name: var-lib-kubelet
+                    mountPath: /var/lib/kubelet
+                    readOnly: true
+            volumes:
+              - name: etc-kubernetes
+                hostPath: { path: /etc/kubernetes }
+              - name: var-lib-kubelet
+                hostPath: { path: /var/lib/kubelet }
+    output: |
+      $ kubectl apply -f kube-bench-job.yaml
+      job.batch/kube-bench created
+      $ kubectl logs job/kube-bench
+      [INFO] 4 Worker Node Security Configuration
+      [PASS] 4.1.1 Ensure the kubelet service file permissions are set to 600 or more restrictive
+      [FAIL] 4.2.1 Ensure the --anonymous-auth argument is set to false
+      [WARN] 4.2.6 Ensure the --protect-kernel-defaults argument is set to true
+      == Summary node: 18 checks PASS, 1 FAIL, 4 WARN ==
+    note:
+      fr: "Le Job place un pod sur le nœud et lit sa configuration en **lecture seule**. Les résultats `[PASS]`/`[FAIL]`/`[WARN]` suivent la numérotation du CIS Benchmark (`4.2.1`). Le `[FAIL]` sur `--anonymous-auth` est un vrai durcissement à appliquer ; les `[WARN]` demandent une vérification manuelle."
+      en: "The Job places a pod on the node and reads its configuration **read-only**. The `[PASS]`/`[FAIL]`/`[WARN]` results follow the CIS Benchmark numbering (`4.2.1`). The `[FAIL]` on `--anonymous-auth` is a real hardening to apply; the `[WARN]`s require a manual check."
+
+  - title:
+      fr: "Lire et prioriser les résultats"
+      en: "Reading and prioritising the results"
+    file: triage.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Export kube-bench results as JSON to process them automatically.
+      kubectl logs job/kube-bench > kube-bench.txt
+
+      # Count each verdict to get a quick health picture.
+      echo "PASS:  $(grep -c '\[PASS\]' kube-bench.txt)"
+      echo "FAIL:  $(grep -c '\[FAIL\]' kube-bench.txt)"
+      echo "WARN:  $(grep -c '\[WARN\]' kube-bench.txt)"
+
+      # The actionable list is the FAILs: these are automatic, confirmed gaps.
+      echo "--- Checks to fix first ---"
+      grep '\[FAIL\]' kube-bench.txt
+    output: |
+      PASS:  52
+      FAIL:  3
+      WARN:  11
+      --- Checks to fix first ---
+      [FAIL] 1.2.16 Ensure that the --profiling argument is set to false
+      [FAIL] 4.2.1 Ensure the --anonymous-auth argument is set to false
+      [FAIL] 4.2.10 Ensure that the --tls-cert-file arguments are set as appropriate
+    note:
+      fr: "On commence par les `[FAIL]` : ce sont des écarts **confirmés automatiquement**, donc actionnables tout de suite. Les `[WARN]` (11 ici) demandent une vérification humaine et ne sont pas tous des problèmes. kube-bench donne la remédiation exacte sous chaque contrôle échoué."
+      en: "Start with the `[FAIL]`s: these are **automatically confirmed** gaps, hence actionable right away. The `[WARN]`s (11 here) require a human check and are not all problems. kube-bench gives the exact remediation under each failed control."
+
+  - title:
+      fr: "Kubescape avec les frameworks NSA et MITRE"
+      en: "Kubescape with the NSA and MITRE frameworks"
+    file: kubescape.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Scan the running cluster against the NSA-CISA hardening framework.
+      # Export SARIF for code scanning, and fail CI below a compliance threshold.
+      kubescape scan framework nsa \
+        --format sarif --output kubescape-nsa.sarif \
+        --compliance-threshold 75
+
+      # Scan against MITRE ATT&CK: weaknesses are mapped to real attack techniques.
+      kubescape scan framework mitre --format pretty-printer
+    output: |
+      [NSA framework]
+      Controls: 24 (Failed: 5, Passed: 17, Skipped: 2)
+      +----------------------------------+----------+----------------+
+      | CONTROL NAME                     | STATUS   | RESOURCES      |
+      +----------------------------------+----------+----------------+
+      | Allow privilege escalation       | failed   | 3 / 40 pods    |
+      | Applications credentials in conf | failed   | 1 / 40 pods    |
+      | Cluster-admin binding            | failed   | 2 bindings     |
+      +----------------------------------+----------+----------------+
+      Compliance score: 71% (threshold 75%) -> FAILED
+      # MITRE: these map to "Privilege Escalation" and "Credential Access" tactics
+    note:
+      fr: "Kubescape regarde aussi les **workloads** et relie chaque faiblesse à une tactique d'attaque (élévation de privilèges, accès aux identifiants). Le `--compliance-threshold 75` fait échouer la CI sous 75 % de conformité. Vue menaces (NSA/MITRE) et vue conformité CIS (kube-bench) se complètent."
+      en: "Kubescape also looks at the **workloads** and links each weakness to an attack tactic (privilege escalation, credential access). The `--compliance-threshold 75` fails CI below 75% compliance. The threat view (NSA/MITRE) and the CIS compliance view (kube-bench) complement each other."
+
+  - title:
+      fr: "Intégrer les deux audits en CI"
+      en: "Integrating both audits in CI"
+    file: .github/workflows/k8s-audit.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: k8s-audit
+      on:
+        schedule:
+          - cron: "0 4 * * *"   # nightly cluster audit
+        workflow_dispatch: {}
+
+      permissions:
+        contents: read
+        security-events: write
+
+      jobs:
+        kubescape:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            # Kubescape can also scan manifests in the repo (shift-left), not only
+            # a live cluster. Here it scans the Kubernetes YAML before deployment.
+            - name: Kubescape NSA scan
+              uses: kubescape/github-action@main
+              with:
+                frameworks: nsa
+                files: "manifests/"
+                format: sarif
+                outputFile: kubescape.sarif
+                failedThreshold: 75   # fail the job below 75% compliance
+
+            - name: Upload SARIF
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: kubescape.sarif
+    output: |
+      Scanning manifests/ against NSA framework...
+      deployment.yaml: control "Allow privilege escalation" FAILED (allowPrivilegeEscalation not set)
+      Compliance score: 68% < 75% threshold
+      Error: failed threshold reached
+      # exit code non-zero -> the workflow fails, SARIF uploaded
+    note:
+      fr: "Kubescape scanne aussi bien un cluster vivant que les **manifestes** du dépôt, ce qui permet un contrôle *shift-left* avant déploiement. Le `failedThreshold` bloque sous un score de conformité. kube-bench, lui, s'exécute sur le cluster réel via le Job : les deux approches sont complémentaires."
+      en: "Kubescape scans both a live cluster and the repository **manifests**, enabling a *shift-left* check before deployment. The `failedThreshold` blocks below a compliance score. kube-bench, in turn, runs on the real cluster via the Job: the two approaches are complementary."
+
+mistake:
+  fr: |
+    **Prendre chaque `[WARN]` de kube-bench pour une faille et bloquer la CI sur tous.**
+
+    kube-bench produit beaucoup de `[WARN]` : ce sont des contrôles qu'il ne peut pas trancher
+    automatiquement et qui demandent une vérification humaine selon le contexte (valeur à confirmer, cas
+    particulier d'une distribution managée). Les traiter tous comme des échecs bloquants noie les équipes et
+    fait passer à côté des vrais `[FAIL]`, qui sont, eux, des écarts confirmés. On commence par corriger les
+    `[FAIL]`, puis on revoit les `[WARN]` au cas par cas. À l'inverse, ignorer en bloc tous les `[WARN]` sans
+    les lire fait rater des durcissements importants : la bonne voie est l'examen, pas l'automatisme.
+  en: |
+    **Treating every kube-bench `[WARN]` as a flaw and blocking CI on all of them.**
+
+    kube-bench produces many `[WARN]`s: these are controls it cannot decide automatically and that need a
+    human check depending on context (a value to confirm, a special case for a managed distribution).
+    Treating them all as blocking failures drowns teams and makes them miss the real `[FAIL]`s, which are
+    confirmed gaps. Start by fixing the `[FAIL]`s, then review the `[WARN]`s case by case. Conversely,
+    blanket-ignoring every `[WARN]` without reading them misses important hardening: the right path is
+    examination, not automatism.
+
+bestPractice:
+  fr: |
+    - **Exécutez kube-bench comme un Job**, avec des montages en **lecture seule** uniquement.
+    - **Corrigez d'abord les `[FAIL]`** (écarts confirmés), puis examinez les `[WARN]` selon le contexte.
+    - **Choisissez la bonne cible** : `node`/`master` en auto-hébergé, le benchmark managé pour EKS/GKE/AKS.
+    - **Complétez avec Kubescape** : frameworks NSA et MITRE pour la vue menaces et les workloads.
+    - **Automatisez l'audit** (Job planifié, Kubescape en CI sur les manifestes) avec un seuil de conformité.
+    - **Exportez en SARIF** pour centraliser et suivre la tendance de conformité dans le temps.
+  en: |
+    - **Run kube-bench as a Job**, with **read-only** mounts only.
+    - **Fix the `[FAIL]`s first** (confirmed gaps), then examine the `[WARN]`s per context.
+    - **Pick the right target**: `node`/`master` self-hosted, the managed benchmark for EKS/GKE/AKS.
+    - **Complement with Kubescape**: NSA and MITRE frameworks for the threat view and the workloads.
+    - **Automate the audit** (scheduled Job, Kubescape in CI on the manifests) with a compliance threshold.
+    - **Export to SARIF** to centralise and track the compliance trend over time.
+
+exercise:
+  statement:
+    fr: |
+      Vous venez de lancer kube-bench sur un cluster auto-hébergé. Le résumé indique :
+
+      ```text
+      == Summary: 60 checks PASS, 4 FAIL, 15 WARN ==
+      [FAIL] 1.2.16 Ensure that the --profiling argument is set to false
+      ```
+
+      1. Par quels résultats commencer, et pourquoi ?
+      2. Un collègue veut « faire échouer la CI dès qu'il y a un WARN ». Expliquez pourquoi c'est une
+         mauvaise idée.
+      3. Pour couvrir aussi les **workloads** et relier les faiblesses à des **techniques d'attaque**, quel
+         outil et quel framework ajoutez-vous, avec la commande ?
+    en: |
+      You just ran kube-bench on a self-hosted cluster. The summary says:
+
+      ```text
+      == Summary: 60 checks PASS, 4 FAIL, 15 WARN ==
+      [FAIL] 1.2.16 Ensure that the --profiling argument is set to false
+      ```
+
+      1. Which results do you start with, and why?
+      2. A colleague wants to "fail CI as soon as there is a WARN". Explain why this is a bad idea.
+      3. To also cover the **workloads** and link weaknesses to **attack techniques**, which tool and which
+         framework do you add, with the command?
+  solution:
+    file: answer.md
+    lang: markdown
+    code: |
+      # Reading the kube-bench results
+
+      1. Start with the 4 [FAIL]s
+         A [FAIL] is a gap that kube-bench confirmed automatically (e.g. profiling left enabled).
+         These are actionable immediately: apply the exact remediation kube-bench prints under each
+         failed control.
+
+      2. Why "fail CI on any WARN" is a bad idea
+         [WARN] means kube-bench could NOT decide automatically; the control depends on context and
+         needs a human check. Many WARNs are not actual problems (especially on managed or specific
+         setups). Blocking on all of them floods the team with noise and buries the real [FAIL]s.
+         Review WARNs case by case instead.
+
+      3. Add Kubescape for workloads + attack techniques
+         Kubescape maps weaknesses to MITRE ATT&CK tactics and also scans pods/deployments:
+           kubescape scan framework mitre
+           kubescape scan framework nsa --format sarif --output kubescape.sarif
+    note:
+      fr: "La priorité va aux `[FAIL]` (confirmés), pas aux `[WARN]` (à vérifier). Kubescape complète kube-bench en regardant les workloads et en reliant les faiblesses au cadre MITRE ATT&CK, ce qui aide à prioriser par chemin d'attaque réel."
+      en: "Priority goes to the `[FAIL]`s (confirmed), not the `[WARN]`s (to verify). Kubescape complements kube-bench by looking at workloads and linking weaknesses to the MITRE ATT&CK framework, which helps prioritise by real attack path."
+
+quiz:
+  - q:
+      fr: "Contre quel référentiel kube-bench vérifie-t-il un cluster ?"
+      en: "Against which framework does kube-bench check a cluster?"
+    options:
+      fr:
+        - "Le CIS Kubernetes Benchmark"
+        - "Le RGPD"
+        - "La norme ISO 9001"
+        - "Le PCI pour les paiements uniquement"
+      en:
+        - "The CIS Kubernetes Benchmark"
+        - "The GDPR"
+        - "The ISO 9001 standard"
+        - "PCI, for payments only"
+    answer: 0
+    why:
+      fr: "kube-bench automatise la vérification des centaines de contrôles du CIS Kubernetes Benchmark (permissions, options de l'API server, kubelet, RBAC) contre un cluster réel."
+      en: "kube-bench automates checking the hundreds of CIS Kubernetes Benchmark controls (permissions, API server options, kubelet, RBAC) against a real cluster."
+  - q:
+      fr: "Pourquoi exécuter kube-bench comme un Job Kubernetes ?"
+      en: "Why run kube-bench as a Kubernetes Job?"
+    options:
+      fr:
+        - "Pour chiffrer le cluster"
+        - "Pour placer un pod sur le nœud et lire sa configuration locale en lecture seule"
+        - "Parce que c'est le seul moyen de déployer une application"
+        - "Pour supprimer les pods vulnérables"
+      en:
+        - "To encrypt the cluster"
+        - "To place a pod on the node and read its local configuration read-only"
+        - "Because it is the only way to deploy an application"
+        - "To delete vulnerable pods"
+    answer: 1
+    why:
+      fr: "Beaucoup de contrôles CIS portent sur des fichiers locaux du nœud (`/etc/kubernetes/...`). Le Job place un pod sur le nœud qui lit ces fichiers en lecture seule, sans rien modifier."
+      en: "Many CIS controls concern local node files (`/etc/kubernetes/...`). The Job places a pod on the node that reads these files read-only, without modifying anything."
+  - q:
+      fr: "Que signifie un résultat `[WARN]` dans kube-bench ?"
+      en: "What does a `[WARN]` result mean in kube-bench?"
+    options:
+      fr:
+        - "Une faille critique à corriger immédiatement"
+        - "Un contrôle qui demande une vérification manuelle selon le contexte"
+        - "Une erreur de l'outil"
+        - "Un contrôle désactivé"
+      en:
+        - "A critical flaw to fix immediately"
+        - "A control that needs a manual check depending on context"
+        - "A tool error"
+        - "A disabled control"
+    answer: 1
+    why:
+      fr: "`[WARN]` signale que kube-bench ne peut pas trancher automatiquement. On l'examine selon le contexte, mais ce n'est pas forcément un problème, contrairement à un `[FAIL]` confirmé."
+      en: "`[WARN]` means kube-bench cannot decide automatically. You examine it per context, but it is not necessarily a problem, unlike a confirmed `[FAIL]`."
+  - q:
+      fr: "Quel apport distinctif a Kubescape par rapport à kube-bench ?"
+      en: "What distinctive contribution does Kubescape have over kube-bench?"
+    options:
+      fr:
+        - "Il ne fait que le CIS Benchmark"
+        - "Il évalue aussi les workloads et relie les faiblesses aux frameworks NSA et MITRE ATT&CK"
+        - "Il remplace kubectl"
+        - "Il chiffre les Secrets"
+      en:
+        - "It only does the CIS Benchmark"
+        - "It also evaluates workloads and links weaknesses to the NSA and MITRE ATT&CK frameworks"
+        - "It replaces kubectl"
+        - "It encrypts Secrets"
+    answer: 1
+    why:
+      fr: "Kubescape ajoute une vue orientée menaces (NSA, MITRE ATT&CK) et regarde les workloads (pods, déploiements), ce qui aide à prioriser par chemin d'attaque réel. Il complète kube-bench."
+      en: "Kubescape adds a threat-oriented view (NSA, MITRE ATT&CK) and looks at workloads (pods, deployments), which helps prioritise by real attack path. It complements kube-bench."
+  - q:
+      fr: "Dans quel ordre traiter les résultats de kube-bench ?"
+      en: "In what order should you handle kube-bench results?"
+    options:
+      fr:
+        - "Les `[PASS]` d'abord"
+        - "Les `[INFO]` d'abord"
+        - "Les `[FAIL]` d'abord, car ce sont des écarts confirmés automatiquement"
+        - "Peu importe l'ordre"
+      en:
+        - "The `[PASS]`s first"
+        - "The `[INFO]`s first"
+        - "The `[FAIL]`s first, because they are automatically confirmed gaps"
+        - "The order does not matter"
+    answer: 2
+    why:
+      fr: "Les `[FAIL]` sont des écarts que kube-bench a confirmés et qui se corrigent tout de suite. Les `[WARN]` demandent une analyse manuelle et viennent ensuite."
+      en: "The `[FAIL]`s are gaps kube-bench confirmed and that can be fixed right away. The `[WARN]`s need a manual analysis and come next."

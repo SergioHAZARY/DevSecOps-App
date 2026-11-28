@@ -1,0 +1,581 @@
+description:
+  fr: "Écrire un script Bash de supervision et d'alerte : disque, CPU, connexions SSH échouées et expiration de certificat TLS, avec envoi d'alerte webhook et planification par cron ou timer systemd."
+  en: "Write a monitoring and alerting Bash script: disk, CPU, failed SSH logins and TLS certificate expiry, with a webhook alert and scheduling via cron or a systemd timer."
+duration: 40
+
+intro:
+  fr: |
+    Un serveur en production ne doit pas tomber en silence. La **supervision**, c'est surveiller en continu
+    quelques indicateurs vitaux — disque plein, CPU saturé, rafale de connexions SSH échouées, certificat TLS
+    qui expire — et **alerter** un humain avant que le problème ne devienne un incident.
+
+    Pensez à un **tableau de bord de voiture** : des voyants qui restent éteints tant que tout va bien, et qui
+    s'allument juste à temps pour éviter la panne. Un bon script de supervision fait exactement cela : il reste
+    discret quand tout est normal, et il envoie une alerte claire quand un seuil est franchi.
+
+    Dans cette leçon, vous construirez un **script de supervision complet** qui vérifie quatre signaux
+    critiques, agrège les alertes, et les envoie à un **webhook** (Slack, Mattermost, Discord…). Vous
+    apprendrez aussi à le **planifier** proprement, avec `cron` ou un **timer systemd**, pour qu'il tourne
+    toutes les cinq minutes sans intervention. Le tout en mode strict, avec une règle d'or : n'alerter que sur
+    ce qui compte, pour éviter la **fatigue d'alerte** qui fait ignorer les vrais problèmes.
+  en: |
+    A production server must not fail silently. **Monitoring** means continuously watching a few vital signals
+    — full disk, saturated CPU, a burst of failed SSH logins, an expiring TLS certificate — and **alerting** a
+    human before the problem becomes an incident.
+
+    Think of a **car dashboard**: warning lights that stay off while all is well, and come on just in time to
+    avoid a breakdown. A good monitoring script does exactly that: it stays quiet when everything is normal,
+    and sends a clear alert when a threshold is crossed.
+
+    In this lesson you will build a **complete monitoring script** that checks four critical signals,
+    aggregates the alerts, and sends them to a **webhook** (Slack, Mattermost, Discord…). You will also learn
+    to **schedule** it cleanly, with `cron` or a **systemd timer**, so it runs every five minutes with no
+    intervention. All in strict mode, with a golden rule: only alert on what matters, to avoid the **alert
+    fatigue** that makes people ignore real problems.
+
+sections:
+  - heading:
+      fr: "Collecter les quatre signaux"
+      en: "Collecting the four signals"
+    body:
+      fr: |
+        Chaque indicateur se lit en une commande, puis on le compare à un seuil :
+
+        **Disque** — pourcentage utilisé d'une partition :
+
+        ```bash
+        # df: usage %, strip the % sign; -P for portable output, awk takes column 5.
+        disk=$(df -P / | awk 'NR==2 { gsub("%","",$5); print $5 }')   # e.g. 87
+        ```
+
+        **CPU** — la charge moyenne sur 1 minute, rapportée au nombre de cœurs :
+
+        ```bash
+        load=$(cut -d' ' -f1 /proc/loadavg)        # 1-minute load average
+        cores=$(nproc)                              # number of CPU cores
+        ```
+
+        **Connexions SSH échouées** — sur la dernière heure, via le journal (`journalctl` ou `/var/log/auth.log`) :
+
+        ```bash
+        failed=$(journalctl -u ssh --since '1 hour ago' 2>/dev/null |
+                 grep -c 'Failed password' || true)
+        ```
+
+        **Expiration de certificat TLS** — jours restants avant expiration :
+
+        ```bash
+        end=$(openssl x509 -enddate -noout -in /etc/ssl/certs/example.crt | cut -d= -f2)
+        days_left=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+        ```
+
+        Le `|| true` après un `grep -c` est important sous `set -e` : `grep` renvoie un code non nul quand il
+        ne trouve rien, ce qui n'est pas une erreur ici (zéro échec est une bonne nouvelle). Chaque valeur est
+        ensuite comparée à un seuil configurable.
+      en: |
+        Each indicator is read in one command, then compared to a threshold:
+
+        **Disk** — used percentage of a partition:
+
+        ```bash
+        # df: usage %, strip the % sign; -P for portable output, awk takes column 5.
+        disk=$(df -P / | awk 'NR==2 { gsub("%","",$5); print $5 }')   # e.g. 87
+        ```
+
+        **CPU** — the 1-minute load average, relative to the number of cores:
+
+        ```bash
+        load=$(cut -d' ' -f1 /proc/loadavg)        # 1-minute load average
+        cores=$(nproc)                              # number of CPU cores
+        ```
+
+        **Failed SSH logins** — over the last hour, via the journal (`journalctl` or `/var/log/auth.log`):
+
+        ```bash
+        failed=$(journalctl -u ssh --since '1 hour ago' 2>/dev/null |
+                 grep -c 'Failed password' || true)
+        ```
+
+        **TLS certificate expiry** — days left before expiry:
+
+        ```bash
+        end=$(openssl x509 -enddate -noout -in /etc/ssl/certs/example.crt | cut -d= -f2)
+        days_left=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+        ```
+
+        The `|| true` after a `grep -c` matters under `set -e`: `grep` returns a non-zero code when it finds
+        nothing, which is not an error here (zero failures is good news). Each value is then compared to a
+        configurable threshold.
+  - heading:
+      fr: "Alerter via un webhook"
+      en: "Alerting via a webhook"
+    body:
+      fr: |
+        Un **webhook** est une URL fournie par un service de messagerie (Slack, Mattermost, Discord…) à
+        laquelle on envoie un message JSON par HTTP POST. C'est le moyen le plus simple d'envoyer une alerte
+        depuis un script :
+
+        ```bash
+        send_alert() {
+            local message="$1"
+            # --fail returns non-zero on HTTP error; --silent hides the progress bar.
+            curl --fail --silent --max-time 10 \
+                 -H 'Content-Type: application/json' \
+                 --data "$(printf '{"text": %s}' "$(json_escape "$message")")" \
+                 "$WEBHOOK_URL"
+        }
+        ```
+
+        Deux points de sécurité. D'abord, l'URL du webhook est un **secret** : elle ne doit jamais être écrite
+        en dur dans le script (quiconque la connaît peut poster). On la lit depuis une variable
+        d'environnement ou un fichier à permissions restreintes : `WEBHOOK_URL="${WEBHOOK_URL:?set it}"`.
+        Ensuite, le message peut contenir des guillemets ou des caractères spéciaux (venus d'un log) : il faut
+        **échapper** le JSON correctement, idéalement avec `jq -Rn --arg`, pour éviter de casser la charge ou
+        d'injecter du contenu.
+
+        La règle anti-**fatigue d'alerte** : n'envoyez **une** notification agrégée que s'il y a au moins une
+        anomalie. Un script qui envoie « tout va bien » toutes les cinq minutes finit par être filtré, et les
+        vraies alertes avec lui.
+      en: |
+        A **webhook** is a URL provided by a messaging service (Slack, Mattermost, Discord…) to which you send
+        a JSON message over HTTP POST. It is the simplest way to send an alert from a script:
+
+        ```bash
+        send_alert() {
+            local message="$1"
+            # --fail returns non-zero on HTTP error; --silent hides the progress bar.
+            curl --fail --silent --max-time 10 \
+                 -H 'Content-Type: application/json' \
+                 --data "$(printf '{"text": %s}' "$(json_escape "$message")")" \
+                 "$WEBHOOK_URL"
+        }
+        ```
+
+        Two security points. First, the webhook URL is a **secret**: it must never be hard-coded in the script
+        (anyone who knows it can post). You read it from an environment variable or a file with restricted
+        permissions: `WEBHOOK_URL="${WEBHOOK_URL:?set it}"`. Second, the message may contain quotes or special
+        characters (from a log): you must **escape** the JSON correctly, ideally with `jq -Rn --arg`, to avoid
+        breaking the payload or injecting content.
+
+        The anti-**alert-fatigue** rule: send **one** aggregated notification only if there is at least one
+        anomaly. A script that sends "all is well" every five minutes ends up filtered, and the real alerts
+        with it.
+  - heading:
+      fr: "Planifier : cron ou timer systemd"
+      en: "Scheduling: cron or a systemd timer"
+    body:
+      fr: |
+        Un script de supervision doit tourner **régulièrement**, sans intervention. Deux planificateurs :
+
+        **cron** est universel et simple. Une ligne dans `crontab -e` :
+
+        ```bash
+        # Run every 5 minutes; redirect output so cron does not email noise.
+        */5 * * * * WEBHOOK_URL=changeme /usr/local/bin/monitor.sh >> /var/log/monitor.log 2>&1
+        ```
+
+        **systemd timer** est plus moderne et plus riche (journalisation intégrée, dépendances, exécution
+        manquée rattrapée avec `Persistent=true`). Il faut deux fichiers, un `.service` et un `.timer` :
+
+        ```ini
+        # /etc/systemd/system/monitor.service
+        [Service]
+        Type=oneshot
+        EnvironmentFile=/etc/monitor.env      # holds WEBHOOK_URL, mode 600
+        ExecStart=/usr/local/bin/monitor.sh
+
+        # /etc/systemd/system/monitor.timer
+        [Timer]
+        OnCalendar=*:0/5                       # every 5 minutes
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+        ```
+
+        On active avec `systemctl enable --now monitor.timer`. L'avantage du timer : le secret est dans un
+        `EnvironmentFile` à permissions `600`, pas dans la table cron, et toute la sortie va dans `journalctl`.
+
+        | Critère | cron | systemd timer |
+        |---|---|---|
+        | Simplicité | très simple | deux fichiers |
+        | Journalisation | à gérer soi-même | intégrée (journalctl) |
+        | Exécution manquée | perdue | rattrapée (`Persistent`) |
+        | Gestion des secrets | fragile | `EnvironmentFile` 600 |
+      en: |
+        A monitoring script must run **regularly**, without intervention. Two schedulers:
+
+        **cron** is universal and simple. One line in `crontab -e`:
+
+        ```bash
+        # Run every 5 minutes; redirect output so cron does not email noise.
+        */5 * * * * WEBHOOK_URL=changeme /usr/local/bin/monitor.sh >> /var/log/monitor.log 2>&1
+        ```
+
+        **systemd timer** is more modern and richer (built-in logging, dependencies, missed runs caught up
+        with `Persistent=true`). It needs two files, a `.service` and a `.timer`:
+
+        ```ini
+        # /etc/systemd/system/monitor.service
+        [Service]
+        Type=oneshot
+        EnvironmentFile=/etc/monitor.env      # holds WEBHOOK_URL, mode 600
+        ExecStart=/usr/local/bin/monitor.sh
+
+        # /etc/systemd/system/monitor.timer
+        [Timer]
+        OnCalendar=*:0/5                       # every 5 minutes
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+        ```
+
+        You enable with `systemctl enable --now monitor.timer`. The timer's advantage: the secret is in an
+        `EnvironmentFile` with `600` permissions, not in the cron table, and all output goes to `journalctl`.
+
+        | Criterion | cron | systemd timer |
+        |---|---|---|
+        | Simplicity | very simple | two files |
+        | Logging | do it yourself | built in (journalctl) |
+        | Missed run | lost | caught up (`Persistent`) |
+        | Secret handling | fragile | `EnvironmentFile` 600 |
+
+examples:
+  - title:
+      fr: "Vérifier le disque et la charge CPU"
+      en: "Checking disk and CPU load"
+    file: check-resources.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      DISK_MAX=85            # alert above 85% used
+      alerts=()
+
+      # Disk: column 5 of df is "Use%"; gsub removes the % so we can compare numbers.
+      disk=$(df -P / | awk 'NR==2 { gsub("%","",$5); print $5 }')
+      (( disk > DISK_MAX )) && alerts+=("Disk / at ${disk}% (>${DISK_MAX}%)")
+
+      # CPU: compare 1-minute load average to the number of cores.
+      load=$(cut -d' ' -f1 /proc/loadavg)
+      cores=$(nproc)
+      # bc handles the decimal comparison load > cores; -l loads the math lib.
+      if (( $(echo "$load > $cores" | bc -l) )); then
+          alerts+=("CPU load $load over $cores cores")
+      fi
+
+      if (( ${#alerts[@]} > 0 )); then
+          printf 'ALERT: %s\n' "${alerts[@]}"
+      else
+          echo "Resources OK (disk ${disk}%, load $load/$cores)"
+      fi
+    output: |
+      ALERT: Disk / at 91% (>85%)
+    note:
+      fr: "On accumule les problèmes dans un tableau `alerts` pour n'envoyer qu'une notification agrégée ensuite. `gsub(\"%\",\"\",$5)` retire le `%` pour comparer des nombres ; `bc -l` gère la comparaison décimale de la charge."
+      en: "Problems accumulate in an `alerts` array so only one aggregated notification is sent later. `gsub(\"%\",\"\",$5)` strips the `%` to compare numbers; `bc -l` handles the decimal comparison of the load."
+
+  - title:
+      fr: "Connexions SSH échouées et expiration TLS"
+      en: "Failed SSH logins and TLS expiry"
+    file: check-security.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      SSH_MAX=30             # alert above 30 failed logins in the last hour
+      CERT_MIN_DAYS=14       # alert if a cert expires within 14 days
+      CERT=/etc/ssl/certs/example.crt
+      alerts=()
+
+      # Failed SSH logins in the last hour. || true: grep -c exits 1 when count is 0.
+      failed=$(journalctl -u ssh --since '1 hour ago' 2>/dev/null |
+               grep -c 'Failed password' || true)
+      (( failed > SSH_MAX )) && alerts+=("$failed failed SSH logins in 1h (>$SSH_MAX)")
+
+      # TLS certificate: compute days remaining before expiry.
+      if [[ -f "$CERT" ]]; then
+          end=$(openssl x509 -enddate -noout -in "$CERT" | cut -d= -f2)
+          days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+          (( days < CERT_MIN_DAYS )) && alerts+=("Certificate expires in $days day(s)")
+      fi
+
+      printf '%s\n' "${alerts[@]:-All security checks OK}"
+    output: |
+      43 failed SSH logins in 1h (>30)
+      Certificate expires in 9 day(s)
+    note:
+      fr: "`|| true` évite que `set -e` n'arrête le script quand `grep -c` compte zéro échec. Le calcul de `days` convertit les dates en secondes (`+%s`) puis en jours. `${alerts[@]:-...}` affiche un message par défaut si le tableau est vide."
+      en: "`|| true` stops `set -e` from halting the script when `grep -c` counts zero failures. The `days` calculation converts dates to seconds (`+%s`) then to days. `${alerts[@]:-...}` prints a default message if the array is empty."
+
+  - title:
+      fr: "Le script de supervision complet avec alerte webhook"
+      en: "The complete monitoring script with webhook alert"
+    file: monitor.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Monitors disk, CPU, failed SSH logins and TLS expiry.
+      # Sends ONE aggregated webhook alert only if something is wrong.
+      set -euo pipefail
+
+      # The webhook URL is a secret: required from the environment, never hard-coded.
+      WEBHOOK_URL="${WEBHOOK_URL:?set WEBHOOK_URL in the environment}"
+      DISK_MAX=85; SSH_MAX=30; CERT_MIN_DAYS=14
+      CERT=/etc/ssl/certs/example.crt
+      host="$(hostname)"
+      alerts=()
+
+      # Safely build a JSON string value from arbitrary text (handles quotes, newlines).
+      send_alert() {
+          local text="$1"
+          local payload
+          payload=$(jq -Rn --arg t "$text" '{text: $t}')
+          curl --fail --silent --max-time 10 \
+               -H 'Content-Type: application/json' \
+               --data "$payload" "$WEBHOOK_URL" >/dev/null
+      }
+
+      # 1. Disk
+      disk=$(df -P / | awk 'NR==2 { gsub("%","",$5); print $5 }')
+      (( disk > DISK_MAX )) && alerts+=("Disk / at ${disk}%")
+
+      # 2. CPU load vs cores
+      load=$(cut -d' ' -f1 /proc/loadavg); cores=$(nproc)
+      (( $(echo "$load > $cores" | bc -l) )) && alerts+=("CPU load $load/$cores")
+
+      # 3. Failed SSH logins in the last hour
+      failed=$(journalctl -u ssh --since '1 hour ago' 2>/dev/null |
+               grep -c 'Failed password' || true)
+      (( failed > SSH_MAX )) && alerts+=("$failed failed SSH logins in 1h")
+
+      # 4. TLS certificate expiry
+      if [[ -f "$CERT" ]]; then
+          end=$(openssl x509 -enddate -noout -in "$CERT" | cut -d= -f2)
+          days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+          (( days < CERT_MIN_DAYS )) && alerts+=("TLS cert expires in $days day(s)")
+      fi
+
+      # Alert ONCE, aggregated, and only if there is something to report.
+      if (( ${#alerts[@]} > 0 )); then
+          msg="[$host] $(printf '%s; ' "${alerts[@]}")"
+          send_alert "$msg"
+          echo "$msg" >&2
+          exit 1          # non-zero so the scheduler records the failure
+      fi
+      echo "[$host] all checks OK"
+    output: |
+      [web-01] Disk / at 91%; 43 failed SSH logins in 1h; TLS cert expires in 9 day(s);
+    note:
+      fr: "Le secret `WEBHOOK_URL` vient de l'environnement (`:?`). `jq -Rn --arg` construit un JSON correctement échappé, même si un log contient des guillemets. Une seule alerte agrégée est envoyée, et seulement en cas d'anomalie : pas de fatigue d'alerte."
+      en: "The `WEBHOOK_URL` secret comes from the environment (`:?`). `jq -Rn --arg` builds correctly escaped JSON, even if a log contains quotes. One aggregated alert is sent, and only on an anomaly: no alert fatigue."
+
+  - title:
+      fr: "Planifier avec un timer systemd"
+      en: "Scheduling with a systemd timer"
+    file: monitor.timer
+    lang: ini
+    kind: secure
+    code: |
+      # /etc/systemd/system/monitor.service
+      [Unit]
+      Description=Resource and security monitoring
+
+      [Service]
+      Type=oneshot
+      # Secret lives in a root-only file (chmod 600), not in the unit or the crontab.
+      EnvironmentFile=/etc/monitor.env
+      ExecStart=/usr/local/bin/monitor.sh
+
+      # --- separate file: /etc/systemd/system/monitor.timer ---
+      [Unit]
+      Description=Run monitoring every 5 minutes
+
+      [Timer]
+      OnCalendar=*:0/5
+      Persistent=true           # catch up a run missed while the host was off
+
+      [Install]
+      WantedBy=timers.target
+    output: |
+      $ sudo systemctl enable --now monitor.timer
+      $ systemctl list-timers monitor.timer
+      NEXT                        LEFT      UNIT          ACTIVATES
+      2026-11-27 02:45:00 UTC     3min      monitor.timer monitor.service
+    note:
+      fr: "Le timer sépare la planification (`.timer`) de l'action (`.service`). Le secret est dans `/etc/monitor.env` en mode `600`, lu par `EnvironmentFile` : jamais exposé dans la table cron. `Persistent=true` rattrape une exécution manquée après un redémarrage."
+      en: "The timer separates scheduling (`.timer`) from the action (`.service`). The secret is in `/etc/monitor.env` with mode `600`, read by `EnvironmentFile`: never exposed in the cron table. `Persistent=true` catches up a run missed after a reboot."
+
+mistake:
+  fr: |
+    **Alerter sur tout, tout le temps, et coder le webhook en dur.**
+
+    Deux travers se renforcent. D'abord la **fatigue d'alerte** : un script qui notifie à chaque exécution,
+    même quand tout va bien, noie les vraies alertes dans le bruit ; très vite, l'équipe crée un filtre et
+    n'ouvre plus les messages — le jour où un vrai problème survient, personne ne le voit. N'alertez que sur un
+    franchissement de seuil, une seule fois, de façon agrégée. Ensuite, **l'URL du webhook en dur** dans le
+    script : c'est un secret qui finit dans Git et permet à quiconque de publier des messages. Lisez-la depuis
+    l'environnement ou un `EnvironmentFile` en mode `600`.
+  en: |
+    **Alerting on everything, all the time, and hard-coding the webhook.**
+
+    Two flaws reinforce each other. First, **alert fatigue**: a script that notifies on every run, even when
+    all is well, drowns real alerts in noise; very soon the team creates a filter and stops opening the
+    messages — the day a real problem occurs, nobody sees it. Only alert on a threshold crossing, once, in
+    aggregated form. Second, the **hard-coded webhook URL** in the script: it is a secret that ends up in Git
+    and lets anyone post messages. Read it from the environment or an `EnvironmentFile` with mode `600`.
+
+bestPractice:
+  fr: |
+    - **N'alertez que sur l'anomalie**, une seule fois et de façon agrégée : la clé contre la fatigue d'alerte.
+    - **Gardez le webhook secret** : lu depuis l'environnement ou un `EnvironmentFile` en `600`, jamais en dur.
+    - **Échappez le JSON** avec `jq -Rn --arg` : un message issu d'un log peut contenir des guillemets.
+    - **Gérez les codes de retour** sous `set -e` : `grep -c ... || true` quand zéro résultat est normal.
+    - **Planifiez avec un timer systemd** quand c'est possible : journalisation intégrée, secret protégé,
+      exécutions manquées rattrapées.
+    - **Sortez en code non nul** sur alerte, pour que le planificateur et `journalctl` gardent une trace.
+  en: |
+    - **Only alert on an anomaly**, once and aggregated: the key against alert fatigue.
+    - **Keep the webhook secret**: read from the environment or an `EnvironmentFile` in `600`, never
+      hard-coded.
+    - **Escape the JSON** with `jq -Rn --arg`: a message from a log may contain quotes.
+    - **Handle exit codes** under `set -e`: `grep -c ... || true` when zero results is normal.
+    - **Schedule with a systemd timer** where possible: built-in logging, protected secret, missed runs caught
+      up.
+    - **Exit non-zero** on an alert, so the scheduler and `journalctl` keep a trace.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez au script de supervision un cinquième contrôle : surveiller l'**usage de la mémoire**. Si la
+      mémoire utilisée dépasse **90 %**, ajoutez une alerte au tableau `alerts`.
+
+      Indice : `free` donne les chiffres. La commande
+      `free | awk '/^Mem:/ { printf "%d", $3/$2*100 }'` affiche le pourcentage utilisé (colonne `used` sur
+      colonne `total`). Comparez ce pourcentage avec `(( ... ))`.
+    en: |
+      Add a fifth check to the monitoring script: watch **memory usage**. If used memory exceeds **90%**, add
+      an alert to the `alerts` array.
+
+      Hint: `free` gives the figures. The command
+      `free | awk '/^Mem:/ { printf "%d", $3/$2*100 }'` prints the used percentage (`used` column over
+      `total` column). Compare that percentage with `(( ... ))`.
+  solution:
+    file: check-memory.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      MEM_MAX=90             # alert above 90% used memory
+      alerts=()              # in the real script this array already exists
+
+      # free prints Mem: total used free ... ; $3/$2*100 is the used percentage.
+      mem=$(free | awk '/^Mem:/ { printf "%d", $3/$2*100 }')
+
+      if (( mem > MEM_MAX )); then
+          alerts+=("Memory at ${mem}% (>${MEM_MAX}%)")
+      fi
+
+      printf '%s\n' "${alerts[@]:-Memory OK (${mem}%)}"
+    note:
+      fr: "`awk '/^Mem:/ ...'` cible la ligne mémoire et calcule le pourcentage utilisé en une passe. L'alerte rejoint le tableau `alerts` partagé, pour être envoyée avec les autres dans une seule notification agrégée."
+      en: "`awk '/^Mem:/ ...'` targets the memory line and computes the used percentage in one pass. The alert joins the shared `alerts` array, to be sent with the others in a single aggregated notification."
+
+quiz:
+  - q:
+      fr: "Pourquoi ajouter `|| true` après `grep -c 'Failed password'` sous `set -e` ?"
+      en: "Why add `|| true` after `grep -c 'Failed password'` under `set -e`?"
+    options:
+      fr:
+        - "Pour chiffrer la sortie"
+        - "Parce que grep -c renvoie un code non nul quand il ne trouve rien, ce qui n'est pas une erreur ici"
+        - "Pour accélérer grep"
+        - "Pour compter deux fois"
+      en:
+        - "To encrypt the output"
+        - "Because grep -c returns non-zero when it finds nothing, which is not an error here"
+        - "To speed grep up"
+        - "To count twice"
+    answer: 1
+    why:
+      fr: "`grep -c` sort avec un code non nul quand le compte est zéro ; sous `set -e`, cela arrêterait le script alors que zéro échec est une bonne nouvelle. `|| true` neutralise ce faux échec."
+      en: "`grep -c` exits non-zero when the count is zero; under `set -e` that would halt the script even though zero failures is good news. `|| true` neutralises this false failure."
+  - q:
+      fr: "Pourquoi ne pas écrire l'URL du webhook en dur dans le script ?"
+      en: "Why not hard-code the webhook URL in the script?"
+    options:
+      fr:
+        - "Parce que c'est un secret qui finirait dans Git et permettrait à quiconque de poster"
+        - "Parce que curl ne l'accepte pas"
+        - "Parce que l'URL change à chaque exécution"
+        - "Parce que cela ralentit l'alerte"
+      en:
+        - "Because it is a secret that would end up in Git and let anyone post"
+        - "Because curl does not accept it"
+        - "Because the URL changes on every run"
+        - "Because it slows the alert down"
+    answer: 0
+    why:
+      fr: "L'URL d'un webhook permet de publier des messages : c'est un secret. On la lit depuis l'environnement ou un `EnvironmentFile` en `600`, jamais en dur dans le code versionné."
+      en: "A webhook URL lets anyone post messages: it is a secret. You read it from the environment or an `EnvironmentFile` in `600`, never hard-coded in versioned code."
+  - q:
+      fr: "Qu'est-ce que la fatigue d'alerte ?"
+      en: "What is alert fatigue?"
+    options:
+      fr:
+        - "Un bug de curl"
+        - "Le fait de recevoir tant d'alertes inutiles qu'on finit par ignorer les vraies"
+        - "Une surcharge du CPU par le script"
+        - "Un certificat expiré"
+      en:
+        - "A curl bug"
+        - "Getting so many useless alerts that you end up ignoring the real ones"
+        - "The script overloading the CPU"
+        - "An expired certificate"
+    answer: 1
+    why:
+      fr: "Trop d'alertes, surtout « tout va bien », noient les vraies : l'équipe filtre les messages et rate l'incident réel. On n'alerte donc que sur un franchissement de seuil, une fois, de façon agrégée."
+      en: "Too many alerts, especially 'all is well', drown the real ones: the team filters the messages and misses the real incident. So you only alert on a threshold crossing, once, aggregated."
+  - q:
+      fr: "Quel avantage un timer systemd a-t-il sur cron pour un secret comme WEBHOOK_URL ?"
+      en: "What advantage does a systemd timer have over cron for a secret like WEBHOOK_URL?"
+    options:
+      fr:
+        - "Il chiffre automatiquement le script"
+        - "Il s'exécute plus vite"
+        - "Il lit le secret depuis un EnvironmentFile en 600, hors de la table cron"
+        - "Il n'a besoin d'aucun fichier"
+      en:
+        - "It automatically encrypts the script"
+        - "It runs faster"
+        - "It reads the secret from an EnvironmentFile in 600, out of the cron table"
+        - "It needs no file"
+    answer: 2
+    why:
+      fr: "Le timer sépare l'unité `.service`, qui charge le secret via `EnvironmentFile` (mode 600), de la planification. Le secret n'apparaît pas en clair dans la crontab et toute la sortie va dans journalctl."
+      en: "The timer separates the `.service` unit, which loads the secret via `EnvironmentFile` (mode 600), from the schedule. The secret does not appear in clear text in the crontab, and all output goes to journalctl."
+  - q:
+      fr: "Comment obtenir le pourcentage utilisé d'un disque pour le comparer à un seuil ?"
+      en: "How do you get a disk's used percentage to compare it to a threshold?"
+    options:
+      fr:
+        - "`df -P /` puis awk sur la colonne 5 en retirant le `%` avec gsub"
+        - "`ls -l /` puis compter les lignes"
+        - "`ps aux` puis sommer la colonne CPU"
+        - "`cat /proc/loadavg`"
+      en:
+        - "`df -P /` then awk on column 5, stripping the `%` with gsub"
+        - "`ls -l /` then count the lines"
+        - "`ps aux` then sum the CPU column"
+        - "`cat /proc/loadavg`"
+    answer: 0
+    why:
+      fr: "`df -P /` affiche l'usage ; la colonne 5 est le pourcentage, dont on retire le `%` avec `gsub` dans awk pour obtenir un nombre comparable avec `(( ... ))`."
+      en: "`df -P /` shows usage; column 5 is the percentage, from which you strip the `%` with `gsub` in awk to get a number comparable with `(( ... ))`."

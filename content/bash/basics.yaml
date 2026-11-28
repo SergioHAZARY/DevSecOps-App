@@ -1,0 +1,440 @@
+description:
+  fr: "Débuter en Bash du bon pied : variables, guillemets et mode strict (set -euo pipefail), les trois réflexes qui séparent un script jouet d'un script de production sûr."
+  en: "Start Bash the right way: variables, quoting and strict mode (set -euo pipefail), the three habits that separate a toy script from a safe production one."
+duration: 25
+
+intro:
+  fr: |
+    **Bash** (*Bourne Again SHell*) est l'interpréteur de commandes par défaut de la plupart des systèmes
+    Linux. C'est l'outil n°1 du quotidien DevSecOps : lancer des commandes, enchaîner des outils, et surtout
+    **automatiser** des tâches d'administration et de sécurité dans des scripts.
+
+    Un script Bash, c'est comme une **liste de courses** que l'on confie à un assistant très obéissant mais
+    très littéral : il exécute chaque ligne exactement comme écrite, de haut en bas. Le problème, c'est que
+    Bash, par défaut, est *trop* tolérant : si une commande échoue, il continue comme si de rien n'était ; si
+    une variable n'existe pas, il la remplace par du vide. Dans un script de sauvegarde ou de durcissement, ce
+    silence est dangereux.
+
+    Cette leçon ne suppose **aucune** connaissance préalable. Vous apprendrez à écrire des variables, à
+    comprendre pourquoi les **guillemets** sont une question de sécurité, et à activer le **mode strict**
+    (`set -euo pipefail`) qui transforme Bash en assistant prudent. Ces trois réflexes sont le socle de tous
+    les scripts de la suite du cours.
+  en: |
+    **Bash** (*Bourne Again SHell*) is the default command interpreter on most Linux systems. It is the
+    number-one everyday DevSecOps tool: running commands, chaining tools, and above all **automating**
+    administration and security tasks in scripts.
+
+    A Bash script is like a **shopping list** handed to a very obedient but very literal assistant: it runs
+    each line exactly as written, top to bottom. The catch is that Bash, by default, is *too* forgiving: if a
+    command fails, it carries on as if nothing happened; if a variable does not exist, it replaces it with
+    emptiness. In a backup or hardening script, that silence is dangerous.
+
+    This lesson assumes **no** prior knowledge. You will learn to write variables, understand why **quoting**
+    is a security matter, and enable **strict mode** (`set -euo pipefail`) which turns Bash into a careful
+    assistant. These three habits are the foundation of every script later in the course.
+
+sections:
+  - heading:
+      fr: "Le shebang et un premier script"
+      en: "The shebang and a first script"
+    body:
+      fr: |
+        Un script Bash est un fichier texte. Sa première ligne, le **shebang**, indique quel interpréteur doit
+        l'exécuter. On écrit toujours :
+
+        ```bash
+        #!/usr/bin/env bash
+        ```
+
+        Pourquoi `/usr/bin/env bash` plutôt que `/bin/bash` ? Parce que `env` cherche Bash dans le `PATH` : le
+        script fonctionne ainsi que Bash soit dans `/bin`, `/usr/bin` ou `/usr/local/bin` (macOS, BSD). On rend
+        ensuite le fichier exécutable et on le lance :
+
+        ```bash
+        chmod +x backup.sh     # make it executable
+        ./backup.sh            # run it
+        ```
+
+        Trois règles à retenir dès maintenant : une instruction par ligne, exécutée de haut en bas ; tout ce
+        qui suit `#` est un **commentaire** ignoré par Bash ; et `echo` affiche du texte, votre premier outil
+        de débogage. Évitez `sh script.sh` : cela force l'interpréteur `sh` (souvent plus limité), et les
+        fonctionnalités Bash de ce cours ne marcheraient pas.
+      en: |
+        A Bash script is a text file. Its first line, the **shebang**, tells which interpreter should run it.
+        You always write:
+
+        ```bash
+        #!/usr/bin/env bash
+        ```
+
+        Why `/usr/bin/env bash` rather than `/bin/bash`? Because `env` looks up Bash in the `PATH`: the script
+        then works whether Bash sits in `/bin`, `/usr/bin` or `/usr/local/bin` (macOS, BSD). You then make the
+        file executable and run it:
+
+        ```bash
+        chmod +x backup.sh     # make it executable
+        ./backup.sh            # run it
+        ```
+
+        Three rules to remember right away: one instruction per line, run top to bottom; everything after `#`
+        is a **comment** ignored by Bash; and `echo` prints text, your first debugging tool. Avoid
+        `sh script.sh`: it forces the `sh` interpreter (often more limited), and the Bash features in this
+        course would not work.
+  - heading:
+      fr: "Variables et guillemets : une question de sécurité"
+      en: "Variables and quoting: a security matter"
+    body:
+      fr: |
+        On crée une variable **sans espace** autour du `=`, et on la lit avec `$` :
+
+        ```bash
+        name="web-01"          # no spaces around =
+        echo "Host: $name"     # reads the value
+        count=$(ls | wc -l)    # captures a command's output
+        ```
+
+        Le point le plus important de toute la leçon : **mettez toujours vos variables entre guillemets
+        doubles** `"$name"`. Sans guillemets, Bash découpe la valeur sur les espaces et interprète les
+        caractères spéciaux (`*`, `?`). Si une variable contient `/ tmp` ou `* .txt`, un `rm $file` sans
+        guillemets peut détruire bien plus que prévu.
+
+        | Écriture | Si `file="my report.txt"` | Verdict |
+        |---|---|---|
+        | `rm $file` | supprime `my` **et** `report.txt` | dangereux |
+        | `rm "$file"` | supprime `my report.txt` | correct |
+
+        Retenez : `$var` sans guillemets est la cause n°1 de bugs et de failles dans les scripts shell.
+        `"$var"` doit devenir un automatisme.
+      en: |
+        You create a variable with **no space** around the `=`, and read it with `$`:
+
+        ```bash
+        name="web-01"          # no spaces around =
+        echo "Host: $name"     # reads the value
+        count=$(ls | wc -l)    # captures a command's output
+        ```
+
+        The single most important point of the whole lesson: **always wrap your variables in double quotes**
+        `"$name"`. Without quotes, Bash splits the value on spaces and interprets special characters (`*`,
+        `?`). If a variable holds `/ tmp` or `* .txt`, an unquoted `rm $file` can destroy far more than
+        intended.
+
+        | Form | If `file="my report.txt"` | Verdict |
+        |---|---|---|
+        | `rm $file` | deletes `my` **and** `report.txt` | dangerous |
+        | `rm "$file"` | deletes `my report.txt` | correct |
+
+        Remember: `$var` without quotes is the number-one cause of bugs and flaws in shell scripts. `"$var"`
+        must become a reflex.
+  - heading:
+      fr: "Le mode strict : set -euo pipefail"
+      en: "Strict mode: set -euo pipefail"
+    body:
+      fr: |
+        Par défaut, Bash pardonne tout. Le **mode strict**, placé en tête de chaque script, le rend prudent :
+
+        ```bash
+        #!/usr/bin/env bash
+        set -euo pipefail
+        ```
+
+        | Option | Effet | Pourquoi c'est vital |
+        |---|---|---|
+        | `set -e` | arrête le script à la première commande qui échoue | évite d'enchaîner sur une erreur |
+        | `set -u` | erreur si on utilise une variable non définie | attrape les fautes de frappe |
+        | `set -o pipefail` | un pipeline échoue si **une** de ses commandes échoue | `a | b` ne masque plus l'échec de `a` |
+
+        Sans `set -e`, un script de sauvegarde dont la copie échoue continuerait jusqu'à afficher « terminé ».
+        Sans `set -u`, une faute de frappe dans un nom de variable (`$htome` au lieu de `$home`) donnerait du
+        vide silencieusement — et `rm -rf "$htome/"` deviendrait `rm -rf /`. Sans `pipefail`,
+        `curl ... | tar ...` masquerait l'échec du téléchargement. On ajoute souvent `IFS=$'\n\t'` pour un
+        découpage plus sûr. Le mode strict est la différence entre un script jouet et un script de production.
+      en: |
+        By default, Bash forgives everything. **Strict mode**, placed at the top of every script, makes it
+        careful:
+
+        ```bash
+        #!/usr/bin/env bash
+        set -euo pipefail
+        ```
+
+        | Option | Effect | Why it is vital |
+        |---|---|---|
+        | `set -e` | stops the script at the first failing command | avoids carrying on after an error |
+        | `set -u` | errors on an undefined variable | catches typos |
+        | `set -o pipefail` | a pipeline fails if **any** command in it fails | `a | b` no longer hides `a`'s failure |
+
+        Without `set -e`, a backup script whose copy fails would carry on to print "done". Without `set -u`, a
+        typo in a variable name (`$htome` instead of `$home`) would silently yield emptiness — and
+        `rm -rf "$htome/"` would become `rm -rf /`. Without `pipefail`, `curl ... | tar ...` would hide a
+        failed download. You often add `IFS=$'\n\t'` for safer splitting. Strict mode is the difference between
+        a toy script and a production one.
+
+examples:
+  - title:
+      fr: "Un premier script complet et sûr"
+      en: "A first complete, safe script"
+    file: hello.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Strict mode: fail fast, catch undefined variables, honour pipeline failures.
+      set -euo pipefail
+
+      # Variables: no spaces around '=', read with $, always quote on use.
+      greeting="Hello"
+      host="$(hostname)"          # $(...) captures a command's output
+
+      echo "${greeting} from ${host}"
+      echo "Today is $(date +%F)"  # %F = YYYY-MM-DD
+    output: |
+      Hello from web-01
+      Today is 2026-11-27
+    note:
+      fr: "Les trois réflexes sont là : shebang `env bash`, `set -euo pipefail`, variables entre guillemets. `$(...)` capture la sortie d'une commande ; `${host}` (avec accolades) est une forme explicite recommandée."
+      en: "The three habits are present: `env bash` shebang, `set -euo pipefail`, quoted variables. `$(...)` captures a command's output; `${host}` (with braces) is the recommended explicit form."
+
+  - title:
+      fr: "Pourquoi les guillemets protègent"
+      en: "Why quoting protects"
+    file: quoting.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # DANGEROUS on purpose: unquoted variable with spaces and a wildcard.
+      file="my report *.txt"
+
+      # Bash word-splits the value and expands the * : this touches MANY files,
+      # not the one intended. On 'rm', this is how data gets destroyed.
+      echo Removing: $file          # unquoted: splits into 3 "arguments"
+    output: |
+      Removing: my report a.txt b.txt c.txt
+    note:
+      fr: "Sans guillemets, `$file` est découpé en mots et le `*` est développé en noms de fichiers réels. Remplacez `echo` par `rm` et vous comprenez le drame : des fichiers non visés sont supprimés."
+      en: "Without quotes, `$file` is split into words and the `*` is expanded into real file names. Replace `echo` with `rm` and you see the disaster: unintended files get deleted."
+
+  - title:
+      fr: "La version sûre et le mode strict en action"
+      en: "The safe version and strict mode in action"
+    file: strict.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      file="my report.txt"
+      echo "Target: $file"          # quoted: stays a single value
+
+      # set -u turns a typo into an immediate, loud error instead of silence.
+      # Uncommenting the next line would stop the script here:
+      # echo "$undefined_var"
+
+      # set -e stops on failure: this grep finds nothing, so the script halts
+      # BEFORE printing "done" (|| true would let us continue on purpose).
+      if grep -q "root" /etc/passwd; then
+          echo "root account present"
+      fi
+      echo "done"
+    output: |
+      Target: my report.txt
+      root account present
+      done
+    note:
+      fr: "Les guillemets gardent `my report.txt` en une seule valeur. `set -u` ferait échouer le script sur `$undefined_var`. On gère un échec volontaire avec `|| true` ou un `if`, jamais en désactivant le mode strict."
+      en: "Quoting keeps `my report.txt` as a single value. `set -u` would fail the script on `$undefined_var`. You handle a deliberate failure with `|| true` or an `if`, never by disabling strict mode."
+
+  - title:
+      fr: "Valider l'entrée avant d'agir"
+      en: "Validating input before acting"
+    file: validate.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # $1 is the first argument. ${1:-} with set -u avoids "unbound variable".
+      port="${1:-}"
+
+      # Never trust input: check it is digits only and in the valid TCP range.
+      if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+          echo "Error: port must be a number" >&2   # >&2 = send to stderr
+          exit 1                                     # non-zero = failure
+      fi
+      if (( port < 1 || port > 65535 )); then
+          echo "Error: port out of range 1-65535" >&2
+          exit 1
+      fi
+
+      echo "Scanning port $port"
+    output: |
+      $ ./validate.sh 99999
+      Error: port out of range 1-65535
+    note:
+      fr: "`${1:-}` fournit une valeur vide par défaut pour rester compatible avec `set -u`. On valide le **format** (`=~` et une regex) puis la **plage** (`(( ... ))`). `>&2` écrit l'erreur sur stderr, et `exit 1` signale l'échec."
+      en: "`${1:-}` provides an empty default to stay compatible with `set -u`. You validate the **format** (`=~` and a regex) then the **range** (`(( ... ))`). `>&2` writes the error to stderr, and `exit 1` signals failure."
+
+mistake:
+  fr: |
+    **Oublier les guillemets autour des variables.**
+
+    C'est l'erreur la plus fréquente et la plus coûteuse en Bash. Écrire `cp $src $dst` au lieu de
+    `cp "$src" "$dst"` casse dès qu'un chemin contient une espace, et peut détruire des données si la valeur
+    contient un `*`. La règle est simple et sans exception : **toute** expansion de variable se met entre
+    guillemets doubles, `"$var"` et `"${array[@]}"`. Deuxième erreur jumelle : ne pas activer le mode strict.
+    Un script sans `set -euo pipefail` continue après une erreur et peut rapporter un succès alors qu'il a
+    échoué à mi-chemin.
+  en: |
+    **Forgetting the quotes around variables.**
+
+    This is the most common and most expensive Bash mistake. Writing `cp $src $dst` instead of
+    `cp "$src" "$dst"` breaks as soon as a path contains a space, and can destroy data if the value contains a
+    `*`. The rule is simple and exceptionless: **every** variable expansion goes in double quotes, `"$var"`
+    and `"${array[@]}"`. A twin second mistake: not enabling strict mode. A script without `set -euo pipefail`
+    carries on after an error and can report success when it actually failed halfway through.
+
+bestPractice:
+  fr: |
+    - **Commencez chaque script** par `#!/usr/bin/env bash` puis `set -euo pipefail` : le socle non négociable.
+    - **Mettez toujours vos variables entre guillemets** : `"$var"`, `"${arr[@]}"`. Pas d'exception.
+    - **Validez les entrées** (arguments, saisies) avant de les utiliser : format puis plage.
+    - **Écrivez les erreurs sur stderr** (`>&2`) et sortez avec un code non nul (`exit 1`) en cas d'échec.
+    - **Passez vos scripts à ShellCheck** (`shellcheck script.sh`) : il repère les variables non quotées et
+      les pièges classiques avant qu'ils ne causent un incident.
+    - **Utilisez `${var:-defaut}`** pour fournir une valeur par défaut compatible avec `set -u`.
+  en: |
+    - **Start every script** with `#!/usr/bin/env bash` then `set -euo pipefail`: the non-negotiable base.
+    - **Always quote your variables**: `"$var"`, `"${arr[@]}"`. No exception.
+    - **Validate inputs** (arguments, user entries) before using them: format then range.
+    - **Write errors to stderr** (`>&2`) and exit non-zero (`exit 1`) on failure.
+    - **Run your scripts through ShellCheck** (`shellcheck script.sh`): it catches unquoted variables and
+      classic traps before they cause an incident.
+    - **Use `${var:-default}`** to provide a default value compatible with `set -u`.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un script `greet.sh` qui :
+
+      1. commence par le shebang correct et le mode strict ;
+      2. prend un nom en premier argument ;
+      3. refuse de continuer (message sur stderr + `exit 1`) si **aucun** argument n'est fourni ;
+      4. sinon affiche `Hello, <nom>! You are on <hostname>.`
+
+      Toutes les variables doivent être entre guillemets. Pensez à `${1:-}` pour rester compatible avec
+      `set -u`.
+    en: |
+      Write a script `greet.sh` that:
+
+      1. starts with the correct shebang and strict mode;
+      2. takes a name as its first argument;
+      3. refuses to continue (message on stderr + `exit 1`) if **no** argument is given;
+      4. otherwise prints `Hello, <name>! You are on <hostname>.`
+
+      All variables must be quoted. Use `${1:-}` to stay compatible with `set -u`.
+  solution:
+    file: greet.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # ${1:-} yields an empty string if no argument was passed, so set -u is happy.
+      name="${1:-}"
+
+      if [[ -z "$name" ]]; then                 # -z : true when the string is empty
+          echo "Usage: $0 <name>" >&2           # $0 is the script's own name
+          exit 1
+      fi
+
+      echo "Hello, $name! You are on $(hostname)."
+    note:
+      fr: "`[[ -z \"$name\" ]]` teste la chaîne vide. `$0` est le nom du script, pratique pour un message d'usage. Sans `${1:-}`, `set -u` ferait échouer le script avant même le test, avec « unbound variable »."
+      en: "`[[ -z \"$name\" ]]` tests the empty string. `$0` is the script's name, handy for a usage message. Without `${1:-}`, `set -u` would fail the script before the test, with 'unbound variable'."
+
+quiz:
+  - q:
+      fr: "Que fait `set -e` dans un script Bash ?"
+      en: "What does `set -e` do in a Bash script?"
+    options:
+      fr:
+        - "Il affiche chaque commande avant de l'exécuter"
+        - "Il arrête le script dès qu'une commande échoue"
+        - "Il ignore toutes les erreurs"
+        - "Il active les expressions régulières"
+      en:
+        - "It prints each command before running it"
+        - "It stops the script as soon as a command fails"
+        - "It ignores all errors"
+        - "It enables regular expressions"
+    answer: 1
+    why:
+      fr: "`set -e` fait échouer le script à la première commande dont le code de sortie est non nul, au lieu de continuer sur une erreur."
+      en: "`set -e` makes the script fail at the first command with a non-zero exit code, instead of carrying on after an error."
+  - q:
+      fr: "Pourquoi écrire `rm \"$file\"` plutôt que `rm $file` ?"
+      en: "Why write `rm \"$file\"` rather than `rm $file`?"
+    options:
+      fr:
+        - "Pour que Bash ne découpe pas la valeur sur les espaces ni ne développe les jokers"
+        - "Parce que les guillemets accélèrent la commande"
+        - "Parce que `rm` exige des guillemets"
+        - "Pour chiffrer le nom du fichier"
+      en:
+        - "So Bash does not split the value on spaces nor expand wildcards"
+        - "Because quotes speed up the command"
+        - "Because `rm` requires quotes"
+        - "To encrypt the file name"
+    answer: 0
+    why:
+      fr: "Sans guillemets, une valeur comme `my report *.txt` est découpée en mots et le `*` est développé : la commande agit sur de mauvais fichiers."
+      en: "Without quotes, a value like `my report *.txt` is split into words and the `*` is expanded: the command acts on the wrong files."
+  - q:
+      fr: "Quel shebang est recommandé pour un script Bash portable ?"
+      en: "Which shebang is recommended for a portable Bash script?"
+    options:
+      fr: ["#!/bin/sh", "#!/usr/bin/env bash", "#!bash", "# bash"]
+      en: ["#!/bin/sh", "#!/usr/bin/env bash", "#!bash", "# bash"]
+    answer: 1
+    why:
+      fr: "`#!/usr/bin/env bash` trouve Bash via le `PATH`, donc le script marche quel que soit l'emplacement de Bash. `#!/bin/sh` forcerait un interpréteur plus limité."
+      en: "`#!/usr/bin/env bash` finds Bash via the `PATH`, so the script works wherever Bash lives. `#!/bin/sh` would force a more limited interpreter."
+  - q:
+      fr: "À quoi sert `set -o pipefail` ?"
+      en: "What is `set -o pipefail` for?"
+    options:
+      fr:
+        - "À masquer les erreurs des pipelines"
+        - "À faire échouer un pipeline si une de ses commandes échoue"
+        - "À rendre les pipelines plus rapides"
+        - "À interdire les pipelines"
+      en:
+        - "To hide pipeline errors"
+        - "To make a pipeline fail if any of its commands fails"
+        - "To make pipelines faster"
+        - "To forbid pipelines"
+    answer: 1
+    why:
+      fr: "Sans `pipefail`, un pipeline ne renvoie que le code de la dernière commande ; avec, l'échec d'une commande en amont (ex. `curl`) n'est plus masqué."
+      en: "Without `pipefail`, a pipeline returns only the last command's code; with it, a failure of an upstream command (e.g. `curl`) is no longer hidden."
+  - q:
+      fr: "Comment fournir une valeur par défaut à une variable pour rester compatible avec `set -u` ?"
+      en: "How do you give a variable a default value to stay compatible with `set -u`?"
+    options:
+      fr:
+        - "`$var?`"
+        - "`$var!`"
+        - "`${var:-defaut}`"
+        - "`$var=defaut`"
+      en:
+        - "`$var?`"
+        - "`$var!`"
+        - "`${var:-default}`"
+        - "`$var=default`"
+    answer: 2
+    why:
+      fr: "`${var:-defaut}` renvoie la valeur de `var` si elle existe, sinon `defaut` : le script ne plante pas sous `set -u` quand la variable est absente."
+      en: "`${var:-default}` returns the value of `var` if set, otherwise `default`: the script does not crash under `set -u` when the variable is missing."

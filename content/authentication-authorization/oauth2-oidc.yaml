@@ -1,0 +1,480 @@
+description:
+  fr: "OAuth2 et OpenID Connect : rôles, flux Authorization Code + PKCE, client credentials, et la différence entre jeton d'accès et jeton d'identité."
+  en: "OAuth2 and OpenID Connect: roles, the Authorization Code + PKCE flow, client credentials, and the difference between access token and ID token."
+duration: 35
+
+intro:
+  fr: |
+    **OAuth2** est un protocole de **délégation d'autorisation** : il permet à une application d'obtenir un
+    accès limité à une ressource **sans connaître votre mot de passe**. **OpenID Connect** (OIDC) ajoute
+    par-dessus une couche d'**authentification** : savoir *qui* vous êtes, de façon standardisée.
+
+    Pensez au voiturier d'un hôtel. Vous ne lui confiez pas votre trousseau complet : vous lui donnez une
+    **clé de voiturier**, qui démarre la voiture mais n'ouvre ni le coffre ni votre maison, et qui expire à
+    la fin de la soirée. OAuth2 délivre ce genre de clé limitée (le *jeton d'accès*) ; OIDC y joint une
+    pièce d'identité vérifiable (le *jeton d'identité*).
+
+    Dans cette leçon, vous apprenez les quatre rôles, puis vous suivez **pas à pas** le flux recommandé
+    aujourd'hui — *Authorization Code* avec **PKCE** — ainsi que le flux *client credentials* de machine à
+    machine. Vous verrez pourquoi les flux *implicit* et *password* sont désormais déconseillés, et comment
+    distinguer un jeton d'accès d'un jeton d'identité.
+  en: |
+    **OAuth2** is an **authorization delegation** protocol: it lets an application obtain limited access to
+    a resource **without knowing your password**. **OpenID Connect** (OIDC) adds an **authentication** layer
+    on top: knowing *who* you are, in a standardised way.
+
+    Think of a hotel valet. You do not hand over your full keyring: you give a **valet key** that starts the
+    car but opens neither the trunk nor your house, and expires at the end of the evening. OAuth2 issues this
+    kind of limited key (the *access token*); OIDC attaches a verifiable identity card (the *ID token*).
+
+    In this lesson you learn the four roles, then follow **step by step** the flow recommended today —
+    *Authorization Code* with **PKCE** — as well as the machine-to-machine *client credentials* flow. You
+    will see why the *implicit* and *password* flows are now discouraged, and how to tell an access token
+    from an ID token.
+
+sections:
+  - heading:
+      fr: "Les quatre rôles et les deux protocoles"
+      en: "The four roles and the two protocols"
+    body:
+      fr: |
+        OAuth2 définit quatre acteurs. Les confondre est la première source d'erreurs :
+
+        | Rôle | Qui c'est | Exemple |
+        |---|---|---|
+        | *Resource Owner* | L'utilisateur qui possède la donnée | Vous |
+        | *Client* | L'application qui veut accéder à la donnée | Une app de photo |
+        | *Authorization Server* | Celui qui authentifie et délivre les jetons | Google, Keycloak, Auth0 |
+        | *Resource Server* | L'API qui héberge la donnée protégée | L'API Google Photos |
+
+        **OAuth2 ≠ OIDC.** OAuth2 répond à « cette application a-t-elle le droit d'accéder à telle
+        ressource ? » (**autorisation**). OIDC, construit sur OAuth2, répond à « qui est cet utilisateur ? »
+        (**authentification**) en ajoutant un *jeton d'identité* (ID token) au format **JWT** et un point
+        d'accès `/userinfo`. Utiliser un simple jeton d'accès OAuth2 comme preuve d'identité (« je détiens
+        un jeton, donc je suis connecté ») est une erreur classique : un jeton d'accès n'est pas destiné au
+        client, mais au *resource server*.
+      en: |
+        OAuth2 defines four actors. Confusing them is the first source of mistakes:
+
+        | Role | Who it is | Example |
+        |---|---|---|
+        | *Resource Owner* | The user who owns the data | You |
+        | *Client* | The application that wants to access the data | A photo app |
+        | *Authorization Server* | The one that authenticates and issues tokens | Google, Keycloak, Auth0 |
+        | *Resource Server* | The API that hosts the protected data | The Google Photos API |
+
+        **OAuth2 ≠ OIDC.** OAuth2 answers "is this application allowed to access that resource?"
+        (**authorization**). OIDC, built on OAuth2, answers "who is this user?" (**authentication**) by
+        adding an *ID token* in **JWT** format and a `/userinfo` endpoint. Using a plain OAuth2 access token
+        as proof of identity ("I hold a token, therefore I am logged in") is a classic mistake: an access
+        token is not meant for the client, but for the resource server.
+  - heading:
+      fr: "Le flux Authorization Code + PKCE, étape par étape"
+      en: "The Authorization Code + PKCE flow, step by step"
+    body:
+      fr: |
+        C'est le flux recommandé pour **toutes** les applications aujourd'hui (web, mobile, SPA). **PKCE**
+        (*Proof Key for Code Exchange*, prononcé « pixy ») empêche le vol du code d'autorisation.
+
+        1. Le client tire un secret aléatoire, le **`code_verifier`**, et en calcule le haché
+           **`code_challenge` = BASE64URL(SHA256(code_verifier))**.
+        2. Le client redirige l'utilisateur vers l'*authorization server* avec `response_type=code`,
+           `client_id`, `redirect_uri`, `scope`, un `state` anti-CSRF et le `code_challenge`.
+        3. L'utilisateur s'authentifie et consent. L'*authorization server* renvoie un **code d'autorisation**
+           à usage unique sur la `redirect_uri`.
+        4. Le client échange ce code contre les jetons en **présentant le `code_verifier`** original. Le
+           serveur vérifie que son SHA-256 correspond au `code_challenge` reçu à l'étape 2.
+        5. Le serveur renvoie un **access token**, souvent un **refresh token**, et (en OIDC) un **ID token**.
+
+        Pourquoi PKCE ? Même si un attaquant intercepte le code (application mobile, redirection piégée), il
+        lui manque le `code_verifier`, qui n'a jamais circulé. Le `state` protège en parallèle contre le
+        CSRF sur la redirection. PKCE est **obligatoire** pour les clients publics (SPA, mobile) et
+        recommandé même pour les clients confidentiels.
+      en: |
+        This is the recommended flow for **every** application today (web, mobile, SPA). **PKCE** (*Proof
+        Key for Code Exchange*, pronounced "pixy") prevents theft of the authorization code.
+
+        1. The client draws a random secret, the **`code_verifier`**, and computes its hash
+           **`code_challenge` = BASE64URL(SHA256(code_verifier))**.
+        2. The client redirects the user to the *authorization server* with `response_type=code`,
+           `client_id`, `redirect_uri`, `scope`, an anti-CSRF `state` and the `code_challenge`.
+        3. The user authenticates and consents. The *authorization server* returns a one-time
+           **authorization code** to the `redirect_uri`.
+        4. The client exchanges this code for tokens by **presenting the original `code_verifier`**. The
+           server checks that its SHA-256 matches the `code_challenge` received at step 2.
+        5. The server returns an **access token**, often a **refresh token**, and (in OIDC) an **ID token**.
+
+        Why PKCE? Even if an attacker intercepts the code (mobile app, hijacked redirect), they lack the
+        `code_verifier`, which never travelled. The `state` protects in parallel against CSRF on the
+        redirect. PKCE is **mandatory** for public clients (SPA, mobile) and recommended even for
+        confidential clients.
+  - heading:
+      fr: "Jeton d'accès vs jeton d'identité, et les flux déconseillés"
+      en: "Access token vs ID token, and the discouraged flows"
+    body:
+      fr: |
+        Deux jetons, deux destinataires, deux usages à ne jamais inverser :
+
+        | Jeton | Destinataire | Contenu | Usage |
+        |---|---|---|---|
+        | *Access token* | Le *resource server* (l'API) | Portées (*scopes*), parfois opaque | Autoriser l'appel à l'API |
+        | *ID token* (OIDC) | Le *client* | Identité : `sub`, `email`, `iat`, `exp`, `aud` | Prouver qui s'est connecté |
+        | *Refresh token* | L'*authorization server* | Opaque, longue durée | Obtenir un nouvel access token |
+
+        Le client lit l'**ID token** pour afficher « Bonjour Alice » ; il envoie l'**access token** à l'API.
+        Il ne doit **jamais** envoyer l'ID token à l'API ni utiliser l'access token pour s'identifier.
+
+        Pour une communication **machine à machine** (un service appelle une API, sans utilisateur), on
+        emploie le flux **Client Credentials** : le service présente son `client_id` + `client_secret` et
+        reçoit un access token. Pas d'utilisateur, donc pas d'ID token.
+
+        Deux flux historiques sont désormais **déconseillés** :
+
+        - **Implicit** (`response_type=token`) : renvoyait l'access token directement dans l'URL, exposé à
+          l'historique et aux scripts. Remplacé par *Authorization Code + PKCE*.
+        - **Resource Owner Password Credentials** : l'application collectait le mot de passe de
+          l'utilisateur. Cela anéantit l'intérêt d'OAuth2 (ne jamais partager le mot de passe) et empêche
+          la MFA. À proscrire.
+      en: |
+        Two tokens, two recipients, two uses never to be swapped:
+
+        | Token | Recipient | Content | Use |
+        |---|---|---|---|
+        | *Access token* | The *resource server* (the API) | Scopes, sometimes opaque | Authorise the API call |
+        | *ID token* (OIDC) | The *client* | Identity: `sub`, `email`, `iat`, `exp`, `aud` | Prove who logged in |
+        | *Refresh token* | The *authorization server* | Opaque, long-lived | Obtain a new access token |
+
+        The client reads the **ID token** to show "Hello Alice"; it sends the **access token** to the API.
+        It must **never** send the ID token to the API nor use the access token to identify the user.
+
+        For **machine-to-machine** communication (a service calls an API, with no user), the **Client
+        Credentials** flow is used: the service presents its `client_id` + `client_secret` and receives an
+        access token. No user, hence no ID token.
+
+        Two historical flows are now **discouraged**:
+
+        - **Implicit** (`response_type=token`): returned the access token directly in the URL, exposed to
+          history and scripts. Replaced by *Authorization Code + PKCE*.
+        - **Resource Owner Password Credentials**: the application collected the user's password. This
+          defeats the whole point of OAuth2 (never share the password) and prevents MFA. To be avoided.
+
+examples:
+  - title:
+      fr: "Générer `code_verifier` et `code_challenge` (PKCE) en Python"
+      en: "Generating `code_verifier` and `code_challenge` (PKCE) in Python"
+    file: pkce.py
+    lang: python
+    kind: secure
+    code: |
+      import base64
+      import hashlib
+      import secrets
+
+
+      def generate_pkce_pair() -> tuple[str, str]:
+          # The verifier is a high-entropy random string kept secret by the client
+          verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+          # The challenge is its SHA-256 hash; only the challenge travels in the first request
+          digest = hashlib.sha256(verifier.encode("ascii")).digest()
+          challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+          return verifier, challenge
+
+
+      verifier, challenge = generate_pkce_pair()
+      # The client stores `verifier` locally and sends only `challenge` + method S256
+      print("code_verifier :", verifier)
+      print("code_challenge:", challenge)
+      print("method        : S256")
+      # An intercepted authorization code is useless without the verifier (never transmitted yet)
+    output: |
+      code_verifier : 7Xb1n0Jk... (43+ chars, example)
+      code_challenge: E9Melhoa2... (example)
+      method        : S256
+    note:
+      fr: "Le `code_verifier` reste sur le client ; seul le `code_challenge` part dans la première requête. Comme le verifier n'est révélé qu'à l'échange final, un code volé ne peut pas être converti en jetons."
+      en: "The `code_verifier` stays on the client; only the `code_challenge` goes out in the first request. Because the verifier is revealed only at the final exchange, a stolen code cannot be turned into tokens."
+
+  - title:
+      fr: "Échanger le code contre des jetons (Node.js, Authorization Code + PKCE)"
+      en: "Exchanging the code for tokens (Node.js, Authorization Code + PKCE)"
+    file: callback.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const app = express();
+
+      // In production these come from environment variables / a secret manager
+      const TOKEN_URL = "https://auth.example/oauth2/token";
+      const CLIENT_ID = "spa-client";
+      const REDIRECT_URI = "https://app.example/callback";
+
+      app.get("/callback", async (req, res) => {
+        // 1) The state must match the one we sent: this blocks CSRF on the redirect
+        if (req.query.state !== req.session.oauthState) {
+          return res.status(400).send("invalid state");
+        }
+        // 2) Exchange the one-time code, proving possession of the code_verifier
+        const body = new URLSearchParams({
+          grant_type: "authorization_code",
+          code: req.query.code,
+          redirect_uri: REDIRECT_URI,
+          client_id: CLIENT_ID,
+          code_verifier: req.session.codeVerifier, // stored at step 1, never sent before
+        });
+        const r = await fetch(TOKEN_URL, { method: "POST", body });
+        const tokens = await r.json();
+        // access_token -> call the API ; id_token -> know who the user is (OIDC)
+        req.session.accessToken = tokens.access_token;
+        res.send("Logged in");
+      });
+
+      app.listen(3000);
+    note:
+      fr: "Le serveur d'autorisation ne délivre les jetons que si le `code_verifier` correspond au `code_challenge` reçu plus tôt. La vérification du `state` empêche un attaquant d'injecter son propre code dans la session de la victime."
+      en: "The authorization server issues tokens only if the `code_verifier` matches the `code_challenge` received earlier. Checking the `state` prevents an attacker from injecting their own code into the victim's session."
+
+  - title:
+      fr: "Flux Client Credentials (machine à machine) en Python"
+      en: "Client Credentials flow (machine to machine) in Python"
+    file: client_credentials.py
+    lang: python
+    kind: secure
+    code: |
+      import requests
+
+      TOKEN_URL = "https://auth.example/oauth2/token"
+
+      # No user is involved: a backend service authenticates with its own credentials.
+      # The client_secret must come from a secret manager, never be hard-coded.
+      resp = requests.post(
+          TOKEN_URL,
+          data={
+              "grant_type": "client_credentials",
+              "scope": "orders:read",   # request only the scopes the service needs
+          },
+          # HTTP Basic auth carries client_id:client_secret over TLS
+          auth=("report-service", "changeme-in-vault"),
+          timeout=5,
+      )
+      token = resp.json()["access_token"]
+
+      # The service then calls the resource server with the access token
+      api = requests.get(
+          "https://api.example/orders",
+          headers={"Authorization": f"Bearer {token}"},
+          timeout=5,
+      )
+      print(api.status_code)
+    output: |
+      200
+    note:
+      fr: "Client Credentials ne concerne que les communications de service à service : il n'y a pas d'utilisateur, donc pas d'ID token. On demande la portée minimale (`orders:read`) et le secret vient d'un coffre, jamais du code."
+      en: "Client Credentials is only for service-to-service communication: there is no user, hence no ID token. Request the minimal scope (`orders:read`) and keep the secret in a vault, never in the code."
+
+  - title:
+      fr: "Valider un ID token (OIDC) : signature, `aud`, `iss`, `exp`"
+      en: "Validating an ID token (OIDC): signature, `aud`, `iss`, `exp`"
+    file: verify_id_token.py
+    lang: python
+    kind: secure
+    code: |
+      import time
+      import jwt  # PyJWT
+      from jwt import PyJWKClient
+
+      ISSUER = "https://auth.example/"
+      AUDIENCE = "spa-client"  # must equal our client_id
+
+      # OIDC exposes the public keys at a well-known JWKS URL
+      jwks = PyJWKClient("https://auth.example/.well-known/jwks.json")
+
+
+      def verify_id_token(id_token: str) -> dict:
+          signing_key = jwks.get_signing_key_from_jwt(id_token)
+          # PyJWT checks the RS256 signature, the audience, the issuer and expiry
+          claims = jwt.decode(
+              id_token,
+              signing_key.key,
+              algorithms=["RS256"],         # never trust "alg": "none"
+              audience=AUDIENCE,            # the token must be meant for us
+              issuer=ISSUER,                # and come from our authorization server
+          )
+          # Extra guard: reject a token issued in the future (clock skew aside)
+          if claims["iat"] > time.time() + 60:
+              raise ValueError("token issued in the future")
+          return claims
+
+
+      # claims["sub"] is the stable user identifier; claims["email"] its email
+    note:
+      fr: "Un ID token non vérifié ne prouve rien. On contrôle la signature avec la clé publique du serveur (JWKS), la portée (`aud` = notre client), l'émetteur (`iss`) et l'expiration (`exp`), en forçant `RS256` pour bloquer l'attaque `alg: none`."
+      en: "An unverified ID token proves nothing. We check the signature with the server's public key (JWKS), the audience (`aud` = our client), the issuer (`iss`) and expiry (`exp`), forcing `RS256` to block the `alg: none` attack."
+
+mistake:
+  fr: |
+    **Utiliser un access token comme preuve d'identité, ou choisir le flux Implicit/Password.**
+
+    Un access token est destiné à l'API, pas au client : il peut être opaque, ne contient pas forcément
+    l'identité, et « détenir un jeton » ne prouve pas *qui* on est. Pour authentifier un utilisateur, il
+    faut un **ID token OIDC vérifié** (signature, `aud`, `iss`, `exp`). Autre piège majeur : reprendre un
+    vieux tutoriel qui utilise le flux **Implicit** (access token dans l'URL) ou **Password** (mot de passe
+    collecté par l'app). Les deux sont déconseillés par l'IETF ; le standard actuel est **Authorization
+    Code + PKCE** pour les utilisateurs et **Client Credentials** pour les services.
+  en: |
+    **Using an access token as proof of identity, or choosing the Implicit/Password flow.**
+
+    An access token is meant for the API, not the client: it may be opaque, does not necessarily contain
+    the identity, and "holding a token" does not prove *who* you are. To authenticate a user you need a
+    **verified OIDC ID token** (signature, `aud`, `iss`, `exp`). Another major trap: following an old
+    tutorial that uses the **Implicit** flow (access token in the URL) or **Password** flow (password
+    collected by the app). Both are discouraged by the IETF; the current standard is **Authorization Code +
+    PKCE** for users and **Client Credentials** for services.
+
+bestPractice:
+  fr: |
+    - **Authorization Code + PKCE** pour toute application utilisateur (web, mobile, SPA), **Client Credentials** entre services.
+    - **Vérifier l'ID token** : signature (JWKS), `aud`, `iss`, `exp`, et algorithme imposé (`RS256`, jamais `none`).
+    - **`state`** systématique sur la redirection pour contrer le CSRF ; `redirect_uri` en liste d'autorisation exacte.
+    - **Portées minimales** (*scopes*) : ne demander que ce dont l'application a besoin.
+    - **Secrets dans un coffre** (Vault, Secrets Manager), jamais dans le code ni dans une SPA publique.
+    - **Access tokens courts** + refresh token stocké côté serveur ; proscrire les flux Implicit et Password.
+  en: |
+    - **Authorization Code + PKCE** for any user application (web, mobile, SPA), **Client Credentials** between services.
+    - **Verify the ID token**: signature (JWKS), `aud`, `iss`, `exp`, and a pinned algorithm (`RS256`, never `none`).
+    - **`state`** on every redirect to counter CSRF; `redirect_uri` on an exact allow-list.
+    - **Minimal scopes**: request only what the application needs.
+    - **Secrets in a vault** (Vault, Secrets Manager), never in the code nor in a public SPA.
+    - **Short access tokens** + a server-side refresh token; avoid the Implicit and Password flows.
+
+exercise:
+  statement:
+    fr: |
+      Une équipe développe une application monopage (SPA) qui se connecte via un fournisseur OIDC. Un
+      développeur propose : « On utilise le flux Implicit, on récupère l'access token dans l'URL, et on
+      s'en sert pour afficher le profil de l'utilisateur et appeler l'API. »
+
+      1. Citez deux problèmes de sécurité dans cette proposition.
+      2. Décrivez le flux correct à utiliser et dites quel jeton sert à afficher le profil et quel jeton
+         sert à appeler l'API.
+    en: |
+      A team is building a single-page application (SPA) that logs in through an OIDC provider. A developer
+      proposes: "Let's use the Implicit flow, grab the access token from the URL, and use it to show the
+      user's profile and call the API."
+
+      1. Name two security problems in this proposal.
+      2. Describe the correct flow to use and say which token is used to display the profile and which token
+         is used to call the API.
+  solution:
+    file: solution.md
+    lang: markdown
+    code: |
+      # 1. Problems
+
+      - **Implicit flow is discouraged**: the access token lands in the URL fragment, exposed to the
+        browser history, logs and any injected script. Use Authorization Code + PKCE instead.
+      - **Access token used as identity**: an access token is meant for the API, not the client. Showing a
+        profile from it is wrong; the client must read a verified OIDC ID token.
+
+      # 2. Correct design
+
+      1. Use **Authorization Code + PKCE** (mandatory for a public client like a SPA).
+      2. Generate a `code_verifier`, send its `code_challenge` (S256) and a `state`.
+      3. Exchange the one-time code + `code_verifier` for tokens.
+      4. **ID token** (verified: signature via JWKS, `aud`, `iss`, `exp`) -> display the profile.
+      5. **Access token** -> sent as `Authorization: Bearer ...` to call the API.
+    note:
+      fr: "La clé est la séparation des rôles des jetons : l'ID token identifie l'utilisateur côté client, l'access token autorise l'appel d'API. PKCE remplace le flux Implicit pour les clients publics."
+      en: "The key is separating the tokens' roles: the ID token identifies the user on the client, the access token authorises the API call. PKCE replaces the Implicit flow for public clients."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence fondamentale entre OAuth2 et OpenID Connect ?"
+      en: "What is the fundamental difference between OAuth2 and OpenID Connect?"
+    options:
+      fr:
+        - "OAuth2 chiffre les données, OIDC les compresse"
+        - "OAuth2 gère l'autorisation (accès aux ressources), OIDC ajoute l'authentification (identité de l'utilisateur)"
+        - "OIDC est une version obsolète d'OAuth2"
+        - "Ils sont strictement identiques"
+      en:
+        - "OAuth2 encrypts data, OIDC compresses it"
+        - "OAuth2 handles authorization (resource access), OIDC adds authentication (user identity)"
+        - "OIDC is an obsolete version of OAuth2"
+        - "They are strictly identical"
+    answer: 1
+    why:
+      fr: "OAuth2 délègue l'accès à une ressource ; OIDC, bâti dessus, répond « qui est l'utilisateur ? » avec un ID token."
+      en: "OAuth2 delegates access to a resource; OIDC, built on top, answers \"who is the user?\" with an ID token."
+  - q:
+      fr: "À quoi sert PKCE dans le flux Authorization Code ?"
+      en: "What is PKCE for in the Authorization Code flow?"
+    options:
+      fr:
+        - "À chiffrer l'access token"
+        - "À compresser la requête"
+        - "À rendre inutile un code d'autorisation volé, car l'attaquant n'a pas le `code_verifier`"
+        - "À remplacer le mot de passe de l'utilisateur"
+      en:
+        - "To encrypt the access token"
+        - "To compress the request"
+        - "To make a stolen authorization code useless, because the attacker lacks the `code_verifier`"
+        - "To replace the user's password"
+    answer: 2
+    why:
+      fr: "Le `code_verifier` n'est révélé qu'à l'échange final ; sans lui, un code intercepté ne peut pas être converti en jetons."
+      en: "The `code_verifier` is revealed only at the final exchange; without it, an intercepted code cannot be turned into tokens."
+  - q:
+      fr: "Quel jeton le client doit-il envoyer à l'API (resource server) ?"
+      en: "Which token should the client send to the API (resource server)?"
+    options:
+      fr:
+        - "L'access token"
+        - "L'ID token"
+        - "Le refresh token"
+        - "Le code_verifier"
+      en:
+        - "The access token"
+        - "The ID token"
+        - "The refresh token"
+        - "The code_verifier"
+    answer: 0
+    why:
+      fr: "L'access token est destiné au resource server ; l'ID token est pour le client et le refresh token pour renouveler l'access token."
+      en: "The access token is meant for the resource server; the ID token is for the client and the refresh token renews the access token."
+  - q:
+      fr: "Quel flux OAuth2 convient à une communication de service à service sans utilisateur ?"
+      en: "Which OAuth2 flow suits service-to-service communication with no user?"
+    options:
+      fr:
+        - "Le flux Implicit"
+        - "Le flux Client Credentials"
+        - "Le flux Resource Owner Password"
+        - "Le flux Authorization Code + PKCE"
+      en:
+        - "The Implicit flow"
+        - "The Client Credentials flow"
+        - "The Resource Owner Password flow"
+        - "The Authorization Code + PKCE flow"
+    answer: 1
+    why:
+      fr: "Client Credentials authentifie un service avec son `client_id`/`client_secret` ; sans utilisateur, il n'y a pas d'ID token."
+      en: "Client Credentials authenticates a service with its `client_id`/`client_secret`; with no user, there is no ID token."
+  - q:
+      fr: "Pourquoi le flux Resource Owner Password est-il déconseillé ?"
+      en: "Why is the Resource Owner Password flow discouraged?"
+    options:
+      fr:
+        - "Il est trop lent"
+        - "Il ne fonctionne pas sur mobile"
+        - "Il n'utilise pas de jetons"
+        - "L'application collecte le mot de passe de l'utilisateur, ce qui anéantit l'intérêt d'OAuth2 et empêche la MFA"
+      en:
+        - "It is too slow"
+        - "It does not work on mobile"
+        - "It uses no tokens"
+        - "The application collects the user's password, which defeats the point of OAuth2 and prevents MFA"
+    answer: 3
+    why:
+      fr: "Partager son mot de passe avec l'application est précisément ce qu'OAuth2 veut éviter ; ce flux bloque aussi la MFA et le SSO."
+      en: "Sharing your password with the application is exactly what OAuth2 aims to avoid; this flow also blocks MFA and SSO."

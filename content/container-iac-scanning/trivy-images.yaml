@@ -1,0 +1,468 @@
+description:
+  fr: "Scanner des images de conteneur avec Trivy : sévérités, --ignore-unfixed, --exit-code, un .trivyignore avec expiration, sorties JSON/SARIF, scanners secrets et misconfig, et cache de la base."
+  en: "Scan container images with Trivy: severities, --ignore-unfixed, --exit-code, a .trivyignore with expiry, JSON/SARIF output, the secret and misconfig scanners, and DB caching."
+duration: 30
+
+intro:
+  fr: |
+    Une image de conteneur n'est pas qu'un paquet de votre code : elle embarque tout un système
+    d'exploitation, des bibliothèques système, des paquets de langage… et parfois des **secrets** oubliés.
+    **Trivy** (d'Aqua Security) est l'outil de référence, gratuit et rapide, pour inspecter tout ce contenu
+    et y trouver les vulnérabilités connues.
+
+    L'analogie : avant d'expédier un colis, un transporteur le passe aux rayons X. Il ne regarde pas
+    seulement ce que vous avez mis dedans, mais aussi l'emballage, le carton, le calage — tout ce qui voyage
+    avec. Trivy fait ce scan complet de l'image : la base (`ubuntu`, `alpine`), les paquets installés, vos
+    dépendances applicatives, et même les secrets accidentellement copiés.
+
+    Dans cette leçon vous allez scanner une image avec Trivy via Docker, filtrer par **sévérité**, ne garder
+    que les failles **corrigeables**, faire **échouer la CI** sur un seuil, écrire un fichier `.trivyignore`
+    avec des dates d'expiration, produire du **JSON** et du **SARIF**, activer les scanners de **secrets** et
+    de **mauvaises configurations**, et comprendre le **cache** de la base de vulnérabilités.
+  en: |
+    A container image is not just a bundle of your code: it carries a whole operating system, system
+    libraries, language packages… and sometimes forgotten **secrets**. **Trivy** (by Aqua Security) is the
+    reference tool, free and fast, to inspect all this content and find the known vulnerabilities.
+
+    The analogy: before shipping a parcel, a courier runs it through an X-ray. They look not only at what you
+    put inside, but also the packaging, the box, the padding — everything that travels with it. Trivy does
+    this full scan of the image: the base (`ubuntu`, `alpine`), the installed packages, your application
+    dependencies, and even accidentally copied secrets.
+
+    In this lesson you will scan an image with Trivy via Docker, filter by **severity**, keep only the
+    **fixable** flaws, **fail CI** on a threshold, write a `.trivyignore` file with expiry dates, produce
+    **JSON** and **SARIF**, enable the **secret** and **misconfiguration** scanners, and understand the
+    **cache** of the vulnerability database.
+
+sections:
+  - heading:
+      fr: "Scanner une image et régler le seuil"
+      en: "Scanning an image and setting the threshold"
+    body:
+      fr: |
+        La commande de base scanne une image par son nom. Sans installation, via Docker :
+
+        ```bash
+        docker run --rm aquasec/trivy:latest image myapp:1.0
+        ```
+
+        Trivy sépare les résultats par **couche** : les vulnérabilités du système d'exploitation de base, et
+        celles des dépendances applicatives. Les options qui comptent en CI :
+
+        | Option | Rôle |
+        |---|---|
+        | `--severity` | Filtrer : `UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL` |
+        | `--ignore-unfixed` | Ne garder que les failles ayant un correctif |
+        | `--exit-code 1` | Renvoyer `1` s'il reste des failles (bloque la CI) |
+        | `--format` | `table`, `json`, `sarif`, `cyclonedx` |
+        | `--scanners` | `vuln`, `secret`, `misconfig`, `license` |
+
+        Le `--ignore-unfixed` est capital : une CVE sans correctif disponible ne peut pas être corrigée en
+        montant une version. La bloquer fait échouer un build sans action possible, ce qui frustre l'équipe.
+        On la garde en visibilité (rapport complet) mais on ne bloque que sur ce qui est **corrigeable** :
+        `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`.
+      en: |
+        The base command scans an image by name. With no installation, via Docker:
+
+        ```bash
+        docker run --rm aquasec/trivy:latest image myapp:1.0
+        ```
+
+        Trivy separates results by **layer**: the base operating system vulnerabilities, and those of the
+        application dependencies. The options that matter in CI:
+
+        | Option | Role |
+        |---|---|
+        | `--severity` | Filter: `UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL` |
+        | `--ignore-unfixed` | Keep only flaws that have a fix |
+        | `--exit-code 1` | Return `1` if flaws remain (blocks CI) |
+        | `--format` | `table`, `json`, `sarif`, `cyclonedx` |
+        | `--scanners` | `vuln`, `secret`, `misconfig`, `license` |
+
+        `--ignore-unfixed` is crucial: a CVE with no available fix cannot be fixed by bumping a version.
+        Blocking it fails a build with no possible action, which frustrates the team. You keep it visible
+        (full report) but only block on what is **fixable**: `--severity HIGH,CRITICAL --ignore-unfixed
+        --exit-code 1`.
+  - heading:
+      fr: "Plusieurs scanners en un : vuln, secret, misconfig"
+      en: "Several scanners in one: vuln, secret, misconfig"
+    body:
+      fr: |
+        Trivy n'est pas qu'un scanner de CVE. L'option `--scanners` active plusieurs moteurs sur la même
+        image :
+
+        - **`vuln`** : les vulnérabilités connues (le mode par défaut).
+        - **`secret`** : des secrets codés en dur dans les couches de l'image (clé AWS, jeton, mot de passe).
+          Un `COPY . .` imprudent embarque souvent un `.env` ou une clé privée.
+        - **`misconfig`** : les mauvaises configurations, par exemple dans un `Dockerfile` (utilisateur root,
+          absence de `USER`) ou des manifestes présents dans l'image.
+        - **`license`** : les licences des composants, pour la conformité.
+
+        ```bash
+        trivy image myapp:1.0 --scanners vuln,secret,misconfig
+        ```
+
+        Scanner les secrets d'une image est souvent une révélation : un secret retiré du code mais resté dans
+        une **couche** antérieure du `Dockerfile` demeure extractible, même s'il n'apparaît plus dans l'image
+        finale. Trivy parcourt l'historique des couches et le retrouve. C'est pourquoi on combine le scan de
+        secrets dans Git (Gitleaks) **et** le scan de secrets de l'image.
+      en: |
+        Trivy is not just a CVE scanner. The `--scanners` option enables several engines on the same image:
+
+        - **`vuln`**: known vulnerabilities (the default mode).
+        - **`secret`**: secrets hard-coded in the image layers (AWS key, token, password). A careless
+          `COPY . .` often bundles a `.env` or a private key.
+        - **`misconfig`**: misconfigurations, for example in a `Dockerfile` (root user, missing `USER`) or
+          manifests present in the image.
+        - **`license`**: component licenses, for compliance.
+
+        ```bash
+        trivy image myapp:1.0 --scanners vuln,secret,misconfig
+        ```
+
+        Scanning an image for secrets is often an eye-opener: a secret removed from the code but left in an
+        earlier `Dockerfile` **layer** remains extractable, even if it no longer appears in the final image.
+        Trivy walks the layer history and finds it. That is why you combine secret scanning in Git (Gitleaks)
+        **and** image secret scanning.
+  - heading:
+      fr: "Ignorer des failles et mettre la base en cache"
+      en: "Ignoring flaws and caching the database"
+    body:
+      fr: |
+        Comme pour les autres outils, on doit pouvoir **ignorer** une alerte de façon tracée. Trivy lit un
+        fichier **`.trivyignore`** à la racine : une CVE par ligne, avec idéalement un commentaire et une
+        **date d'expiration** (`exp:`). Après cette date, Trivy réactive l'alerte.
+
+        ```text
+        # No fix yet; vulnerable code path unused. Review before the date.
+        CVE-2024-12345 exp:2026-09-30
+        ```
+
+        Un format plus riche, `.trivyignore.yaml`, permet d'ajouter la raison et le périmètre de façon
+        structurée. Dans les deux cas, le principe reste : ignorer une **CVE précise**, justifiée, avec
+        expiration — jamais désactiver une sévérité entière.
+
+        Côté performance, Trivy télécharge une **base de vulnérabilités** (plusieurs centaines de Mo). En CI,
+        la retélécharger à chaque build est lent et peut échouer si la source est momentanément indisponible.
+        On met donc la base en **cache** :
+
+        - `--cache-dir /chemin` ou la variable `TRIVY_CACHE_DIR` pointent vers un dossier persistant ;
+        - on monte ce dossier comme cache du runner (par exemple `actions/cache`) ;
+        - `--download-db-only` permet de pré-télécharger la base dans une étape dédiée.
+
+        Un cache partagé entre builds réduit drastiquement le temps de scan et la dépendance au réseau.
+      en: |
+        As with the other tools, you must be able to **ignore** an alert in a traced way. Trivy reads a
+        **`.trivyignore`** file at the root: one CVE per line, ideally with a comment and an **expiry date**
+        (`exp:`). After that date, Trivy re-activates the alert.
+
+        ```text
+        # No fix yet; vulnerable code path unused. Review before the date.
+        CVE-2024-12345 exp:2026-09-30
+        ```
+
+        A richer format, `.trivyignore.yaml`, lets you add the reason and scope in a structured way. In both
+        cases the principle holds: ignore a **precise CVE**, justified, with an expiry — never disable a whole
+        severity.
+
+        On performance, Trivy downloads a **vulnerability database** (several hundred MB). In CI,
+        re-downloading it on every build is slow and can fail if the source is momentarily unavailable. So you
+        **cache** the database:
+
+        - `--cache-dir /path` or the `TRIVY_CACHE_DIR` variable point to a persistent folder;
+        - you mount this folder as the runner's cache (for example `actions/cache`);
+        - `--download-db-only` lets you pre-download the database in a dedicated step.
+
+        A cache shared between builds drastically cuts scan time and network dependency.
+
+examples:
+  - title:
+      fr: "Scanner une image et bloquer sur le corrigeable"
+      en: "Scanning an image and blocking on the fixable"
+    file: trivy-image.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Scan the image: keep only HIGH/CRITICAL that HAVE a fix, fail CI if any remain.
+      docker run --rm aquasec/trivy:latest image myapp:1.0 \
+        --severity HIGH,CRITICAL \
+        --ignore-unfixed \
+        --exit-code 1
+      echo "exit code: $?"
+    output: |
+      2026-04-02T09:30:11Z  INFO  Vulnerability scanning is enabled
+      myapp:1.0 (debian 12.5)
+      ==================================
+      Total: 1 (HIGH: 1, CRITICAL: 0)
+
+      ┌──────────┬────────────────┬──────────┬───────────┬───────────┐
+      │ Library  │ Vulnerability  │ Severity │ Installed │   Fixed   │
+      ├──────────┼────────────────┼──────────┼───────────┼───────────┤
+      │ libxml2  │ CVE-2024-25062 │ HIGH     │ 2.9.14    │ 2.9.14+r3 │
+      └──────────┴────────────────┴──────────┴───────────┴───────────┘
+      exit code: 1
+    note:
+      fr: "Trivy indique la couche (`debian 12.5`), la bibliothèque, la CVE et la version corrigée. `--ignore-unfixed` a écarté les CVE sans correctif ; `--exit-code 1` fait échouer le job sur la seule faille corrigeable restante. Pour la corriger, on met à jour l'image de base."
+      en: "Trivy shows the layer (`debian 12.5`), the library, the CVE and the fixed version. `--ignore-unfixed` dropped CVEs with no fix; `--exit-code 1` fails the job on the only remaining fixable flaw. To fix it, you update the base image."
+
+  - title:
+      fr: "Activer les scanners secrets et misconfig"
+      en: "Enabling the secret and misconfig scanners"
+    file: trivy-full.sh
+    lang: bash
+    kind: secure
+    code: |
+      # One tool, three engines: CVEs, hard-coded secrets, and misconfigurations.
+      docker run --rm -v "$(pwd):/out" aquasec/trivy:latest image myapp:1.0 \
+        --scanners vuln,secret,misconfig \
+        --severity HIGH,CRITICAL \
+        --format sarif --output /out/trivy.sarif
+    output: |
+      myapp:1.0 (secret scanning)
+      ==================================
+      CRITICAL: AWS Access Key ID
+      File: /app/.env
+      13:  AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
+
+      myapp:1.0 (dockerfile misconfig)
+      ==================================
+      HIGH: Image user should not be 'root' (DS002)
+      Specify a non-root user with the USER instruction.
+
+      SARIF report written to /out/trivy.sarif
+    note:
+      fr: "Le scanner `secret` a retrouvé une clé AWS dans un `.env` copié dans une couche de l'image, même si le code source est propre : un secret resté dans une couche reste extractible. Le scanner `misconfig` signale l'absence d'instruction `USER` (image qui tourne en root). Le SARIF s'importe dans *Code scanning*."
+      en: "The `secret` scanner found an AWS key in a `.env` copied into an image layer, even though the source code is clean: a secret left in a layer stays extractable. The `misconfig` scanner flags the missing `USER` instruction (image running as root). The SARIF imports into *Code scanning*."
+
+  - title:
+      fr: "Un .trivyignore avec expiration"
+      en: "A .trivyignore with expiry"
+    file: .trivyignore
+    lang: text
+    kind: secure
+    code: |
+      # Trivy ignore file - versioned, so every exception is reviewed.
+      # Format: one CVE per line, optional "exp:YYYY-MM-DD" expiry.
+
+      # No upstream fix yet for the base image; the affected parser is not invoked.
+      # Reviewed by the platform team on 2026-03-15.
+      CVE-2024-25062 exp:2026-09-15
+
+      # False positive: this Go stdlib CVE applies only to the Windows build,
+      # we ship a Linux image. Re-check at the date below.
+      CVE-2024-24790 exp:2026-07-01
+    output: |
+      $ trivy image myapp:1.0 --severity HIGH,CRITICAL --exit-code 1
+      Total: 0 (HIGH: 0, CRITICAL: 0)
+      2 vulnerabilities ignored by .trivyignore (CVE-2024-25062, CVE-2024-24790)
+      exit code: 0
+    note:
+      fr: "Chaque ligne cible une CVE précise, justifiée par un commentaire, avec une date `exp:`. Après cette date, Trivy réactive l'alerte et le build échoue de nouveau, forçant une relecture. Comme le fichier est versionné, toute exception passe par une revue de code."
+      en: "Each line targets a precise CVE, justified by a comment, with an `exp:` date. After that date, Trivy re-activates the alert and the build fails again, forcing a re-review. Since the file is versioned, every exception goes through code review."
+
+  - title:
+      fr: "Mettre la base en cache en CI"
+      en: "Caching the database in CI"
+    file: .github/workflows/trivy.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: trivy-image
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        scan:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            # Persist the Trivy vulnerability DB between runs: faster, less network-dependent
+            - name: Cache Trivy DB
+              uses: actions/cache@v4
+              with:
+                path: .trivycache
+                key: trivy-db-${{ github.run_id }}
+                restore-keys: trivy-db-
+
+            - name: Build image
+              run: docker build -t myapp:${{ github.sha }} .
+
+            - name: Trivy scan
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                image-ref: myapp:${{ github.sha }}
+                scanners: vuln,secret
+                severity: HIGH,CRITICAL
+                ignore-unfixed: true
+                exit-code: 1
+                cache-dir: .trivycache   # reuse the cached DB
+    output: |
+      Restoring cache for trivy-db-...
+      Cache restored (DB age: 4h) -> skipping full DB download
+      Total: 0 (HIGH: 0, CRITICAL: 0)
+      # exit code 0 : the pull request passes, scan took 11s instead of ~90s
+    note:
+      fr: "Le cache (`actions/cache` + `cache-dir`) évite de retélécharger la base à chaque build : le scan passe de ~90 s à ~11 s et ne dépend plus de la disponibilité de la source. Le scanner `secret` est activé en plus de `vuln` pour rattraper un secret resté dans une couche."
+      en: "The cache (`actions/cache` + `cache-dir`) avoids re-downloading the database on every build: the scan drops from ~90s to ~11s and no longer depends on the source's availability. The `secret` scanner is enabled on top of `vuln` to catch a secret left in a layer."
+
+mistake:
+  fr: |
+    **Scanner sans `--ignore-unfixed` et faire échouer la CI sur des CVE sans correctif.**
+
+    Beaucoup de CVE n'ont pas encore de correctif publié : les signaler est utile pour la visibilité, mais
+    faire **échouer** le build dessus est contre-productif, car l'équipe ne peut rien faire pour les
+    corriger. Résultat : des builds rouges permanents, puis le réflexe de tout ignorer. On bloque sur les
+    failles **corrigeables** (`--ignore-unfixed`) et on garde les autres en rapport. L'autre erreur fréquente
+    est d'oublier le cache de la base : le scan devient lent et fragile, et l'équipe finit par le désactiver
+    « parce qu'il ralentit tout ».
+  en: |
+    **Scanning without `--ignore-unfixed` and failing CI on CVEs that have no fix.**
+
+    Many CVEs have no published fix yet: reporting them is useful for visibility, but **failing** the build on
+    them is counterproductive, because the team can do nothing to fix them. The result: permanently red
+    builds, then the reflex to ignore everything. You block on the **fixable** flaws (`--ignore-unfixed`) and
+    keep the others in the report. The other common mistake is forgetting to cache the database: the scan
+    becomes slow and fragile, and the team ends up disabling it "because it slows everything down".
+
+bestPractice:
+  fr: |
+    - **Bloquez sur le corrigeable** : `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`.
+    - **Activez plusieurs scanners** (`vuln,secret,misconfig`) : secrets dans les couches, images root.
+    - **Produisez du SARIF** pour *Code scanning* et du JSON pour l'automatisation.
+    - **Ignorez par CVE précise** dans `.trivyignore`, avec commentaire et **date d'expiration**.
+    - **Mettez la base en cache** (`--cache-dir`, `actions/cache`) : scans rapides et robustes.
+    - **Mettez à jour l'image de base** pour corriger les CVE système plutôt que de les ignorer.
+  en: |
+    - **Block on the fixable**: `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`.
+    - **Enable several scanners** (`vuln,secret,misconfig`): secrets in layers, root images.
+    - **Produce SARIF** for *Code scanning* and JSON for automation.
+    - **Ignore per precise CVE** in `.trivyignore`, with a comment and an **expiry date**.
+    - **Cache the database** (`--cache-dir`, `actions/cache`): fast and robust scans.
+    - **Update the base image** to fix system CVEs rather than ignoring them.
+
+exercise:
+  statement:
+    fr: |
+      Votre pipeline construit une image `api:${SHA}`. On vous demande une commande Trivy (via Docker ou
+      l'action) qui :
+
+      1. scanne les vulnérabilités **et** les secrets ;
+      2. ne bloque que sur les failles `CRITICAL` **corrigeables** ;
+      3. produit un rapport **SARIF** dans `trivy.sarif` ;
+      4. fait échouer la CI si une faille correspondante est trouvée.
+
+      Écrivez la commande, puis expliquez en une phrase pourquoi vous avez ajouté le scanner `secret`.
+    en: |
+      Your pipeline builds an image `api:${SHA}`. You are asked for a Trivy command (via Docker or the
+      action) that:
+
+      1. scans vulnerabilities **and** secrets;
+      2. only blocks on **fixable** `CRITICAL` flaws;
+      3. produces a **SARIF** report in `trivy.sarif`;
+      4. fails CI if a matching flaw is found.
+
+      Write the command, then explain in one sentence why you added the `secret` scanner.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      docker run --rm -v "$(pwd):/out" aquasec/trivy:latest image "api:${SHA}" \
+        --scanners vuln,secret \
+        --severity CRITICAL \
+        --ignore-unfixed \
+        --exit-code 1 \
+        --format sarif --output /out/trivy.sarif
+
+      # Why the secret scanner: a secret (API key, private key) can remain extractable
+      # inside an earlier image LAYER even after being removed from the current source,
+      # so scanning the image catches leaks that a code-only scan would miss.
+    note:
+      fr: "`--scanners vuln,secret` couvre les deux risques en un passage ; `--severity CRITICAL --ignore-unfixed` limite le blocage au critique corrigeable ; `--exit-code 1` fait échouer la CI ; `--format sarif` alimente *Code scanning*. Le scanner de secrets rattrape une clé restée dans une couche."
+      en: "`--scanners vuln,secret` covers both risks in one pass; `--severity CRITICAL --ignore-unfixed` limits blocking to fixable critical; `--exit-code 1` fails CI; `--format sarif` feeds *Code scanning*. The secret scanner catches a key left in a layer."
+
+quiz:
+  - q:
+      fr: "Pourquoi ajouter `--ignore-unfixed` à un scan Trivy en CI ?"
+      en: "Why add `--ignore-unfixed` to a Trivy scan in CI?"
+    options:
+      fr:
+        - "Pour ignorer toutes les vulnérabilités"
+        - "Pour ne bloquer que sur les failles ayant un correctif disponible"
+        - "Pour accélérer le build de l'image"
+        - "Pour désactiver le scanner de secrets"
+      en:
+        - "To ignore all vulnerabilities"
+        - "To block only on flaws that have an available fix"
+        - "To speed up the image build"
+        - "To disable the secret scanner"
+    answer: 1
+    why:
+      fr: "Une CVE sans correctif ne peut pas être résolue par une mise à jour. La bloquer fait échouer le build sans action possible. `--ignore-unfixed` garde ces CVE en rapport mais ne bloque que sur le corrigeable."
+      en: "A CVE with no fix cannot be resolved by an update. Blocking it fails the build with no possible action. `--ignore-unfixed` keeps those CVEs in the report but only blocks on the fixable ones."
+  - q:
+      fr: "Que détecte le scanner `secret` de Trivy dans une image ?"
+      en: "What does Trivy's `secret` scanner detect in an image?"
+    options:
+      fr:
+        - "Les secrets codés en dur dans les couches de l'image, même retirés du code final"
+        - "Les ports ouverts"
+        - "La vitesse du réseau"
+        - "La taille de l'image"
+      en:
+        - "Secrets hard-coded in the image layers, even if removed from the final code"
+        - "Open ports"
+        - "Network speed"
+        - "Image size"
+    answer: 0
+    why:
+      fr: "Un secret copié dans une couche antérieure reste extractible même s'il n'apparaît plus dans l'image finale. Trivy parcourt l'historique des couches et le retrouve."
+      en: "A secret copied into an earlier layer stays extractable even if it no longer appears in the final image. Trivy walks the layer history and finds it."
+  - q:
+      fr: "Quel champ rend une exception `.trivyignore` saine ?"
+      en: "Which field makes a `.trivyignore` exception healthy?"
+    options:
+      fr:
+        - "La couleur"
+        - "Le numéro de port"
+        - "Le nom de l'image en majuscules"
+        - "Une date d'expiration (exp:) qui réactive l'alerte plus tard"
+      en:
+        - "The colour"
+        - "The port number"
+        - "The image name in capitals"
+        - "An expiry date (exp:) that re-activates the alert later"
+    answer: 3
+    why:
+      fr: "Sans expiration, un ignore devient permanent et oublié. Avec `exp:`, Trivy réactive la CVE après la date, forçant une relecture. Le fichier versionné rend chaque exception revue."
+      en: "Without an expiry, an ignore becomes permanent and forgotten. With `exp:`, Trivy re-activates the CVE after the date, forcing a re-review. The versioned file makes every exception reviewed."
+  - q:
+      fr: "Pourquoi mettre la base de vulnérabilités de Trivy en cache en CI ?"
+      en: "Why cache Trivy's vulnerability database in CI?"
+    options:
+      fr:
+        - "Pour chiffrer les résultats"
+        - "Pour accélérer les scans et réduire la dépendance au téléchargement de la base"
+        - "Pour ignorer les CVE critiques"
+        - "Pour supprimer le scanner de secrets"
+      en:
+        - "To encrypt the results"
+        - "To speed up scans and reduce dependency on downloading the database"
+        - "To ignore critical CVEs"
+        - "To remove the secret scanner"
+    answer: 1
+    why:
+      fr: "La base pèse plusieurs centaines de Mo. La retélécharger à chaque build est lent et peut échouer. Un cache partagé (`--cache-dir`, `actions/cache`) rend les scans rapides et robustes."
+      en: "The database is several hundred MB. Re-downloading it on every build is slow and can fail. A shared cache (`--cache-dir`, `actions/cache`) makes scans fast and robust."
+  - q:
+      fr: "Quel format de sortie Trivy convient pour l'onglet Code scanning de GitHub ?"
+      en: "Which Trivy output format suits GitHub's Code scanning tab?"
+    options:
+      fr: ["table", "sarif", "pdf", "csv"]
+      en: ["table", "sarif", "pdf", "csv"]
+    answer: 1
+    why:
+      fr: "Le SARIF est le format standard importé par *Code scanning* et les agrégateurs. `table` est pour la lecture humaine, `json`/`cyclonedx` pour l'automatisation et les SBOM."
+      en: "SARIF is the standard format imported by *Code scanning* and aggregators. `table` is for human reading, `json`/`cyclonedx` for automation and SBOMs."

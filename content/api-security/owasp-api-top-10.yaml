@@ -1,0 +1,348 @@
+description:
+  fr: "Découvrir l'OWASP API Security Top 10 (2023) et sa faille phare, le BOLA : exemple vulnérable d'accès non autorisé à un objet et sa correction côté serveur."
+  en: "Discover the OWASP API Security Top 10 (2023) and its flagship flaw, BOLA: a vulnerable example of unauthorized object access and its server-side fix."
+duration: 22
+
+intro:
+  fr: |
+    Les **API** (*Application Programming Interfaces*) sont les portes dérobées des applications modernes : c'est
+    par elles que le mobile, le site web et les partenaires accèdent aux données. Elles ne ressemblent pas à une
+    page web classique, et leurs failles sont donc différentes. L'**OWASP** (*Open Worldwide Application Security
+    Project*) publie un **Top 10 spécifique aux API**, distinct du Top 10 web habituel.
+
+    L'analogie : une API, c'est le guichet d'une banque. Le guichetier (le serveur) ne doit pas remettre le relevé
+    de compte de n'importe qui à n'importe qui, juste parce que le client a écrit un autre numéro de compte sur le
+    formulaire. La faille n°1 des API, le **BOLA** (*Broken Object Level Authorization*), c'est exactement ça :
+    laisser un utilisateur lire les données d'un autre en changeant un simple identifiant dans l'URL.
+
+    Dans cette leçon, vous allez parcourir les 10 risques de l'édition **2023**, puis plonger dans le BOLA avec un
+    exemple **vulnérable** (une API qui fait confiance à l'ID fourni) et sa **correction** (vérifier que l'objet
+    appartient bien à l'utilisateur authentifié).
+  en: |
+    **APIs** (*Application Programming Interfaces*) are the back doors of modern applications: through them, the
+    mobile app, the website and partners reach the data. They do not look like a classic web page, so their flaws
+    differ. **OWASP** (*Open Worldwide Application Security Project*) publishes an **API-specific Top 10**, distinct
+    from the usual web Top 10.
+
+    The analogy: an API is a bank counter. The teller (the server) must not hand anyone's account statement to
+    just anyone, simply because the customer wrote a different account number on the form. The number-one API
+    flaw, **BOLA** (*Broken Object Level Authorization*), is exactly that: letting a user read someone else's
+    data by changing a single identifier in the URL.
+
+    In this lesson you will walk through the 10 risks of the **2023** edition, then dive into BOLA with a
+    **vulnerable** example (an API trusting the supplied ID) and its **fix** (checking the object truly belongs
+    to the authenticated user).
+
+sections:
+  - heading:
+      fr: "Le Top 10 API 2023 en un coup d'œil"
+      en: "The 2023 API Top 10 at a glance"
+    body:
+      fr: |
+        L'édition 2023 classe les risques les plus critiques propres aux API :
+
+        | Réf | Risque | En une phrase |
+        |---|---|---|
+        | API1 | Broken Object Level Authorization (BOLA) | Accéder à l'objet d'un autre via son ID |
+        | API2 | Broken Authentication | Authentification cassée (JWT, tokens) |
+        | API3 | Broken Object Property Level Authorization | Lire/écrire des champs interdits |
+        | API4 | Unrestricted Resource Consumption | Pas de limite (coûts, DoS) |
+        | API5 | Broken Function Level Authorization | Accéder à une fonction admin |
+        | API6 | Unrestricted Access to Sensitive Business Flows | Abus d'un flux métier (ex. achats en masse) |
+        | API7 | Server Side Request Forgery (SSRF) | Forcer le serveur à appeler une URL interne |
+        | API8 | Security Misconfiguration | Mauvaise configuration |
+        | API9 | Improper Inventory Management | API fantômes, versions oubliées |
+        | API10 | Unsafe Consumption of APIs | Faire trop confiance aux API tierces |
+
+        Les trois premiers concernent l'**autorisation** : qui a le droit d'accéder à *quoi*. C'est le cœur de la
+        sécurité des API, car un attaquant authentifié mais malhonnête est le scénario le plus fréquent.
+      en: |
+        The 2023 edition ranks the most critical API-specific risks:
+
+        | Ref | Risk | In one sentence |
+        |---|---|---|
+        | API1 | Broken Object Level Authorization (BOLA) | Access another user's object via its ID |
+        | API2 | Broken Authentication | Broken authentication (JWT, tokens) |
+        | API3 | Broken Object Property Level Authorization | Read/write forbidden fields |
+        | API4 | Unrestricted Resource Consumption | No limit (costs, DoS) |
+        | API5 | Broken Function Level Authorization | Reach an admin function |
+        | API6 | Unrestricted Access to Sensitive Business Flows | Abuse a business flow (e.g. bulk buying) |
+        | API7 | Server Side Request Forgery (SSRF) | Force the server to call an internal URL |
+        | API8 | Security Misconfiguration | Misconfiguration |
+        | API9 | Improper Inventory Management | Shadow APIs, forgotten versions |
+        | API10 | Unsafe Consumption of APIs | Trusting third-party APIs too much |
+
+        The first three are about **authorization**: who may access *what*. This is the heart of API security,
+        because an authenticated but dishonest attacker is the most common scenario.
+  - heading:
+      fr: "BOLA : la faille n°1 expliquée"
+      en: "BOLA: the number-one flaw explained"
+    body:
+      fr: |
+        Le **BOLA** survient quand une API identifie *l'utilisateur* (authentification) mais **ne vérifie pas**
+        qu'il a le droit d'accéder à *l'objet* demandé (autorisation au niveau de l'objet). L'exemple canonique :
+
+        ```
+        GET /api/invoices/1023
+        ```
+
+        Si le serveur renvoie la facture `1023` à quiconque est connecté, sans vérifier qu'elle appartient bien à
+        cet utilisateur, alors changer `1023` en `1024` donne accès à la facture d'un autre. L'attaquant n'a même
+        pas besoin d'outil : il incrémente un nombre dans l'URL.
+
+        La cause profonde : on confond **être authentifié** (je sais qui tu es) et **être autorisé** (tu as le
+        droit de voir *cet* objet précis). La correction est toujours la même : à chaque accès à un objet,
+        **vérifier côté serveur** que l'objet est lié à l'identité authentifiée — typiquement en filtrant la
+        requête par `owner_id = utilisateur_courant`, et non en faisant confiance à l'ID fourni par le client.
+      en: |
+        **BOLA** happens when an API identifies *the user* (authentication) but **does not check** they are
+        allowed to access the requested *object* (object-level authorization). The canonical example:
+
+        ```
+        GET /api/invoices/1023
+        ```
+
+        If the server returns invoice `1023` to anyone logged in, without checking it belongs to that user, then
+        changing `1023` to `1024` gives access to someone else's invoice. The attacker needs no tool: they
+        increment a number in the URL.
+
+        The root cause: confusing **being authenticated** (I know who you are) with **being authorized** (you may
+        see *this* specific object). The fix is always the same: on every object access, **check server-side**
+        that the object is tied to the authenticated identity — typically by filtering the query with
+        `owner_id = current_user`, not by trusting the client-supplied ID.
+
+examples:
+  - title:
+      fr: "Vulnérable : BOLA, on fait confiance à l'ID"
+      en: "Vulnerable: BOLA, trusting the ID"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # Flask API - authenticated, but NO object-level authorization.
+      from flask import Flask, g, jsonify
+
+      app = Flask(__name__)
+
+      # Pretend auth middleware set g.user_id from a valid token.
+      INVOICES = {
+          1023: {"owner_id": 1, "amount": 42.0},   # belongs to user 1
+          1024: {"owner_id": 2, "amount": 999.0},  # belongs to user 2
+      }
+
+
+      @app.get("/api/invoices/<int:invoice_id>")
+      def get_invoice(invoice_id):
+          g.user_id = 1  # the logged-in user is user 1
+          invoice = INVOICES.get(invoice_id)
+          if invoice is None:
+              return jsonify(error="not found"), 404
+          # BUG: returns the invoice whoever it belongs to. User 1 can read
+          # user 2's invoice just by asking for /api/invoices/1024 (BOLA).
+          return jsonify(invoice)
+    output: |
+      # User 1, authenticated, reads someone else's invoice:
+      #   GET /api/invoices/1024
+      #   200 OK  {"owner_id": 2, "amount": 999.0}   <-- not theirs!
+    note:
+      fr: "L'API vérifie que l'utilisateur est connecté mais pas que la facture lui appartient. En incrémentant l'ID (`1023` → `1024`), l'utilisateur 1 lit la facture de l'utilisateur 2. C'est le BOLA, faille API n°1 : authentifié n'est pas autorisé."
+      en: "The API checks the user is logged in but not that the invoice belongs to them. By incrementing the ID (`1023` → `1024`), user 1 reads user 2's invoice. This is BOLA, the number-one API flaw: authenticated is not authorized."
+
+  - title:
+      fr: "Sécurisé : vérifier la propriété de l'objet"
+      en: "Secure: check object ownership"
+    file: app_secure.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, g, jsonify
+
+      app = Flask(__name__)
+
+      INVOICES = {
+          1023: {"owner_id": 1, "amount": 42.0},
+          1024: {"owner_id": 2, "amount": 999.0},
+      }
+
+
+      @app.get("/api/invoices/<int:invoice_id>")
+      def get_invoice(invoice_id):
+          g.user_id = 1
+          invoice = INVOICES.get(invoice_id)
+          if invoice is None:
+              return jsonify(error="not found"), 404
+          # FIX: object-level authorization. The object must belong to the
+          # authenticated user, or we refuse - and return 404, not 403, so
+          # we do not even confirm the invoice exists (no enumeration).
+          if invoice["owner_id"] != g.user_id:
+              return jsonify(error="not found"), 404
+          return jsonify(invoice)
+    output: |
+      # User 1 can read their own invoice:
+      #   GET /api/invoices/1023  ->  200 OK  {"owner_id": 1, "amount": 42.0}
+      # But not someone else's:
+      #   GET /api/invoices/1024  ->  404 Not Found
+    note:
+      fr: "Une seule vérification corrige le BOLA : `invoice[\"owner_id\"] != g.user_id`. On renvoie `404` (et non `403`) pour ne pas révéler l'existence de la facture, bloquant l'énumération. La règle : toujours autoriser au niveau de l'objet, côté serveur."
+      en: "A single check fixes BOLA: `invoice[\"owner_id\"] != g.user_id`. We return `404` (not `403`) so we do not reveal the invoice exists, blocking enumeration. The rule: always authorize at the object level, server-side."
+
+  - title:
+      fr: "Sécurisé : filtrer par propriétaire dans la requête"
+      en: "Secure: filter by owner in the query"
+    file: queries.sql
+    lang: sql
+    kind: secure
+    code: |
+      -- The most robust pattern: never fetch an object by its id alone.
+      -- Always scope the query to the authenticated user, so an object that
+      -- is not theirs simply does not come back - BOLA becomes impossible.
+
+      CREATE TABLE invoices (
+          id       INTEGER PRIMARY KEY,
+          owner_id INTEGER NOT NULL,
+          amount   REAL NOT NULL
+      );
+      INSERT INTO invoices VALUES (1023, 1, 42.0), (1024, 2, 999.0);
+
+      -- VULNERABLE shape (do NOT do this): id only.
+      --   SELECT * FROM invoices WHERE id = 1024;   -- returns anyone's row
+
+      -- SECURE shape: id AND owner_id (owner_id comes from the session/token,
+      -- never from the client). User 1 asking for 1024 gets zero rows.
+      SELECT id, amount FROM invoices
+      WHERE id = 1024 AND owner_id = 1;
+    output: |
+      -- The secure query returns nothing for an invoice user 1 does not own:
+      -- (0 rows)
+      -- For their own invoice it returns the data:
+      -- SELECT ... WHERE id = 1023 AND owner_id = 1;  -> 1023 | 42.0
+    note:
+      fr: "En ajoutant `AND owner_id = <utilisateur courant>` à la requête, un objet qui n'appartient pas à l'utilisateur ne remonte tout simplement pas. Le `owner_id` vient de la session/token, jamais du client. C'est la défense la plus solide contre le BOLA."
+      en: "By adding `AND owner_id = <current user>` to the query, an object the user does not own simply never comes back. The `owner_id` comes from the session/token, never from the client. This is the strongest defense against BOLA."
+
+mistake:
+  fr: |
+    **Confondre authentification et autorisation.** Beaucoup d'API vérifient soigneusement *qui* se connecte
+    (token valide) puis font aveuglément confiance à l'**ID d'objet** fourni dans l'URL. Savoir qui est
+    l'utilisateur ne dit rien sur son droit d'accéder à *cet* objet précis. Autre piège lié : utiliser des **IDs
+    séquentiels** (1, 2, 3…) qui rendent l'énumération triviale ; des UUID aléatoires compliquent la devinette,
+    mais **ne remplacent pas** la vérification d'autorisation — ils ne sont qu'une défense en profondeur. La
+    seule vraie parade reste de vérifier, à chaque accès, que l'objet appartient à l'utilisateur authentifié.
+  en: |
+    **Confusing authentication and authorization.** Many APIs carefully verify *who* logs in (valid token) then
+    blindly trust the **object ID** supplied in the URL. Knowing who the user is says nothing about their right
+    to access *this* specific object. A related trap: using **sequential IDs** (1, 2, 3…) that make enumeration
+    trivial; random UUIDs make guessing harder but **do not replace** the authorization check — they are only
+    defense in depth. The only real fix remains verifying, on every access, that the object belongs to the
+    authenticated user.
+
+bestPractice:
+  fr: |
+    - **Autorisez au niveau de l'objet** à chaque accès : vérifiez que l'objet appartient à l'utilisateur authentifié.
+    - **Filtrez les requêtes par propriétaire** (`owner_id = utilisateur courant`), ne récupérez jamais par ID seul.
+    - **Tirez le `owner_id` de la session/token**, jamais d'un paramètre contrôlé par le client.
+    - **Renvoyez `404`** plutôt que `403` pour un objet interdit, afin de ne pas confirmer son existence (anti-énumération).
+    - **Distinguez clairement** authentification (qui) et autorisation (quel droit sur quoi) dans votre code.
+  en: |
+    - **Authorize at the object level** on every access: check the object belongs to the authenticated user.
+    - **Filter queries by owner** (`owner_id = current user`), never fetch by ID alone.
+    - **Take `owner_id` from the session/token**, never from a client-controlled parameter.
+    - **Return `404`** rather than `403` for a forbidden object, so you do not confirm it exists (anti-enumeration).
+    - **Clearly separate** authentication (who) and authorization (what right on what) in your code.
+
+exercise:
+  statement:
+    fr: |
+      Cet endpoint laisse n'importe quel utilisateur connecté lire le profil de n'importe quel autre :
+
+      ```python
+      @app.get("/api/users/<int:user_id>/profile")
+      def profile(user_id):
+          return jsonify(PROFILES[user_id])
+      ```
+
+      1. Nommez la faille OWASP API concernée.
+      2. Réécrivez l'endpoint pour qu'un utilisateur ne puisse lire **que son propre** profil (l'ID de
+         l'utilisateur authentifié est dans `g.user_id`).
+    en: |
+      This endpoint lets any logged-in user read any other user's profile:
+
+      ```python
+      @app.get("/api/users/<int:user_id>/profile")
+      def profile(user_id):
+          return jsonify(PROFILES[user_id])
+      ```
+
+      1. Name the relevant OWASP API flaw.
+      2. Rewrite the endpoint so a user can read **only their own** profile (the authenticated user's ID is in
+         `g.user_id`).
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      # Flaw: API1:2023 - Broken Object Level Authorization (BOLA).
+      # The endpoint trusts the client-supplied user_id with no ownership
+      # check, so any authenticated user reads any profile.
+
+      @app.get("/api/users/<int:user_id>/profile")
+      def profile(user_id):
+          # Object-level authorization: the requested id must match the
+          # authenticated identity, otherwise refuse (404, no enumeration).
+          if user_id != g.user_id:
+              return jsonify(error="not found"), 404
+          return jsonify(PROFILES[user_id])
+    note:
+      fr: "La faille est le BOLA (API1:2023). La correction vérifie que `user_id` correspond à l'utilisateur authentifié (`g.user_id`) avant de renvoyer le profil, et répond `404` sinon pour bloquer l'énumération."
+      en: "The flaw is BOLA (API1:2023). The fix checks that `user_id` matches the authenticated user (`g.user_id`) before returning the profile, and responds `404` otherwise to block enumeration."
+
+quiz:
+  - q:
+      fr: "Que désigne le BOLA, faille API n°1 ?"
+      en: "What does BOLA, the number-one API flaw, refer to?"
+    options:
+      fr: ["Un accès non autorisé à l'objet d'un autre utilisateur via son ID", "Une injection SQL", "Un dépassement de mémoire", "Un certificat expiré"]
+      en: ["Unauthorized access to another user's object via its ID", "A SQL injection", "A memory overflow", "An expired certificate"]
+    answer: 0
+    why:
+      fr: "Le BOLA (Broken Object Level Authorization) permet à un utilisateur authentifié d'accéder à l'objet d'un autre en changeant simplement l'ID demandé, faute de vérification d'autorisation au niveau de l'objet."
+      en: "BOLA (Broken Object Level Authorization) lets an authenticated user access another's object by simply changing the requested ID, due to a missing object-level authorization check."
+  - q:
+      fr: "Quelle est la différence entre authentification et autorisation ?"
+      en: "What is the difference between authentication and authorization?"
+    options:
+      fr: ["Ce sont des synonymes", "L'authentification dit qui tu es, l'autorisation dit ce que tu as le droit de faire", "L'autorisation chiffre les données", "L'authentification limite le débit"]
+      en: ["They are synonyms", "Authentication says who you are, authorization says what you may do", "Authorization encrypts data", "Authentication rate-limits"]
+    answer: 1
+    why:
+      fr: "Être authentifié (savoir qui est l'utilisateur) ne dit rien sur son droit d'accéder à un objet précis ; c'est l'autorisation, et la confondre avec l'authentification est la cause du BOLA."
+      en: "Being authenticated (knowing who the user is) says nothing about their right to access a specific object; that is authorization, and confusing it with authentication is the cause of BOLA."
+  - q:
+      fr: "Quelle est la défense la plus solide contre le BOLA ?"
+      en: "What is the strongest defense against BOLA?"
+    options:
+      fr: ["Utiliser des UUID aléatoires uniquement", "Chiffrer l'URL", "Filtrer la requête par propriétaire (owner_id = utilisateur courant)", "Masquer l'ID en base64"]
+      en: ["Use random UUIDs only", "Encrypt the URL", "Filter the query by owner (owner_id = current user)", "Hide the ID in base64"]
+    answer: 2
+    why:
+      fr: "Scoper la requête au propriétaire issu de la session garantit qu'un objet qui n'appartient pas à l'utilisateur ne remonte jamais ; les UUID aident mais ne remplacent pas cette vérification."
+      en: "Scoping the query to the owner derived from the session guarantees an object the user does not own never comes back; UUIDs help but do not replace this check."
+  - q:
+      fr: "Pourquoi renvoyer `404` plutôt que `403` pour un objet interdit ?"
+      en: "Why return `404` rather than `403` for a forbidden object?"
+    options:
+      fr: ["C'est plus rapide", "Pour chiffrer la réponse", "Pour ne pas confirmer que l'objet existe (anti-énumération)", "Parce que 403 n'existe pas en API"]
+      en: ["It is faster", "To encrypt the response", "So as not to confirm the object exists (anti-enumeration)", "Because 403 does not exist in APIs"]
+    answer: 2
+    why:
+      fr: "Un `403` révèle que l'objet existe mais est interdit, ce qui aide l'attaquant à énumérer les IDs valides ; un `404` ne divulgue rien."
+      en: "A `403` reveals the object exists but is forbidden, helping an attacker enumerate valid IDs; a `404` discloses nothing."
+  - q:
+      fr: "Les UUID aléatoires remplacent-ils la vérification d'autorisation ?"
+      en: "Do random UUIDs replace the authorization check?"
+    options:
+      fr: ["Oui, ils suffisent", "Non, ils ne sont qu'une défense en profondeur", "Oui, s'ils sont chiffrés", "Non, ils aggravent le problème"]
+      en: ["Yes, they are enough", "No, they are only defense in depth", "Yes, if encrypted", "No, they make it worse"]
+    answer: 1
+    why:
+      fr: "Les UUID compliquent la devinette d'un ID, mais si l'API ne vérifie pas la propriété, un attaquant qui obtient un UUID valide accède quand même à l'objet. La vérification reste obligatoire."
+      en: "UUIDs make guessing an ID harder, but if the API does not check ownership, an attacker who obtains a valid UUID still accesses the object. The check remains mandatory."

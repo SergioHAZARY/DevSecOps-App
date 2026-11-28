@@ -1,0 +1,408 @@
+description:
+  fr: "Chiffrer mots de passe, clés et variables sensibles avec Ansible Vault : chiffrer un fichier, une valeur, gérer plusieurs vault IDs et masquer les secrets avec no_log."
+  en: "Encrypt passwords, keys and sensitive variables with Ansible Vault: encrypt a file, a single value, manage multiple vault IDs and hide secrets with no_log."
+duration: 35
+
+intro:
+  fr: |
+    Vos playbooks ont besoin de secrets : mot de passe de base de données, clé d'API, certificat privé.
+    Mais un dépôt Git est lisible par toute l'équipe, archivé, cloné, sauvegardé... Y écrire un secret en
+    clair, c'est le distribuer à tout le monde, pour toujours.
+
+    **Ansible Vault** résout ce problème : il chiffre fichiers et variables avec AES-256, à partir d'un
+    **mot de passe de vault**. Dans Git, on ne voit plus qu'un blob chiffré ; à l'exécution, Ansible
+    déchiffre à la volée avec le mot de passe fourni séparément. C'est un coffre-fort dont le contenu voyage
+    avec le code, mais dont la clé reste à part.
+
+    Vous allez chiffrer un fichier de variables, chiffrer une valeur unique avec `encrypt_string`, gérer
+    plusieurs environnements avec les **vault IDs**, et masquer les secrets des journaux avec `no_log`.
+  en: |
+    Your playbooks need secrets: a database password, an API key, a private certificate. But a Git
+    repository is readable by the whole team, archived, cloned, backed up... Writing a secret in clear text
+    there means distributing it to everyone, forever.
+
+    **Ansible Vault** solves this: it encrypts files and variables with AES-256, using a **vault password**.
+    In Git you only see an encrypted blob; at run time Ansible decrypts on the fly with the password
+    supplied separately. It is a safe whose contents travel with the code, but whose key stays apart.
+
+    You will encrypt a variables file, encrypt a single value with `encrypt_string`, manage several
+    environments with **vault IDs**, and hide secrets from logs with `no_log`.
+
+sections:
+  - heading:
+      fr: "Les commandes de base"
+      en: "The core commands"
+    body:
+      fr: |
+        Ansible Vault s'utilise avec le sous-commande `ansible-vault`.
+
+        | Commande | Rôle |
+        |---|---|
+        | `ansible-vault create secrets.yml` | Créer un fichier chiffré dans l'éditeur |
+        | `ansible-vault edit secrets.yml` | Modifier un fichier chiffré (déchiffré en mémoire) |
+        | `ansible-vault view secrets.yml` | Afficher le contenu sans le déchiffrer sur le disque |
+        | `ansible-vault encrypt vars.yml` | Chiffrer un fichier existant |
+        | `ansible-vault decrypt vars.yml` | Déchiffrer (à éviter : le secret retombe en clair) |
+        | `ansible-vault rekey secrets.yml` | Changer le mot de passe du vault |
+
+        Un fichier chiffré commence par l'en-tête `$ANSIBLE_VAULT;1.1;AES256`. On le versionne tel quel
+        dans Git : son contenu est illisible sans le mot de passe. Au moment de jouer le playbook, on fournit
+        le mot de passe avec `--ask-vault-pass` (saisie interactive) ou `--vault-password-file`.
+      en: |
+        Ansible Vault is used through the `ansible-vault` sub-command.
+
+        | Command | Purpose |
+        |---|---|
+        | `ansible-vault create secrets.yml` | Create an encrypted file in the editor |
+        | `ansible-vault edit secrets.yml` | Edit an encrypted file (decrypted in memory) |
+        | `ansible-vault view secrets.yml` | Show the content without decrypting it on disk |
+        | `ansible-vault encrypt vars.yml` | Encrypt an existing file |
+        | `ansible-vault decrypt vars.yml` | Decrypt (avoid: the secret falls back to clear text) |
+        | `ansible-vault rekey secrets.yml` | Change the vault password |
+
+        An encrypted file starts with the header `$ANSIBLE_VAULT;1.1;AES256`. You version it as-is in Git:
+        its content is unreadable without the password. When playing the playbook, you supply the password
+        with `--ask-vault-pass` (interactive prompt) or `--vault-password-file`.
+  - heading:
+      fr: "encrypt_string et fichiers mixtes"
+      en: "encrypt_string and mixed files"
+    body:
+      fr: |
+        Chiffrer tout un fichier cache aussi les noms de variables, ce qui gêne la relecture des diffs.
+        **`ansible-vault encrypt_string`** chiffre une **valeur unique** que l'on colle dans un fichier de
+        variables par ailleurs en clair : on voit alors les noms (`db_password: !vault | ...`) mais pas les
+        valeurs.
+
+        Les deux approches sont valides :
+
+        | Approche | Avantage | Inconvénient |
+        |---|---|---|
+        | Fichier entier chiffré | Simple, tout est protégé | Diffs illisibles, noms cachés |
+        | `encrypt_string` par valeur | Diffs lisibles, granularité fine | Plus verbeux à maintenir |
+
+        Dans tous les cas, le mot de passe du vault ne doit **jamais** être commité. On le stocke hors du
+        dépôt, dans un gestionnaire de secrets de l'équipe ou une variable d'environnement de la CI.
+      en: |
+        Encrypting a whole file also hides the variable names, which hinders diff review.
+        **`ansible-vault encrypt_string`** encrypts a **single value** that you paste into an otherwise
+        clear-text variables file: you then see the names (`db_password: !vault | ...`) but not the values.
+
+        Both approaches are valid:
+
+        | Approach | Upside | Downside |
+        |---|---|---|
+        | Whole file encrypted | Simple, everything is protected | Unreadable diffs, hidden names |
+        | `encrypt_string` per value | Readable diffs, fine granularity | More verbose to maintain |
+
+        In every case the vault password must **never** be committed. You store it outside the repository,
+        in the team's secret manager or a CI environment variable.
+  - heading:
+      fr: "Vault IDs et no_log"
+      en: "Vault IDs and no_log"
+    body:
+      fr: |
+        Un projet a souvent plusieurs secrets : un pour la `dev`, un pour la `prod`. Les **vault IDs**
+        étiquettent chaque mot de passe : `--vault-id dev@prompt --vault-id prod@~/.prod_pass`. Ansible
+        choisit automatiquement la bonne clé pour chaque fichier selon son étiquette. On isole ainsi les
+        secrets de production des secrets de développement.
+
+        Attention : déchiffrer un secret ne suffit pas à le protéger. Si une tâche affiche sa valeur (module
+        `debug`, échec d'une commande, mode verbeux `-v`), le secret se retrouve **en clair dans les
+        journaux**. La parade est **`no_log: true`** sur toute tâche manipulant un secret : Ansible masque
+        alors sa sortie par `censored`. C'est la deuxième moitié du travail, aussi importante que le
+        chiffrement lui-même.
+      en: |
+        A project often has several secrets: one for `dev`, one for `prod`. **Vault IDs** label each
+        password: `--vault-id dev@prompt --vault-id prod@~/.prod_pass`. Ansible automatically picks the
+        right key for each file based on its label. This isolates production secrets from development ones.
+
+        Beware: decrypting a secret is not enough to protect it. If a task prints its value (the `debug`
+        module, a failing command, verbose mode `-v`), the secret ends up **in clear text in the logs**.
+        The fix is **`no_log: true`** on any task handling a secret: Ansible then masks its output with
+        `censored`. This is the second half of the job, as important as the encryption itself.
+
+examples:
+  - title:
+      fr: "VULNÉRABLE : un secret en clair dans group_vars"
+      en: "VULNERABLE: a clear-text secret in group_vars"
+    file: group_vars/prod.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      ---
+      # DANGER: this file is committed to Git in clear text.
+      # Everyone who can clone the repo, now or in the future, reads this password.
+      # It also stays in the Git history even after you "remove" it.
+      db_host: db.example.com
+      db_user: app
+      db_password: SuperSecret123!   # <-- plain text, leaked forever
+      api_token: tok_live_9f8e7d6c5b4a
+    note:
+      fr: "C'est l'erreur la plus fréquente. Tout secret commité une fois est compromis, même supprimé ensuite : il reste dans l'historique Git. La version sécurisée chiffre ce fichier avec Vault."
+      en: "This is the most common mistake. Any secret committed once is compromised, even if removed later: it stays in the Git history. The secure version encrypts this file with Vault."
+
+  - title:
+      fr: "SÉCURISÉ : chiffrer le fichier avec Ansible Vault"
+      en: "SECURE: encrypt the file with Ansible Vault"
+    file: vault.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Encrypt the existing file in place (asks for a vault password)
+      ansible-vault encrypt group_vars/prod.yml
+
+      # Later: inspect it safely without decrypting on disk
+      ansible-vault view group_vars/prod.yml
+
+      # Edit it: Ansible decrypts in memory, you edit, it re-encrypts on save
+      ansible-vault edit group_vars/prod.yml
+
+      # Rotate the vault password (e.g. after someone leaves the team)
+      ansible-vault rekey group_vars/prod.yml
+    output: |
+      # What Git now stores for group_vars/prod.yml:
+      $ANSIBLE_VAULT;1.1;AES256
+      66336539653...e3b
+      37623930646...a1c
+      35396531383...9f0
+    note:
+      fr: "Dans Git, le fichier n'est plus qu'un blob AES-256 commençant par `$ANSIBLE_VAULT`. On le versionne sans crainte ; seul le mot de passe du vault, gardé à part, permet de le lire."
+      en: "In Git, the file is now just an AES-256 blob starting with `$ANSIBLE_VAULT`. You version it without worry; only the vault password, kept apart, can read it."
+
+  - title:
+      fr: "encrypt_string : chiffrer une seule valeur"
+      en: "encrypt_string: encrypt a single value"
+    file: secrets.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Generate the encrypted value (prints the block below):
+      #   ansible-vault encrypt_string 'SuperSecret123!' --name db_password
+      ---
+      # A mostly clear-text file: variable NAMES are visible, VALUES are encrypted.
+      # Diffs stay readable while secrets stay protected.
+      db_host: db.example.com
+      db_user: app
+      db_password: !vault |
+        $ANSIBLE_VAULT;1.1;AES256
+        39653464366164383...6362
+        66393832613930643...3030
+        34376234313933383...3161
+    note:
+      fr: "`encrypt_string` chiffre une valeur isolée insérée dans un fichier par ailleurs lisible. On voit `db_password:` dans les diffs Git, mais sa valeur reste un blob chiffré."
+      en: "`encrypt_string` encrypts a single value inserted into an otherwise readable file. You see `db_password:` in Git diffs, but its value stays an encrypted blob."
+
+  - title:
+      fr: "Utiliser le secret sans le divulguer : no_log et vault IDs"
+      en: "Use the secret without leaking it: no_log and vault IDs"
+    file: deploy.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      - name: Configure the database connection
+        hosts: db
+        become: true
+        # group_vars/prod.yml (vault) provides db_user and db_password
+        tasks:
+          - name: Write the app configuration with the secret
+            ansible.builtin.template:
+              src: app.env.j2
+              dest: /etc/app/app.env
+              owner: app
+              group: app
+              mode: "0600" # readable only by the app user
+            no_log: true # hide the rendered secret from the task output and logs
+
+          - name: Create the database user
+            community.postgresql.postgresql_user:
+              name: "{{ db_user }}"
+              password: "{{ db_password }}"
+            no_log: true # never print the password, even on failure or with -v
+    output: |
+      # Run with a labelled vault id for the prod environment:
+      #   ansible-playbook deploy.yml --vault-id prod@~/.vault_prod_pass
+      TASK [Write the app configuration with the secret] ****************
+      changed: [db1] => (item=None)  # output censored by no_log
+    note:
+      fr: "`no_log: true` empêche la valeur du secret d'apparaître dans la sortie, même en cas d'échec ou en mode `-v`. Le vault ID `prod@...` sélectionne automatiquement le bon mot de passe."
+      en: "`no_log: true` keeps the secret's value out of the output, even on failure or in `-v` mode. The vault ID `prod@...` automatically selects the right password."
+
+mistake:
+  fr: |
+    **Chiffrer le secret mais l'afficher quand même dans les journaux.**
+
+    Beaucoup d'équipes chiffrent soigneusement leurs fichiers avec Vault, puis trahissent le secret au
+    premier `debug: var=db_password`, au premier échec de tâche qui recrache la commande, ou en lançant le
+    playbook avec `-vvv`. Le chiffrement protège le secret **au repos** (dans Git) ; `no_log: true` le
+    protège **à l'exécution** (dans les journaux). Il faut les deux. Et ne commitez jamais le mot de passe
+    du vault : gardez-le hors du dépôt, dans un gestionnaire de secrets ou une variable de CI protégée.
+  en: |
+    **Encrypting the secret but printing it in the logs anyway.**
+
+    Many teams carefully encrypt their files with Vault, then betray the secret on the first
+    `debug: var=db_password`, the first failing task that echoes the command, or by running the playbook
+    with `-vvv`. Encryption protects the secret **at rest** (in Git); `no_log: true` protects it **at run
+    time** (in the logs). You need both. And never commit the vault password: keep it outside the repo, in
+    a secret manager or a protected CI variable.
+
+bestPractice:
+  fr: |
+    - **Chiffrez tout secret** avant de le commiter ; un secret commité une fois est compromis, changez-le.
+    - **`no_log: true`** sur chaque tâche manipulant un secret, pour les tenir hors des journaux.
+    - **Le mot de passe du vault n'est jamais dans Git** : coffre-fort d'équipe ou variable de CI.
+    - **Vault IDs** (`dev@`, `prod@`) pour isoler les secrets par environnement.
+    - **`encrypt_string`** quand vous voulez garder des diffs lisibles ; fichier entier sinon.
+    - **`rekey`** régulièrement et après tout départ d'un membre de l'équipe.
+  en: |
+    - **Encrypt every secret** before committing it; a secret committed once is compromised, rotate it.
+    - **`no_log: true`** on every task handling a secret, to keep it out of the logs.
+    - **The vault password is never in Git**: team secret manager or a CI variable.
+    - **Vault IDs** (`dev@`, `prod@`) to isolate secrets per environment.
+    - **`encrypt_string`** when you want readable diffs; whole-file encryption otherwise.
+    - **`rekey`** regularly and after any team member leaves.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue a commité ce fichier `group_vars/all.yml` en clair dans Git :
+
+      ```yaml
+      smtp_host: mail.example.com
+      smtp_password: Hunter2Changeme
+      ```
+
+      1. Quelle commande chiffre ce fichier existant avec Ansible Vault ?
+      2. Écrivez une tâche de playbook qui utilise `smtp_password` tout en garantissant qu'il n'apparaîtra
+         jamais dans les journaux.
+      3. Au-delà du chiffrement, quelle action faut-il absolument faire puisque le secret a déjà été commité ?
+    en: |
+      A colleague committed this `group_vars/all.yml` file in clear text to Git:
+
+      ```yaml
+      smtp_host: mail.example.com
+      smtp_password: Hunter2Changeme
+      ```
+
+      1. Which command encrypts this existing file with Ansible Vault?
+      2. Write a playbook task that uses `smtp_password` while guaranteeing it never appears in the logs.
+      3. Beyond encryption, what action is absolutely required since the secret was already committed?
+  solution:
+    file: solution.yml
+    lang: yaml
+    code: |
+      # 1. Encrypt the existing file in place:
+      #      ansible-vault encrypt group_vars/all.yml
+      #
+      # 2. A task using the secret, hidden from logs:
+      ---
+      - name: Configure the mail relay
+        hosts: app
+        become: true
+        tasks:
+          - name: Write the SMTP credentials file
+            ansible.builtin.template:
+              src: smtp.conf.j2
+              dest: /etc/app/smtp.conf
+              owner: app
+              group: app
+              mode: "0600"
+            no_log: true # the rendered secret never reaches the output or logs
+      #
+      # 3. The secret is already in the Git history, so it is COMPROMISED:
+      #    rotate it (change smtp_password at the provider) before anything else.
+    note:
+      fr: "Chiffrer ne « dé-commite » pas le secret : il reste dans l'historique Git. La seule réponse correcte à une fuite est la **rotation** : on change le mot de passe chez le fournisseur."
+      en: "Encrypting does not \"un-commit\" the secret: it stays in the Git history. The only correct response to a leak is **rotation**: change the password at the provider."
+
+quiz:
+  - q:
+      fr: "Quel algorithme Ansible Vault utilise-t-il pour chiffrer un fichier ?"
+      en: "Which algorithm does Ansible Vault use to encrypt a file?"
+    options:
+      fr:
+        - "Base64"
+        - "AES-256"
+        - "ROT13"
+        - "MD5"
+      en:
+        - "Base64"
+        - "AES-256"
+        - "ROT13"
+        - "MD5"
+    answer: 1
+    why:
+      fr: "Vault chiffre en AES-256 ; Base64 n'est qu'un encodage réversible et MD5 un hachage : aucun des deux ne protège un secret."
+      en: "Vault encrypts with AES-256; Base64 is only a reversible encoding and MD5 a hash: neither protects a secret."
+  - q:
+      fr: "À quoi sert `no_log: true` sur une tâche ?"
+      en: "What is `no_log: true` on a task for?"
+    options:
+      fr:
+        - "À désactiver complètement l'exécution de la tâche"
+        - "À chiffrer le fichier d'inventaire"
+        - "À empêcher la valeur du secret d'apparaître dans la sortie et les journaux"
+        - "À accélérer la tâche"
+      en:
+        - "To disable the task's execution entirely"
+        - "To encrypt the inventory file"
+        - "To keep the secret's value out of the output and logs"
+        - "To speed up the task"
+    answer: 2
+    why:
+      fr: "`no_log: true` masque la sortie de la tâche (`censored`), même en cas d'échec ou en mode verbeux : indispensable sur les tâches manipulant un secret."
+      en: "`no_log: true` masks the task's output (`censored`), even on failure or in verbose mode: essential on tasks handling a secret."
+  - q:
+      fr: "Quel est l'avantage principal de `encrypt_string` sur le chiffrement d'un fichier entier ?"
+      en: "What is the main advantage of `encrypt_string` over encrypting a whole file?"
+    options:
+      fr:
+        - "Les noms de variables restent lisibles, donc les diffs Git aussi"
+        - "C'est plus rapide à déchiffrer"
+        - "Cela n'a pas besoin de mot de passe"
+        - "Cela chiffre aussi le playbook"
+      en:
+        - "Variable names stay readable, so Git diffs do too"
+        - "It is faster to decrypt"
+        - "It needs no password"
+        - "It also encrypts the playbook"
+    answer: 0
+    why:
+      fr: "`encrypt_string` ne chiffre que la valeur : on garde `db_password:` visible dans les diffs, seule la valeur devient un blob chiffré."
+      en: "`encrypt_string` encrypts only the value: `db_password:` stays visible in diffs, only the value becomes an encrypted blob."
+  - q:
+      fr: "Un secret a été commité en clair puis le fichier a été chiffré avec Vault. Le secret est-il sûr ?"
+      en: "A secret was committed in clear text, then the file was encrypted with Vault. Is the secret safe?"
+    options:
+      fr:
+        - "Oui, le chiffrement efface tout l'historique"
+        - "Oui, personne ne regarde l'historique Git"
+        - "Non : il reste en clair dans l'historique Git, il faut le changer (rotation)"
+        - "Oui, à condition de redémarrer le serveur"
+      en:
+        - "Yes, encryption erases the whole history"
+        - "Yes, nobody looks at Git history"
+        - "No: it stays in clear text in the Git history, it must be rotated"
+        - "Yes, as long as you reboot the server"
+    answer: 2
+    why:
+      fr: "Chiffrer le fichier aujourd'hui ne retire pas le secret des commits passés : il est compromis et doit être changé chez le fournisseur."
+      en: "Encrypting the file today does not remove the secret from past commits: it is compromised and must be rotated at the provider."
+  - q:
+      fr: "À quoi servent les vault IDs comme `--vault-id prod@~/.prod_pass` ?"
+      en: "What are vault IDs like `--vault-id prod@~/.prod_pass` for?"
+    options:
+      fr:
+        - "À désactiver le chiffrement en développement"
+        - "À étiqueter et isoler plusieurs mots de passe, par exemple par environnement"
+        - "À publier les secrets sur Galaxy"
+        - "À remplacer SSH"
+      en:
+        - "To disable encryption in development"
+        - "To label and isolate several passwords, for example per environment"
+        - "To publish secrets to Galaxy"
+        - "To replace SSH"
+    answer: 1
+    why:
+      fr: "Les vault IDs associent une étiquette (`dev`, `prod`) à un mot de passe ; Ansible choisit la bonne clé par fichier, séparant ainsi les environnements."
+      en: "Vault IDs tie a label (`dev`, `prod`) to a password; Ansible picks the right key per file, keeping environments separate."

@@ -1,0 +1,503 @@
+description:
+  fr: "Comprendre la bascule de tfsec (déprécié) vers trivy config : scanner Terraform, Dockerfile et Kubernetes, la syntaxe d'ignore #trivy:ignore et .trivyignore, et la migration des checks."
+  en: "Understand the shift from tfsec (deprecated) to trivy config: scan Terraform, Dockerfile and Kubernetes, the #trivy:ignore and .trivyignore syntax, and check migration."
+duration: 25
+
+intro:
+  fr: |
+    Pendant des années, **tfsec** a été l'outil préféré pour scanner le Terraform à la recherche de
+    mauvaises configurations. Aqua Security, qui maintient tfsec **et** Trivy, a décidé de **fusionner** les
+    capacités de tfsec dans Trivy. Résultat : tfsec est désormais **déprécié**, et ses contrôles vivent dans
+    `trivy config`. Connaître cette bascule évite de bâtir un pipeline sur un outil en fin de vie.
+
+    L'analogie : votre vieux couteau suisse spécialisé (tfsec) faisait très bien une chose. Le fabricant a
+    intégré toutes ses lames dans un modèle plus complet (Trivy) qui fait aussi le scan d'images, de
+    dépendances et de secrets. Vous ne jetez pas le savoir-faire : vous apprenez où retrouver chaque lame
+    dans le nouvel outil.
+
+    Dans cette leçon vous allez voir pourquoi tfsec est déprécié, lancer `trivy config` sur du Terraform, un
+    Dockerfile et des manifestes Kubernetes, maîtriser la syntaxe d'ignore de Trivy
+    (`#trivy:ignore:<ID>` en ligne et le fichier `.trivyignore`), et comprendre la correspondance entre les
+    identifiants tfsec et les AVD de Trivy pour migrer sans rien perdre.
+  en: |
+    For years, **tfsec** was the favourite tool to scan Terraform for misconfigurations. Aqua Security, which
+    maintains tfsec **and** Trivy, decided to **merge** tfsec's capabilities into Trivy. The result: tfsec is
+    now **deprecated**, and its checks live in `trivy config`. Knowing this shift avoids building a pipeline
+    on an end-of-life tool.
+
+    The analogy: your old specialised Swiss army knife (tfsec) did one thing very well. The maker folded all
+    its blades into a more complete model (Trivy) that also scans images, dependencies and secrets. You do
+    not throw away the know-how: you learn where each blade is in the new tool.
+
+    In this lesson you will see why tfsec is deprecated, run `trivy config` on Terraform, a Dockerfile and
+    Kubernetes manifests, master Trivy's ignore syntax (`#trivy:ignore:<ID>` inline and the `.trivyignore`
+    file), and understand the mapping between tfsec identifiers and Trivy AVDs to migrate without losing
+    anything.
+
+sections:
+  - heading:
+      fr: "Pourquoi tfsec est déprécié"
+      en: "Why tfsec is deprecated"
+    body:
+      fr: |
+        tfsec et Trivy appartiennent au même éditeur (Aqua Security). Maintenir deux moteurs de scan de
+        configuration qui se recouvraient était redondant. Aqua a donc **consolidé** : le moteur
+        d'analyse de configuration de Trivy (nommé *Trivy Misconfiguration*, historiquement **AVD** pour *Aqua
+        Vulnerability Database*) a absorbé les règles de tfsec.
+
+        Concrètement :
+
+        - le dépôt tfsec affiche un avis de **dépréciation** et renvoie vers Trivy ;
+        - les nouvelles règles ne sont ajoutées qu'à Trivy ;
+        - `trivy config` (ou `trivy fs --scanners misconfig`) remplace `tfsec`.
+
+        | | tfsec (déprécié) | trivy config |
+        |---|---|---|
+        | Statut | Fin de vie, plus de nouvelles règles | Maintenu activement |
+        | Périmètre | Terraform surtout | Terraform, Dockerfile, Kubernetes, Helm, CloudFormation... |
+        | Identifiants | `aws-s3-...`, `AWS018` | `AVD-AWS-0089`, plus les ID historiques |
+        | Intégration | Outil séparé | Un seul binaire pour vuln, secret, misconfig, IaC |
+
+        Le gros avantage de la bascule : **un seul outil** couvre désormais les images, les dépendances, les
+        secrets et l'IaC. On réduit le nombre d'outils à installer, à mettre à jour et à intégrer en CI.
+      en: |
+        tfsec and Trivy belong to the same vendor (Aqua Security). Maintaining two overlapping configuration
+        scanning engines was redundant. Aqua therefore **consolidated**: Trivy's configuration analysis engine
+        (called *Trivy Misconfiguration*, historically **AVD** for *Aqua Vulnerability Database*) absorbed
+        tfsec's rules.
+
+        In practice:
+
+        - the tfsec repository shows a **deprecation** notice and points to Trivy;
+        - new rules are added only to Trivy;
+        - `trivy config` (or `trivy fs --scanners misconfig`) replaces `tfsec`.
+
+        | | tfsec (deprecated) | trivy config |
+        |---|---|---|
+        | Status | End of life, no new rules | Actively maintained |
+        | Scope | Mostly Terraform | Terraform, Dockerfile, Kubernetes, Helm, CloudFormation... |
+        | Identifiers | `aws-s3-...`, `AWS018` | `AVD-AWS-0089`, plus the historic IDs |
+        | Integration | Separate tool | One binary for vuln, secret, misconfig, IaC |
+
+        The big advantage of the shift: **a single tool** now covers images, dependencies, secrets and IaC.
+        You reduce the number of tools to install, update and integrate in CI.
+  - heading:
+      fr: "Lancer trivy config"
+      en: "Running trivy config"
+    body:
+      fr: |
+        `trivy config` scanne un dossier de configuration. Il détecte automatiquement les types de fichiers
+        (Terraform, Dockerfile, manifestes Kubernetes, Helm) et applique les règles correspondantes.
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" aquasec/trivy:latest config /src \
+          --severity HIGH,CRITICAL --exit-code 1
+        ```
+
+        Les options sont cohérentes avec le reste de Trivy :
+
+        | Option | Rôle |
+        |---|---|
+        | `--severity` | Filtrer par gravité |
+        | `--exit-code 1` | Bloquer la CI sur un échec |
+        | `--format` | `table`, `json`, `sarif` |
+        | `--misconfig-scanners` | Restreindre (`terraform`, `dockerfile`, `kubernetes`...) |
+        | `--ignorefile` | Chemin d'un `.trivyignore` personnalisé |
+
+        Chaque résultat affiche un identifiant **AVD** (`AVD-AWS-0089`), la sévérité, la ressource et un lien
+        vers la documentation qui explique le risque et la correction. Comme pour le scan d'images, on bloque
+        la CI avec `--exit-code 1` et on filtre la sévérité pour rester actionnable.
+      en: |
+        `trivy config` scans a configuration folder. It auto-detects file types (Terraform, Dockerfile,
+        Kubernetes manifests, Helm) and applies the matching rules.
+
+        ```bash
+        docker run --rm -v "$(pwd):/src" aquasec/trivy:latest config /src \
+          --severity HIGH,CRITICAL --exit-code 1
+        ```
+
+        The options are consistent with the rest of Trivy:
+
+        | Option | Role |
+        |---|---|
+        | `--severity` | Filter by severity |
+        | `--exit-code 1` | Block CI on a failure |
+        | `--format` | `table`, `json`, `sarif` |
+        | `--misconfig-scanners` | Restrict (`terraform`, `dockerfile`, `kubernetes`...) |
+        | `--ignorefile` | Path to a custom `.trivyignore` |
+
+        Each result shows an **AVD** identifier (`AVD-AWS-0089`), the severity, the resource and a link to the
+        documentation explaining the risk and the fix. As with image scanning, you block CI with
+        `--exit-code 1` and filter severity to stay actionable.
+  - heading:
+      fr: "La syntaxe d'ignore de Trivy"
+      en: "Trivy's ignore syntax"
+    body:
+      fr: |
+        Pour supprimer un faux positif ou un risque accepté, Trivy propose deux mécanismes, tous deux tracés.
+
+        **1. En ligne**, un commentaire `#trivy:ignore:<ID>` juste **au-dessus** du bloc concerné. On peut y
+        ajouter une date d'expiration et une raison :
+
+        ```hcl
+        #trivy:ignore:AVD-AWS-0107:exp:2026-09-30
+        resource "aws_security_group_rule" "http" {
+          cidr_blocks = ["0.0.0.0/0"]  # public web server, port 80 intended
+        }
+        ```
+
+        **2. Le fichier `.trivyignore`** à la racine, une entrée par ligne (identifiant AVD, commentaire,
+        `exp:` optionnel), identique dans l'esprit au `.trivyignore` du scan d'images vu précédemment.
+
+        | Mécanisme | Portée | Quand l'utiliser |
+        |---|---|---|
+        | `#trivy:ignore:<ID>` | Le bloc juste en dessous | Exception locale, liée à une ressource précise |
+        | `.trivyignore` | Tout le dépôt | Décision globale, documentée |
+
+        La règle d'or, encore une fois : ignorer un **identifiant précis**, justifié et de préférence daté.
+        Pour la migration depuis tfsec, retenez que les anciens identifiants tfsec restent **reconnus** par
+        Trivy en plus des AVD, ce qui facilite la transition : on remplace la commande `tfsec` par
+        `trivy config`, et on adapte progressivement les commentaires d'ignore vers la syntaxe
+        `#trivy:ignore`.
+      en: |
+        To suppress a false positive or an accepted risk, Trivy offers two mechanisms, both traced.
+
+        **1. Inline**, a `#trivy:ignore:<ID>` comment just **above** the relevant block. You can add an expiry
+        date and a reason:
+
+        ```hcl
+        #trivy:ignore:AVD-AWS-0107:exp:2026-09-30
+        resource "aws_security_group_rule" "http" {
+          cidr_blocks = ["0.0.0.0/0"]  # public web server, port 80 intended
+        }
+        ```
+
+        **2. The `.trivyignore` file** at the root, one entry per line (AVD identifier, comment, optional
+        `exp:`), the same in spirit as the image-scan `.trivyignore` seen earlier.
+
+        | Mechanism | Scope | When to use |
+        |---|---|---|
+        | `#trivy:ignore:<ID>` | The block just below | Local exception, tied to a precise resource |
+        | `.trivyignore` | The whole repository | Global, documented decision |
+
+        The golden rule, again: ignore a **precise identifier**, justified and preferably dated. For migration
+        from tfsec, note that the old tfsec identifiers are still **recognised** by Trivy in addition to the
+        AVDs, which eases the transition: you replace the `tfsec` command with `trivy config`, and gradually
+        move the ignore comments to the `#trivy:ignore` syntax.
+
+examples:
+  - title:
+      fr: "Avant / après : de tfsec à trivy config"
+      en: "Before / after: from tfsec to trivy config"
+    file: migrate.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # BEFORE (deprecated): tfsec scanned the Terraform directory
+      #   tfsec . --minimum-severity HIGH
+
+      # AFTER (maintained): trivy config does the same and more, via Docker
+      docker run --rm -v "$(pwd):/src" aquasec/trivy:latest config /src \
+        --severity HIGH,CRITICAL \
+        --exit-code 1
+
+      # The same binary also scans images, dependencies and secrets:
+      #   trivy image myapp:1.0
+      #   trivy fs . --scanners vuln,secret
+    output: |
+      2026-04-02T11:05:02Z  INFO  Misconfiguration scanning is enabled
+      main.tf (terraform)
+      ==================================
+      Tests: 24 (SUCCESSES: 21, FAILURES: 3)
+
+      HIGH: Security group rule allows ingress from public internet (AVD-AWS-0107)
+      HIGH: S3 bucket does not block public access (AVD-AWS-0094)
+      CRITICAL: RDS storage is not encrypted (AVD-AWS-0080)
+      exit code: 1
+    note:
+      fr: "La commande `tfsec .` devient `trivy config /src`. Les résultats portent des identifiants **AVD** et la CI se bloque de la même façon avec `--exit-code 1`. Bonus : le même binaire Trivy scanne aussi images, dépendances et secrets, ce qui simplifie l'outillage."
+      en: "The `tfsec .` command becomes `trivy config /src`. Results carry **AVD** identifiers and CI blocks the same way with `--exit-code 1`. Bonus: the same Trivy binary also scans images, dependencies and secrets, which simplifies tooling."
+
+  - title:
+      fr: "Scanner un Dockerfile et des manifestes Kubernetes"
+      en: "Scanning a Dockerfile and Kubernetes manifests"
+    file: Dockerfile
+    lang: dockerfile
+    kind: vulnerable
+    code: |
+      FROM ubuntu:22.04
+
+      # Misconfig AVD-DS-0002: no USER instruction -> the container runs as root
+      RUN apt-get update && apt-get install -y python3
+
+      COPY app.py /app/app.py
+
+      # No non-root USER, no HEALTHCHECK: trivy config flags these
+      CMD ["python3", "/app/app.py"]
+    output: |
+      $ trivy config Dockerfile
+      Dockerfile (dockerfile)
+      ==================================
+      HIGH: Specify at least 1 USER command with non-root user (AVD-DS-0002)
+        Running as root gives any container escape full host privileges.
+      LOW: Add HEALTHCHECK instruction in your Dockerfile (AVD-DS-0026)
+      Tests: 26 (SUCCESSES: 24, FAILURES: 2)
+    note:
+      fr: "`trivy config` ne se limite pas au Terraform : il applique des règles aux Dockerfile (ici l'absence d'instruction `USER`, donc un conteneur qui tourne en root) et aux manifestes Kubernetes. Un seul outil couvre tous les formats d'IaC du dépôt."
+      en: "`trivy config` is not limited to Terraform: it applies rules to Dockerfiles (here the missing `USER` instruction, so a container running as root) and to Kubernetes manifests. A single tool covers all the IaC formats in the repository."
+
+  - title:
+      fr: "Ignorer en ligne avec #trivy:ignore et expiration"
+      en: "Ignoring inline with #trivy:ignore and expiry"
+    file: security_group.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_security_group" "web" {
+        name = "web-sg"
+
+        # SSH restricted to the internal network: this passes the check
+        ingress {
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["10.0.0.0/8"]
+        }
+
+        # Port 80 is intentionally public (a web server). Ignore the precise AVD,
+        # with a reason and an expiry so the exception is re-reviewed.
+        #trivy:ignore:AVD-AWS-0107:exp:2026-10-01
+        ingress {
+          from_port   = 80
+          to_port     = 80
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+    output: |
+      $ trivy config security_group.tf --severity HIGH,CRITICAL
+      Tests: 24 (SUCCESSES: 23, FAILURES: 0, EXCEPTIONS: 1)
+      AVD-AWS-0107 ignored (expires 2026-10-01): public ingress on port 80
+      exit code: 0
+    note:
+      fr: "Le commentaire `#trivy:ignore:AVD-AWS-0107:exp:2026-10-01` se place **juste au-dessus** du bloc concerné et cible un seul AVD. L'`exp:` réactive l'alerte après la date, forçant une relecture. La règle SSH, elle, passe le contrôle sans suppression car elle est correctement restreinte."
+      en: "The `#trivy:ignore:AVD-AWS-0107:exp:2026-10-01` comment goes **just above** the relevant block and targets a single AVD. The `exp:` re-activates the alert after the date, forcing a re-review. The SSH rule itself passes the check with no skip because it is correctly restricted."
+
+  - title:
+      fr: "Intégration en CI avec rapport SARIF"
+      en: "CI integration with a SARIF report"
+    file: .github/workflows/iac.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: iac-config
+      on: [pull_request]
+
+      permissions:
+        contents: read
+        security-events: write   # to publish the SARIF
+
+      jobs:
+        trivy-config:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            # Replaces a former "tfsec" step. scan-type: config covers all IaC formats.
+            - name: Trivy config scan
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: config
+                scan-ref: .
+                severity: HIGH,CRITICAL
+                exit-code: 1
+                format: sarif
+                output: trivy-config.sarif
+
+            - name: Upload SARIF
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: trivy-config.sarif
+    output: |
+      main.tf (terraform): 1 CRITICAL (AVD-AWS-0080 RDS not encrypted)
+      Dockerfile (dockerfile): 1 HIGH (AVD-DS-0002 runs as root)
+      exit code: 1  -> pull request blocked
+      SARIF uploaded to code scanning
+    note:
+      fr: "Le job remplace une ancienne étape `tfsec` par `scan-type: config`. Les mauvaises configurations de Terraform **et** du Dockerfile sont détectées en un passage, le build échoue sur HIGH/CRITICAL, et le SARIF alimente l'onglet *Code scanning*. Un seul outil, une seule étape."
+      en: "The job replaces a former `tfsec` step with `scan-type: config`. Terraform **and** Dockerfile misconfigurations are detected in one pass, the build fails on HIGH/CRITICAL, and the SARIF feeds the *Code scanning* tab. One tool, one step."
+
+mistake:
+  fr: |
+    **Continuer à bâtir de nouveaux pipelines sur tfsec parce que « ça marche encore ».**
+
+    tfsec fonctionne toujours, mais il est déprécié : plus aucune nouvelle règle n'y est ajoutée. Un
+    pipeline neuf fondé sur tfsec accumule une dette dès le premier jour et rate les contrôles les plus
+    récents. La bascule vers `trivy config` est simple (la commande et les options sont très proches, les
+    anciens identifiants restent reconnus) et apporte un bénéfice immédiat : le même binaire scanne aussi
+    les images, les dépendances et les secrets. Migrer tôt évite de refaire le travail plus tard, sous
+    contrainte.
+  en: |
+    **Keeping new pipelines built on tfsec because "it still works".**
+
+    tfsec still runs, but it is deprecated: no new rules are added to it. A fresh pipeline based on tfsec
+    accumulates debt from day one and misses the latest checks. The shift to `trivy config` is simple (the
+    command and options are very close, the old identifiers are still recognised) and brings an immediate
+    benefit: the same binary also scans images, dependencies and secrets. Migrating early avoids redoing the
+    work later, under pressure.
+
+bestPractice:
+  fr: |
+    - **Utilisez `trivy config`**, pas tfsec (déprécié), pour tout nouveau pipeline.
+    - **Un seul binaire Trivy** pour les images, dépendances, secrets et IaC : moins d'outils à gérer.
+    - **Filtrez la sévérité** et bloquez la CI avec `--exit-code 1`.
+    - **Ignorez par identifiant AVD précis** (`#trivy:ignore:<ID>`), avec raison et `exp:`.
+    - **Produisez du SARIF** pour *Code scanning* et le suivi dans le temps.
+    - **Scannez tous les formats** présents : Terraform, Dockerfile, Kubernetes, Helm.
+  en: |
+    - **Use `trivy config`**, not tfsec (deprecated), for any new pipeline.
+    - **A single Trivy binary** for images, dependencies, secrets and IaC: fewer tools to manage.
+    - **Filter severity** and block CI with `--exit-code 1`.
+    - **Ignore per precise AVD identifier** (`#trivy:ignore:<ID>`), with a reason and `exp:`.
+    - **Produce SARIF** for *Code scanning* and tracking over time.
+    - **Scan every format** present: Terraform, Dockerfile, Kubernetes, Helm.
+
+exercise:
+  statement:
+    fr: |
+      Un dépôt utilise encore cette étape de CI :
+
+      ```yaml
+      - name: tfsec
+        run: tfsec . --minimum-severity HIGH
+      ```
+
+      1. Pourquoi faut-il remplacer cette étape ?
+      2. Écrivez la commande `trivy config` équivalente (via Docker) qui scanne le dossier courant, ne garde
+         que HIGH et CRITICAL, et fait échouer la CI.
+      3. Un bloc Terraform ouvre volontairement le port 443 d'un load balancer public (`AVD-AWS-0107`).
+         Écrivez la ligne d'ignore correcte, avec une expiration.
+    en: |
+      A repository still uses this CI step:
+
+      ```yaml
+      - name: tfsec
+        run: tfsec . --minimum-severity HIGH
+      ```
+
+      1. Why should this step be replaced?
+      2. Write the equivalent `trivy config` command (via Docker) that scans the current folder, keeps only
+         HIGH and CRITICAL, and fails CI.
+      3. A Terraform block intentionally opens port 443 of a public load balancer (`AVD-AWS-0107`). Write the
+         correct ignore line, with an expiry.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. tfsec is DEPRECATED: no new rules are added, and its checks now live in Trivy.
+      #    A new pipeline should use trivy config to get maintained, up-to-date rules and
+      #    a single tool that also scans images, dependencies and secrets.
+
+      # 2. Equivalent trivy config command:
+      docker run --rm -v "$(pwd):/src" aquasec/trivy:latest config /src \
+        --severity HIGH,CRITICAL --exit-code 1
+
+      # 3. Inline ignore, placed just ABOVE the intended-public block, with an expiry:
+      #    #trivy:ignore:AVD-AWS-0107:exp:2026-12-31
+      #    (public HTTPS on a load balancer is intended; re-review before the date)
+    note:
+      fr: "tfsec étant en fin de vie, on migre vers `trivy config`, dont la commande et les options restent proches. L'ignore cible l'AVD précis, est placé au-dessus du bloc voulu, et porte une date d'expiration qui force la réévaluation de l'exception."
+      en: "Since tfsec is end-of-life, migrate to `trivy config`, whose command and options stay close. The ignore targets the precise AVD, sits above the intended block, and carries an expiry date that forces re-evaluation of the exception."
+
+quiz:
+  - q:
+      fr: "Quel est le statut actuel de tfsec ?"
+      en: "What is tfsec's current status?"
+    options:
+      fr:
+        - "Déprécié : ses contrôles ont été fusionnés dans Trivy"
+        - "L'outil le plus récent du marché"
+        - "Un outil de scan d'images uniquement"
+        - "Un service payant de HashiCorp"
+      en:
+        - "Deprecated: its checks were merged into Trivy"
+        - "The newest tool on the market"
+        - "An image-scanning-only tool"
+        - "A paid HashiCorp service"
+    answer: 0
+    why:
+      fr: "Aqua Security, qui maintient les deux, a consolidé les règles de tfsec dans Trivy. tfsec est déprécié ; on utilise désormais `trivy config` pour le scan de mauvaises configurations."
+      en: "Aqua Security, which maintains both, consolidated tfsec's rules into Trivy. tfsec is deprecated; you now use `trivy config` for misconfiguration scanning."
+  - q:
+      fr: "Quelle commande remplace `tfsec .` ?"
+      en: "Which command replaces `tfsec .`?"
+    options:
+      fr:
+        - "trivy image ."
+        - "trivy config ."
+        - "trivy auth ."
+        - "trivy update ."
+      en:
+        - "trivy image ."
+        - "trivy config ."
+        - "trivy auth ."
+        - "trivy update ."
+    answer: 1
+    why:
+      fr: "`trivy config` scanne les fichiers d'IaC (Terraform, Dockerfile, Kubernetes...) à la recherche de mauvaises configurations, reprenant le rôle de tfsec."
+      en: "`trivy config` scans IaC files (Terraform, Dockerfile, Kubernetes...) for misconfigurations, taking over tfsec's role."
+  - q:
+      fr: "Comment ignorer un check Trivy en ligne dans du Terraform ?"
+      en: "How do you ignore a Trivy check inline in Terraform?"
+    options:
+      fr:
+        - "Avec `// skip` à la fin de la ligne"
+        - "Avec un commentaire `#trivy:ignore:<ID>` juste au-dessus du bloc"
+        - "En supprimant la ressource"
+        - "En renommant le fichier"
+      en:
+        - "With `// skip` at the end of the line"
+        - "With a `#trivy:ignore:<ID>` comment just above the block"
+        - "By deleting the resource"
+        - "By renaming the file"
+    answer: 1
+    why:
+      fr: "Le commentaire `#trivy:ignore:<ID>` se place au-dessus du bloc et cible un AVD précis. On peut y ajouter `:exp:DATE` pour réactiver l'alerte plus tard."
+      en: "The `#trivy:ignore:<ID>` comment sits above the block and targets a precise AVD. You can add `:exp:DATE` to re-activate the alert later."
+  - q:
+      fr: "Quel avantage majeur apporte la bascule vers Trivy ?"
+      en: "What major advantage does the shift to Trivy bring?"
+    options:
+      fr:
+        - "Un seul outil couvre images, dépendances, secrets et IaC"
+        - "Il supprime le besoin de corriger les failles"
+        - "Il ne scanne que le Terraform"
+        - "Il chiffre automatiquement l'infrastructure"
+      en:
+        - "A single tool covers images, dependencies, secrets and IaC"
+        - "It removes the need to fix flaws"
+        - "It only scans Terraform"
+        - "It automatically encrypts the infrastructure"
+    answer: 0
+    why:
+      fr: "Là où tfsec ne faisait que l'IaC, le même binaire Trivy scanne aussi les images, les dépendances et les secrets. On réduit le nombre d'outils à installer et à intégrer."
+      en: "Where tfsec only did IaC, the same Trivy binary also scans images, dependencies and secrets. You reduce the number of tools to install and integrate."
+  - q:
+      fr: "Que désigne un identifiant comme `AVD-AWS-0107` dans un résultat Trivy ?"
+      en: "What does an identifier like `AVD-AWS-0107` refer to in a Trivy result?"
+    options:
+      fr:
+        - "Le numéro de version de Trivy"
+        - "L'identifiant stable du contrôle de configuration, utilisé pour l'ignorer ou le documenter"
+        - "Le coût de la correction"
+        - "L'adresse IP de la ressource"
+      en:
+        - "Trivy's version number"
+        - "The config check's stable identifier, used to ignore or document it"
+        - "The cost of the fix"
+        - "The resource's IP address"
+    answer: 1
+    why:
+      fr: "L'AVD est l'identifiant stable du contrôle dans la base d'Aqua. On s'en sert pour cibler un ignore (`#trivy:ignore:AVD-AWS-0107`) et pour consulter la documentation du risque."
+      en: "The AVD is the check's stable identifier in Aqua's database. You use it to target an ignore (`#trivy:ignore:AVD-AWS-0107`) and to look up the risk documentation."

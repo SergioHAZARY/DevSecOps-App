@@ -1,0 +1,511 @@
+description:
+  fr: "Écrire un script Bash de sauvegarde chiffrée et fiable : archive tar, chiffrement avec age ou GPG, somme de contrôle d'intégrité et rotation automatique des anciennes sauvegardes."
+  en: "Write a reliable encrypted backup Bash script: tar archive, encryption with age or GPG, integrity checksum and automatic rotation of old backups."
+duration: 35
+
+intro:
+  fr: |
+    Une sauvegarde n'a de valeur que si elle est **fiable**, **chiffrée** et **restaurable**. Trop de scripts
+    de sauvegarde se contentent de copier des fichiers : ils laissent les données en clair (lisibles par
+    quiconque accède au support), ne vérifient jamais que l'archive n'est pas corrompue, et accumulent des
+    fichiers jusqu'à saturer le disque.
+
+    Pensez à un **coffre-fort déposé à la banque** : on met les documents dans une boîte (l'archive), on la
+    ferme à clé (le chiffrement), on note son contenu sur un bordereau scellé (la somme de contrôle), et la
+    banque ne garde que les N derniers dépôts (la rotation). Chaque étape a un rôle, et l'oubli d'une seule
+    rend la sauvegarde inutile le jour d'un incident.
+
+    Dans cette leçon, vous construirez un **script de sauvegarde complet** : création d'une archive `tar`
+    compressée, **chiffrement** avec `age` (moderne) ou `gpg`, génération d'une **somme de contrôle**
+    (`sha256`) pour vérifier l'intégrité, et **rotation** qui supprime les sauvegardes trop anciennes. Le tout
+    en mode strict, avec gestion des erreurs : une sauvegarde qui échoue doit le **dire**, pas prétendre avoir
+    réussi.
+  en: |
+    A backup is only worth something if it is **reliable**, **encrypted** and **restorable**. Too many backup
+    scripts merely copy files: they leave data in clear text (readable by anyone who accesses the medium),
+    never verify the archive is not corrupt, and pile up files until the disk is full.
+
+    Think of a **safe-deposit box at the bank**: you put the documents in a box (the archive), lock it (the
+    encryption), note its contents on a sealed slip (the checksum), and the bank keeps only the last N
+    deposits (the rotation). Each step has a role, and forgetting a single one makes the backup useless on the
+    day of an incident.
+
+    In this lesson you will build a **complete backup script**: creating a compressed `tar` archive,
+    **encrypting** with `age` (modern) or `gpg`, generating a **checksum** (`sha256`) to verify integrity, and
+    **rotation** that removes backups that are too old. All in strict mode, with error handling: a backup that
+    fails must **say so**, not pretend it succeeded.
+
+sections:
+  - heading:
+      fr: "Archiver avec tar, de façon reproductible"
+      en: "Archiving with tar, reproducibly"
+    body:
+      fr: |
+        `tar` regroupe une arborescence en un seul fichier, compressé avec `gzip` (`-z`) ou `zstd`. La base :
+
+        ```bash
+        # -c create, -z gzip, -f file. Quote variables; use an absolute source.
+        tar -czf "/backups/data-$(date +%F).tar.gz" -C /srv data
+        ```
+
+        L'option `-C /srv data` est importante : elle entre dans `/srv` puis archive `data`, ce qui évite de
+        stocker des chemins absolus dans l'archive (plus propre à restaurer). Le nom de fichier intègre la date
+        avec `$(date +%F)` (format `AAAA-MM-JJ`), pour ne jamais écraser une sauvegarde précédente.
+
+        Deux précautions de sécurité. D'abord, créez les fichiers temporaires avec `mktemp`, jamais avec un nom
+        fixe comme `/tmp/backup.tar` : un nom prévisible peut être détourné par un autre utilisateur (attaque
+        par lien symbolique). Ensuite, posez des **permissions restrictives** avec `umask 077` en tête de
+        script, pour que les archives ne soient lisibles que par leur propriétaire. Une sauvegarde lisible par
+        tous annule l'intérêt du chiffrement qui suit.
+      en: |
+        `tar` bundles a directory tree into a single file, compressed with `gzip` (`-z`) or `zstd`. The basics:
+
+        ```bash
+        # -c create, -z gzip, -f file. Quote variables; use an absolute source.
+        tar -czf "/backups/data-$(date +%F).tar.gz" -C /srv data
+        ```
+
+        The `-C /srv data` option matters: it enters `/srv` then archives `data`, avoiding storing absolute
+        paths in the archive (cleaner to restore). The file name embeds the date with `$(date +%F)` (format
+        `YYYY-MM-DD`), so you never overwrite a previous backup.
+
+        Two security precautions. First, create temporary files with `mktemp`, never with a fixed name like
+        `/tmp/backup.tar`: a predictable name can be hijacked by another user (symlink attack). Second, set
+        **restrictive permissions** with `umask 077` at the top of the script, so archives are readable only by
+        their owner. A world-readable backup defeats the point of the encryption that follows.
+  - heading:
+      fr: "Chiffrer : age ou GPG"
+      en: "Encrypting: age or GPG"
+    body:
+      fr: |
+        Une sauvegarde part souvent sur un disque externe, un NAS ou le cloud : elle doit être **chiffrée au
+        repos**. Deux outils :
+
+        **age** (moderne, simple) chiffre avec une clé publique ; seul le détenteur de la clé privée peut
+        déchiffrer :
+
+        ```bash
+        age -r age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8j \
+            -o backup.tar.gz.age backup.tar.gz
+        age -d -i ~/.age/key.txt -o backup.tar.gz backup.tar.gz.age   # decrypt
+        ```
+
+        **GPG** (classique, répandu) fait la même chose :
+
+        ```bash
+        gpg --encrypt --recipient backup@example.com -o backup.tar.gz.gpg backup.tar.gz
+        gpg --decrypt backup.tar.gz.gpg > backup.tar.gz                 # decrypt
+        ```
+
+        | Critère | age | GPG |
+        |---|---|---|
+        | Simplicité | très simple | plus complexe (trousseau) |
+        | Format de clé | court, une ligne | clés et sous-clés |
+        | Usage recommandé | nouveaux projets | écosystèmes existants |
+
+        Le principe clé est le **chiffrement par clé publique** : le serveur de sauvegarde n'a besoin **que** de
+        la clé publique pour chiffrer. La clé privée, qui seule permet de déchiffrer, reste hors du serveur (sur
+        un poste d'administration ou dans un coffre). Ainsi, même compromis, le serveur ne peut pas déchiffrer
+        ses propres sauvegardes.
+      en: |
+        A backup often goes to an external disk, a NAS or the cloud: it must be **encrypted at rest**. Two
+        tools:
+
+        **age** (modern, simple) encrypts with a public key; only the private-key holder can decrypt:
+
+        ```bash
+        age -r age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8j \
+            -o backup.tar.gz.age backup.tar.gz
+        age -d -i ~/.age/key.txt -o backup.tar.gz backup.tar.gz.age   # decrypt
+        ```
+
+        **GPG** (classic, widespread) does the same:
+
+        ```bash
+        gpg --encrypt --recipient backup@example.com -o backup.tar.gz.gpg backup.tar.gz
+        gpg --decrypt backup.tar.gz.gpg > backup.tar.gz                 # decrypt
+        ```
+
+        | Criterion | age | GPG |
+        |---|---|---|
+        | Simplicity | very simple | more complex (keyring) |
+        | Key format | short, one line | keys and subkeys |
+        | Recommended use | new projects | existing ecosystems |
+
+        The key principle is **public-key encryption**: the backup server needs **only** the public key to
+        encrypt. The private key, which alone decrypts, stays off the server (on an admin workstation or in a
+        vault). So even if compromised, the server cannot decrypt its own backups.
+  - heading:
+      fr: "Intégrité et rotation"
+      en: "Integrity and rotation"
+    body:
+      fr: |
+        Une archive peut se corrompre (disque défaillant, transfert interrompu). Une **somme de contrôle**
+        `sha256` permet de le détecter à la restauration :
+
+        ```bash
+        sha256sum backup.tar.gz.age > backup.tar.gz.age.sha256   # record the fingerprint
+        sha256sum -c backup.tar.gz.age.sha256                    # verify later: OK or FAILED
+        ```
+
+        Si un seul octet change, la vérification échoue : on sait alors que la sauvegarde est inutilisable
+        **avant** d'en avoir besoin en urgence.
+
+        La **rotation** évite de saturer le disque. On garde les N dernières sauvegardes et on supprime les
+        plus anciennes. La forme sûre utilise `find` avec `-mtime` (âge en jours) :
+
+        ```bash
+        # Delete encrypted backups older than 14 days. -print shows what is removed.
+        find /backups -name '*.tar.gz.age' -type f -mtime +14 -print -delete
+        ```
+
+        Attention : testez toujours la rotation d'abord **sans** `-delete` (avec `-print` seul) pour vérifier
+        la liste. Supprimer les mauvaises sauvegardes est aussi grave que ne pas en avoir. Enfin, la règle d'or
+        du métier est le **3-2-1** : au moins 3 copies, sur 2 supports différents, dont 1 hors site. Une
+        sauvegarde locale non testée n'est pas une vraie sauvegarde : planifiez des **restaurations d'essai**.
+      en: |
+        An archive can become corrupt (failing disk, interrupted transfer). A `sha256` **checksum** lets you
+        detect this at restore time:
+
+        ```bash
+        sha256sum backup.tar.gz.age > backup.tar.gz.age.sha256   # record the fingerprint
+        sha256sum -c backup.tar.gz.age.sha256                    # verify later: OK or FAILED
+        ```
+
+        If a single byte changes, verification fails: you then know the backup is unusable **before** you need
+        it in an emergency.
+
+        **Rotation** avoids filling the disk. You keep the last N backups and delete the oldest. The safe form
+        uses `find` with `-mtime` (age in days):
+
+        ```bash
+        # Delete encrypted backups older than 14 days. -print shows what is removed.
+        find /backups -name '*.tar.gz.age' -type f -mtime +14 -print -delete
+        ```
+
+        Careful: always test rotation first **without** `-delete` (with `-print` only) to check the list.
+        Deleting the wrong backups is as bad as having none. Finally, the industry golden rule is **3-2-1**: at
+        least 3 copies, on 2 different media, 1 of them off-site. An untested local backup is not a real
+        backup: schedule **test restores**.
+
+examples:
+  - title:
+      fr: "Archiver et chiffrer avec age"
+      en: "Archiving and encrypting with age"
+    file: backup-encrypt.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      umask 077                     # new files readable by owner only, from the start
+
+      src="/srv/data"
+      dest_dir="/backups"
+      recipient="age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8j"
+      stamp="$(date +%F_%H%M%S)"
+      archive="$dest_dir/data-$stamp.tar.gz.age"
+
+      # mktemp gives an unpredictable name: no symlink hijack in /tmp.
+      tmp="$(mktemp)"
+      # Clean the temp file whatever happens (success, error, Ctrl-C).
+      trap 'rm -f "$tmp"' EXIT
+
+      # Build the archive, then encrypt to the recipient's public key.
+      tar -czf "$tmp" -C "$(dirname "$src")" "$(basename "$src")"
+      age -r "$recipient" -o "$archive" "$tmp"
+
+      echo "Backup written: $archive ($(du -h "$archive" | cut -f1))"
+    output: |
+      Backup written: /backups/data-2026-11-27_021500.tar.gz.age (184M)
+    note:
+      fr: "`umask 077` et `mktemp` protègent les fichiers temporaires. Le `trap ... EXIT` garantit le nettoyage même en cas d'erreur ou d'interruption. Seule la clé publique est sur le serveur : il ne peut pas déchiffrer ses propres sauvegardes."
+      en: "`umask 077` and `mktemp` protect temporary files. The `trap ... EXIT` guarantees cleanup even on error or interruption. Only the public key is on the server: it cannot decrypt its own backups."
+
+  - title:
+      fr: "Version dangereuse : sauvegarde en clair et nom prévisible"
+      en: "Dangerous version: clear-text backup with a predictable name"
+    file: backup-bad.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # ANTI-PATTERN on several counts. Do NOT use this in production.
+
+      # 1. No strict mode: errors are ignored, a failed tar still "succeeds".
+      # 2. Fixed temp name: another user can pre-create /tmp/backup.tar as a
+      #    symlink to a sensitive file (symlink attack).
+      tar -czf /tmp/backup.tar /srv/data
+
+      # 3. The archive is NOT encrypted: anyone with the disk reads the data.
+      cp /tmp/backup.tar /mnt/usb/backup.tar
+
+      # 4. No checksum, no rotation: corruption is invisible, the disk fills up.
+      echo "Backup done"           # printed even if tar or cp failed
+    output: |
+      Backup done
+    note:
+      fr: "Quatre fautes cumulées : pas de mode strict, nom temporaire fixe (attaque par lien symbolique), données en clair, ni somme de contrôle ni rotation. Ce script peut afficher « done » sans qu'aucune donnée exploitable n'existe."
+      en: "Four compounded faults: no strict mode, fixed temp name (symlink attack), clear-text data, no checksum and no rotation. This script can print 'done' without any usable data existing."
+
+  - title:
+      fr: "Le script de sauvegarde complet"
+      en: "The complete backup script"
+    file: secure-backup.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Encrypted, checksummed, rotated backup. Fails loudly on any error.
+      set -euo pipefail
+      umask 077
+
+      # --- Configuration ---
+      SRC="${1:-/srv/data}"
+      DEST="/backups"
+      RECIPIENT="age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8j"
+      RETENTION_DAYS=14
+      STAMP="$(date +%F_%H%M%S)"
+      ARCHIVE="$DEST/$(basename "$SRC")-$STAMP.tar.gz.age"
+
+      log()  { echo "[$(date +%T)] $*" >&2; }
+      fail() { echo "[$(date +%T)] ERROR: $*" >&2; exit 1; }
+
+      [[ -d "$SRC"  ]] || fail "source not found: $SRC"
+      [[ -d "$DEST" ]] || fail "destination not found: $DEST"
+
+      tmp="$(mktemp)"
+      trap 'rm -f "$tmp"' EXIT     # always remove the clear-text temp archive
+
+      # 1. Archive (compressed) into the temp file
+      log "Archiving $SRC"
+      tar -czf "$tmp" -C "$(dirname "$SRC")" "$(basename "$SRC")" \
+          || fail "tar failed"
+
+      # 2. Encrypt the archive to the recipient's public key
+      log "Encrypting to $ARCHIVE"
+      age -r "$RECIPIENT" -o "$ARCHIVE" "$tmp" || fail "encryption failed"
+
+      # 3. Checksum for later integrity verification
+      sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+      log "Checksum: $(cut -d' ' -f1 "$ARCHIVE.sha256")"
+
+      # 4. Verify we can read it back (fail now, not during a disaster)
+      sha256sum -c "$ARCHIVE.sha256" >/dev/null || fail "checksum verification failed"
+
+      # 5. Rotate: remove encrypted backups older than RETENTION_DAYS
+      log "Rotating backups older than $RETENTION_DAYS days"
+      find "$DEST" -name '*.tar.gz.age' -type f -mtime "+$RETENTION_DAYS" -print -delete
+      find "$DEST" -name '*.sha256'      -type f -mtime "+$RETENTION_DAYS" -delete
+
+      log "Backup OK: $ARCHIVE"
+    output: |
+      [02:15:00] Archiving /srv/data
+      [02:15:41] Encrypting to /backups/data-2026-11-27_021500.tar.gz.age
+      [02:15:48] Checksum: 9f2c1a7b4e...c3
+      [02:15:49] Rotating backups older than 14 days
+      /backups/data-2026-11-12_021500.tar.gz.age
+      [02:15:49] Backup OK: /backups/data-2026-11-27_021500.tar.gz.age
+    note:
+      fr: "Chaque étape échoue bruyamment (`|| fail ...`) : impossible de prétendre un succès sans archive valide. La vérification `sha256sum -c` confirme qu'on peut relire la sauvegarde, et la rotation ne supprime que les fichiers chiffrés anciens, après les avoir listés."
+      en: "Every step fails loudly (`|| fail ...`): impossible to claim success without a valid archive. The `sha256sum -c` check confirms the backup is readable, and rotation deletes only old encrypted files, after listing them."
+
+  - title:
+      fr: "Restaurer et vérifier une sauvegarde"
+      en: "Restoring and verifying a backup"
+    file: restore.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      archive="${1:?usage: restore.sh <backup.tar.gz.age> <dest-dir>}"
+      dest="${2:?usage: restore.sh <backup.tar.gz.age> <dest-dir>}"
+      key="$HOME/.age/key.txt"
+
+      # 1. Verify integrity BEFORE trusting the data.
+      if [[ -f "$archive.sha256" ]]; then
+          sha256sum -c "$archive.sha256" || { echo "Corrupt archive!" >&2; exit 1; }
+      fi
+
+      # 2. Decrypt with the private key, then extract into the destination.
+      age -d -i "$key" "$archive" | tar -xzf - -C "$dest"
+      echo "Restored $archive into $dest"
+    output: |
+      $ ./restore.sh /backups/data-2026-11-27_021500.tar.gz.age /tmp/restore
+      data-2026-11-27_021500.tar.gz.age: OK
+      Restored /backups/data-2026-11-27_021500.tar.gz.age into /tmp/restore
+    note:
+      fr: "On vérifie la somme de contrôle **avant** de faire confiance aux données. Le déchiffrement utilise la clé **privée** (`-i`), absente du serveur de sauvegarde. Une restauration d'essai régulière prouve que la chaîne complète fonctionne."
+      en: "You verify the checksum **before** trusting the data. Decryption uses the **private** key (`-i`), which is absent from the backup server. A regular test restore proves the whole chain works."
+
+mistake:
+  fr: |
+    **Sauvegarder en clair, avec un nom de fichier temporaire prévisible, et ne jamais tester la restauration.**
+
+    Trois erreurs qui se cumulent souvent. Une sauvegarde **non chiffrée** expose toutes les données dès que
+    le support (disque, NAS, bucket cloud) est accessible : le chiffrement par clé publique est indispensable.
+    Un fichier temporaire **à nom fixe** (`/tmp/backup.tar`) peut être détourné par un autre utilisateur via un
+    lien symbolique : utilisez toujours `mktemp`. Enfin, une sauvegarde **jamais restaurée** n'est qu'une
+    hypothèse : le jour de l'incident, on découvre qu'elle est corrompue, incomplète ou impossible à
+    déchiffrer. Planifiez des restaurations d'essai et vérifiez les sommes de contrôle.
+  en: |
+    **Backing up in clear text, with a predictable temp file name, and never testing the restore.**
+
+    Three mistakes that often compound. An **unencrypted** backup exposes all data as soon as the medium
+    (disk, NAS, cloud bucket) is accessible: public-key encryption is essential. A temp file with a **fixed
+    name** (`/tmp/backup.tar`) can be hijacked by another user via a symlink: always use `mktemp`. Finally, a
+    backup that is **never restored** is only a hypothesis: on the day of the incident, you discover it is
+    corrupt, incomplete or impossible to decrypt. Schedule test restores and verify checksums.
+
+bestPractice:
+  fr: |
+    - **Chiffrez par clé publique** (age ou GPG) : seule la clé publique est sur le serveur, la privée reste
+      hors ligne.
+    - **Posez `umask 077`** et créez les temporaires avec `mktemp` ; nettoyez-les avec `trap ... EXIT`.
+    - **Ajoutez une somme de contrôle** `sha256` et vérifiez-la (`sha256sum -c`) pour détecter toute
+      corruption.
+    - **Faites tourner les sauvegardes** avec `find -mtime`, testées d'abord sans `-delete`.
+    - **Échouez bruyamment** : chaque étape en `|| fail`, sortie non nulle, jamais de faux « succès ».
+    - **Appliquez la règle 3-2-1** et **testez vos restaurations** régulièrement : une sauvegarde non
+      restaurée n'existe pas.
+  en: |
+    - **Encrypt with a public key** (age or GPG): only the public key is on the server, the private one stays
+      offline.
+    - **Set `umask 077`** and create temp files with `mktemp`; clean them with `trap ... EXIT`.
+    - **Add a `sha256` checksum** and verify it (`sha256sum -c`) to detect any corruption.
+    - **Rotate backups** with `find -mtime`, tested first without `-delete`.
+    - **Fail loudly**: each step with `|| fail`, non-zero exit, never a false "success".
+    - **Apply the 3-2-1 rule** and **test your restores** regularly: an unrestored backup does not exist.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez au script de sauvegarde une étape de **vérification de l'espace disque** avant de commencer :
+      si l'espace libre sur `/backups` est inférieur à **2 Go**, le script doit écrire un message d'erreur sur
+      stderr et sortir avec `exit 1`, sans créer d'archive.
+
+      Indice : `df --output=avail -k /backups | tail -1` donne l'espace libre en kilo-octets. Convertissez le
+      seuil de 2 Go en kilo-octets (2 * 1024 * 1024) et comparez avec `(( ... ))`.
+    en: |
+      Add a **disk-space check** step to the backup script before it starts: if the free space on `/backups`
+      is below **2 GB**, the script must write an error message to stderr and exit with `exit 1`, without
+      creating an archive.
+
+      Hint: `df --output=avail -k /backups | tail -1` gives the free space in kilobytes. Convert the 2 GB
+      threshold to kilobytes (2 * 1024 * 1024) and compare with `(( ... ))`.
+  solution:
+    file: check-space.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      dest="/backups"
+      min_kb=$(( 2 * 1024 * 1024 ))     # 2 GB expressed in kilobytes
+
+      # df --output=avail -k prints available KB; tail -1 drops the header line.
+      avail_kb="$(df --output=avail -k "$dest" | tail -1 | tr -d ' ')"
+
+      if (( avail_kb < min_kb )); then
+          echo "ERROR: only ${avail_kb}KB free on $dest, need ${min_kb}KB" >&2
+          exit 1
+      fi
+
+      echo "Space OK: ${avail_kb}KB free"
+    note:
+      fr: "On lit l'espace libre avec `df --output=avail -k`, on retire l'en-tête avec `tail -1` et les espaces avec `tr -d ' '`. La comparaison `(( avail_kb < min_kb ))` bloque la sauvegarde avant de remplir le disque, un échec fréquent des crons de sauvegarde."
+      en: "You read free space with `df --output=avail -k`, drop the header with `tail -1` and spaces with `tr -d ' '`. The `(( avail_kb < min_kb ))` comparison blocks the backup before filling the disk, a frequent failure of backup crons."
+
+quiz:
+  - q:
+      fr: "Pourquoi chiffrer une sauvegarde avec une clé publique (age/GPG) ?"
+      en: "Why encrypt a backup with a public key (age/GPG)?"
+    options:
+      fr:
+        - "Pour que le serveur de sauvegarde ne puisse pas déchiffrer ses propres archives"
+        - "Pour compresser davantage"
+        - "Pour accélérer la sauvegarde"
+        - "Pour éviter d'utiliser tar"
+      en:
+        - "So the backup server cannot decrypt its own archives"
+        - "To compress more"
+        - "To speed up the backup"
+        - "To avoid using tar"
+    answer: 0
+    why:
+      fr: "Seule la clé publique est sur le serveur : il peut chiffrer mais pas déchiffrer. La clé privée reste hors ligne, donc un serveur compromis ne révèle pas les données sauvegardées."
+      en: "Only the public key is on the server: it can encrypt but not decrypt. The private key stays offline, so a compromised server does not reveal the backed-up data."
+  - q:
+      fr: "Pourquoi utiliser `mktemp` plutôt qu'un nom de fichier temporaire fixe ?"
+      en: "Why use `mktemp` rather than a fixed temp file name?"
+    options:
+      fr:
+        - "Parce que c'est plus court à écrire"
+        - "Pour éviter qu'un autre utilisateur ne détourne le fichier via un lien symbolique"
+        - "Parce que tar l'exige"
+        - "Pour chiffrer le fichier"
+      en:
+        - "Because it is shorter to write"
+        - "To stop another user hijacking the file via a symlink"
+        - "Because tar requires it"
+        - "To encrypt the file"
+    answer: 1
+    why:
+      fr: "Un nom prévisible comme `/tmp/backup.tar` peut être pré-créé par un attaquant en lien symbolique vers un fichier sensible. `mktemp` génère un nom imprévisible et sûr."
+      en: "A predictable name like `/tmp/backup.tar` can be pre-created by an attacker as a symlink to a sensitive file. `mktemp` generates an unpredictable, safe name."
+  - q:
+      fr: "À quoi sert `sha256sum -c` sur une sauvegarde ?"
+      en: "What is `sha256sum -c` used for on a backup?"
+    options:
+      fr:
+        - "À chiffrer l'archive"
+        - "À compresser l'archive"
+        - "À vérifier que l'archive n'a pas été corrompue"
+        - "À supprimer les anciennes archives"
+      en:
+        - "To encrypt the archive"
+        - "To compress the archive"
+        - "To verify the archive has not been corrupted"
+        - "To delete old archives"
+    answer: 2
+    why:
+      fr: "`sha256sum -c` recalcule l'empreinte et la compare à celle enregistrée : si un octet a changé, la vérification échoue, révélant une corruption avant la restauration d'urgence."
+      en: "`sha256sum -c` recomputes the fingerprint and compares it to the recorded one: if a byte changed, verification fails, revealing corruption before the emergency restore."
+  - q:
+      fr: "Que décrit la règle de sauvegarde 3-2-1 ?"
+      en: "What does the 3-2-1 backup rule describe?"
+    options:
+      fr:
+        - "3 scripts, 2 serveurs, 1 administrateur"
+        - "3 copies, sur 2 supports différents, dont 1 hors site"
+        - "3 jours, 2 semaines, 1 mois de rétention"
+        - "3 chiffrements successifs"
+      en:
+        - "3 scripts, 2 servers, 1 administrator"
+        - "3 copies, on 2 different media, 1 of them off-site"
+        - "3 days, 2 weeks, 1 month of retention"
+        - "3 successive encryptions"
+    answer: 1
+    why:
+      fr: "La règle 3-2-1 : au moins 3 copies des données, sur 2 types de supports différents, dont 1 conservée hors site, pour survivre à la perte d'un lieu ou d'un support."
+      en: "The 3-2-1 rule: at least 3 copies of the data, on 2 different media types, 1 of them kept off-site, to survive the loss of a location or a medium."
+  - q:
+      fr: "Avant d'activer une rotation avec `find -delete`, que faut-il faire ?"
+      en: "Before enabling rotation with `find -delete`, what should you do?"
+    options:
+      fr:
+        - "Tester d'abord avec `-print` seul pour vérifier la liste des fichiers visés"
+        - "Supprimer tout le dossier"
+        - "Désactiver le mode strict"
+        - "Chiffrer les fichiers une seconde fois"
+      en:
+        - "Test first with `-print` only to check the list of targeted files"
+        - "Delete the whole folder"
+        - "Disable strict mode"
+        - "Encrypt the files a second time"
+    answer: 0
+    why:
+      fr: "Supprimer les mauvaises sauvegardes est aussi grave que ne pas en avoir. On vérifie d'abord la liste avec `-print` seul, puis on ajoute `-delete` une fois certain du périmètre."
+      en: "Deleting the wrong backups is as bad as having none. You first check the list with `-print` only, then add `-delete` once sure of the scope."

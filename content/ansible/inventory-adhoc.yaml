@@ -1,0 +1,404 @@
+description:
+  fr: "Décrire son parc de machines dans un inventaire Ansible et lancer des commandes ad hoc sécurisées sans écrire le moindre playbook."
+  en: "Describe your fleet of machines in an Ansible inventory and run secure ad-hoc commands without writing a single playbook."
+duration: 30
+
+intro:
+  fr: |
+    **Ansible** est un outil d'automatisation *sans agent* : il n'installe rien sur les serveurs à gérer,
+    il s'y connecte simplement en **SSH** et exécute des modules Python. La première chose à lui apprendre,
+    c'est *où* sont vos machines : c'est le rôle de l'**inventaire** (*inventory* en anglais).
+
+    Imaginez un carnet d'adresses. Au lieu de retenir l'IP de chaque serveur, vous les rangez dans des
+    groupes (`web`, `db`, `prod`) et vous dites ensuite « déploie sur le groupe `web` ». Une **commande
+    ad hoc** (*ad hoc command*) est une action unique lancée en une ligne, sans fichier, par exemple
+    « redémarre nginx partout » ou « montre-moi l'espace disque ».
+
+    Dans cette leçon vous allez écrire votre premier inventaire, le vérifier, puis lancer des commandes
+    ad hoc en lecture seule puis avec privilèges, toujours en vérifiant d'abord avec `--check`.
+  en: |
+    **Ansible** is an *agentless* automation tool: it installs nothing on the servers it manages, it simply
+    connects over **SSH** and runs Python modules. The first thing to teach it is *where* your machines
+    are: that is the job of the **inventory**.
+
+    Picture an address book. Instead of memorising each server's IP, you file them into groups (`web`,
+    `db`, `prod`) and then say "deploy to the `web` group". An **ad-hoc command** is a single action
+    launched in one line, with no file, for example "restart nginx everywhere" or "show me the disk space".
+
+    In this lesson you will write your first inventory, verify it, then run ad-hoc commands read-only and
+    then with privileges, always checking first with `--check`.
+
+sections:
+  - heading:
+      fr: "L'inventaire : INI ou YAML"
+      en: "The inventory: INI or YAML"
+    body:
+      fr: |
+        Un inventaire liste les hôtes et les range en **groupes**. Deux formats coexistent :
+
+        | Format | Extension | Quand l'utiliser |
+        |---|---|---|
+        | INI | `inventory.ini` | Petits inventaires, lisible rapidement |
+        | YAML | `inventory.yml` | Variables complexes, groupes imbriqués |
+
+        Deux groupes existent toujours sans qu'on les déclare : **`all`** (tous les hôtes) et
+        **`ungrouped`** (les hôtes sans groupe). Les variables propres à un hôte vont dans
+        `host_vars/<hote>.yml`, celles d'un groupe dans `group_vars/<groupe>.yml` : on sépare ainsi la
+        *configuration* des *adresses*.
+      en: |
+        An inventory lists hosts and files them into **groups**. Two formats coexist:
+
+        | Format | Extension | When to use it |
+        |---|---|---|
+        | INI | `inventory.ini` | Small inventories, quick to read |
+        | YAML | `inventory.yml` | Complex variables, nested groups |
+
+        Two groups always exist without being declared: **`all`** (every host) and **`ungrouped`** (hosts
+        with no group). Variables for a single host go in `host_vars/<host>.yml`, those for a group in
+        `group_vars/<group>.yml`: this keeps the *configuration* separate from the *addresses*.
+  - heading:
+      fr: "ansible.cfg et la connexion SSH"
+      en: "ansible.cfg and the SSH connection"
+    body:
+      fr: |
+        Le fichier **`ansible.cfg`** placé à la racine du projet règle le comportement par défaut :
+        quel inventaire utiliser, quel utilisateur SSH, où trouver la clé privée. Le poser dans le projet
+        (et non dans `/etc`) rend l'automatisation reproductible et versionnée dans Git.
+
+        Ansible se connecte avec votre **clé SSH**, jamais avec un mot de passe stocké en clair. Pour les
+        actions qui exigent les droits root (installer un paquet, modifier un service), on ajoute
+        l'élévation de privilèges **`become`**, qui utilise `sudo` sur la cible. On ne se connecte donc
+        jamais directement en `root` : on se connecte en utilisateur normal, puis on *devient* root pour
+        la seule tâche qui le nécessite.
+      en: |
+        The **`ansible.cfg`** file at the project root sets the default behaviour: which inventory to use,
+        which SSH user, where to find the private key. Putting it in the project (not in `/etc`) makes the
+        automation reproducible and versioned in Git.
+
+        Ansible connects with your **SSH key**, never with a clear-text stored password. For actions that
+        require root (installing a package, changing a service), you add privilege escalation **`become`**,
+        which uses `sudo` on the target. So you never connect directly as `root`: you connect as a normal
+        user, then *become* root only for the one task that needs it.
+  - heading:
+      fr: "Commandes ad hoc"
+      en: "Ad-hoc commands"
+    body:
+      fr: |
+        Une commande ad hoc suit toujours la forme `ansible <cible> -m <module> -a "<arguments>"`.
+
+        | Module | Rôle | Idempotent |
+        |---|---|---|
+        | `ansible.builtin.ping` | Tester la connexion (ce n'est pas un ping ICMP) | oui |
+        | `ansible.builtin.setup` | Collecter les *facts* (OS, IP, RAM...) | oui |
+        | `ansible.builtin.command` | Lancer une commande sans shell (sûr) | non |
+        | `ansible.builtin.shell` | Lancer via un shell (pipes, `>`), à éviter | non |
+        | `ansible.builtin.service` | Démarrer/arrêter un service | oui |
+
+        Préférez toujours `command` à `shell` : `shell` interprète les métacaractères (`;`, `|`, `$`) et
+        ouvre la porte à l'injection de commande si un argument vient d'une variable non maîtrisée. Et avant
+        toute action qui modifie l'état, lancez-la avec `--check` pour simuler sans rien changer.
+      en: |
+        An ad-hoc command always follows the form `ansible <target> -m <module> -a "<arguments>"`.
+
+        | Module | Purpose | Idempotent |
+        |---|---|---|
+        | `ansible.builtin.ping` | Test the connection (not an ICMP ping) | yes |
+        | `ansible.builtin.setup` | Gather *facts* (OS, IP, RAM...) | yes |
+        | `ansible.builtin.command` | Run a command with no shell (safe) | no |
+        | `ansible.builtin.shell` | Run through a shell (pipes, `>`), avoid | no |
+        | `ansible.builtin.service` | Start/stop a service | yes |
+
+        Always prefer `command` over `shell`: `shell` interprets metacharacters (`;`, `|`, `$`) and opens
+        the door to command injection if an argument comes from an untrusted variable. And before any state
+        changing action, run it with `--check` to simulate without changing anything.
+
+examples:
+  - title:
+      fr: "Un inventaire INI avec groupes et variables"
+      en: "An INI inventory with groups and variables"
+    file: inventory.ini
+    lang: ini
+    kind: neutral
+    code: |
+      # One host per line: an alias, then its real address via ansible_host
+      [web]
+      web1 ansible_host=192.0.2.11
+      web2 ansible_host=192.0.2.12
+
+      [db]
+      db1 ansible_host=192.0.2.21
+
+      # A "group of groups": "prod" contains every host of web and db
+      [prod:children]
+      web
+      db
+
+      # Variables applied to the whole prod group (connection identity)
+      [prod:vars]
+      ansible_user=deploy
+      # Never disable host key checking in real life; keep SSH verifying the server
+      ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new
+    note:
+      fr: "`ansible_host` sépare l'alias lisible (`web1`) de l'adresse réelle. Le groupe `prod:children` évite de répéter les hôtes. `accept-new` mémorise la clé au premier contact mais refuse ensuite tout changement."
+      en: "`ansible_host` separates the readable alias (`web1`) from the real address. The `prod:children` group avoids repeating hosts. `accept-new` memorises the key on first contact but then refuses any change."
+
+  - title:
+      fr: "Le même inventaire en YAML, plus ansible.cfg"
+      en: "The same inventory in YAML, plus ansible.cfg"
+    file: inventory.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      all:
+        children:
+          web:
+            hosts:
+              web1:
+                ansible_host: 192.0.2.11
+              web2:
+                ansible_host: 192.0.2.12
+          db:
+            hosts:
+              db1:
+                ansible_host: 192.0.2.21
+          prod:
+            children:
+              web:
+              db:
+            vars:
+              ansible_user: deploy
+    output: |
+      # ansible.cfg (project root, versioned in Git)
+      [defaults]
+      inventory = inventory.yml
+      remote_user = deploy
+      private_key_file = ~/.ssh/deploy_ed25519
+      host_key_checking = True
+      # Readable, machine-parsable output
+      stdout_callback = yaml
+    note:
+      fr: "Le YAML brille dès que les variables se complexifient. `host_key_checking = True` garde la vérification de l'empreinte du serveur active : c'est la protection contre une attaque de l'intercepteur."
+      en: "YAML shines as soon as variables get complex. `host_key_checking = True` keeps the server fingerprint check on: that is the protection against a man-in-the-middle attack."
+
+  - title:
+      fr: "Vérifier l'inventaire et tester la connexion"
+      en: "Check the inventory and test the connection"
+    file: check.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. List what Ansible actually understands from the inventory (catches typos)
+      ansible-inventory --graph
+
+      # 2. Test connectivity to every host of the "web" group (SSH + Python)
+      ansible web -m ansible.builtin.ping
+
+      # 3. Gather a single fact: the OS family, read-only and safe
+      ansible web -m ansible.builtin.setup -a "filter=ansible_os_family"
+    output: |
+      @all:
+        |--@prod:
+        |  |--@web:
+        |  |  |--web1
+        |  |  |--web2
+        |  |--@db:
+        |  |  |--db1
+      web1 | SUCCESS => {"ping": "pong"}
+      web2 | SUCCESS => {"ping": "pong"}
+    note:
+      fr: "`ansible-inventory --graph` affiche l'arbre résolu : un hôte mal placé se voit tout de suite. Le module `ping` renvoie `pong` quand SSH **et** Python répondent sur la cible."
+      en: "`ansible-inventory --graph` prints the resolved tree: a misplaced host shows up immediately. The `ping` module returns `pong` when SSH **and** Python both answer on the target."
+
+  - title:
+      fr: "Commandes ad hoc : lecture seule puis action avec --check"
+      en: "Ad-hoc commands: read-only then an action with --check"
+    file: adhoc.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Read-only: free disk space on all production hosts (command, not shell)
+      ansible prod -m ansible.builtin.command -a "df -h /"
+
+      # Dry run FIRST: simulate installing nginx, change nothing (-C = --check)
+      # become (-b) elevates to root via sudo only for this task
+      ansible web -b -m ansible.builtin.apt -a "name=nginx state=present" --check
+
+      # Once the dry run looks right, run it for real (drop --check)
+      ansible web -b -m ansible.builtin.apt -a "name=nginx state=present"
+
+      # Restart a service safely: the service module is idempotent
+      ansible web -b -m ansible.builtin.service -a "name=nginx state=restarted"
+    output: |
+      web1 | CHANGED => {"changed": true, "cache_update_time": 0}
+      web2 | CHANGED => {"changed": true, "cache_update_time": 0}
+    note:
+      fr: "`--check` simule : la sortie montre `CHANGED` sans rien modifier. On relance ensuite sans l'option. `become` (`-b`) n'élève les droits que pour la tâche, on ne se connecte jamais en root."
+      en: "`--check` simulates: the output shows `CHANGED` without changing anything. You then re-run without the flag. `become` (`-b`) elevates privileges only for the task; you never connect as root."
+
+mistake:
+  fr: |
+    **Désactiver la vérification de la clé d'hôte avec `host_key_checking = False` pour « que ça marche ».**
+
+    C'est le réflexe le plus répandu et le plus dangereux. En coupant cette vérification, Ansible accepte
+    n'importe quel serveur se présentant à l'IP attendue : un attaquant qui détourne le trafic peut se faire
+    passer pour votre cible et récupérer vos commandes privilégiées. Gardez la vérification active et
+    utilisez `accept-new` pour accepter automatiquement une empreinte *inconnue* uniquement au premier
+    contact, sans jamais accepter un *changement* d'empreinte.
+  en: |
+    **Disabling host key checking with `host_key_checking = False` just "to make it work".**
+
+    This is the most common and most dangerous reflex. By turning that check off, Ansible accepts any
+    server presenting itself at the expected IP: an attacker who hijacks the traffic can impersonate your
+    target and capture your privileged commands. Keep the check on and use `accept-new`, which auto-accepts
+    an *unknown* fingerprint only on first contact, while still refusing any *change* of fingerprint.
+
+bestPractice:
+  fr: |
+    - **Versionnez** `ansible.cfg` et l'inventaire dans Git, à la racine du projet.
+    - **Connexion par clé SSH**, utilisateur non-root, `become` seulement pour les tâches privilégiées.
+    - **`ansible-inventory --graph`** pour valider l'inventaire avant de lancer quoi que ce soit.
+    - **`command` plutôt que `shell`** ; n'utilisez `shell` que si vous avez réellement besoin d'un pipe.
+    - **`--check` d'abord** sur toute commande qui modifie l'état.
+    - **`host_key_checking = True`** : ne coupez jamais la vérification de l'empreinte du serveur.
+  en: |
+    - **Version** `ansible.cfg` and the inventory in Git, at the project root.
+    - **SSH key connection**, non-root user, `become` only for privileged tasks.
+    - **`ansible-inventory --graph`** to validate the inventory before running anything.
+    - **`command` rather than `shell`**; use `shell` only when you truly need a pipe.
+    - **`--check` first** on any command that changes state.
+    - **`host_key_checking = True`**: never turn off the server fingerprint check.
+
+exercise:
+  statement:
+    fr: |
+      Vous gérez trois serveurs : deux serveurs d'application (`app1` sur `192.0.2.31`, `app2` sur
+      `192.0.2.32`) et un serveur de supervision (`mon1` sur `192.0.2.41`). Les trois se connectent avec
+      l'utilisateur `deploy`.
+
+      1. Écrivez un inventaire INI avec un groupe `app`, un groupe `monitoring`, et un groupe parent
+         `infra` qui contient les deux, en fixant `ansible_user=deploy` pour tout `infra`.
+      2. Donnez la commande ad hoc qui teste la connexion à tout le groupe `infra`.
+    en: |
+      You manage three servers: two application servers (`app1` on `192.0.2.31`, `app2` on `192.0.2.32`)
+      and one monitoring server (`mon1` on `192.0.2.41`). All three connect as user `deploy`.
+
+      1. Write an INI inventory with an `app` group, a `monitoring` group, and a parent group `infra`
+         containing both, setting `ansible_user=deploy` for all of `infra`.
+      2. Give the ad-hoc command that tests connectivity to the whole `infra` group.
+  solution:
+    file: solution.ini
+    lang: ini
+    code: |
+      [app]
+      app1 ansible_host=192.0.2.31
+      app2 ansible_host=192.0.2.32
+
+      [monitoring]
+      mon1 ansible_host=192.0.2.41
+
+      # Parent group gathering both sub-groups
+      [infra:children]
+      app
+      monitoring
+
+      # Shared connection identity for every host under infra
+      [infra:vars]
+      ansible_user=deploy
+
+      # Ad-hoc connectivity test (run from the shell):
+      #   ansible infra -i solution.ini -m ansible.builtin.ping
+    note:
+      fr: "Le groupe `infra:children` rassemble `app` et `monitoring` ; `infra:vars` applique `ansible_user` aux cinq... pardon, aux trois hôtes d'un coup. `ansible infra -m ansible.builtin.ping` teste tout."
+      en: "The `infra:children` group gathers `app` and `monitoring`; `infra:vars` applies `ansible_user` to all three hosts at once. `ansible infra -m ansible.builtin.ping` tests everything."
+
+quiz:
+  - q:
+      fr: "Pourquoi dit-on qu'Ansible est « sans agent » (agentless) ?"
+      en: "Why is Ansible said to be \"agentless\"?"
+    options:
+      fr:
+        - "Parce qu'il n'installe aucun logiciel permanent sur les machines gérées, il passe par SSH"
+        - "Parce qu'il ne fonctionne que sur la machine locale"
+        - "Parce qu'il remplace l'administrateur système"
+        - "Parce qu'il n'a pas besoin de Python"
+      en:
+        - "Because it installs no permanent software on the managed machines, it uses SSH"
+        - "Because it only works on the local machine"
+        - "Because it replaces the system administrator"
+        - "Because it does not need Python"
+    answer: 0
+    why:
+      fr: "Ansible se connecte en SSH et exécute des modules Python à la volée : rien de permanent n'est installé sur les cibles (Python y est en revanche nécessaire)."
+      en: "Ansible connects over SSH and runs Python modules on the fly: nothing permanent is installed on the targets (Python is still required there)."
+  - q:
+      fr: "Quel groupe contient automatiquement tous les hôtes de l'inventaire ?"
+      en: "Which group automatically contains every host in the inventory?"
+    options:
+      fr:
+        - "`everyone`"
+        - "`default`"
+        - "`all`"
+        - "`hosts`"
+      en:
+        - "`everyone`"
+        - "`default`"
+        - "`all`"
+        - "`hosts`"
+    answer: 2
+    why:
+      fr: "`all` existe toujours sans être déclaré ; `ungrouped` contient les hôtes sans groupe explicite."
+      en: "`all` always exists without being declared; `ungrouped` holds hosts with no explicit group."
+  - q:
+      fr: "Pourquoi préférer `ansible.builtin.command` à `ansible.builtin.shell` ?"
+      en: "Why prefer `ansible.builtin.command` over `ansible.builtin.shell`?"
+    options:
+      fr:
+        - "`command` est plus rapide à écrire"
+        - "`command` n'interprète pas les métacaractères du shell, réduisant le risque d'injection"
+        - "`shell` ne fonctionne pas sous Linux"
+        - "`command` peut utiliser des pipes `|`"
+      en:
+        - "`command` is faster to type"
+        - "`command` does not interpret shell metacharacters, reducing injection risk"
+        - "`shell` does not work on Linux"
+        - "`command` can use `|` pipes"
+    answer: 1
+    why:
+      fr: "`shell` passe par un shell qui interprète `;`, `|`, `$` ; `command` exécute directement, sans cette surface d'injection (mais ne gère pas les pipes)."
+      en: "`shell` goes through a shell that interprets `;`, `|`, `$`; `command` runs directly, without that injection surface (but it cannot handle pipes)."
+  - q:
+      fr: "Que fait l'option `--check` sur une commande ad hoc ?"
+      en: "What does the `--check` flag do on an ad-hoc command?"
+    options:
+      fr:
+        - "Elle vérifie la syntaxe du fichier d'inventaire"
+        - "Elle affiche la version d'Ansible"
+        - "Elle chiffre la connexion"
+        - "Elle simule l'action sans rien modifier sur la cible"
+      en:
+        - "It checks the syntax of the inventory file"
+        - "It prints the Ansible version"
+        - "It encrypts the connection"
+        - "It simulates the action without changing anything on the target"
+    answer: 3
+    why:
+      fr: "`--check` est le mode « essai à blanc » : Ansible rapporte ce qui changerait, mais n'applique rien."
+      en: "`--check` is the \"dry run\" mode: Ansible reports what would change, but applies nothing."
+  - q:
+      fr: "À quoi sert `become` (`-b`) dans une commande ad hoc ?"
+      en: "What is `become` (`-b`) for in an ad-hoc command?"
+    options:
+      fr:
+        - "À se connecter directement en tant que root par SSH"
+        - "À élever les privilèges via sudo seulement pour la tâche exécutée"
+        - "À changer de serveur cible"
+        - "À activer le chiffrement des variables"
+      en:
+        - "To connect directly as root over SSH"
+        - "To elevate privileges via sudo only for the task being run"
+        - "To switch the target server"
+        - "To enable variable encryption"
+    answer: 1
+    why:
+      fr: "On se connecte en utilisateur normal puis `become` utilise sudo pour la seule tâche privilégiée : on évite ainsi la connexion root directe."
+      en: "You connect as a normal user, then `become` uses sudo for the one privileged task: this avoids a direct root login."

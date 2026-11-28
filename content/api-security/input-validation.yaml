@@ -1,0 +1,394 @@
+description:
+  fr: "Valider rigoureusement les entrées d'une API avec des schémas : Pydantic et Zod, OpenAPI 3.1, prévention du mass assignment et limites de pagination."
+  en: "Rigorously validate API inputs with schemas: Pydantic and Zod, OpenAPI 3.1, mass-assignment prevention and pagination limits."
+duration: 22
+
+intro:
+  fr: |
+    Toute donnée venant d'un client est **hostile jusqu'à preuve du contraire**. Un champ trop long, un type
+    inattendu, un champ en trop : chacun peut faire planter l'API, corrompre des données ou ouvrir une faille. La
+    **validation des entrées** est le filtre à l'entrée du système, et la façon la plus fiable de la faire est de
+    déclarer un **schéma** et de rejeter tout ce qui n'y correspond pas.
+
+    L'analogie : la validation, c'est le formulaire administratif avec des cases au format imposé. Si on demande
+    une date au format `JJ/MM/AAAA` et un code postal à 5 chiffres, on refuse tout ce qui ne rentre pas dans les
+    cases — au lieu d'accepter « n'importe quoi » et de devoir le nettoyer après coup. Déclarer le format attendu
+    une fois, puis laisser une bibliothèque vérifier, est bien plus sûr que des `if` éparpillés.
+
+    Dans cette leçon, vous allez valider des entrées avec **Pydantic** (Python) et **Zod** (TypeScript), décrire
+    le contrat d'API avec **OpenAPI 3.1**, puis fermer deux failles sournoises : le **mass assignment** (laisser
+    le client écrire des champs qu'il ne devrait pas, comme `role: admin`) et l'absence de **limite de
+    pagination** qui permet d'aspirer toute la base en une requête.
+  en: |
+    Any data coming from a client is **hostile until proven otherwise**. A too-long field, an unexpected type, an
+    extra field: each can crash the API, corrupt data or open a flaw. **Input validation** is the filter at the
+    system's entrance, and the most reliable way to do it is to declare a **schema** and reject anything that
+    does not match.
+
+    The analogy: validation is the official form with fixed-format boxes. If you ask for a date in `DD/MM/YYYY`
+    and a 5-digit postcode, you refuse anything that does not fit the boxes — instead of accepting "whatever" and
+    having to clean it up afterward. Declaring the expected format once, then letting a library check it, is far
+    safer than scattered `if`s.
+
+    In this lesson you will validate inputs with **Pydantic** (Python) and **Zod** (TypeScript), describe the API
+    contract with **OpenAPI 3.1**, then close two sneaky flaws: **mass assignment** (letting the client write
+    fields they should not, like `role: admin`) and the missing **pagination limit** that lets someone siphon the
+    whole database in one request.
+
+sections:
+  - heading:
+      fr: "Valider avec un schéma, pas des if"
+      en: "Validate with a schema, not with ifs"
+    body:
+      fr: |
+        Valider à la main (`if not isinstance(...)`, `if len(...) > ...`) est fastidieux et plein d'oublis. Les
+        bibliothèques de validation par **schéma** déclarent le format attendu une fois et rejettent
+        automatiquement tout le reste :
+
+        | Outil | Écosystème | Rôle |
+        |---|---|---|
+        | **Pydantic** | Python (FastAPI) | Modèles typés, validation + coercition |
+        | **Zod** | TypeScript (Node) | Schémas typés, inférence de types |
+        | **OpenAPI 3.1** | Agnostique | Contrat d'API, validable côté serveur **et** client |
+
+        Un bon schéma précise, pour chaque champ : le **type**, s'il est **obligatoire**, et ses **contraintes**
+        (longueur min/max, format email, intervalle numérique, motif regex). Il **rejette** une entrée non
+        conforme avec un message clair et un code `422`/`400`, avant qu'elle n'atteigne la logique métier. La règle
+        d'or : **valider en liste blanche** (ce qui est explicitement autorisé), jamais en liste noire (tenter
+        d'interdire ce qui est mauvais, qu'on n'anticipe jamais complètement).
+      en: |
+        Validating by hand (`if not isinstance(...)`, `if len(...) > ...`) is tedious and full of gaps. **Schema**
+        validation libraries declare the expected format once and automatically reject everything else:
+
+        | Tool | Ecosystem | Role |
+        |---|---|---|
+        | **Pydantic** | Python (FastAPI) | Typed models, validation + coercion |
+        | **Zod** | TypeScript (Node) | Typed schemas, type inference |
+        | **OpenAPI 3.1** | Agnostic | API contract, validatable server-side **and** client-side |
+
+        A good schema specifies, for each field: the **type**, whether it is **required**, and its **constraints**
+        (min/max length, email format, numeric range, regex pattern). It **rejects** a non-compliant input with a
+        clear message and a `422`/`400` code, before it reaches the business logic. The golden rule: **validate
+        with an allowlist** (what is explicitly permitted), never a denylist (trying to forbid what is bad, which
+        you never fully anticipate).
+  - heading:
+      fr: "Mass assignment et limites de pagination"
+      en: "Mass assignment and pagination limits"
+    body:
+      fr: |
+        Deux pièges méritent une attention particulière :
+
+        **Le mass assignment** (API3 de l'OWASP) : quand on construit un objet en recopiant *tout* le JSON reçu
+        dans un modèle, le client peut injecter des champs qu'il ne devrait pas contrôler. S'il envoie
+        `{"email": "...", "role": "admin"}` et que le code fait `User(**data)`, l'attaquant se promeut
+        administrateur. La parade : un schéma qui **n'autorise que les champs attendus** (et rejette les champs en
+        trop), et des modèles **séparés** pour l'entrée (ce que le client peut écrire) et pour la sortie.
+
+        **La pagination** : un endpoint `GET /items` qui renvoie *tous* les éléments est une bombe — à la fois
+        pour les performances et comme vecteur d'exfiltration. On impose une **taille de page maximale** (ex.
+        `limit ≤ 100`) et on valide que `limit` et `offset` sont des entiers positifs bornés. Sans cela, un
+        `?limit=10000000` peut saturer la base et la mémoire.
+      en: |
+        Two traps deserve special attention:
+
+        **Mass assignment** (OWASP API3): when you build an object by copying *all* the received JSON into a
+        model, the client can inject fields they should not control. If they send `{"email": "...", "role":
+        "admin"}` and the code does `User(**data)`, the attacker promotes themselves to admin. The fix: a schema
+        that **only allows the expected fields** (and rejects extra ones), and **separate** models for input (what
+        the client may write) and output.
+
+        **Pagination**: a `GET /items` endpoint that returns *all* items is a bomb — both for performance and as
+        an exfiltration vector. You enforce a **maximum page size** (e.g. `limit ≤ 100`) and validate that `limit`
+        and `offset` are bounded positive integers. Without this, a `?limit=10000000` can saturate the database
+        and memory.
+
+examples:
+  - title:
+      fr: "Vulnérable : mass assignment, aucune validation"
+      en: "Vulnerable: mass assignment, no validation"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - trusts and copies the whole request body.
+      from flask import Flask, request, jsonify
+
+      app = Flask(__name__)
+      DB = {}
+
+
+      @app.post("/users")
+      def create_user():
+          data = request.get_json(force=True)
+          # DANGER: every field the client sends becomes a user attribute.
+          # Sending {"email": "...", "role": "admin"} makes them admin.
+          user = {**data}                 # mass assignment
+          DB[data["email"]] = user
+          return jsonify(user), 201
+
+      # The attacker simply adds a field the server never meant to expose:
+      #   POST /users {"email":"evil@example.com","role":"admin","credits":99999}
+    output: |
+      # The privileged fields are accepted verbatim:
+      #   201 Created
+      #   {"email":"evil@example.com","role":"admin","credits":99999}
+    note:
+      fr: "`{**data}` recopie tout le JSON du client dans l'objet utilisateur : il suffit d'ajouter `role: admin` ou `credits: 99999` pour se promouvoir. C'est le mass assignment (API3). Aucun contrôle de type ni de champ n'est effectué."
+      en: "`{**data}` copies the client's whole JSON into the user object: just add `role: admin` or `credits: 99999` to self-promote. This is mass assignment (API3). No type or field check is performed."
+
+  - title:
+      fr: "Sécurisé : Pydantic (liste blanche + contraintes)"
+      en: "Secure: Pydantic (allowlist + constraints)"
+    file: app_secure.py
+    lang: python
+    kind: secure
+    code: |
+      from fastapi import FastAPI
+      from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+      app = FastAPI()
+
+
+      # Input model: ONLY the fields a client is allowed to set.
+      class UserCreate(BaseModel):
+          # Reject any field not declared here (no role, no credits...).
+          model_config = ConfigDict(extra="forbid")
+          email: EmailStr
+          name: str = Field(min_length=1, max_length=80)
+          age: int = Field(ge=0, le=120)          # bounded integer
+
+
+      # Output model: what we expose back (role set by the server, not client).
+      class UserOut(BaseModel):
+          email: EmailStr
+          name: str
+          role: str
+
+
+      @app.post("/users", response_model=UserOut, status_code=201)
+      def create_user(payload: UserCreate):
+          # The server decides the role; the client cannot influence it.
+          return UserOut(email=payload.email, name=payload.name, role="user")
+    output: |
+      # Sending a forbidden field is rejected with 422, not silently kept:
+      #   POST /users {"email":"evil@example.com","name":"x","role":"admin"}
+      #   422 Unprocessable Entity
+      #   {"detail":[{"loc":["body","role"],"msg":"Extra inputs are not permitted"}]}
+    note:
+      fr: "`extra=\"forbid\"` rejette tout champ non déclaré : le `role: admin` injecté provoque un `422`. Les contraintes (`EmailStr`, `min_length`, `ge/le`) valident chaque champ. Des modèles d'entrée et de sortie séparés empêchent le client de fixer `role`."
+      en: "`extra=\"forbid\"` rejects any undeclared field: the injected `role: admin` triggers a `422`. The constraints (`EmailStr`, `min_length`, `ge/le`) validate each field. Separate input and output models stop the client from setting `role`."
+
+  - title:
+      fr: "Sécurisé : Zod (TypeScript) + pagination bornée"
+      en: "Secure: Zod (TypeScript) + bounded pagination"
+    file: validate.ts
+    lang: typescript
+    kind: secure
+    code: |
+      import { z } from "zod";
+
+      // Input schema: strict() rejects unexpected fields (anti mass-assignment).
+      const UserCreate = z
+        .object({
+          email: z.string().email(),
+          name: z.string().min(1).max(80),
+          age: z.number().int().min(0).max(120),
+        })
+        .strict();
+
+      // Pagination: cap the page size so nobody can pull the whole table.
+      const Pagination = z.object({
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        offset: z.coerce.number().int().min(0).default(0),
+      });
+
+      // Usage in an Express handler:
+      function createUser(body: unknown) {
+        const result = UserCreate.safeParse(body);
+        if (!result.success) {
+          return { status: 422, errors: result.error.issues };
+        }
+        // result.data is fully typed and safe to use.
+        return { status: 201, user: { ...result.data, role: "user" } };
+      }
+
+      console.log(createUser({ email: "e@example.com", name: "Al", age: 30, role: "admin" }));
+    output: |
+      // The extra "role" field is rejected:
+      // { status: 422, errors: [ { code: 'unrecognized_keys', keys: ['role'] } ] }
+      // And ?limit=9999999 is clamped by the schema to max 100.
+    note:
+      fr: "`.strict()` de Zod rejette les champs inconnus (anti mass-assignment), et le schéma de pagination borne `limit` à 100 maximum. `safeParse` renvoie une erreur structurée (`422`) sans lever d'exception, et `result.data` est typé en toute sécurité."
+      en: "Zod's `.strict()` rejects unknown fields (anti mass-assignment), and the pagination schema caps `limit` at 100. `safeParse` returns a structured error (`422`) without throwing, and `result.data` is safely typed."
+
+  - title:
+      fr: "Sécurisé : le contrat en OpenAPI 3.1"
+      en: "Secure: the contract in OpenAPI 3.1"
+    file: openapi.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      openapi: 3.1.0
+      info: { title: Users API, version: "1.0.0" }
+      paths:
+        /users:
+          post:
+            requestBody:
+              required: true
+              content:
+                application/json:
+                  schema: { $ref: "#/components/schemas/UserCreate" }
+            responses:
+              "201": { description: Created }
+              "422": { description: Validation error }
+      components:
+        schemas:
+          UserCreate:
+            type: object
+            # Reject any field not listed here (anti mass-assignment).
+            additionalProperties: false
+            required: [email, name, age]
+            properties:
+              email: { type: string, format: email }
+              name:  { type: string, minLength: 1, maxLength: 80 }
+              age:   { type: integer, minimum: 0, maximum: 120 }
+    output: |
+      # A request validator (e.g. a gateway or middleware) rejects, per
+      # this contract, any body with an extra field or out-of-range value:
+      #   422 Unprocessable Entity
+    note:
+      fr: "`additionalProperties: false` est l'équivalent OpenAPI de la liste blanche : seuls `email`, `name`, `age` sont acceptés. Le contrat devient la source de vérité, validable automatiquement côté serveur (middleware, passerelle) et utilisable pour générer clients et tests."
+      en: "`additionalProperties: false` is the OpenAPI equivalent of allowlisting: only `email`, `name`, `age` are accepted. The contract becomes the source of truth, automatically validatable server-side (middleware, gateway) and usable to generate clients and tests."
+
+mistake:
+  fr: |
+    **Recopier tout le corps de la requête dans un objet (`User(**data)`, `{...body}`).** C'est la porte ouverte
+    au mass assignment : le client peut glisser `role`, `is_admin`, `balance` ou tout autre champ sensible. Il
+    faut **une liste blanche** stricte (`extra=\"forbid\"`, `.strict()`, `additionalProperties: false`) et des
+    modèles séparés entrée/sortie. Autre oubli fréquent : ne pas borner la **pagination**, laissant un `?limit=…`
+    arbitraire aspirer toute la base. Enfin, valider **uniquement côté client** (dans le navigateur) ne protège
+    rien : un attaquant appelle l'API directement. La validation doit **toujours** être faite côté serveur.
+  en: |
+    **Copying the whole request body into an object (`User(**data)`, `{...body}`).** This is the open door to
+    mass assignment: the client can slip in `role`, `is_admin`, `balance` or any other sensitive field. You need
+    a strict **allowlist** (`extra=\"forbid\"`, `.strict()`, `additionalProperties: false`) and separate
+    input/output models. Another frequent oversight: not bounding **pagination**, letting an arbitrary `?limit=…`
+    siphon the whole database. Finally, validating **only client-side** (in the browser) protects nothing: an
+    attacker calls the API directly. Validation must **always** be done server-side.
+
+bestPractice:
+  fr: |
+    - **Validez par schéma, en liste blanche** : n'acceptez que les champs explicitement déclarés, rejetez le reste.
+    - **Séparez les modèles entrée/sortie** pour empêcher le client de fixer des champs comme `role` (anti mass-assignment).
+    - **Contraignez chaque champ** : type, obligatoire/optionnel, longueurs, intervalles, format.
+    - **Bornez la pagination** : `limit` plafonné (ex. ≤ 100), `offset` positif, valeurs entières.
+    - **Validez côté serveur**, toujours : la validation navigateur n'est qu'un confort, pas une sécurité.
+  en: |
+    - **Validate by schema, with an allowlist**: accept only explicitly declared fields, reject the rest.
+    - **Separate input/output models** to stop the client from setting fields like `role` (anti mass-assignment).
+    - **Constrain every field**: type, required/optional, lengths, ranges, format.
+    - **Bound pagination**: capped `limit` (e.g. ≤ 100), positive `offset`, integer values.
+    - **Validate server-side**, always: browser validation is a convenience, not security.
+
+exercise:
+  statement:
+    fr: |
+      Cet endpoint FastAPI est vulnérable au mass assignment et n'impose aucune contrainte :
+
+      ```python
+      @app.post("/accounts")
+      def create(data: dict):
+          return save(data)   # copies everything, including "balance"
+      ```
+
+      Écrivez un modèle **Pydantic** qui n'accepte **que** `email` (format email) et `username` (1 à 30
+      caractères), rejette tout champ supplémentaire, et empêche donc le client de fixer `balance` ou `role`.
+    en: |
+      This FastAPI endpoint is vulnerable to mass assignment and enforces no constraints:
+
+      ```python
+      @app.post("/accounts")
+      def create(data: dict):
+          return save(data)   # copies everything, including "balance"
+      ```
+
+      Write a **Pydantic** model that accepts **only** `email` (email format) and `username` (1 to 30
+      characters), rejects any extra field, and thus stops the client from setting `balance` or `role`.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      from fastapi import FastAPI
+      from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+      app = FastAPI()
+
+
+      class AccountCreate(BaseModel):
+          # Reject any field not listed -> balance/role are refused.
+          model_config = ConfigDict(extra="forbid")
+          email: EmailStr
+          username: str = Field(min_length=1, max_length=30)
+
+
+      @app.post("/accounts", status_code=201)
+      def create(payload: AccountCreate):
+          # Only the allowlisted, validated fields reach the business logic.
+          # The server sets any privileged field itself (e.g. balance=0).
+          return save({"email": payload.email, "username": payload.username,
+                       "balance": 0})
+    note:
+      fr: "`extra=\"forbid\"` bloque tout champ non déclaré : envoyer `balance` ou `role` renvoie `422`. Seuls `email` (validé) et `username` (1-30 car.) sont acceptés ; le serveur fixe lui-même `balance`, hors de portée du client."
+      en: "`extra=\"forbid\"` blocks any undeclared field: sending `balance` or `role` returns `422`. Only `email` (validated) and `username` (1-30 chars) are accepted; the server sets `balance` itself, out of the client's reach."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que le mass assignment ?"
+      en: "What is mass assignment?"
+    options:
+      fr: ["Copier tout le corps de la requête dans un objet, laissant le client écrire des champs interdits", "Chiffrer plusieurs champs à la fois", "Envoyer beaucoup de requêtes", "Valider côté client"]
+      en: ["Copying the whole request body into an object, letting the client write forbidden fields", "Encrypting several fields at once", "Sending many requests", "Validating client-side"]
+    answer: 0
+    why:
+      fr: "Le mass assignment (API3) survient quand on recopie tout le JSON reçu dans un modèle : le client peut injecter des champs sensibles comme `role: admin`."
+      en: "Mass assignment (API3) happens when you copy all received JSON into a model: the client can inject sensitive fields like `role: admin`."
+  - q:
+      fr: "Quelle approche de validation est recommandée ?"
+      en: "Which validation approach is recommended?"
+    options:
+      fr: ["Liste noire : interdire ce qui est mauvais", "Aucune validation", "Liste blanche : n'accepter que ce qui est explicitement autorisé", "Valider seulement dans le navigateur"]
+      en: ["Denylist: forbid what is bad", "No validation", "Allowlist: accept only what is explicitly permitted", "Validate only in the browser"]
+    answer: 2
+    why:
+      fr: "La liste blanche n'accepte que les champs et valeurs déclarés, fermant les cas imprévus ; la liste noire laisse toujours passer ce qu'on n'a pas anticipé."
+      en: "The allowlist accepts only declared fields and values, closing unforeseen cases; the denylist always lets through what you did not anticipate."
+  - q:
+      fr: "Que fait `extra=\"forbid\"` (Pydantic) ou `.strict()` (Zod) ?"
+      en: "What does `extra=\"forbid\"` (Pydantic) or `.strict()` (Zod) do?"
+    options:
+      fr: ["Rejette tout champ non déclaré dans le schéma", "Chiffre les champs", "Augmente la limite de pagination", "Désactive la validation"]
+      en: ["Rejects any field not declared in the schema", "Encrypts fields", "Raises the pagination limit", "Disables validation"]
+    answer: 0
+    why:
+      fr: "Ces options refusent les champs inattendus, ce qui bloque le mass assignment : un `role` ou `balance` injecté provoque une erreur de validation."
+      en: "These options reject unexpected fields, blocking mass assignment: an injected `role` or `balance` triggers a validation error."
+  - q:
+      fr: "Pourquoi borner la taille de page (`limit`) d'un endpoint de liste ?"
+      en: "Why bound the page size (`limit`) of a list endpoint?"
+    options:
+      fr: ["Pour chiffrer la réponse", "Pour éviter qu'un `?limit` énorme sature la base et serve d'exfiltration", "Pour accélérer l'authentification", "Pour imposer HTTPS"]
+      en: ["To encrypt the response", "To stop a huge `?limit` from saturating the database and enabling exfiltration", "To speed up authentication", "To enforce HTTPS"]
+    answer: 1
+    why:
+      fr: "Sans plafond, `?limit=10000000` peut épuiser mémoire et base, et permet d'aspirer toutes les données en une requête ; on impose donc une taille maximale."
+      en: "Without a cap, `?limit=10000000` can exhaust memory and the database, and lets someone siphon all data in one request; so you enforce a maximum size."
+  - q:
+      fr: "La validation uniquement côté client (navigateur) suffit-elle ?"
+      en: "Is client-side-only validation (browser) sufficient?"
+    options:
+      fr: ["Oui, c'est suffisant", "Oui, si le site est en HTTPS", "Non, un attaquant appelle l'API directement ; il faut valider côté serveur", "Non, il faut aussi chiffrer le JSON"]
+      en: ["Yes, it is enough", "Yes, if the site uses HTTPS", "No, an attacker calls the API directly; you must validate server-side", "No, you must also encrypt the JSON"]
+    answer: 2
+    why:
+      fr: "La validation navigateur est contournable en appelant l'API directement (curl, script) ; seule la validation côté serveur protège réellement."
+      en: "Browser validation is bypassed by calling the API directly (curl, script); only server-side validation truly protects."

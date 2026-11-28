@@ -1,0 +1,334 @@
+description:
+  fr: "Authentifier une API avec les bonnes méthodes : clés d'API, OAuth2 client credentials, validation stricte des JWT et mTLS, avec leurs usages respectifs."
+  en: "Authenticate an API with the right methods: API keys, OAuth2 client credentials, strict JWT validation and mTLS, with their respective uses."
+duration: 25
+
+intro:
+  fr: |
+    Avant de décider *ce qu'un appelant a le droit de faire* (autorisation), une API doit savoir *qui* l'appelle
+    (authentification). Se tromper ici, c'est laisser la porte ouverte : une API mal authentifiée est la faille
+    **API2** de l'OWASP. Mais toutes les méthodes ne se valent pas, et chacune a son terrain.
+
+    L'analogie : authentifier un appel d'API, c'est contrôler une identité à l'entrée. Une **clé d'API**, c'est un
+    badge nominatif — pratique mais à protéger. Un **jeton OAuth2**, c'est un bracelet d'accès temporaire remis par
+    un comptoir officiel. Un **JWT** mal vérifié, c'est un badge qu'on accepte sans regarder s'il est authentique.
+    Le **mTLS**, c'est quand les deux parties montrent leur carte d'identité : le client *et* le serveur se
+    prouvent mutuellement qui ils sont.
+
+    Dans cette leçon, vous allez comparer ces quatre méthodes, voir un **JWT validé à la va-vite** (vulnérable) vs
+    une **validation stricte** (signature, algorithme, émetteur, audience, expiration), obtenir un jeton par le
+    flux **OAuth2 client credentials** (machine à machine), et comprendre quand chaque méthode s'impose.
+  en: |
+    Before deciding *what a caller may do* (authorization), an API must know *who* is calling (authentication).
+    Getting this wrong leaves the door open: a poorly authenticated API is OWASP's **API2** flaw. But not all
+    methods are equal, and each has its place.
+
+    The analogy: authenticating an API call is checking an identity at the entrance. An **API key** is a named
+    badge — handy but to be protected. An **OAuth2 token** is a temporary wristband handed out by an official
+    desk. A badly checked **JWT** is a badge you accept without verifying it is genuine. **mTLS** is when both
+    parties show their ID card: the client *and* the server prove who they are to each other.
+
+    In this lesson you will compare these four methods, see a **sloppily validated JWT** (vulnerable) vs a
+    **strict validation** (signature, algorithm, issuer, audience, expiry), obtain a token via the **OAuth2 client
+    credentials** flow (machine-to-machine), and understand when each method is the right choice.
+
+sections:
+  - heading:
+      fr: "Quatre méthodes, quatre usages"
+      en: "Four methods, four uses"
+    body:
+      fr: |
+        Chaque méthode d'authentification répond à un besoin précis :
+
+        | Méthode | Qui s'authentifie | Idéal pour | Point de vigilance |
+        |---|---|---|---|
+        | **Clé d'API** | Le client (secret statique) | Accès simple, quotas, partenaires | Fuite = accès total, à faire tourner |
+        | **OAuth2 (client credentials)** | Une application (machine à machine) | Services internes, intégrations | Jetons courts, scopes limités |
+        | **JWT** | Un utilisateur/service (jeton signé) | Sessions sans état, microservices | **Validation stricte** obligatoire |
+        | **mTLS** | Client **et** serveur (certificats) | Zero trust, services critiques | Gestion des certificats (PKI) |
+
+        La clé d'API est la plus simple mais la plus fragile (un secret unique qui donne tout). OAuth2 et JWT sont
+        le standard moderne pour les applications. Le mTLS offre la plus forte garantie — authentification
+        **mutuelle** — au prix d'une infrastructure de certificats à gérer. On choisit selon le niveau de risque :
+        une API publique de météo n'a pas les mêmes besoins qu'une API bancaire interne.
+      en: |
+        Each authentication method answers a specific need:
+
+        | Method | Who authenticates | Ideal for | Watch out for |
+        |---|---|---|---|
+        | **API key** | The client (static secret) | Simple access, quotas, partners | Leak = full access, must be rotated |
+        | **OAuth2 (client credentials)** | An application (machine-to-machine) | Internal services, integrations | Short tokens, limited scopes |
+        | **JWT** | A user/service (signed token) | Stateless sessions, microservices | **Strict validation** mandatory |
+        | **mTLS** | Client **and** server (certificates) | Zero trust, critical services | Certificate management (PKI) |
+
+        The API key is the simplest but the most fragile (a single secret that grants everything). OAuth2 and JWT
+        are the modern standard for applications. mTLS gives the strongest guarantee — **mutual** authentication —
+        at the cost of a certificate infrastructure to manage. You choose by risk level: a public weather API has
+        different needs than an internal banking API.
+  - heading:
+      fr: "Valider un JWT correctement"
+      en: "Validating a JWT correctly"
+    body:
+      fr: |
+        Un **JWT** (*JSON Web Token*) est un jeton signé composé de trois parties : en-tête, charge utile (*claims*)
+        et signature. Le danger : un JWT se **lit** sans aucune clé (la charge utile est juste du base64). Beaucoup
+        de code *décode* le token et fait confiance à son contenu **sans vérifier la signature** — autant accepter
+        n'importe quel badge.
+
+        Une validation stricte vérifie **toutes** ces conditions :
+
+        1. **La signature** avec la clé publique de l'émetteur (et le bon **algorithme**).
+        2. **L'algorithme** : on **impose** `RS256`/`ES256` attendu et on rejette `none` et le passage HS/RS.
+        3. **`iss`** (issuer) : le jeton vient-il de l'émetteur attendu ?
+        4. **`aud`** (audience) : le jeton est-il destiné à *cette* API ?
+        5. **`exp`** (expiration) : le jeton est-il encore valide ? (et `nbf`, `iat`)
+
+        Omettre une seule de ces vérifications ouvre une faille : accepter l'algorithme `none` permet de forger un
+        jeton sans signature ; ne pas vérifier `aud` permet de réutiliser un jeton émis pour une autre API.
+      en: |
+        A **JWT** (*JSON Web Token*) is a signed token made of three parts: header, payload (*claims*) and
+        signature. The danger: a JWT can be **read** without any key (the payload is just base64). Much code
+        *decodes* the token and trusts its content **without verifying the signature** — like accepting any badge.
+
+        Strict validation checks **all** these conditions:
+
+        1. **The signature** with the issuer's public key (and the right **algorithm**).
+        2. **The algorithm**: you **enforce** the expected `RS256`/`ES256` and reject `none` and HS/RS confusion.
+        3. **`iss`** (issuer): does the token come from the expected issuer?
+        4. **`aud`** (audience): is the token meant for *this* API?
+        5. **`exp`** (expiry): is the token still valid? (and `nbf`, `iat`)
+
+        Omitting a single check opens a flaw: accepting the `none` algorithm lets an attacker forge an unsigned
+        token; not checking `aud` lets a token issued for another API be reused.
+
+examples:
+  - title:
+      fr: "Vulnérable : JWT décodé sans vérification"
+      en: "Vulnerable: JWT decoded without verification"
+    file: auth_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - trusts the token's content without verifying it.
+      import jwt  # PyJWT
+
+      def get_user_from_token(token: str) -> dict:
+          # DANGER: decode WITHOUT the signature check. Anyone can craft a
+          # token with any claims; the payload is just base64, not proof.
+          claims = jwt.decode(token, options={"verify_signature": False})
+          # The server now trusts whatever the attacker put in "role".
+          return {"user": claims["sub"], "role": claims.get("role", "user")}
+
+      # An attacker forges a token locally with role=admin and no signature:
+      forged = jwt.encode({"sub": "evil", "role": "admin"}, "", algorithm="none")
+      print(get_user_from_token(forged))
+    output: |
+      {'user': 'evil', 'role': 'admin'}
+      # The forged, unsigned token is accepted as an admin. Total bypass.
+    note:
+      fr: "`verify_signature: False` (et accepter `none`) revient à faire confiance à un badge sans vérifier qu'il est authentique. Un attaquant forge un jeton `role: admin` en local et prend le contrôle. La charge utile d'un JWT n'est **pas** une preuve tant que la signature n'est pas vérifiée."
+      en: "`verify_signature: False` (and accepting `none`) is like trusting a badge without checking it is genuine. An attacker forges a `role: admin` token locally and takes over. A JWT's payload is **not** proof until the signature is verified."
+
+  - title:
+      fr: "Sécurisé : validation stricte du JWT"
+      en: "Secure: strict JWT validation"
+    file: auth_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import jwt  # PyJWT
+      from jwt import InvalidTokenError
+
+      # The issuer's PUBLIC key (fetched from its JWKS endpoint in real life).
+      PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMIIBIjAN...example...\n-----END PUBLIC KEY-----"
+      EXPECTED_ISSUER = "https://auth.example.com/"
+      EXPECTED_AUDIENCE = "https://api.example.com/invoices"
+
+      def get_user_from_token(token: str) -> dict:
+          try:
+              claims = jwt.decode(
+                  token,
+                  PUBLIC_KEY,
+                  algorithms=["RS256"],          # enforce algo: reject none/HS
+                  issuer=EXPECTED_ISSUER,        # check iss
+                  audience=EXPECTED_AUDIENCE,    # check aud (this API)
+                  options={                      # require these claims...
+                      "require": ["exp", "iss", "aud", "sub"],
+                      "verify_exp": True,        # ...and that it is not expired
+                  },
+              )
+          except InvalidTokenError as exc:
+              raise PermissionError(f"invalid token: {exc}") from exc
+          return {"user": claims["sub"], "role": claims.get("role", "user")}
+    output: |
+      # A forged / unsigned / expired / wrong-audience token now fails:
+      #   PermissionError: invalid token: Signature verification failed
+      #   PermissionError: invalid token: Invalid audience
+      #   PermissionError: invalid token: Signature has expired
+    note:
+      fr: "On vérifie la signature avec la clé publique, on **impose** `algorithms=[\"RS256\"]` (rejette `none`), et on contrôle `iss`, `aud` et `exp`. Les claims `require` garantissent leur présence. Un jeton forgé, expiré ou destiné à une autre API est rejeté."
+      en: "We verify the signature with the public key, **enforce** `algorithms=[\"RS256\"]` (rejecting `none`), and check `iss`, `aud` and `exp`. The `require` option guarantees the claims are present. A forged, expired or wrong-audience token is rejected."
+
+  - title:
+      fr: "Sécurisé : obtenir un jeton OAuth2 (client credentials)"
+      en: "Secure: get an OAuth2 token (client credentials)"
+    file: client_credentials.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # Machine-to-machine auth: a service gets a SHORT-LIVED token from the
+      # authorization server, then calls the API with it. No user involved.
+
+      # 1. Exchange client_id + client_secret for an access token.
+      TOKEN=$(curl -s -X POST https://auth.example.com/oauth/token \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=report-service" \
+        --data-urlencode "client_secret=changeme-in-vault" \
+        -d "scope=invoices:read" \
+        | jq -r .access_token)
+
+      # 2. Call the API using the token as a Bearer credential.
+      curl -s https://api.example.com/invoices \
+        -H "Authorization: Bearer $TOKEN"
+    output: |
+      # The token is scoped (invoices:read) and expires quickly:
+      # {"invoices": [{"id": 1023, "amount": 42.0}]}
+    note:
+      fr: "Le flux *client credentials* est fait pour l'authentification machine à machine : le service échange ses identifiants contre un **jeton court** limité à un `scope` précis. Le secret reste côté serveur (dans un coffre), jamais exposé au navigateur, et le jeton expire vite."
+      en: "The *client credentials* flow is built for machine-to-machine auth: the service exchanges its credentials for a **short-lived token** limited to a precise `scope`. The secret stays server-side (in a vault), never exposed to the browser, and the token expires quickly."
+
+mistake:
+  fr: |
+    **Décoder un JWT et faire confiance à son contenu sans vérifier la signature.** C'est l'erreur la plus grave
+    et la plus répandue : comme la charge utile d'un JWT se lit sans clé, on croit « connaître » l'utilisateur,
+    alors que n'importe qui peut forger un token avec `role: admin`. Variante tout aussi dangereuse : accepter
+    l'algorithme `none`, ou ne pas **imposer** l'algorithme attendu (ce qui permet l'attaque de confusion
+    RS256→HS256). Il faut toujours vérifier la signature **et** verrouiller l'algorithme, puis contrôler `iss`,
+    `aud` et `exp`. Enfin, ne transmettez jamais une clé d'API dans une URL (elle finit dans les logs) : utilisez
+    un en-tête `Authorization`.
+  en: |
+    **Decoding a JWT and trusting its content without verifying the signature.** This is the gravest and most
+    common mistake: because a JWT's payload reads without a key, you think you "know" the user, when anyone can
+    forge a token with `role: admin`. An equally dangerous variant: accepting the `none` algorithm, or not
+    **enforcing** the expected algorithm (which enables the RS256→HS256 confusion attack). Always verify the
+    signature **and** lock the algorithm, then check `iss`, `aud` and `exp`. Finally, never pass an API key in a
+    URL (it ends up in logs): use an `Authorization` header.
+
+bestPractice:
+  fr: |
+    - **Vérifiez toujours la signature** d'un JWT et **imposez l'algorithme** attendu (`RS256`/`ES256`), rejetez `none`.
+    - **Contrôlez `iss`, `aud`, `exp`** à chaque validation : l'émetteur, la destination et la fraîcheur du jeton.
+    - **Préférez des jetons courts** avec des `scope` limités au besoin (moindre privilège).
+    - **Protégez et faites tourner les clés d'API** ; transmettez-les en en-tête `Authorization`, jamais dans l'URL.
+    - **Réservez le mTLS** aux services critiques/zero trust où l'authentification mutuelle justifie la gestion d'une PKI.
+  en: |
+    - **Always verify a JWT's signature** and **enforce the expected algorithm** (`RS256`/`ES256`), reject `none`.
+    - **Check `iss`, `aud`, `exp`** on every validation: the issuer, the destination and the token's freshness.
+    - **Prefer short-lived tokens** with `scope`s limited to need (least privilege).
+    - **Protect and rotate API keys**; pass them in an `Authorization` header, never in the URL.
+    - **Reserve mTLS** for critical/zero-trust services where mutual authentication justifies managing a PKI.
+
+exercise:
+  statement:
+    fr: |
+      Un microservice valide ses JWT ainsi :
+
+      ```python
+      claims = jwt.decode(token, PUBLIC_KEY, algorithms=["RS256", "none"])
+      ```
+
+      1. Identifiez **deux** problèmes de sécurité dans cette ligne.
+      2. Réécrivez-la pour une validation stricte imposant l'émetteur `https://auth.example.com/`, l'audience
+         `https://api.example.com/`, et l'expiration.
+    en: |
+      A microservice validates its JWTs like this:
+
+      ```python
+      claims = jwt.decode(token, PUBLIC_KEY, algorithms=["RS256", "none"])
+      ```
+
+      1. Identify **two** security problems in this line.
+      2. Rewrite it for strict validation enforcing issuer `https://auth.example.com/`, audience
+         `https://api.example.com/`, and expiry.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      # Problems:
+      #  1. "none" is in the allowed algorithms -> an attacker can submit an
+      #     unsigned token and bypass the signature check entirely.
+      #  2. No issuer/audience/expiry checks -> a token from another issuer,
+      #     meant for another API, or already expired would be accepted.
+
+      import jwt
+      from jwt import InvalidTokenError
+
+      try:
+          claims = jwt.decode(
+              token,
+              PUBLIC_KEY,
+              algorithms=["RS256"],                       # no "none"
+              issuer="https://auth.example.com/",         # check iss
+              audience="https://api.example.com/",        # check aud
+              options={"require": ["exp", "iss", "aud"], "verify_exp": True},
+          )
+      except InvalidTokenError as exc:
+          raise PermissionError(f"invalid token: {exc}") from exc
+    note:
+      fr: "Problème 1 : `none` autorisé permet un jeton non signé. Problème 2 : ni `iss`, ni `aud`, ni `exp` contrôlés. La correction impose `RS256` seul et vérifie l'émetteur, l'audience et l'expiration."
+      en: "Problem 1: allowing `none` permits an unsigned token. Problem 2: no `iss`, `aud` or `exp` checks. The fix enforces `RS256` only and verifies the issuer, audience and expiry."
+
+quiz:
+  - q:
+      fr: "Pourquoi ne faut-il pas faire confiance à la charge utile d'un JWT sans vérifier sa signature ?"
+      en: "Why must you not trust a JWT's payload without verifying its signature?"
+    options:
+      fr: ["Parce qu'elle est chiffrée", "Parce qu'elle est en base64 et peut être forgée par n'importe qui", "Parce qu'elle est trop longue", "Parce qu'elle expire trop vite"]
+      en: ["Because it is encrypted", "Because it is base64 and can be forged by anyone", "Because it is too long", "Because it expires too fast"]
+    answer: 1
+    why:
+      fr: "La charge utile d'un JWT est seulement encodée en base64, lisible et modifiable sans clé ; seule la vérification de la signature prouve son authenticité."
+      en: "A JWT's payload is only base64-encoded, readable and modifiable without a key; only verifying the signature proves its authenticity."
+  - q:
+      fr: "Pourquoi faut-il imposer l'algorithme attendu (et rejeter `none`) ?"
+      en: "Why must you enforce the expected algorithm (and reject `none`)?"
+    options:
+      fr: ["Pour accélérer la validation", "Pour empêcher un jeton forgé non signé ou l'attaque de confusion d'algorithme", "Pour réduire la taille du jeton", "Pour chiffrer la charge utile"]
+      en: ["To speed up validation", "To prevent a forged unsigned token or the algorithm-confusion attack", "To reduce token size", "To encrypt the payload"]
+    answer: 1
+    why:
+      fr: "Accepter `none` permet un jeton sans signature ; ne pas verrouiller l'algorithme ouvre l'attaque RS256→HS256. Imposer l'algorithme attendu ferme ces deux failles."
+      en: "Accepting `none` permits an unsigned token; not locking the algorithm opens the RS256→HS256 attack. Enforcing the expected algorithm closes both flaws."
+  - q:
+      fr: "À quoi sert la vérification du claim `aud` (audience) ?"
+      en: "What is the purpose of checking the `aud` (audience) claim?"
+    options:
+      fr: ["S'assurer que le jeton est destiné à cette API précise", "Mesurer la taille du jeton", "Chiffrer le jeton", "Compter les utilisateurs"]
+      en: ["Ensure the token is intended for this specific API", "Measure the token size", "Encrypt the token", "Count the users"]
+    answer: 0
+    why:
+      fr: "`aud` indique à quelle API le jeton est destiné ; le vérifier empêche de réutiliser sur votre API un jeton émis pour un autre service."
+      en: "`aud` states which API the token is meant for; checking it prevents reusing on your API a token issued for another service."
+  - q:
+      fr: "Pour quelle situation le flux OAuth2 client credentials est-il conçu ?"
+      en: "What situation is the OAuth2 client credentials flow designed for?"
+    options:
+      fr: ["La connexion d'un utilisateur humain", "L'authentification machine à machine entre services", "Le chiffrement des disques", "La rotation des certificats TLS"]
+      en: ["A human user login", "Machine-to-machine authentication between services", "Disk encryption", "TLS certificate rotation"]
+    answer: 1
+    why:
+      fr: "Le flux client credentials sert quand une application s'authentifie elle-même (sans utilisateur) pour obtenir un jeton court et limité à un scope, typiquement entre microservices."
+      en: "The client credentials flow is used when an application authenticates itself (no user) to get a short-lived, scope-limited token, typically between microservices."
+  - q:
+      fr: "Quel est l'avantage distinctif du mTLS ?"
+      en: "What is the distinctive advantage of mTLS?"
+    options:
+      fr: ["Il supprime le besoin d'autorisation", "Il accélère l'API", "Le client et le serveur s'authentifient mutuellement par certificat", "Il rend les jetons inutiles partout"]
+      en: ["It removes the need for authorization", "It speeds up the API", "Client and server mutually authenticate via certificate", "It makes tokens useless everywhere"]
+    answer: 2
+    why:
+      fr: "Le mTLS impose que les deux extrémités présentent un certificat valide : l'authentification est mutuelle, idéale pour le zero trust, au prix d'une PKI à gérer."
+      en: "mTLS requires both ends to present a valid certificate: authentication is mutual, ideal for zero trust, at the cost of managing a PKI."

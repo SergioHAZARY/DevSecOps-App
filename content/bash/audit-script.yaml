@@ -1,0 +1,497 @@
+description:
+  fr: "Écrire un script Bash d'audit de sécurité complet pour Linux : comptes UID 0, mots de passe vides, fichiers SUID, ports en écoute, fichiers inscriptibles par tous et contrôles SSH."
+  en: "Write a complete Bash security audit script for Linux: UID 0 accounts, empty passwords, SUID files, listening ports, world-writable files and SSH checks."
+duration: 35
+
+intro:
+  fr: |
+    Auditer un serveur Linux, c'est répondre à une liste de questions précises : *y a-t-il un autre compte que
+    root avec les pleins pouvoirs ? un compte sans mot de passe ? des fichiers qui donnent les droits de root
+    quand on les lance ? quels ports écoutent le réseau ? SSH est-il bien configuré ?* Chacune se vérifie en
+    quelques commandes, et un bon script les rassemble en un **rapport** clair.
+
+    C'est l'équivalent d'une **ronde de sécurité** dans un bâtiment : on passe devant chaque porte et chaque
+    fenêtre, et on note *conforme* ou *à corriger*. Notre script fera une ronde complète du système et
+    produira, pour chaque contrôle, un verdict `PASS`, `WARN` ou `FAIL`.
+
+    Dans cette leçon, vous construirez un **script d'audit complet**, en **lecture seule** : il constate, il ne
+    corrige rien (le durcissement fera l'objet d'une leçon dédiée). Vous apprendrez à lire `/etc/passwd` et
+    `/etc/shadow`, à trouver les fichiers SUID et inscriptibles par tous, à lister les ports en écoute avec
+    `ss`, et à vérifier la configuration SSH. Le tout en mode strict, avec des fonctions réutilisables.
+  en: |
+    Auditing a Linux server means answering a precise checklist: *is there another all-powerful account
+    besides root? an account with no password? files that grant root rights when run? which ports listen on
+    the network? is SSH well configured?* Each one is checked in a few commands, and a good script gathers
+    them into a clear **report**.
+
+    It is the equivalent of a **security round** in a building: you walk past every door and window and note
+    *compliant* or *needs fixing*. Our script does a full round of the system and produces, for each check, a
+    `PASS`, `WARN` or `FAIL` verdict.
+
+    In this lesson you will build a **complete audit script**, **read-only**: it observes, it fixes nothing
+    (hardening gets its own lesson). You will learn to read `/etc/passwd` and `/etc/shadow`, to find SUID and
+    world-writable files, to list listening ports with `ss`, and to check the SSH configuration. All in strict
+    mode, with reusable functions.
+
+sections:
+  - heading:
+      fr: "Comptes : UID 0 et mots de passe vides"
+      en: "Accounts: UID 0 and empty passwords"
+    body:
+      fr: |
+        Sous Linux, l'identité d'un compte est son **UID** (identifiant numérique). L'UID `0`, c'est root : le
+        super-utilisateur. Il ne devrait exister **qu'un seul** compte UID 0. Un deuxième compte UID 0 est une
+        porte dérobée classique, car il a tous les droits sans s'appeler « root ».
+
+        ```bash
+        # Any account whose UID (field 3 of /etc/passwd) is 0 has root powers.
+        awk -F: '$3 == 0 { print $1 }' /etc/passwd
+        ```
+
+        Les mots de passe ne sont pas dans `/etc/passwd` mais dans `/etc/shadow` (lisible par root seulement).
+        Le deuxième champ contient le mot de passe **haché**. S'il est **vide**, le compte peut se connecter
+        **sans mot de passe** — une faille grave :
+
+        ```bash
+        # Field 2 empty = no password required. Needs root to read /etc/shadow.
+        awk -F: '($2 == "") { print $1 }' /etc/shadow
+        ```
+
+        Un `*` ou un `!` dans ce champ signifie au contraire que le compte est **verrouillé** (pas de
+        connexion par mot de passe), ce qui est normal pour les comptes de service. L'audit cherche donc deux
+        anomalies : plus d'un UID 0, et tout compte au mot de passe réellement vide.
+      en: |
+        On Linux, an account's identity is its **UID** (numeric identifier). UID `0` is root: the superuser.
+        There should be **only one** UID 0 account. A second UID 0 account is a classic backdoor, because it
+        has all rights without being called "root".
+
+        ```bash
+        # Any account whose UID (field 3 of /etc/passwd) is 0 has root powers.
+        awk -F: '$3 == 0 { print $1 }' /etc/passwd
+        ```
+
+        Passwords are not in `/etc/passwd` but in `/etc/shadow` (readable by root only). The second field
+        holds the **hashed** password. If it is **empty**, the account can log in with **no password** — a
+        serious flaw:
+
+        ```bash
+        # Field 2 empty = no password required. Needs root to read /etc/shadow.
+        awk -F: '($2 == "") { print $1 }' /etc/shadow
+        ```
+
+        A `*` or `!` in that field means instead that the account is **locked** (no password login), which is
+        normal for service accounts. The audit therefore looks for two anomalies: more than one UID 0, and any
+        account with a genuinely empty password.
+  - heading:
+      fr: "SUID et fichiers inscriptibles par tous"
+      en: "SUID and world-writable files"
+    body:
+      fr: |
+        Le bit **SUID** (*Set User ID*) sur un exécutable le fait tourner avec les droits de son **propriétaire**
+        (souvent root), quel que soit l'utilisateur qui le lance. Certains programmes en ont légitimement besoin
+        (`passwd`, `sudo`), mais un binaire SUID inattendu, surtout dans un dossier personnel, est un vecteur
+        d'**élévation de privilèges** majeur.
+
+        ```bash
+        # -perm -4000 selects files with the SUID bit; -type f limits to regular files.
+        find / -xdev -type f -perm -4000 2>/dev/null
+        ```
+
+        Les **fichiers inscriptibles par tous** (world-writable, permission `o+w`) sont un autre risque :
+        n'importe quel utilisateur peut les modifier. Sur un script exécuté par root, cela permet d'y injecter
+        des commandes.
+
+        ```bash
+        # -perm -0002 = writable by "others". Exclude /proc, /sys with -xdev.
+        find / -xdev -type f -perm -0002 2>/dev/null
+        ```
+
+        `-xdev` empêche `find` de traverser d'autres systèmes de fichiers (comme `/proc`), ce qui le rend plus
+        rapide et évite le bruit. `2>/dev/null` masque les erreurs « permission refusée » sur les dossiers
+        inaccessibles. L'audit compare la liste SUID trouvée à une **liste de référence** connue : tout binaire
+        en trop est à investiguer.
+      en: |
+        The **SUID** bit (*Set User ID*) on an executable makes it run with its **owner's** rights (often
+        root), whatever user launches it. Some programs legitimately need it (`passwd`, `sudo`), but an
+        unexpected SUID binary, especially in a home directory, is a major **privilege-escalation** vector.
+
+        ```bash
+        # -perm -4000 selects files with the SUID bit; -type f limits to regular files.
+        find / -xdev -type f -perm -4000 2>/dev/null
+        ```
+
+        **World-writable files** (permission `o+w`) are another risk: any user can modify them. On a script
+        run by root, this allows injecting commands into it.
+
+        ```bash
+        # -perm -0002 = writable by "others". Exclude /proc, /sys with -xdev.
+        find / -xdev -type f -perm -0002 2>/dev/null
+        ```
+
+        `-xdev` stops `find` from crossing into other filesystems (like `/proc`), making it faster and avoiding
+        noise. `2>/dev/null` hides "permission denied" errors on inaccessible folders. The audit compares the
+        SUID list found against a known **baseline**: any extra binary must be investigated.
+  - heading:
+      fr: "Ports en écoute et configuration SSH"
+      en: "Listening ports and SSH configuration"
+    body:
+      fr: |
+        Chaque **port en écoute** est une porte ouverte sur le réseau. L'outil moderne pour les lister est `ss`
+        (qui remplace `netstat`) :
+
+        ```bash
+        # -t TCP, -u UDP, -l listening, -n numeric, -p show the process.
+        ss -tulnp
+        ```
+
+        On s'intéresse surtout aux services qui écoutent sur **toutes** les interfaces (`0.0.0.0` ou `*`),
+        donc exposés au-delà de la machine. Un port de base de données (3306, 5432, 6379) exposé est une
+        anomalie fréquente et grave.
+
+        Pour **SSH**, on inspecte `/etc/ssh/sshd_config` à la recherche de réglages dangereux :
+
+        | Réglage | Valeur sûre | Pourquoi |
+        |---|---|---|
+        | `PermitRootLogin` | `no` | pas de connexion root directe |
+        | `PasswordAuthentication` | `no` | clés uniquement, pas de force brute |
+        | `PermitEmptyPasswords` | `no` | jamais de mot de passe vide |
+        | `Protocol` | `2` | SSHv1 est cassé |
+
+        L'audit lit ces directives (sans les modifier) et signale toute valeur non conforme. Comme tous les
+        contrôles, chaque résultat devient un objet uniforme `[contrôle, statut, détail]`, qu'on affiche en
+        tableau et qu'on peut exporter.
+      en: |
+        Each **listening port** is an open door on the network. The modern tool to list them is `ss` (which
+        replaces `netstat`):
+
+        ```bash
+        # -t TCP, -u UDP, -l listening, -n numeric, -p show the process.
+        ss -tulnp
+        ```
+
+        You care mostly about services listening on **all** interfaces (`0.0.0.0` or `*`), hence exposed beyond
+        the machine. An exposed database port (3306, 5432, 6379) is a frequent and serious anomaly.
+
+        For **SSH**, you inspect `/etc/ssh/sshd_config` for dangerous settings:
+
+        | Setting | Safe value | Why |
+        |---|---|---|
+        | `PermitRootLogin` | `no` | no direct root login |
+        | `PasswordAuthentication` | `no` | keys only, no brute force |
+        | `PermitEmptyPasswords` | `no` | never an empty password |
+        | `Protocol` | `2` | SSHv1 is broken |
+
+        The audit reads these directives (without changing them) and flags any non-compliant value. Like all
+        checks, each result becomes a uniform object `[check, status, detail]`, printed as a table and
+        exportable.
+
+examples:
+  - title:
+      fr: "Contrôle unitaire : comptes à privilèges"
+      en: "Single check: privileged accounts"
+    file: check-uid0.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Find every account with UID 0. More than one = a hidden backdoor.
+      mapfile -t root_accounts < <(awk -F: '$3 == 0 { print $1 }' /etc/passwd)
+
+      if (( ${#root_accounts[@]} == 1 )) && [[ "${root_accounts[0]}" == "root" ]]; then
+          echo "PASS  UID 0 accounts: only root"
+      else
+          # "${root_accounts[*]}" joins the array into one string for display
+          echo "FAIL  UID 0 accounts: ${root_accounts[*]}"
+      fi
+    output: |
+      FAIL  UID 0 accounts: root toor
+    note:
+      fr: "`mapfile -t ... < <(...)` remplit un tableau avec la sortie de la commande, sans découpage hasardeux. Le compte `toor` en UID 0 est une porte dérobée : il a tous les droits de root sous un autre nom."
+      en: "`mapfile -t ... < <(...)` fills an array from the command output, with no risky splitting. The `toor` account at UID 0 is a backdoor: it has all of root's rights under a different name."
+
+  - title:
+      fr: "Contrôle unitaire : SUID et world-writable"
+      en: "Single check: SUID and world-writable"
+    file: check-perms.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Known-good SUID binaries vary by distro; keep a baseline and diff against it.
+      baseline="/usr/bin/passwd /usr/bin/sudo /usr/bin/su /usr/bin/mount /usr/bin/umount"
+
+      echo "== Unexpected SUID files =="
+      # -xdev stays on one filesystem; 2>/dev/null hides permission-denied noise.
+      find / -xdev -type f -perm -4000 2>/dev/null | while IFS= read -r f; do
+          # Print only files NOT in the baseline
+          [[ " $baseline " == *" $f "* ]] || echo "  SUID: $f"
+      done
+
+      echo "== World-writable files (sample) =="
+      find / -xdev -type f -perm -0002 2>/dev/null | head -10 | sed 's/^/  WW: /'
+    output: |
+      == Unexpected SUID files ==
+        SUID: /home/devops/.local/bin/backup-helper
+      == World-writable files (sample) ==
+        WW: /var/tmp/upload.sh
+    note:
+      fr: "Un binaire SUID dans un dossier personnel (`backup-helper`) est une alerte directe d'élévation de privilèges. Le script compare à une liste de référence et ne signale que les écarts, pour éviter le bruit des binaires légitimes."
+      en: "A SUID binary in a home directory (`backup-helper`) is a direct privilege-escalation alert. The script diffs against a baseline and reports only deviations, to avoid the noise of legitimate binaries."
+
+  - title:
+      fr: "Le script d'audit complet"
+      en: "The complete audit script"
+    file: security-audit.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Linux security baseline audit. Read-only: it changes nothing.
+      # Run as root for full coverage (needs /etc/shadow and a full find).
+      set -euo pipefail
+
+      pass=0; warn=0; fail=0
+
+      # Uniform reporter: STATUS, check name, detail. Keeps output comparable.
+      report() {
+          local status="$1"; shift
+          printf '%-5s %s\n' "$status" "$*"
+          case "$status" in PASS) ((pass++));; WARN) ((warn++));; FAIL) ((fail++));; esac
+      }
+
+      # 1. Exactly one UID 0 account (root)
+      n_root=$(awk -F: '$3 == 0' /etc/passwd | wc -l)
+      (( n_root == 1 )) && report PASS "UID 0: only root" \
+                        || report FAIL "UID 0: $n_root accounts have root UID"
+
+      # 2. No empty passwords (requires root to read /etc/shadow)
+      if [[ -r /etc/shadow ]]; then
+          empty=$(awk -F: '($2 == "") { print $1 }' /etc/shadow | tr '\n' ' ')
+          [[ -z "$empty" ]] && report PASS "No empty passwords" \
+                            || report FAIL "Empty passwords: $empty"
+      else
+          report WARN "Cannot read /etc/shadow (run as root)"
+      fi
+
+      # 3. Unexpected SUID binaries outside system directories
+      suid_home=$(find /home -xdev -type f -perm -4000 2>/dev/null | wc -l)
+      (( suid_home == 0 )) && report PASS "No SUID binary under /home" \
+                           || report FAIL "$suid_home SUID binary(ies) under /home"
+
+      # 4. World-writable files (excluding sticky-bit dirs like /tmp)
+      ww=$(find / -xdev -type f -perm -0002 2>/dev/null | wc -l)
+      (( ww == 0 )) && report PASS "No world-writable file" \
+                    || report WARN "$ww world-writable file(s) found"
+
+      # 5. Database ports must not listen on all interfaces
+      db_exposed=$(ss -tulnH 2>/dev/null | awk '$5 ~ /0\.0\.0\.0:(3306|5432|6379)$/' | wc -l)
+      (( db_exposed == 0 )) && report PASS "No DB port exposed on 0.0.0.0" \
+                            || report FAIL "$db_exposed database port(s) exposed"
+
+      # 6. SSH hardening directives
+      sshd=/etc/ssh/sshd_config
+      grep -qiE '^[[:space:]]*PermitRootLogin[[:space:]]+no' "$sshd" \
+          && report PASS "SSH: PermitRootLogin no" \
+          || report FAIL "SSH: PermitRootLogin not set to no"
+
+      echo "----"
+      echo "PASS=$pass WARN=$warn FAIL=$fail"
+      (( fail == 0 ))     # non-zero exit if any FAIL, for CI/schedulers
+    output: |
+      FAIL  UID 0: 2 accounts have root UID
+      PASS  No empty passwords
+      PASS  No SUID binary under /home
+      WARN  3 world-writable file(s) found
+      FAIL  2 database port(s) exposed
+      FAIL  SSH: PermitRootLogin not set to no
+      ----
+      PASS=2 WARN=1 FAIL=3
+    note:
+      fr: "Le script est **lecture seule** et factorise tout avec la fonction `report`. Chaque contrôle produit un verdict uniforme ; la dernière ligne `(( fail == 0 ))` fait sortir le script en échec s'il reste un FAIL, pour qu'un pipeline ou un cron réagisse."
+      en: "The script is **read-only** and factors everything through the `report` helper. Each check yields a uniform verdict; the final `(( fail == 0 ))` makes the script exit with failure if any FAIL remains, so a pipeline or cron reacts."
+
+  - title:
+      fr: "Lister les ports exposés au réseau"
+      en: "Listing ports exposed to the network"
+    file: listening-ports.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      echo "Services listening on ALL interfaces (0.0.0.0 or [::]):"
+      # -H removes the header; column 5 is the local address:port.
+      ss -tulnH |
+          awk '$5 ~ /^(0\.0\.0\.0|\[::\]|\*):/ { print $1, $5 }' |
+          sort -u
+    output: |
+      Services listening on ALL interfaces (0.0.0.0 or [::]):
+      tcp 0.0.0.0:22
+      tcp 0.0.0.0:5432
+      udp 0.0.0.0:68
+    note:
+      fr: "`ss -tulnH` liste les sockets en écoute sans en-tête. On ne garde que celles liées à toutes les interfaces : le port 5432 (PostgreSQL) exposé en `0.0.0.0` devrait écouter sur `127.0.0.1` ou être filtré par un pare-feu."
+      en: "`ss -tulnH` lists listening sockets without a header. We keep only those bound to all interfaces: port 5432 (PostgreSQL) exposed on `0.0.0.0` should listen on `127.0.0.1` or be filtered by a firewall."
+
+mistake:
+  fr: |
+    **Confondre audit et correction, et lancer un script d'audit qui modifie le système.**
+
+    Un script d'audit doit être strictement **en lecture seule** : il constate et rapporte, sans jamais
+    changer un fichier, un compte ou une permission. Mélanger constat et correction est dangereux : une
+    « correction » automatique mal ciblée peut couper l'accès SSH ou casser un service en pleine production.
+    Séparez toujours l'audit (cette leçon) du durcissement (la leçon suivante, avec sauvegarde et dry-run).
+    Autre piège : oublier `-xdev` sur `find`, qui part alors explorer `/proc` et `/sys`, rend l'audit très
+    lent et produit du bruit inutile.
+  en: |
+    **Confusing audit with fixing, and running an audit script that modifies the system.**
+
+    An audit script must be strictly **read-only**: it observes and reports, never changing a file, an account
+    or a permission. Mixing observation and fixing is dangerous: a badly targeted automatic "fix" can cut off
+    SSH access or break a service in production. Always separate auditing (this lesson) from hardening (the
+    next lesson, with backup and dry-run). Another trap: forgetting `-xdev` on `find`, which then wanders into
+    `/proc` and `/sys`, makes the audit very slow and produces useless noise.
+
+bestPractice:
+  fr: |
+    - **Audit en lecture seule** : constater et rapporter, jamais modifier. Le durcissement est une étape
+      distincte.
+    - **Exécutez en root** pour une couverture complète (lecture de `/etc/shadow`, `find` sur tout le
+      système), mais sans rien changer.
+    - **Comparez à une référence** connue (liste SUID, directives SSH) et ne signalez que les écarts.
+    - **Utilisez `ss` plutôt que `netstat`** (déprécié) et surveillez les services liés à `0.0.0.0`.
+    - **Produisez un verdict uniforme** (`PASS`/`WARN`/`FAIL`) et sortez en échec s'il reste un FAIL, pour
+      intégrer l'audit à un pipeline.
+    - **Ajoutez `-xdev` à `find`** et `2>/dev/null` pour rester rapide et sans bruit.
+  en: |
+    - **Read-only audit**: observe and report, never modify. Hardening is a separate step.
+    - **Run as root** for full coverage (reading `/etc/shadow`, `find` over the whole system), but change
+      nothing.
+    - **Compare against a known baseline** (SUID list, SSH directives) and report only deviations.
+    - **Use `ss` rather than `netstat`** (deprecated) and watch services bound to `0.0.0.0`.
+    - **Produce a uniform verdict** (`PASS`/`WARN`/`FAIL`) and exit with failure if any FAIL remains, to plug
+      the audit into a pipeline.
+    - **Add `-xdev` to `find`** and `2>/dev/null` to stay fast and noise-free.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez au script d'audit un contrôle qui vérifie la directive SSH **`PasswordAuthentication`**. Le
+      contrôle doit :
+
+      1. lire `/etc/ssh/sshd_config` ;
+      2. renvoyer `PASS` si `PasswordAuthentication no` est présent (authentification par clé uniquement) ;
+      3. renvoyer `FAIL` sinon, car l'authentification par mot de passe expose à la force brute.
+
+      Utilisez la fonction `report` existante. Pensez à `grep -qiE` pour une recherche insensible à la casse
+      et tolérante aux espaces.
+    en: |
+      Add a check to the audit script that verifies the SSH directive **`PasswordAuthentication`**. The check
+      must:
+
+      1. read `/etc/ssh/sshd_config`;
+      2. return `PASS` if `PasswordAuthentication no` is present (key-based authentication only);
+      3. return `FAIL` otherwise, since password authentication exposes to brute force.
+
+      Use the existing `report` function. Use `grep -qiE` for a case-insensitive, whitespace-tolerant search.
+  solution:
+    file: check-ssh-pw.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Assumes the report() helper from the audit script is already defined.
+      sshd=/etc/ssh/sshd_config
+
+      # -q quiet (exit code only), -i ignore case, -E extended regex.
+      # ^[[:space:]]* tolerates leading spaces; [[:space:]]+ between key and value.
+      if grep -qiE '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$sshd"; then
+          report PASS "SSH: PasswordAuthentication no (keys only)"
+      else
+          report FAIL "SSH: PasswordAuthentication not disabled (brute-force risk)"
+      fi
+    note:
+      fr: "`grep -qiE` ne renvoie qu'un code de sortie (quiet), testable par `if`. Le motif tolère l'indentation et les espaces variables. Désactiver l'authentification par mot de passe coupe la force brute SSH à la racine."
+      en: "`grep -qiE` returns only an exit code (quiet), testable by `if`. The pattern tolerates indentation and variable spacing. Disabling password authentication cuts SSH brute force at the root."
+
+quiz:
+  - q:
+      fr: "Combien de comptes devraient avoir l'UID 0 sur un système sain ?"
+      en: "How many accounts should have UID 0 on a healthy system?"
+    options:
+      fr: ["Aucun", "Exactement un (root)", "Au moins deux", "Autant que d'administrateurs"]
+      en: ["None", "Exactly one (root)", "At least two", "As many as there are admins"]
+    answer: 1
+    why:
+      fr: "Seul root doit avoir l'UID 0. Tout autre compte UID 0 possède les pleins pouvoirs sous un autre nom : c'est une porte dérobée typique."
+      en: "Only root should have UID 0. Any other UID 0 account holds full power under a different name: a typical backdoor."
+  - q:
+      fr: "Que révèle un champ de mot de passe vide dans `/etc/shadow` ?"
+      en: "What does an empty password field in `/etc/shadow` reveal?"
+    options:
+      fr:
+        - "Que le compte est verrouillé"
+        - "Que le compte peut se connecter sans mot de passe"
+        - "Que le mot de passe est chiffré"
+        - "Que le compte n'existe pas"
+      en:
+        - "That the account is locked"
+        - "That the account can log in with no password"
+        - "That the password is encrypted"
+        - "That the account does not exist"
+    answer: 1
+    why:
+      fr: "Un deuxième champ vide dans /etc/shadow signifie aucune exigence de mot de passe : connexion possible sans secret, une faille grave. Un `*` ou `!` indique au contraire un compte verrouillé."
+      en: "An empty second field in /etc/shadow means no password requirement: login possible with no secret, a serious flaw. A `*` or `!` instead means a locked account."
+  - q:
+      fr: "Que fait le bit SUID sur un exécutable ?"
+      en: "What does the SUID bit do on an executable?"
+    options:
+      fr:
+        - "Il le rend inscriptible par tous"
+        - "Il le chiffre"
+        - "Il le fait tourner avec les droits de son propriétaire"
+        - "Il l'empêche de s'exécuter"
+      en:
+        - "It makes it world-writable"
+        - "It encrypts it"
+        - "It makes it run with its owner's rights"
+        - "It prevents it from running"
+    answer: 2
+    why:
+      fr: "SUID fait exécuter le programme avec les droits du propriétaire (souvent root), quel que soit l'utilisateur. Un binaire SUID inattendu est un vecteur d'élévation de privilèges."
+      en: "SUID runs the program with the owner's rights (often root), whatever user launches it. An unexpected SUID binary is a privilege-escalation vector."
+  - q:
+      fr: "Quel outil moderne remplace `netstat` pour lister les ports en écoute ?"
+      en: "Which modern tool replaces `netstat` to list listening ports?"
+    options:
+      fr: ["ss", "lsof", "ps", "top"]
+      en: ["ss", "lsof", "ps", "top"]
+    answer: 0
+    why:
+      fr: "`ss` (socket statistics) est l'outil actuel ; `netstat` est déprécié. `ss -tulnp` liste les sockets TCP/UDP en écoute avec le processus associé."
+      en: "`ss` (socket statistics) is the current tool; `netstat` is deprecated. `ss -tulnp` lists listening TCP/UDP sockets with the associated process."
+  - q:
+      fr: "Pourquoi un script d'audit ne doit-il rien modifier sur le système ?"
+      en: "Why should an audit script change nothing on the system?"
+    options:
+      fr:
+        - "Parce que modifier est impossible en Bash"
+        - "Parce qu'un audit doit constater sans risque de casser un service"
+        - "Parce que root ne peut pas écrire"
+        - "Parce que cela ralentit le script"
+      en:
+        - "Because modifying is impossible in Bash"
+        - "Because an audit must observe without risking breaking a service"
+        - "Because root cannot write"
+        - "Because it slows the script down"
+    answer: 1
+    why:
+      fr: "Séparer l'audit (constater) du durcissement (corriger) évite qu'une correction mal ciblée coupe SSH ou casse un service. Le durcissement se fait séparément, avec sauvegarde et dry-run."
+      en: "Separating audit (observe) from hardening (fix) avoids a mistargeted fix cutting off SSH or breaking a service. Hardening is done separately, with backup and dry-run."

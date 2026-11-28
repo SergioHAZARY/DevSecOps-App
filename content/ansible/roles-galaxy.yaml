@@ -1,0 +1,420 @@
+description:
+  fr: "Structurer son automatisation en rôles réutilisables et installer collections et rôles depuis Ansible Galaxy avec un fichier requirements.yml."
+  en: "Structure your automation into reusable roles and install collections and roles from Ansible Galaxy with a requirements.yml file."
+duration: 35
+
+intro:
+  fr: |
+    Un playbook de 300 lignes qui installe NGINX, PostgreSQL et un pare-feu devient vite illisible et
+    impossible à réutiliser. Un **rôle** (*role*) découpe cette automatisation en blocs autonomes et
+    réutilisables : un rôle « nginx », un rôle « postgres », qu'on assemble comme des briques Lego.
+
+    **Ansible Galaxy** est à la fois une convention de structure de dossiers et un dépôt public en ligne
+    (galaxy.ansible.com) d'où l'on télécharge des rôles et des **collections** écrits par la communauté,
+    un peu comme npm pour JavaScript ou pip pour Python. Une collection regroupe des modules (par exemple
+    `community.general` ou `ansible.posix`).
+
+    Vous allez créer un rôle avec `ansible-galaxy role init`, comprendre chacun de ses dossiers, puis
+    déclarer vos dépendances dans un `requirements.yml` installable d'une seule commande.
+  en: |
+    A 300-line playbook that installs NGINX, PostgreSQL and a firewall quickly becomes unreadable and
+    impossible to reuse. A **role** splits that automation into self-contained, reusable blocks: an "nginx"
+    role, a "postgres" role, that you assemble like Lego bricks.
+
+    **Ansible Galaxy** is both a folder-structure convention and a public online repository
+    (galaxy.ansible.com) from which you download community-written roles and **collections**, a bit like
+    npm for JavaScript or pip for Python. A collection bundles modules (for example `community.general` or
+    `ansible.posix`).
+
+    You will create a role with `ansible-galaxy role init`, understand each of its folders, then declare
+    your dependencies in a `requirements.yml` installable with a single command.
+
+sections:
+  - heading:
+      fr: "La structure d'un rôle"
+      en: "The structure of a role"
+    body:
+      fr: |
+        `ansible-galaxy role init webserver` crée un dossier `webserver/` avec des sous-dossiers au rôle
+        bien défini. Ansible charge automatiquement le fichier `main.yml` de chacun.
+
+        | Dossier | Contenu |
+        |---|---|
+        | `tasks/` | Les tâches du rôle (`main.yml` est le point d'entrée) |
+        | `handlers/` | Les handlers notifiés par les tâches |
+        | `templates/` | Les modèles Jinja2 (`.j2`) |
+        | `files/` | Les fichiers statiques à copier tels quels |
+        | `defaults/` | Variables par défaut (priorité la plus basse, faciles à surcharger) |
+        | `vars/` | Variables du rôle (priorité plus haute) |
+        | `meta/` | Métadonnées : auteur, dépendances, plateformes supportées |
+
+        La règle d'or : les valeurs *configurables* par l'utilisateur vont dans `defaults/`, car elles sont
+        les plus faciles à remplacer ; les constantes internes vont dans `vars/`.
+      en: |
+        `ansible-galaxy role init webserver` creates a `webserver/` folder with sub-folders of clear
+        purpose. Ansible automatically loads each one's `main.yml`.
+
+        | Folder | Contents |
+        |---|---|
+        | `tasks/` | The role's tasks (`main.yml` is the entry point) |
+        | `handlers/` | Handlers notified by the tasks |
+        | `templates/` | Jinja2 templates (`.j2`) |
+        | `files/` | Static files copied as-is |
+        | `defaults/` | Default variables (lowest priority, easy to override) |
+        | `vars/` | Role variables (higher priority) |
+        | `meta/` | Metadata: author, dependencies, supported platforms |
+
+        The golden rule: user-*configurable* values go in `defaults/`, because they are the easiest to
+        override; internal constants go in `vars/`.
+  - heading:
+      fr: "Collections et rôles depuis Galaxy"
+      en: "Collections and roles from Galaxy"
+    body:
+      fr: |
+        Depuis Ansible 2.10, les modules sont livrés dans des **collections** séparées du cœur. Deux
+        collections reviennent sans cesse en sécurité :
+
+        | Collection | Exemples de modules | Usage typique |
+        |---|---|---|
+        | `ansible.posix` | `sysctl`, `authorized_key`, `mount` | Réglages système POSIX |
+        | `community.general` | `ufw`, `timezone`, `pam_limits` | Pare-feu, divers |
+
+        On les installe avec `ansible-galaxy collection install community.general`. Mais la bonne pratique
+        est de **ne jamais installer à la main** : on déclare tout dans un fichier `requirements.yml`
+        versionné, avec une **version épinglée**, et on installe d'une commande. Ainsi toute l'équipe (et la
+        CI) obtient exactement les mêmes versions.
+      en: |
+        Since Ansible 2.10, modules ship in **collections** separate from the core. Two collections keep
+        coming up in security work:
+
+        | Collection | Example modules | Typical use |
+        |---|---|---|
+        | `ansible.posix` | `sysctl`, `authorized_key`, `mount` | POSIX system settings |
+        | `community.general` | `ufw`, `timezone`, `pam_limits` | Firewall, miscellaneous |
+
+        You install them with `ansible-galaxy collection install community.general`. But best practice is to
+        **never install by hand**: you declare everything in a versioned `requirements.yml`, with a
+        **pinned version**, and install in one command. That way the whole team (and CI) gets exactly the
+        same versions.
+  - heading:
+      fr: "Utiliser et sécuriser les rôles externes"
+      en: "Using and securing external roles"
+    body:
+      fr: |
+        Un playbook appelle ses rôles dans la clé `roles:` (ordre simple) ou via le module
+        `ansible.builtin.include_role` (chargement dynamique, conditionnel). Un rôle peut lui-même dépendre
+        d'un autre via `meta/main.yml` → `dependencies`.
+
+        Un rôle téléchargé depuis Galaxy est du **code tiers** exécuté avec les privilèges root sur vos
+        serveurs. Avant de l'utiliser :
+
+        - **Épinglez la version** (`version: 1.4.0`) : un rôle qui change sous vos pieds est un risque de
+          chaîne d'approvisionnement.
+        - **Lisez le code** des `tasks/main.yml`, surtout les appels à `shell`/`command`.
+        - **Préférez les rôles vérifiés** et maintenus, avec un dépôt public et des releases.
+
+        C'est exactement le même raisonnement que pour une dépendance npm ou pip : la commodité ne dispense
+        jamais de la revue.
+      en: |
+        A playbook calls its roles in the `roles:` key (simple ordering) or via the
+        `ansible.builtin.include_role` module (dynamic, conditional loading). A role can itself depend on
+        another via `meta/main.yml` → `dependencies`.
+
+        A role downloaded from Galaxy is **third-party code** run with root privileges on your servers.
+        Before using it:
+
+        - **Pin the version** (`version: 1.4.0`): a role that changes under your feet is a supply-chain
+          risk.
+        - **Read the code** of `tasks/main.yml`, especially calls to `shell`/`command`.
+        - **Prefer vetted**, maintained roles with a public repository and releases.
+
+        This is exactly the same reasoning as for an npm or pip dependency: convenience never excuses
+        skipping the review.
+
+examples:
+  - title:
+      fr: "Créer un rôle et lire son arborescence"
+      en: "Create a role and read its tree"
+    file: init.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Scaffold a role following the Galaxy conventions
+      ansible-galaxy role init roles/webserver
+
+      # Inspect the created structure
+      find roles/webserver -maxdepth 2 -type f | sort
+    output: |
+      roles/webserver/README.md
+      roles/webserver/defaults/main.yml
+      roles/webserver/files/.gitkeep
+      roles/webserver/handlers/main.yml
+      roles/webserver/meta/main.yml
+      roles/webserver/tasks/main.yml
+      roles/webserver/templates/.gitkeep
+      roles/webserver/vars/main.yml
+    note:
+      fr: "Chaque sous-dossier a un rôle précis et son `main.yml` est chargé automatiquement. On remplit `tasks/`, `defaults/`, `templates/` et on supprime les dossiers vides inutiles."
+      en: "Each sub-folder has a precise role and its `main.yml` is loaded automatically. You fill `tasks/`, `defaults/`, `templates/` and remove unused empty folders."
+
+  - title:
+      fr: "Le contenu du rôle : tasks, defaults et handlers"
+      en: "The role's contents: tasks, defaults and handlers"
+    file: roles/webserver/tasks/main.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      # roles/webserver/tasks/main.yml
+      - name: Install the web server package
+        ansible.builtin.apt:
+          name: "{{ webserver_package }}" # value comes from defaults/main.yml
+          state: present
+          update_cache: true
+
+      - name: Deploy the virtual host from a template
+        ansible.builtin.template:
+          src: vhost.conf.j2
+          dest: "/etc/nginx/sites-available/{{ webserver_domain }}.conf"
+          owner: root
+          group: root
+          mode: "0644"
+        notify: Reload web server
+
+      # roles/webserver/defaults/main.yml
+      # webserver_package: nginx
+      # webserver_domain: example.com
+
+      # roles/webserver/handlers/main.yml
+      # - name: Reload web server
+      #   ansible.builtin.service:
+      #     name: nginx
+      #     state: reloaded
+    note:
+      fr: "Les tâches lisent des variables définies dans `defaults/main.yml` : l'utilisateur du rôle peut les surcharger sans modifier le code du rôle. Le handler vit dans `handlers/main.yml`."
+      en: "The tasks read variables defined in `defaults/main.yml`: the role's user can override them without touching the role's code. The handler lives in `handlers/main.yml`."
+
+  - title:
+      fr: "requirements.yml : collections et rôles épinglés"
+      en: "requirements.yml: pinned collections and roles"
+    file: requirements.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      # Install everything with:
+      #   ansible-galaxy install -r requirements.yml
+      collections:
+        # Pin exact versions: reproducible builds, no surprise upgrade
+        - name: community.general
+          version: "10.1.0"
+        - name: ansible.posix
+          version: "2.0.0"
+
+      roles:
+        # A role from a specific Git tag, not a moving branch
+        - name: geerlingguy.security
+          src: https://github.com/geerlingguy/ansible-role-security
+          version: "3.1.0"
+          scm: git
+    output: |
+      Starting galaxy collection install process
+      community.general:10.1.0 was installed successfully
+      ansible.posix:2.0.0 was installed successfully
+      Starting galaxy role install process
+      - geerlingguy.security (3.1.0) was installed successfully
+    note:
+      fr: "Chaque dépendance porte une `version` figée : c'est la protection contre une attaque de chaîne d'approvisionnement où un rôle changerait de contenu. `ansible-galaxy install -r` installe tout en une fois."
+      en: "Every dependency carries a frozen `version`: that is the protection against a supply-chain attack where a role's content would change. `ansible-galaxy install -r` installs everything at once."
+
+  - title:
+      fr: "Assembler les rôles dans un playbook"
+      en: "Assembling roles in a playbook"
+    file: site.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      - name: Build the web tier
+        hosts: web
+        become: true
+        roles:
+          # Roles run in order; each one is a reusable block
+          - role: geerlingguy.security # pinned external role, reviewed beforehand
+          - role: webserver
+            vars:
+              webserver_domain: shop.example.com # override a default for this host
+
+      - name: Build the database tier
+        hosts: db
+        become: true
+        tasks:
+          - name: Include the postgres role only when enabled
+            ansible.builtin.include_role:
+              name: postgres
+            when: enable_database | default(false)
+    note:
+      fr: "La clé `roles:` exécute les rôles dans l'ordre ; `include_role` les charge dynamiquement, ici sous condition. On surcharge une variable par défaut au moment de l'appel, sans toucher au rôle."
+      en: "The `roles:` key runs roles in order; `include_role` loads them dynamically, here conditionally. A default variable is overridden at call time, without touching the role."
+
+mistake:
+  fr: |
+    **Installer des rôles Galaxy sans épingler la version ni lire le code.**
+
+    `ansible-galaxy install geerlingguy.security` sans `version:` télécharge la dernière release du
+    moment : votre infrastructure peut changer de comportement d'un jour à l'autre sans que rien dans votre
+    dépôt n'ait bougé. Pire, un rôle est du code exécuté en root sur tous vos serveurs ; un mainteneur
+    compromis ou malveillant exécuterait n'importe quoi. Épinglez chaque dépendance dans `requirements.yml`
+    et relisez au moins les tâches `shell`/`command` avant d'adopter un rôle tiers.
+  en: |
+    **Installing Galaxy roles without pinning the version or reading the code.**
+
+    `ansible-galaxy install geerlingguy.security` with no `version:` downloads the latest release of the
+    moment: your infrastructure can change behaviour from one day to the next although nothing in your repo
+    moved. Worse, a role is code run as root on all your servers; a compromised or malicious maintainer
+    could run anything. Pin every dependency in `requirements.yml` and at least review the `shell`/`command`
+    tasks before adopting a third-party role.
+
+bestPractice:
+  fr: |
+    - **Un rôle = une responsabilité** (`nginx`, `postgres`, `firewall`), réutilisable entre projets.
+    - **`defaults/` pour les variables configurables**, `vars/` pour les constantes internes.
+    - **`requirements.yml` versionné** avec une `version` épinglée pour chaque collection et rôle.
+    - **Relisez le code** d'un rôle tiers, surtout ses appels à `shell`/`command`, avant adoption.
+    - **`ansible-galaxy install -r requirements.yml`** dans la CI pour des builds reproductibles.
+    - **Un `meta/main.yml` renseigné** : auteur, plateformes, dépendances.
+  en: |
+    - **One role = one responsibility** (`nginx`, `postgres`, `firewall`), reusable across projects.
+    - **`defaults/` for configurable variables**, `vars/` for internal constants.
+    - **Versioned `requirements.yml`** with a pinned `version` for every collection and role.
+    - **Review the code** of a third-party role, especially its `shell`/`command` calls, before adopting.
+    - **`ansible-galaxy install -r requirements.yml`** in CI for reproducible builds.
+    - **A filled-in `meta/main.yml`**: author, platforms, dependencies.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe a besoin du module `community.general.ufw` et du module `ansible.posix.sysctl`.
+
+      1. Écrivez un fichier `requirements.yml` qui installe la collection `community.general` en version
+         `10.1.0` et la collection `ansible.posix` en version `2.0.0`.
+      2. Donnez la commande qui installe ces dépendances à partir de ce fichier.
+      3. En une phrase, expliquez pourquoi épingler la version est une bonne pratique de sécurité.
+    en: |
+      Your team needs the `community.general.ufw` module and the `ansible.posix.sysctl` module.
+
+      1. Write a `requirements.yml` that installs the `community.general` collection at version `10.1.0`
+         and the `ansible.posix` collection at version `2.0.0`.
+      2. Give the command that installs these dependencies from that file.
+      3. In one sentence, explain why pinning the version is a security best practice.
+  solution:
+    file: requirements.yml
+    lang: yaml
+    code: |
+      ---
+      collections:
+        - name: community.general
+          version: "10.1.0"
+        - name: ansible.posix
+          version: "2.0.0"
+
+      # Install command:
+      #   ansible-galaxy collection install -r requirements.yml
+      #
+      # Pinning the version guarantees reproducible runs and prevents a modified
+      # upstream release (a supply-chain attack) from silently reaching your servers.
+    note:
+      fr: "`ansible-galaxy collection install -r requirements.yml` installe les deux collections aux versions exactes. L'épinglage garantit que CI, collègues et production exécutent le même code."
+      en: "`ansible-galaxy collection install -r requirements.yml` installs both collections at the exact versions. Pinning guarantees CI, teammates and production run the same code."
+
+quiz:
+  - q:
+      fr: "Quel dossier d'un rôle contient les variables les plus faciles à surcharger ?"
+      en: "Which role folder holds the variables that are easiest to override?"
+    options:
+      fr:
+        - "`vars/`"
+        - "`defaults/`"
+        - "`meta/`"
+        - "`files/`"
+      en:
+        - "`vars/`"
+        - "`defaults/`"
+        - "`meta/`"
+        - "`files/`"
+    answer: 1
+    why:
+      fr: "Les variables de `defaults/` ont la priorité la plus basse : l'utilisateur du rôle peut les remplacer facilement, contrairement à celles de `vars/`."
+      en: "Variables in `defaults/` have the lowest priority: the role's user can easily override them, unlike those in `vars/`."
+  - q:
+      fr: "Quelle commande crée l'arborescence standard d'un rôle ?"
+      en: "Which command creates a role's standard tree?"
+    options:
+      fr:
+        - "`ansible-galaxy role init webserver`"
+        - "`ansible-playbook --init webserver`"
+        - "`ansible role new webserver`"
+        - "`ansible-galaxy create webserver`"
+      en:
+        - "`ansible-galaxy role init webserver`"
+        - "`ansible-playbook --init webserver`"
+        - "`ansible role new webserver`"
+        - "`ansible-galaxy create webserver`"
+    answer: 0
+    why:
+      fr: "`ansible-galaxy role init` génère les dossiers `tasks/`, `handlers/`, `defaults/`, `templates/`, `files/`, `vars/` et `meta/`."
+      en: "`ansible-galaxy role init` generates the `tasks/`, `handlers/`, `defaults/`, `templates/`, `files/`, `vars/` and `meta/` folders."
+  - q:
+      fr: "Qu'est-ce qu'une collection Ansible ?"
+      en: "What is an Ansible collection?"
+    options:
+      fr:
+        - "Un ensemble de serveurs à gérer"
+        - "Un fichier d'inventaire chiffré"
+        - "Un paquet de modules, rôles et plugins distribué séparément du cœur"
+        - "Un type de variable spécial"
+      en:
+        - "A set of servers to manage"
+        - "An encrypted inventory file"
+        - "A package of modules, roles and plugins distributed separately from the core"
+        - "A special kind of variable"
+    answer: 2
+    why:
+      fr: "Depuis Ansible 2.10, les modules sont livrés dans des collections comme `community.general` ou `ansible.posix`, séparées d'ansible-core."
+      en: "Since Ansible 2.10, modules ship in collections such as `community.general` or `ansible.posix`, separate from ansible-core."
+  - q:
+      fr: "Pourquoi épingler la `version` d'un rôle dans `requirements.yml` ?"
+      en: "Why pin a role's `version` in `requirements.yml`?"
+    options:
+      fr:
+        - "Pour que le rôle s'exécute plus vite"
+        - "Pour réduire la taille du dépôt"
+        - "Pour masquer le code du rôle"
+        - "Pour garantir des builds reproductibles et éviter un changement de code non contrôlé"
+      en:
+        - "To make the role run faster"
+        - "To reduce the repository size"
+        - "To hide the role's code"
+        - "To guarantee reproducible builds and avoid an uncontrolled code change"
+    answer: 3
+    why:
+      fr: "Un rôle non épinglé peut changer de contenu à tout moment : figer la version protège contre une attaque de chaîne d'approvisionnement et rend les exécutions identiques."
+      en: "An unpinned role can change content at any time: freezing the version protects against a supply-chain attack and makes runs identical."
+  - q:
+      fr: "Comment un playbook exécute-t-il plusieurs rôles dans un ordre défini ?"
+      en: "How does a playbook run several roles in a defined order?"
+    options:
+      fr:
+        - "Avec la clé `roles:` listant les rôles dans l'ordre"
+        - "Avec la clé `hosts:`"
+        - "Avec un fichier `.env`"
+        - "Avec l'option `--roles` en ligne de commande uniquement"
+      en:
+        - "With the `roles:` key listing the roles in order"
+        - "With the `hosts:` key"
+        - "With a `.env` file"
+        - "Only with the `--roles` command-line flag"
+    answer: 0
+    why:
+      fr: "La clé `roles:` d'un play exécute les rôles listés dans l'ordre ; `include_role` permet en plus un chargement dynamique et conditionnel."
+      en: "A play's `roles:` key runs the listed roles in order; `include_role` additionally allows dynamic, conditional loading."

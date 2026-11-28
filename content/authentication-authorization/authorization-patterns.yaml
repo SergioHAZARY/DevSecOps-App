@@ -1,0 +1,542 @@
+description:
+  fr: "Autorisation : RBAC vs ABAC, deny by default, vérifications au niveau objet contre l'IDOR, middleware centralisé et tests de contrôle d'accès."
+  en: "Authorization: RBAC vs ABAC, deny by default, object-level checks against IDOR, centralised middleware and access-control tests."
+duration: 35
+
+intro:
+  fr: |
+    L'**authentification** répond à « qui êtes-vous ? ». L'**autorisation** répond à la question suivante,
+    tout aussi critique : « avez-vous le **droit** de faire *cette* action sur *cet* objet ? ». La plupart
+    des fuites de données récentes ne viennent pas d'un mot de passe cassé, mais d'une autorisation
+    manquante : un utilisateur change `/invoice/123` en `/invoice/124` et lit la facture d'un autre.
+
+    Pensez à un immeuble de bureaux. Un badge prouve votre identité (authentification), mais c'est la
+    **liste des portes** que votre badge ouvre qui décide où vous allez (autorisation). Si chaque porte
+    oublie de vérifier le badge, l'immeuble entier est ouvert, quel que soit le soin apporté à l'accueil.
+
+    Dans cette leçon, vous comparez deux modèles — **RBAC** (par rôles) et **ABAC** (par attributs) —, vous
+    appliquez le principe **deny by default** (tout est interdit sauf autorisation explicite), vous corrigez
+    une faille **IDOR** par une vérification **au niveau de l'objet**, et vous centralisez le contrôle dans
+    un **middleware** testé automatiquement.
+  en: |
+    **Authentication** answers "who are you?". **Authorization** answers the next, equally critical
+    question: "are you **allowed** to do *this* action on *this* object?". Most recent data leaks come not
+    from a cracked password, but from a missing authorization: a user changes `/invoice/123` to
+    `/invoice/124` and reads someone else's invoice.
+
+    Think of an office building. A badge proves your identity (authentication), but it is the **list of
+    doors** your badge opens that decides where you go (authorization). If every door forgets to check the
+    badge, the whole building is open, however careful the front desk was.
+
+    In this lesson you compare two models — **RBAC** (role-based) and **ABAC** (attribute-based) — apply the
+    **deny by default** principle (everything is forbidden unless explicitly allowed), fix an **IDOR** flaw
+    with an **object-level** check, and centralise the control in an automatically tested **middleware**.
+
+sections:
+  - heading:
+      fr: "RBAC vs ABAC, et le principe deny by default"
+      en: "RBAC vs ABAC, and the deny-by-default principle"
+    body:
+      fr: |
+        Deux grandes façons de décider « qui peut quoi » :
+
+        | Critère | RBAC (par rôles) | ABAC (par attributs) |
+        |---|---|---|
+        | Décision basée sur | Le **rôle** de l'utilisateur (`admin`, `editor`, `viewer`) | Des **attributs** (service, pays, heure, propriétaire de l'objet) |
+        | Exemple | « Un `editor` peut publier » | « Un auteur peut modifier **son** article avant 18 h » |
+        | Avantage | Simple, lisible, suffisant dans 80 % des cas | Fin, contextuel, dynamique |
+        | Inconvénient | Explosion des rôles pour des cas fins | Plus complexe à écrire et à auditer |
+
+        En pratique, on commence en **RBAC** et on ajoute des règles **ABAC** là où le contexte compte
+        (propriété de l'objet, segmentation par locataire). Un moteur de politiques comme **OPA/Rego** permet
+        d'externaliser ces règles.
+
+        Au-dessus des deux modèles, un principe non négociable : **deny by default** (refus par défaut).
+        L'accès est **refusé** sauf si une règle l'autorise explicitement. L'inverse — autoriser par défaut
+        et lister les interdictions — laisse forcément passer les cas oubliés (une nouvelle route, un nouveau
+        champ). Avec le refus par défaut, oublier une règle **ferme** la porte au lieu de l'ouvrir : l'erreur
+        est visible (un `403`) au lieu d'être silencieuse (une fuite).
+      en: |
+        Two main ways to decide "who can do what":
+
+        | Criterion | RBAC (role-based) | ABAC (attribute-based) |
+        |---|---|---|
+        | Decision based on | The user's **role** (`admin`, `editor`, `viewer`) | **Attributes** (department, country, time, object owner) |
+        | Example | "An `editor` can publish" | "An author can edit **their** article before 6 pm" |
+        | Strength | Simple, readable, enough in 80% of cases | Fine-grained, contextual, dynamic |
+        | Weakness | Role explosion for fine cases | Harder to write and audit |
+
+        In practice you start with **RBAC** and add **ABAC** rules where context matters (object ownership,
+        per-tenant segmentation). A policy engine such as **OPA/Rego** lets you externalise these rules.
+
+        Above both models sits one non-negotiable principle: **deny by default**. Access is **denied** unless
+        a rule explicitly allows it. The opposite — allow by default and list the forbidden cases —
+        necessarily lets forgotten cases through (a new route, a new field). With deny by default, forgetting
+        a rule **closes** the door instead of opening it: the mistake is visible (a `403`) instead of silent
+        (a leak).
+  - heading:
+      fr: "IDOR : vérifier l'objet, pas seulement le rôle"
+      en: "IDOR: check the object, not just the role"
+    body:
+      fr: |
+        L'**IDOR** (*Insecure Direct Object Reference*, référence directe d'objet non sécurisée) est la
+        faille d'autorisation la plus répandue. Le code vérifie que l'utilisateur est **connecté**, mais pas
+        qu'il a le droit d'accéder à **cet objet précis** :
+
+        ```python
+        # VULNERABLE: any logged-in user can read any invoice by changing the id
+        @app.get("/invoice/<int:invoice_id>")
+        @login_required
+        def get_invoice(invoice_id):
+            return db.invoices.get(invoice_id)
+        ```
+
+        L'attaquant incrémente l'identifiant (`/invoice/124`) et lit les données d'autrui. La correction est
+        une **vérification au niveau de l'objet** : la requête filtre sur le **propriétaire**.
+
+        ```python
+        # FIXED: the query is scoped to the current user; a foreign id returns nothing -> 404
+        invoice = db.invoices.find_one(id=invoice_id, owner_id=current_user.id)
+        ```
+
+        Points clés :
+
+        - La vérification se fait **côté serveur**, à chaque requête, jamais en cachant seulement un bouton
+          dans l'interface.
+        - Remplacer un identifiant séquentiel par un **UUID** réduit la devinette mais **ne remplace pas** la
+          vérification de propriété — l'URL peut toujours fuiter (journaux, partage).
+        - Renvoyer **404** plutôt que **403** pour un objet qui ne vous appartient pas évite de confirmer son
+          existence.
+      en: |
+        **IDOR** (*Insecure Direct Object Reference*) is the most common authorization flaw. The code checks
+        that the user is **logged in**, but not that they may access **this specific object**:
+
+        ```python
+        # VULNERABLE: any logged-in user can read any invoice by changing the id
+        @app.get("/invoice/<int:invoice_id>")
+        @login_required
+        def get_invoice(invoice_id):
+            return db.invoices.get(invoice_id)
+        ```
+
+        The attacker increments the identifier (`/invoice/124`) and reads others' data. The fix is an
+        **object-level check**: the query filters on the **owner**.
+
+        ```python
+        # FIXED: the query is scoped to the current user; a foreign id returns nothing -> 404
+        invoice = db.invoices.find_one(id=invoice_id, owner_id=current_user.id)
+        ```
+
+        Key points:
+
+        - The check happens **server-side**, on every request, never by merely hiding a button in the UI.
+        - Replacing a sequential id with a **UUID** reduces guessing but **does not replace** the ownership
+          check — the URL can still leak (logs, sharing).
+        - Returning **404** rather than **403** for an object that is not yours avoids confirming it exists.
+  - heading:
+      fr: "Centraliser et tester le contrôle d'accès"
+      en: "Centralising and testing access control"
+    body:
+      fr: |
+        Si chaque route réimplémente sa propre vérification, une seule oubliée suffit à ouvrir une brèche.
+        La bonne architecture **centralise** la décision :
+
+        - un **middleware** (ou un décorateur, un *filter*, un *guard*) applique la politique **avant**
+          d'atteindre le code métier ;
+        - les règles vivent au **même endroit** (table de permissions, politique OPA/Rego), pas éparpillées ;
+        - la vérification au niveau de l'objet est fournie par une **fonction unique** (`authorize(user,
+          action, resource)`) que toutes les routes appellent.
+
+        | Anti-modèle | Risque | Bonne pratique |
+        |---|---|---|
+        | Contrôle dupliqué dans chaque route | Un oubli = une faille | Middleware/décorateur centralisé |
+        | Masquer le bouton côté client | Contournable via l'API | Décision côté serveur |
+        | Autoriser par défaut | Toute nouvelle route est ouverte | Deny by default |
+
+        Enfin, le contrôle d'accès se **teste** comme le reste. Pour chaque ressource sensible, écrivez des
+        tests qui vérifient qu'un utilisateur **non autorisé** reçoit `403`/`404`, qu'un **propriétaire**
+        passe, et que `deny by default` s'applique à une route sans règle. Ces tests tournent en **CI** ;
+        côté détection, les outils **SAST** (CodeQL requête *missing authorization*, Semgrep) repèrent les
+        routes d'état sans appel d'autorisation, et le **DAST** rejoue des requêtes avec un autre compte.
+      en: |
+        If every route re-implements its own check, a single forgotten one is enough to open a breach. The
+        right architecture **centralises** the decision:
+
+        - a **middleware** (or a decorator, filter, guard) applies the policy **before** reaching the
+          business code;
+        - the rules live in **one place** (a permissions table, an OPA/Rego policy), not scattered;
+        - the object-level check is provided by a **single function** (`authorize(user, action, resource)`)
+          that every route calls.
+
+        | Anti-pattern | Risk | Best practice |
+        |---|---|---|
+        | Check duplicated in each route | One miss = one flaw | Centralised middleware/decorator |
+        | Hiding the button client-side | Bypassable via the API | Server-side decision |
+        | Allow by default | Every new route is open | Deny by default |
+
+        Finally, access control is **tested** like everything else. For each sensitive resource, write tests
+        that check an **unauthorised** user gets `403`/`404`, an **owner** passes, and `deny by default`
+        applies to a route with no rule. These tests run in **CI**; for detection, **SAST** tools (CodeQL
+        *missing authorization* query, Semgrep) spot state-changing routes with no authorization call, and
+        **DAST** replays requests with a different account.
+
+examples:
+  - title:
+      fr: "RBAC : décorateur centralisé, deny by default (Python/Flask)"
+      en: "RBAC: centralised decorator, deny by default (Python/Flask)"
+    file: rbac.py
+    lang: python
+    kind: secure
+    code: |
+      from functools import wraps
+      from flask import Flask, abort, g
+
+      app = Flask(__name__)
+
+      # The policy lives in ONE place: role -> set of allowed permissions
+      ROLE_PERMISSIONS = {
+          "admin": {"article:read", "article:write", "article:delete"},
+          "editor": {"article:read", "article:write"},
+          "viewer": {"article:read"},
+      }
+
+
+      def require(permission: str):
+          def decorator(fn):
+              @wraps(fn)
+              def wrapper(*args, **kwargs):
+                  role = getattr(g, "role", None)
+                  # Deny by default: unknown role or missing permission -> 403
+                  if permission not in ROLE_PERMISSIONS.get(role, set()):
+                      abort(403)
+                  return fn(*args, **kwargs)
+              return wrapper
+          return decorator
+
+
+      @app.post("/articles")
+      @require("article:write")   # the check runs BEFORE the business code
+      def create_article():
+          return "created"
+
+
+      @app.delete("/articles/<int:article_id>")
+      @require("article:delete")  # only admin holds this permission
+      def delete_article(article_id):
+          return "deleted"
+    note:
+      fr: "Les permissions sont définies à un seul endroit et appliquées par un décorateur réutilisable. Un rôle inconnu ou une permission absente provoque un `403` : c'est le `deny by default`, l'oubli d'une règle ferme la porte."
+      en: "Permissions are defined in one place and enforced by a reusable decorator. An unknown role or a missing permission triggers a `403`: this is deny by default, forgetting a rule closes the door."
+
+  - title:
+      fr: "IDOR : vérification au niveau de l'objet (Node.js/Express)"
+      en: "IDOR: object-level check (Node.js/Express)"
+    file: invoices.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const app = express();
+
+      // ---------- VULNERABLE ----------
+      // Checks only that the user is logged in, not that the invoice is theirs
+      app.get("/vulnerable/invoice/:id", requireLogin, async (req, res) => {
+        const invoice = await db.invoices.findById(req.params.id);
+        res.json(invoice); // /invoice/124 leaks another user's data
+      });
+
+      // ---------- FIXED ----------
+      app.get("/invoice/:id", requireLogin, async (req, res) => {
+        // The query is SCOPED to the current user: a foreign id matches nothing
+        const invoice = await db.invoices.findOne({
+          id: req.params.id,
+          ownerId: req.user.id, // object-level authorization
+        });
+        // 404 (not 403) avoids confirming that someone else's invoice exists
+        if (!invoice) return res.status(404).json({ error: "not found" });
+        res.json(invoice);
+      });
+
+      function requireLogin(req, res, next) {
+        if (!req.user) return res.status(401).json({ error: "login required" });
+        next();
+      }
+
+      app.listen(3000);
+    output: |
+      # Local lab, alice logged in, invoice 124 belongs to bob:
+      $ curl -H "Cookie: session=alice" http://localhost:3000/invoice/124
+      {"error":"not found"}
+    note:
+      fr: "La correction filtre la requête sur `ownerId`, de sorte qu'un identifiant appartenant à autrui ne renvoie rien. Renvoyer `404` plutôt que `403` évite de révéler l'existence de la ressource."
+      en: "The fix scopes the query to `ownerId`, so an identifier belonging to someone else returns nothing. Returning `404` rather than `403` avoids revealing that the resource exists."
+
+  - title:
+      fr: "ABAC : décision par attributs (propriété + contexte)"
+      en: "ABAC: attribute-based decision (ownership + context)"
+    file: abac.py
+    lang: python
+    kind: secure
+    code: |
+      from dataclasses import dataclass
+
+
+      @dataclass
+      class User:
+          id: int
+          department: str
+
+
+      @dataclass
+      class Document:
+          owner_id: int
+          department: str
+          classification: str  # "public" | "internal" | "secret"
+
+
+      def can_read(user: User, doc: Document) -> bool:
+          # ABAC: the decision combines several attributes, not just a role
+          if doc.classification == "public":
+              return True
+          if doc.owner_id == user.id:
+              return True  # the owner always reads their own document
+          # Same-department staff may read internal (but not secret) documents
+          if doc.classification == "internal" and doc.department == user.department:
+              return True
+          return False  # deny by default: anything not explicitly allowed is refused
+
+
+      alice = User(id=1, department="finance")
+      inv = Document(owner_id=2, department="finance", classification="internal")
+      secret = Document(owner_id=2, department="finance", classification="secret")
+      print("read internal (same dept):", can_read(alice, inv))
+      print("read secret  (not owner) :", can_read(alice, secret))
+    output: |
+      read internal (same dept): True
+      read secret  (not owner) : True
+      read secret  (not owner) : False
+    note:
+      fr: "ABAC décide à partir d'attributs combinés (propriété, service, classification), ce que RBAC seul ne sait pas exprimer finement. La dernière ligne `return False` matérialise le `deny by default`."
+      en: "ABAC decides from combined attributes (ownership, department, classification), which RBAC alone cannot express finely. The final `return False` embodies deny by default."
+
+  - title:
+      fr: "Tester le contrôle d'accès (pytest)"
+      en: "Testing access control (pytest)"
+    file: test_authz.py
+    lang: python
+    kind: secure
+    code: |
+      import pytest
+      from abac import User, Document, can_read
+
+
+      def test_owner_can_read_secret():
+          owner = User(id=2, department="finance")
+          doc = Document(owner_id=2, department="finance", classification="secret")
+          assert can_read(owner, doc) is True
+
+
+      def test_other_user_cannot_read_secret():
+          # A non-owner from the same department must NOT read a secret document
+          intruder = User(id=1, department="finance")
+          doc = Document(owner_id=2, department="finance", classification="secret")
+          assert can_read(intruder, doc) is False
+
+
+      def test_cross_department_internal_denied():
+          # Deny by default: a different department has no implicit access
+          outsider = User(id=3, department="sales")
+          doc = Document(owner_id=2, department="finance", classification="internal")
+          assert can_read(outsider, doc) is False
+
+
+      @pytest.mark.parametrize("classification", ["internal", "secret"])
+      def test_unknown_classification_is_denied(classification):
+          user = User(id=9, department="legal")
+          doc = Document(owner_id=1, department="finance", classification=classification)
+          assert can_read(user, doc) is False
+    output: |
+      ==== 4 passed in 0.02s ====
+    note:
+      fr: "Le contrôle d'accès se teste comme toute logique métier : on vérifie que le propriétaire passe, qu'un intrus est refusé et que le `deny by default` s'applique. Ces tests tournent en CI et détectent une régression d'autorisation."
+      en: "Access control is tested like any business logic: check that the owner passes, an intruder is denied and deny by default applies. These tests run in CI and catch an authorization regression."
+
+mistake:
+  fr: |
+    **Vérifier le rôle mais pas la propriété de l'objet (IDOR), ou cacher un bouton au lieu de décider côté serveur.**
+
+    Beaucoup d'applications contrôlent « l'utilisateur est-il connecté / est-il `editor` ? » puis chargent
+    l'objet par son identifiant **sans vérifier qu'il lui appartient**. Changer `/order/123` en `/order/124`
+    suffit alors à lire la commande d'autrui. Masquer le bouton « Supprimer » dans l'interface ne protège
+    rien : l'API reste appelable directement. La règle : **chaque accès à une ressource vérifie, côté
+    serveur, le droit de l'utilisateur sur cet objet précis**, et la politique est **deny by default** —
+    tout ce qui n'est pas explicitement autorisé est refusé.
+  en: |
+    **Checking the role but not object ownership (IDOR), or hiding a button instead of deciding server-side.**
+
+    Many applications check "is the user logged in / an `editor`?" then load the object by its id **without
+    verifying it belongs to them**. Changing `/order/123` to `/order/124` is then enough to read someone
+    else's order. Hiding the "Delete" button in the UI protects nothing: the API is still callable directly.
+    The rule: **every access to a resource verifies, server-side, the user's right over that specific
+    object**, and the policy is **deny by default** — anything not explicitly allowed is refused.
+
+bestPractice:
+  fr: |
+    - **Deny by default** : refuser l'accès sauf règle explicite ; une route sans règle renvoie `403`.
+    - **Vérification au niveau de l'objet** à chaque requête : filtrer sur le propriétaire / le locataire (contre l'IDOR).
+    - **Décision côté serveur** uniquement ; masquer un élément d'interface n'est pas un contrôle d'accès.
+    - **Centraliser** la politique (middleware, décorateur, OPA/Rego) plutôt que la dupliquer dans chaque route.
+    - **Renvoyer `404`** pour une ressource d'autrui afin de ne pas confirmer son existence.
+    - **Tester l'autorisation** (propriétaire, intrus, deny by default) en CI ; **SAST** pour les routes sans contrôle.
+  en: |
+    - **Deny by default**: refuse access unless explicitly allowed; a route with no rule returns `403`.
+    - **Object-level check** on every request: scope to the owner / tenant (against IDOR).
+    - **Server-side decision** only; hiding a UI element is not access control.
+    - **Centralise** the policy (middleware, decorator, OPA/Rego) rather than duplicating it in each route.
+    - **Return `404`** for someone else's resource so as not to confirm it exists.
+    - **Test authorization** (owner, intruder, deny by default) in CI; **SAST** for routes with no check.
+
+exercise:
+  statement:
+    fr: |
+      Cette route d'une API de messagerie laisse lire n'importe quel message :
+
+      ```python
+      @app.get("/message/<int:message_id>")
+      @login_required
+      def read_message(message_id):
+          return db.messages.get(message_id)
+      ```
+
+      1. Nommez la faille et montrez comment l'exploiter en labo local.
+      2. Corrigez la route par une vérification au niveau de l'objet, en renvoyant `404` si le message
+         n'appartient pas à l'utilisateur courant.
+    en: |
+      This route of a messaging API lets anyone read any message:
+
+      ```python
+      @app.get("/message/<int:message_id>")
+      @login_required
+      def read_message(message_id):
+          return db.messages.get(message_id)
+      ```
+
+      1. Name the flaw and show how to exploit it on a local lab.
+      2. Fix the route with an object-level check, returning `404` if the message does not belong to the
+         current user.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      from flask import abort, jsonify
+      from flask_login import current_user, login_required
+
+
+      @app.get("/message/<int:message_id>")
+      @login_required
+      def read_message(message_id):
+          # Object-level authorization: scope the lookup to the current user.
+          # A message belonging to someone else simply does not match -> 404.
+          message = db.messages.find_one(id=message_id, recipient_id=current_user.id)
+          if message is None:
+              abort(404)  # 404, not 403: do not confirm the message exists
+          return jsonify(message)
+
+      # Exploit on a local lab (IDOR): logged in as alice, iterate the id to read bob's mail
+      #   curl -H "Cookie: session=alice" http://localhost:5000/message/124
+      # After the fix this returns 404 instead of bob's message.
+    note:
+      fr: "La faille est une IDOR : `@login_required` vérifie seulement la connexion, pas la propriété. La correction filtre sur `recipient_id=current_user.id` ; un identifiant d'autrui ne correspond plus et renvoie `404`."
+      en: "The flaw is an IDOR: `@login_required` only checks login, not ownership. The fix scopes to `recipient_id=current_user.id`; another user's id no longer matches and returns `404`."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence principale entre RBAC et ABAC ?"
+      en: "What is the main difference between RBAC and ABAC?"
+    options:
+      fr:
+        - "RBAC décide selon le rôle de l'utilisateur, ABAC selon des attributs comme la propriété ou le contexte"
+        - "RBAC chiffre les données, ABAC les signe"
+        - "ABAC ne fonctionne qu'avec OAuth2"
+        - "RBAC est réservé aux bases de données"
+      en:
+        - "RBAC decides by the user's role, ABAC by attributes such as ownership or context"
+        - "RBAC encrypts data, ABAC signs it"
+        - "ABAC only works with OAuth2"
+        - "RBAC is reserved for databases"
+    answer: 0
+    why:
+      fr: "RBAC repose sur des rôles fixes ; ABAC combine des attributs (propriétaire, service, heure) pour une décision plus fine et contextuelle."
+      en: "RBAC relies on fixed roles; ABAC combines attributes (owner, department, time) for a finer, contextual decision."
+  - q:
+      fr: "Qu'est-ce qu'une faille IDOR ?"
+      en: "What is an IDOR flaw?"
+    options:
+      fr:
+        - "Un mot de passe stocké en clair"
+        - "Accéder à l'objet d'un autre utilisateur en modifiant un identifiant, faute de vérification de propriété"
+        - "Un certificat TLS expiré"
+        - "Une injection SQL dans un formulaire"
+      en:
+        - "A password stored in clear"
+        - "Accessing another user's object by changing an identifier, due to a missing ownership check"
+        - "An expired TLS certificate"
+        - "A SQL injection in a form"
+    answer: 1
+    why:
+      fr: "L'IDOR survient quand le code vérifie la connexion mais pas que l'objet appartient à l'utilisateur : changer l'id donne accès aux données d'autrui."
+      en: "IDOR happens when the code checks login but not that the object belongs to the user: changing the id grants access to others' data."
+  - q:
+      fr: "Que signifie le principe « deny by default » ?"
+      en: "What does the \"deny by default\" principle mean?"
+    options:
+      fr:
+        - "Tout est autorisé sauf une liste d'interdictions"
+        - "On supprime tous les comptes inactifs"
+        - "L'accès est refusé sauf s'il est explicitement autorisé par une règle"
+        - "On bloque toutes les adresses IP étrangères"
+      en:
+        - "Everything is allowed except a list of forbidden cases"
+        - "All inactive accounts are deleted"
+        - "Access is denied unless explicitly allowed by a rule"
+        - "All foreign IP addresses are blocked"
+    answer: 2
+    why:
+      fr: "Avec le refus par défaut, oublier une règle ferme la porte (un `403` visible) au lieu de l'ouvrir silencieusement."
+      en: "With deny by default, forgetting a rule closes the door (a visible `403`) instead of silently opening it."
+  - q:
+      fr: "Pourquoi centraliser le contrôle d'accès dans un middleware plutôt que de le répéter dans chaque route ?"
+      en: "Why centralise access control in a middleware rather than repeating it in each route?"
+    options:
+      fr:
+        - "Pour réduire la taille du code uniquement"
+        - "Parce qu'une seule vérification oubliée dans une route suffit à ouvrir une brèche"
+        - "Parce que les middlewares sont plus rapides"
+        - "Parce que c'est exigé par HTTP"
+      en:
+        - "Only to reduce code size"
+        - "Because a single forgotten check in one route is enough to open a breach"
+        - "Because middlewares are faster"
+        - "Because HTTP requires it"
+    answer: 1
+    why:
+      fr: "La duplication multiplie les occasions d'oubli ; un point de décision unique garantit que toutes les routes passent par la même politique."
+      en: "Duplication multiplies the chances of an oversight; a single decision point ensures every route goes through the same policy."
+  - q:
+      fr: "Pourquoi renvoyer `404` plutôt que `403` pour une ressource qui n'appartient pas à l'utilisateur ?"
+      en: "Why return `404` rather than `403` for a resource that does not belong to the user?"
+    options:
+      fr:
+        - "Parce que `403` n'existe pas en HTTP"
+        - "Pour accélérer la réponse"
+        - "Parce que `404` est mieux référencé"
+        - "Pour ne pas confirmer l'existence de la ressource à un utilisateur non autorisé"
+      en:
+        - "Because `403` does not exist in HTTP"
+        - "To speed up the response"
+        - "Because `404` ranks better in search"
+        - "To avoid confirming the resource exists to an unauthorised user"
+    answer: 3
+    why:
+      fr: "Un `403` révèle que l'objet existe ; un `404` ne distingue pas « inexistant » de « interdit », ce qui ne donne aucune information à l'attaquant."
+      en: "A `403` reveals the object exists; a `404` does not distinguish \"nonexistent\" from \"forbidden\", giving the attacker no information."

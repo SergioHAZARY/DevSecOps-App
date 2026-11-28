@@ -1,0 +1,370 @@
+description:
+  fr: "Évaluer en continu la posture de sécurité du cloud avec les CIS Benchmarks et le CSPM : audits automatisés avec Prowler et ScoutSuite, puis boucle de remédiation en CI."
+  en: "Continuously assess your cloud security posture with CIS Benchmarks and CSPM: automated audits with Prowler and ScoutSuite, then a remediation loop in CI."
+duration: 25
+
+intro:
+  fr: |
+    Un compte cloud (AWS, Azure, GCP) comporte des centaines de réglages de sécurité : chiffrement, journaux,
+    accès publics, politiques IAM. Les vérifier à la main est impossible, et une seule case mal cochée — un bucket
+    S3 public, une clé d'accès vieille de trois ans — peut tout compromettre. Deux outils répondent à ce besoin :
+    les **CIS Benchmarks** (le référentiel) et le **CSPM** (l'automatisation de l'évaluation).
+
+    L'analogie : les **CIS Benchmarks** sont la check-list officielle d'inspection d'un avion avant décollage —
+    des centaines de points validés par des experts. Le **CSPM** (*Cloud Security Posture Management*) est le
+    mécanicien automatique qui passe cette check-list en continu et vous signale chaque voyant rouge, plutôt que
+    de la cocher une fois par an.
+
+    Dans cette leçon, vous allez lancer un audit de votre propre compte cloud avec **Prowler** et **ScoutSuite**
+    (deux outils open source bien réels), lire leurs rapports, comprendre comment ils se rattachent aux CIS
+    Benchmarks, et surtout construire une **boucle de remédiation en CI** : détecter, corriger, re-scanner, pour
+    que la posture ne dérive plus jamais.
+  en: |
+    A cloud account (AWS, Azure, GCP) has hundreds of security settings: encryption, logs, public access, IAM
+    policies. Checking them by hand is impossible, and a single wrong box — a public S3 bucket, a three-year-old
+    access key — can compromise everything. Two things answer this need: the **CIS Benchmarks** (the standard)
+    and **CSPM** (automated assessment).
+
+    The analogy: the **CIS Benchmarks** are the official pre-flight inspection checklist of an aircraft —
+    hundreds of points validated by experts. **CSPM** (*Cloud Security Posture Management*) is the automatic
+    mechanic who runs that checklist continuously and flags every red light, rather than ticking it once a year.
+
+    In this lesson you will run an audit of your own cloud account with **Prowler** and **ScoutSuite** (two very
+    real open-source tools), read their reports, understand how they map to the CIS Benchmarks, and above all
+    build a **remediation loop in CI**: detect, fix, re-scan, so your posture never drifts again.
+
+sections:
+  - heading:
+      fr: "CIS Benchmarks et CSPM"
+      en: "CIS Benchmarks and CSPM"
+    body:
+      fr: |
+        Le **CIS** (*Center for Internet Security*) publie des **Benchmarks** : des guides de durcissement
+        détaillés, consensuels et versionnés, pour AWS, Azure, GCP, Kubernetes, Linux, etc. Chaque contrôle a un
+        identifiant (ex. *CIS AWS 2.1.1 : chiffrement S3 au repos*), un niveau (1 = essentiel, 2 = strict) et une
+        procédure d'audit et de remédiation.
+
+        Le **CSPM** est la catégorie d'outils qui **vérifie automatiquement** ces contrôles sur votre compte :
+
+        | | CIS Benchmark | CSPM |
+        |---|---|---|
+        | Nature | Le référentiel (la check-list) | L'outil qui l'exécute |
+        | Fréquence | — | Continu / à la demande |
+        | Exemples | CIS AWS, CIS Azure | Prowler, ScoutSuite, Steampipe |
+
+        Un outil CSPM se connecte en **lecture seule** à votre compte (via un rôle IAM), énumère les ressources,
+        et produit un rapport : contrôles réussis, échoués, et sévérité. L'objectif n'est pas un audit ponctuel
+        mais une **surveillance continue** de la *dérive* — car une configuration sûre aujourd'hui peut être cassée
+        par un changement demain.
+      en: |
+        The **CIS** (*Center for Internet Security*) publishes **Benchmarks**: detailed, consensus-based,
+        versioned hardening guides for AWS, Azure, GCP, Kubernetes, Linux and more. Each control has an identifier
+        (e.g. *CIS AWS 2.1.1: S3 encryption at rest*), a level (1 = essential, 2 = strict) and an audit and
+        remediation procedure.
+
+        **CSPM** is the category of tools that **automatically checks** these controls against your account:
+
+        | | CIS Benchmark | CSPM |
+        |---|---|---|
+        | Nature | The standard (the checklist) | The tool that runs it |
+        | Frequency | — | Continuous / on demand |
+        | Examples | CIS AWS, CIS Azure | Prowler, ScoutSuite, Steampipe |
+
+        A CSPM tool connects **read-only** to your account (via an IAM role), enumerates the resources, and
+        produces a report: passed, failed controls and severity. The goal is not a one-off audit but **continuous
+        monitoring** of *drift* — because a configuration safe today can be broken by a change tomorrow.
+  - heading:
+      fr: "La boucle de remédiation en CI"
+      en: "The remediation loop in CI"
+    body:
+      fr: |
+        Scanner une fois ne suffit pas : il faut une boucle **détecter → corriger → re-scanner**, idéalement
+        automatisée dans un pipeline.
+
+        1. **Détecter** : Prowler/ScoutSuite tourne (planifié ou en CI) et exporte un rapport (JSON, CSV, HTML, ou
+           ASFF pour AWS Security Hub).
+        2. **Prioriser** : on trie par sévérité (CRITICAL/HIGH d'abord) et par exploitabilité (accès public ?).
+        3. **Corriger** : de préférence via l'**Infrastructure as Code** (Terraform), pour que la correction soit
+           durable et versionnée, pas un clic ponctuel dans la console.
+        4. **Re-scanner** : on relance l'audit pour confirmer que le contrôle passe désormais, et on **fait échouer
+           la CI** si de nouvelles failles critiques apparaissent.
+
+        Ce dernier point est essentiel : brancher Prowler avec `--severity critical high` et un seuil d'échec
+        transforme l'audit en **garde-fou** qui empêche une mauvaise configuration d'atteindre la production. La
+        remédiation passe par l'IaC pour éviter la *dérive de configuration* : corriger dans la console sans
+        toucher au code, c'est garantir que la faille reviendra au prochain `terraform apply`.
+      en: |
+        Scanning once is not enough: you need a **detect → fix → re-scan** loop, ideally automated in a pipeline.
+
+        1. **Detect**: Prowler/ScoutSuite runs (scheduled or in CI) and exports a report (JSON, CSV, HTML, or
+           ASFF for AWS Security Hub).
+        2. **Prioritise**: sort by severity (CRITICAL/HIGH first) and exploitability (public access?).
+        3. **Fix**: preferably through **Infrastructure as Code** (Terraform), so the fix is durable and
+           versioned, not a one-off click in the console.
+        4. **Re-scan**: re-run the audit to confirm the control now passes, and **fail CI** if new critical flaws
+           appear.
+
+        This last point is essential: wiring Prowler with `--severity critical high` and a failure gate turns the
+        audit into a **guardrail** that stops a misconfiguration from reaching production. Remediation goes
+        through IaC to avoid *configuration drift*: fixing in the console without touching the code guarantees the
+        flaw returns at the next `terraform apply`.
+
+examples:
+  - title:
+      fr: "Dangereux : audit manuel, ponctuel, non suivi"
+      en: "Dangerous: a manual, one-off, untracked audit"
+    file: manual-check.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - checking one setting by hand, once, and moving on.
+
+      # Someone manually looks at ONE bucket in the console, or runs:
+      aws s3api get-bucket-encryption --bucket my-data-bucket
+      # Sees it's fine today, ticks a box in a spreadsheet, and forgets it.
+
+      # Problems:
+      #  - Hundreds of other buckets / resources are never checked.
+      #  - No severity, no standard, no history, no drift detection.
+      #  - Next week a colleague disables encryption and nobody notices.
+      #  - There is no gate: a public bucket can be created at any time.
+    output: |
+      # The one bucket looks fine...
+      {"ServerSideEncryptionConfiguration": {"Rules": [...]}}
+      # ...while 40 other resources silently violate the CIS Benchmark.
+    note:
+      fr: "Vérifier un réglage à la main, une fois, ne couvre ni les autres ressources ni la dérive dans le temps. Sans référentiel (CIS) ni outil continu (CSPM), la posture se dégrade sans que personne ne le voie. C'est l'illusion du « on a vérifié »."
+      en: "Checking one setting by hand, once, covers neither the other resources nor drift over time. Without a standard (CIS) or a continuous tool (CSPM), the posture degrades unnoticed. It is the illusion of \"we checked it\"."
+
+  - title:
+      fr: "Sécurisé : audit AWS avec Prowler"
+      en: "Secure: AWS audit with Prowler"
+    file: prowler-scan.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # Prowler connects READ-ONLY using your configured AWS credentials.
+
+      # 1. Run the CIS AWS Benchmark checks, HTML + JSON reports.
+      prowler aws \
+        --compliance cis_3.0_aws \
+        --output-formats html json-ocsf \
+        --output-directory ./prowler-out
+
+      # 2. Focus on the most urgent findings only.
+      prowler aws --severity critical high
+
+      # 3. Scan a single service (e.g. S3) for a fast targeted check.
+      prowler aws --service s3
+
+      # 4. In CI: fail the pipeline if any CRITICAL/HIGH check fails.
+      prowler aws --severity critical high \
+        && echo "Posture OK" \
+        || { echo "Critical cloud misconfig found"; exit 1; }
+    output: |
+      # Prowler output (trimmed):
+      # FAIL s3_bucket_public_access  CRITICAL  my-data-bucket is public
+      # FAIL iam_rotate_access_keys   MEDIUM    key AKIAIOSFODNN7EXAMPLE 400+ days
+      # PASS cloudtrail_enabled       -         CloudTrail is logging
+      # Overall: 182 PASS / 14 FAIL (3 CRITICAL)
+    note:
+      fr: "Prowler exécute les contrôles CIS AWS en lecture seule et produit un rapport priorisé par sévérité. En CI, `--severity critical high` plus un `exit 1` transforme l'audit en garde-fou qui bloque une configuration dangereuse (bucket public, clé non tournée)."
+      en: "Prowler runs the CIS AWS controls read-only and produces a report prioritised by severity. In CI, `--severity critical high` plus an `exit 1` turns the audit into a guardrail that blocks a dangerous configuration (public bucket, unrotated key)."
+
+  - title:
+      fr: "Sécurisé : ScoutSuite et remédiation en IaC"
+      en: "Secure: ScoutSuite and IaC remediation"
+    file: remediate.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. ScoutSuite audits the account and builds a browsable HTML report.
+      scout aws --report-dir ./scout-out
+      # Open ./scout-out/report.html to triage findings by service/severity.
+
+      # 2. Remediate DURABLY via Terraform, not a console click.
+      #    Example Terraform fixing the public-bucket CIS finding:
+      cat > s3_secure.tf <<'EOF'
+      resource "aws_s3_bucket_public_access_block" "data" {
+        bucket                  = aws_s3_bucket.data.id
+        block_public_acls       = true   # CIS: block public ACLs
+        block_public_policy     = true   # CIS: block public bucket policy
+        ignore_public_acls      = true
+        restrict_public_buckets = true
+      }
+      EOF
+      terraform apply -auto-approve
+
+      # 3. Re-scan to confirm the control now PASSES (close the loop).
+      prowler aws --service s3 --severity critical high
+    note:
+      fr: "ScoutSuite génère un rapport navigable pour trier les écarts. La correction passe par Terraform (ici le blocage d'accès public S3), ce qui la rend durable et versionnée : pas de dérive. On re-scanne ensuite pour prouver que le contrôle CIS passe désormais."
+      en: "ScoutSuite produces a browsable report to triage gaps. The fix goes through Terraform (here the S3 public-access block), making it durable and versioned: no drift. You then re-scan to prove the CIS control now passes."
+
+  - title:
+      fr: "Sécurisé : la boucle d'audit en CI (planifiée)"
+      en: "Secure: the audit loop in CI (scheduled)"
+    file: .github/workflows/cspm.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: cloud-posture
+      on:
+        schedule:
+          - cron: "0 6 * * *"      # daily posture check at 06:00 UTC
+        workflow_dispatch: {}
+      permissions:
+        id-token: write            # for OIDC, no static AWS keys
+        contents: read
+      jobs:
+        prowler:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Assume a read-only audit role via OIDC
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                role-to-assume: arn:aws:iam::123456789012:role/prowler-audit
+                aws-region: eu-west-1
+            - name: Run Prowler and fail on CRITICAL/HIGH
+              run: |
+                pip install prowler
+                prowler aws --severity critical high \
+                  --output-formats json-ocsf --output-directory out
+            - uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                name: prowler-report
+                path: out/
+    output: |
+      # The job runs every morning; a new CRITICAL misconfig fails it
+      # and alerts the team, while the full report is kept as an artifact.
+    note:
+      fr: "L'audit tourne chaque jour via OIDC (aucune clé AWS statique) avec un rôle **en lecture seule**. Une nouvelle faille critique fait échouer le job et alerte l'équipe ; le rapport est archivé. C'est la surveillance continue qui empêche la dérive de posture."
+      en: "The audit runs daily via OIDC (no static AWS keys) with a **read-only** role. A new critical flaw fails the job and alerts the team; the report is archived. This continuous monitoring is what prevents posture drift."
+
+mistake:
+  fr: |
+    **Scanner une fois et corriger dans la console.** Deux erreurs jumelles. D'abord, un audit ponctuel ne détecte
+    pas la **dérive** : la posture doit être vérifiée en continu, car chaque changement peut introduire une faille.
+    Ensuite, corriger directement dans la console (cliquer pour rendre un bucket privé) sans modifier
+    l'Infrastructure as Code garantit que la faille **reviendra** au prochain `terraform apply`, qui réécrasera la
+    correction manuelle. La remédiation durable passe par le code, puis par un re-scan qui prouve que le contrôle
+    CIS passe. Enfin, donner à l'outil CSPM plus que des droits en **lecture seule** est un risque inutile.
+  en: |
+    **Scanning once and fixing in the console.** Two twin mistakes. First, a one-off audit does not catch
+    **drift**: posture must be checked continuously, because every change can introduce a flaw. Second, fixing
+    directly in the console (clicking to make a bucket private) without changing the Infrastructure as Code
+    guarantees the flaw **comes back** at the next `terraform apply`, which overwrites the manual fix. Durable
+    remediation goes through code, then a re-scan proving the CIS control passes. Finally, giving the CSPM tool
+    more than **read-only** rights is a needless risk.
+
+bestPractice:
+  fr: |
+    - **Adoptez un référentiel** (CIS Benchmark du fournisseur) plutôt que des vérifications ad hoc.
+    - **Automatisez l'audit** avec Prowler/ScoutSuite, en continu (planifié) et en CI, jamais une seule fois.
+    - **Donnez un rôle en lecture seule** à l'outil CSPM, idéalement via OIDC sans clé statique.
+    - **Remédiez via l'IaC** (Terraform) pour une correction durable et versionnée, puis **re-scannez** pour confirmer.
+    - **Faites échouer la CI** sur les contrôles CRITICAL/HIGH afin de bloquer la dérive avant la production.
+  en: |
+    - **Adopt a standard** (the provider's CIS Benchmark) rather than ad-hoc checks.
+    - **Automate the audit** with Prowler/ScoutSuite, continuously (scheduled) and in CI, never just once.
+    - **Give the CSPM tool a read-only role**, ideally via OIDC with no static key.
+    - **Remediate via IaC** (Terraform) for a durable, versioned fix, then **re-scan** to confirm.
+    - **Fail CI** on CRITICAL/HIGH controls to block drift before production.
+
+exercise:
+  statement:
+    fr: |
+      Votre entreprise veut mettre en place une surveillance continue de la posture AWS. On vous demande de :
+
+      1. Donner la commande Prowler qui exécute le CIS Benchmark AWS et **n'échoue que** sur les contrôles
+         CRITICAL et HIGH (pour un usage en CI).
+      2. Expliquer en deux phrases pourquoi la correction doit se faire en Terraform plutôt que dans la console.
+    en: |
+      Your company wants to set up continuous monitoring of its AWS posture. You are asked to:
+
+      1. Give the Prowler command that runs the CIS AWS Benchmark and **only fails** on CRITICAL and HIGH
+         controls (for use in CI).
+      2. Explain in two sentences why the fix should be done in Terraform rather than in the console.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. Run CIS AWS checks, fail the pipeline only on CRITICAL/HIGH.
+      prowler aws \
+        --compliance cis_3.0_aws \
+        --severity critical high \
+        --output-formats json-ocsf \
+        --output-directory ./out
+      # Prowler exits non-zero when a check at that severity fails,
+      # which stops the CI pipeline.
+
+      # 2. Why Terraform, not the console:
+      #  - A console click is NOT tracked: nobody reviews it, and the next
+      #    `terraform apply` overwrites it, so the flaw silently returns
+      #    (configuration drift).
+      #  - A Terraform fix is versioned, peer-reviewed and reproducible, so
+      #    the control stays fixed and the change has an audit trail.
+    note:
+      fr: "`--severity critical high` limite l'échec aux failles graves, idéal pour une porte CI. Corriger en Terraform rend la remédiation durable (versionnée, revue) et évite que le prochain `apply` ne réintroduise la faille : c'est la différence entre colmater et réparer."
+      en: "`--severity critical high` limits the failure to serious flaws, ideal for a CI gate. Fixing in Terraform makes remediation durable (versioned, reviewed) and prevents the next `apply` from reintroducing the flaw: the difference between patching and repairing."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'un CIS Benchmark ?"
+      en: "What is a CIS Benchmark?"
+    options:
+      fr: ["Un référentiel de durcissement détaillé et consensuel pour une plateforme", "Un outil de scan", "Un type de chiffrement", "Un service AWS payant"]
+      en: ["A detailed, consensus-based hardening standard for a platform", "A scanning tool", "A type of encryption", "A paid AWS service"]
+    answer: 0
+    why:
+      fr: "Le CIS Benchmark est la check-list de durcissement (AWS, Azure, Kubernetes…) ; le CSPM est l'outil qui en vérifie automatiquement les contrôles."
+      en: "The CIS Benchmark is the hardening checklist (AWS, Azure, Kubernetes…); CSPM is the tool that automatically checks its controls."
+  - q:
+      fr: "Que signifie CSPM ?"
+      en: "What does CSPM stand for?"
+    options:
+      fr: ["Cloud Secret Policy Manager", "Container Security Patch Management", "Cloud Security Posture Management", "Central System Performance Monitor"]
+      en: ["Cloud Secret Policy Manager", "Container Security Patch Management", "Cloud Security Posture Management", "Central System Performance Monitor"]
+    answer: 2
+    why:
+      fr: "CSPM (Cloud Security Posture Management) désigne les outils qui évaluent en continu la configuration de sécurité d'un compte cloud, comme Prowler ou ScoutSuite."
+      en: "CSPM (Cloud Security Posture Management) refers to tools that continuously assess a cloud account's security configuration, such as Prowler or ScoutSuite."
+  - q:
+      fr: "Quels droits faut-il accorder à un outil CSPM comme Prowler ?"
+      en: "What rights should you grant a CSPM tool like Prowler?"
+    options:
+      fr: ["Des droits administrateur complets", "Un accès en lecture seule", "Aucun accès", "Des droits d'écriture sur S3"]
+      en: ["Full administrator rights", "Read-only access", "No access", "Write rights on S3"]
+    answer: 1
+    why:
+      fr: "Un outil CSPM n'a besoin que de lire la configuration pour l'auditer ; lui donner des droits d'écriture ou admin crée un risque inutile en cas de compromission."
+      en: "A CSPM tool only needs to read the configuration to audit it; giving it write or admin rights creates a needless risk if it is compromised."
+  - q:
+      fr: "Pourquoi corriger une faille dans la console est-il un mauvais réflexe ?"
+      en: "Why is fixing a flaw in the console a bad habit?"
+    options:
+      fr: ["C'est plus lent", "Le prochain `terraform apply` réécrasera la correction (dérive)", "Cela coûte plus cher", "Cela désactive les logs"]
+      en: ["It is slower", "The next `terraform apply` overwrites the fix (drift)", "It costs more", "It disables logs"]
+    answer: 1
+    why:
+      fr: "Une correction manuelle non reflétée dans l'IaC est écrasée au prochain `apply`, et la faille revient. La remédiation durable passe par le code, versionné et revu."
+      en: "A manual fix not reflected in the IaC is overwritten at the next `apply`, and the flaw returns. Durable remediation goes through versioned, reviewed code."
+  - q:
+      fr: "Comment transforme-t-on un audit Prowler en garde-fou de CI ?"
+      en: "How do you turn a Prowler audit into a CI guardrail?"
+    options:
+      fr: ["En l'exécutant sans options", "En le lançant une fois par an", "En lui donnant des droits admin", "En le faisant échouer sur les contrôles CRITICAL/HIGH"]
+      en: ["By running it with no options", "By running it once a year", "By giving it admin rights", "By making it fail on CRITICAL/HIGH controls"]
+    answer: 3
+    why:
+      fr: "Avec `--severity critical high` et un code de sortie non nul en cas d'échec, Prowler bloque le pipeline dès qu'une configuration dangereuse apparaît, empêchant la dérive d'atteindre la production."
+      en: "With `--severity critical high` and a non-zero exit on failure, Prowler blocks the pipeline as soon as a dangerous configuration appears, stopping drift from reaching production."

@@ -1,0 +1,517 @@
+description:
+  fr: "Assembler un playbook de durcissement complet et idempotent : SSH, pare-feu UFW, auditd, mises à jour automatiques, sysctl et bannière légale."
+  en: "Assemble a complete, idempotent hardening playbook: SSH, the UFW firewall, auditd, automatic updates, sysctl and a legal banner."
+duration: 45
+
+intro:
+  fr: |
+    Vous savez écrire des playbooks, utiliser des rôles et chiffrer des secrets. Il est temps de tout
+    réunir dans le playbook qui tourne en premier sur chaque nouveau serveur : le **playbook de
+    durcissement** (*hardening*). Son but est de réduire la surface d'attaque *avant* que l'application
+    n'arrive.
+
+    Pensez à une maison neuve : avant d'emménager, on pose les serrures, on ferme les fenêtres du
+    sous-sol, on installe un détecteur de fumée et on affiche le règlement à l'entrée. C'est exactement ce
+    que fait ce playbook, de façon automatique et répétable sur des centaines de serveurs identiques.
+
+    Vous allez durcir SSH (avec validation et handler pour ne jamais vous enfermer dehors), configurer le
+    pare-feu UFW en « tout bloquer sauf... », activer auditd et les mises à jour de sécurité automatiques,
+    régler le noyau via sysctl, et afficher une bannière légale. Le tout testé avec `--check --diff`.
+  en: |
+    You can write playbooks, use roles and encrypt secrets. Time to bring it all together in the playbook
+    that runs first on every new server: the **hardening playbook**. Its goal is to reduce the attack
+    surface *before* the application arrives.
+
+    Think of a new house: before moving in you fit the locks, close the basement windows, install a smoke
+    detector and post the rules at the entrance. That is exactly what this playbook does, automatically and
+    repeatably across hundreds of identical servers.
+
+    You will harden SSH (with validation and a handler so you never lock yourself out), configure the UFW
+    firewall as "block everything except...", enable auditd and automatic security updates, tune the kernel
+    via sysctl, and display a legal banner. All tested with `--check --diff`.
+
+sections:
+  - heading:
+      fr: "Durcir SSH sans se verrouiller dehors"
+      en: "Harden SSH without locking yourself out"
+    body:
+      fr: |
+        SSH est la porte d'entrée : un réglage raté peut vous couper l'accès au serveur. La parade est
+        d'**écrire la configuration dans un fichier séparé** de `/etc/ssh/sshd_config.d/`, puis de **valider
+        la syntaxe** avec `sshd -t` *avant* de recharger le service. Le module `template` le fait avec son
+        option `validate`, et un **handler** ne recharge SSH que si le fichier a changé ET passé la
+        validation.
+
+        | Réglage sshd | Valeur durcie | Pourquoi |
+        |---|---|---|
+        | `PermitRootLogin` | `no` | Pas de connexion root directe |
+        | `PasswordAuthentication` | `no` | Clés uniquement, fin de la force brute |
+        | `KbdInteractiveAuthentication` | `no` | Ferme l'autre voie par mot de passe |
+        | `X11Forwarding` | `no` | Surface inutile en serveur |
+        | `MaxAuthTries` | `3` | Limite les essais par connexion |
+
+        Astuce de sécurité : gardez toujours une session SSH ouverte pendant le test. Si le nouveau réglage
+        vous bloque, vous pouvez corriger depuis la session existante.
+      en: |
+        SSH is the front door: a botched setting can cut off your access to the server. The fix is to
+        **write the configuration in a separate file** under `/etc/ssh/sshd_config.d/`, then **validate the
+        syntax** with `sshd -t` *before* reloading the service. The `template` module does this with its
+        `validate` option, and a **handler** reloads SSH only if the file changed AND passed validation.
+
+        | sshd setting | Hardened value | Why |
+        |---|---|---|
+        | `PermitRootLogin` | `no` | No direct root login |
+        | `PasswordAuthentication` | `no` | Keys only, end of brute force |
+        | `KbdInteractiveAuthentication` | `no` | Closes the other password path |
+        | `X11Forwarding` | `no` | Useless surface on a server |
+        | `MaxAuthTries` | `3` | Limits attempts per connection |
+
+        Security tip: always keep an SSH session open during the test. If the new setting locks you out, you
+        can fix it from the existing session.
+  - heading:
+      fr: "Pare-feu, auditd et mises à jour"
+      en: "Firewall, auditd and updates"
+    body:
+      fr: |
+        Le pare-feu applique le principe du **moindre privilège réseau** : on refuse tout en entrée, puis on
+        autorise explicitement le strict nécessaire. Le module `community.general.ufw` le fait proprement :
+        on pose d'abord `policy: deny` pour l'entrée, puis on ouvre SSH et le web.
+
+        - **auditd** journalise les appels système sensibles (lecture de `/etc/shadow`, changements de
+          configuration) : c'est la boîte noire du serveur, précieuse après un incident.
+        - **unattended-upgrades** applique automatiquement les correctifs de sécurité : une faille connue
+          non corrigée est la cause n°1 des compromissions.
+        - **sysctl** durcit le noyau : désactivation du routage, protection contre l'usurpation d'adresse,
+          randomisation de la mémoire.
+
+        Tous ces réglages sont *déclaratifs* : on décrit l'état voulu, Ansible converge vers lui et ne
+        change plus rien ensuite.
+      en: |
+        The firewall applies the principle of **network least privilege**: deny everything inbound, then
+        explicitly allow only what is strictly needed. The `community.general.ufw` module does this
+        cleanly: first set `policy: deny` for inbound, then open SSH and the web.
+
+        - **auditd** logs sensitive system calls (reading `/etc/shadow`, configuration changes): it is the
+          server's black box, invaluable after an incident.
+        - **unattended-upgrades** automatically applies security patches: a known, unpatched flaw is the
+          number one cause of compromise.
+        - **sysctl** hardens the kernel: disabling routing, protecting against address spoofing, memory
+          randomisation.
+
+        All these settings are *declarative*: you describe the desired state, Ansible converges to it and
+        changes nothing afterwards.
+  - heading:
+      fr: "Structure, ordre et test"
+      en: "Structure, order and testing"
+    body:
+      fr: |
+        L'ordre des tâches compte : on configure le pare-feu et SSH avant d'ouvrir les services, et on
+        termine par un rapport. Un **handler** centralise le rechargement des services pour qu'il n'arrive
+        qu'une fois, à la fin.
+
+        La règle absolue avant d'appliquer un durcissement en production :
+
+        1. `ansible-playbook harden.yml --syntax-check` — la syntaxe est bonne.
+        2. `ansible-playbook harden.yml --check --diff` — on voit exactement ce qui changerait.
+        3. On applique sur **un** serveur de test (`--limit canary`).
+        4. On vérifie l'accès SSH **depuis une nouvelle session**.
+        5. On déploie sur le reste du parc.
+
+        `--check --diff` est votre filet de sécurité : il affiche le contenu avant/après de chaque fichier
+        sans rien modifier. Pour un playbook de durcissement, sauter cette étape, c'est jouer avec l'accès à
+        ses propres serveurs.
+      en: |
+        Task order matters: configure the firewall and SSH before opening services, and finish with a
+        report. A **handler** centralises service reloads so they happen only once, at the end.
+
+        The absolute rule before applying hardening in production:
+
+        1. `ansible-playbook harden.yml --syntax-check` — the syntax is valid.
+        2. `ansible-playbook harden.yml --check --diff` — you see exactly what would change.
+        3. Apply on **one** test server (`--limit canary`).
+        4. Verify SSH access **from a fresh session**.
+        5. Roll out to the rest of the fleet.
+
+        `--check --diff` is your safety net: it prints the before/after content of each file without
+        changing anything. For a hardening playbook, skipping this step means gambling with access to your
+        own servers.
+
+examples:
+  - title:
+      fr: "Le durcissement SSH avec validation et handler"
+      en: "SSH hardening with validation and a handler"
+    file: harden-ssh.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      - name: Harden SSH safely
+        hosts: all
+        become: true
+        tasks:
+          - name: Deploy a hardened sshd drop-in config
+            ansible.builtin.template:
+              src: sshd_hardening.conf.j2
+              dest: /etc/ssh/sshd_config.d/10-hardening.conf
+              owner: root
+              group: root
+              mode: "0600"
+              # CRITICAL: validate the resulting config before accepting it.
+              # %s is the temp file; if "sshd -t" fails, the file is NOT installed.
+              validate: "sshd -t -f %s"
+            notify: Reload sshd
+
+        handlers:
+          - name: Reload sshd
+            ansible.builtin.service:
+              name: ssh
+              state: reloaded # reload, not restart: keeps existing sessions alive
+    output: |
+      # templates/sshd_hardening.conf.j2 (managed by Ansible)
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      X11Forwarding no
+      MaxAuthTries 3
+      AllowUsers deploy
+    note:
+      fr: "`validate: sshd -t -f %s` refuse d'installer une config SSH invalide : impossible de se verrouiller dehors par une faute de frappe. Le handler fait un `reload`, pas un `restart`, pour préserver les sessions."
+      en: "`validate: sshd -t -f %s` refuses to install an invalid SSH config: a typo cannot lock you out. The handler does a `reload`, not a `restart`, to preserve existing sessions."
+
+  - title:
+      fr: "Pare-feu UFW : tout bloquer sauf SSH et le web"
+      en: "UFW firewall: block everything except SSH and the web"
+    file: harden-firewall.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      - name: Configure the host firewall
+        hosts: all
+        become: true
+        tasks:
+          - name: Install ufw
+            ansible.builtin.apt:
+              name: ufw
+              state: present
+              update_cache: true
+
+          - name: Default deny all inbound traffic
+            community.general.ufw:
+              direction: incoming
+              policy: deny # least privilege: nothing in unless explicitly allowed
+
+          - name: Default allow outbound traffic
+            community.general.ufw:
+              direction: outgoing
+              policy: allow
+
+          - name: Allow SSH with rate limiting (slows brute force)
+            community.general.ufw:
+              rule: limit
+              port: "22"
+              proto: tcp
+
+          - name: Allow HTTP and HTTPS
+            community.general.ufw:
+              rule: allow
+              port: "{{ item }}"
+              proto: tcp
+            loop:
+              - "80"
+              - "443"
+
+          - name: Enable ufw and turn on logging
+            community.general.ufw:
+              state: enabled
+              logging: "on"
+    note:
+      fr: "On pose la politique par défaut `deny` AVANT d'ouvrir des ports : à aucun instant le serveur n'est grand ouvert. `rule: limit` sur SSH ralentit la force brute en bridant les connexions répétées."
+      en: "The default `deny` policy is set BEFORE opening any ports: at no point is the server wide open. `rule: limit` on SSH slows brute force by throttling repeated connections."
+
+  - title:
+      fr: "Playbook complet : auditd, mises à jour, sysctl, bannière"
+      en: "Complete playbook: auditd, updates, sysctl, banner"
+    file: harden.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      - name: Baseline server hardening
+        hosts: all
+        become: true
+        tasks:
+          - name: Install security baseline packages
+            ansible.builtin.apt:
+              name:
+                - auditd
+                - unattended-upgrades
+              state: present
+              update_cache: true
+
+          - name: Ensure auditd is running and enabled at boot
+            ansible.builtin.service:
+              name: auditd
+              state: started
+              enabled: true
+
+          - name: Enable automatic security updates
+            ansible.builtin.copy:
+              dest: /etc/apt/apt.conf.d/20auto-upgrades
+              owner: root
+              group: root
+              mode: "0644"
+              content: |
+                APT::Periodic::Update-Package-Lists "1";
+                APT::Periodic::Unattended-Upgrade "1";
+
+          - name: Harden kernel network parameters
+            ansible.posix.sysctl:
+              name: "{{ item.name }}"
+              value: "{{ item.value }}"
+              state: present
+              sysctl_set: true
+              reload: true
+            loop:
+              # Ignore spoofed ICMP redirects (prevents route manipulation)
+              - { name: net.ipv4.conf.all.accept_redirects, value: "0" }
+              # Reject packets claiming an impossible source (anti-spoofing)
+              - { name: net.ipv4.conf.all.rp_filter, value: "1" }
+              # Do not act as a router unless you really are one
+              - { name: net.ipv4.ip_forward, value: "0" }
+
+          - name: Set a legal login banner
+            ansible.builtin.copy:
+              dest: /etc/issue.net
+              owner: root
+              group: root
+              mode: "0644"
+              content: |
+                Authorized access only. All activity is monitored and logged.
+            notify: Restart sshd
+
+        handlers:
+          - name: Restart sshd
+            ansible.builtin.service:
+              name: ssh
+              state: restarted
+    note:
+      fr: "Chaque bloc est déclaratif et idempotent : paquets, service auditd, mises à jour auto, trois réglages sysctl anti-usurpation, bannière légale. Un second passage affichera `changed=0`."
+      en: "Each block is declarative and idempotent: packages, the auditd service, auto-updates, three anti-spoofing sysctl settings, a legal banner. A second run will show `changed=0`."
+
+  - title:
+      fr: "Déployer en toute sécurité : --check --diff puis canary"
+      en: "Deploy safely: --check --diff then canary"
+    file: deploy.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. Syntax only, no connection
+      ansible-playbook harden.yml --syntax-check
+
+      # 2. Dry run with content diffs: see every change before it happens
+      ansible-playbook harden.yml --check --diff
+
+      # 3. Apply to ONE canary host first, keeping a second SSH session open
+      ansible-playbook harden.yml --limit canary
+
+      # 4. From a NEW terminal, confirm you can still log in and sudo
+      ssh deploy@canary 'sudo -n true && echo "access OK"'
+
+      # 5. Only then roll out to everyone
+      ansible-playbook harden.yml
+    output: |
+      TASK [Deploy a hardened sshd drop-in config] *********************
+      --- before
+      +++ after: /etc/ssh/sshd_config.d/10-hardening.conf
+      +PermitRootLogin no
+      +PasswordAuthentication no
+      changed: [canary]
+
+      PLAY RECAP ******************************************************
+      canary : ok=9  changed=6  unreachable=0  failed=0
+    note:
+      fr: "`--diff` montre les lignes ajoutées avant même de les appliquer. La stratégie canary (`--limit canary`) applique sur un seul serveur et on valide l'accès depuis une nouvelle session avant le déploiement global."
+      en: "`--diff` shows the added lines before they are even applied. The canary strategy (`--limit canary`) applies to a single server, and you validate access from a fresh session before the global rollout."
+
+mistake:
+  fr: |
+    **Appliquer un durcissement SSH en production sans validation ni test, directement sur tout le parc.**
+
+    C'est la meilleure façon de se verrouiller hors de ses propres serveurs : une faute de frappe dans
+    `sshd_config`, un `PasswordAuthentication no` alors que personne n'a de clé, et le `reload` casse
+    l'accès de tout le monde d'un coup. Toujours : `validate: "sshd -t -f %s"` sur le template, un `reload`
+    plutôt qu'un `restart`, `--check --diff` avant d'appliquer, un déploiement canary sur un seul hôte, et
+    une session SSH gardée ouverte pendant le test. Le durcissement protège le serveur, pas contre vos
+    propres erreurs : c'est la méthode qui vous protège.
+  en: |
+    **Applying SSH hardening in production with no validation or test, straight to the whole fleet.**
+
+    This is the surest way to lock yourself out of your own servers: a typo in `sshd_config`, a
+    `PasswordAuthentication no` while nobody has a key, and the `reload` cuts off everyone at once. Always:
+    `validate: "sshd -t -f %s"` on the template, a `reload` rather than a `restart`, `--check --diff` before
+    applying, a canary deploy on a single host, and an SSH session kept open during the test. Hardening
+    protects the server, not against your own mistakes: it is the method that protects you.
+
+bestPractice:
+  fr: |
+    - **`validate: "sshd -t -f %s"`** sur tout template de configuration SSH.
+    - **Pare-feu `deny` par défaut**, puis on ouvre explicitement SSH (en `limit`) et le web.
+    - **`reload` plutôt que `restart`** pour SSH : les sessions en cours survivent.
+    - **auditd + unattended-upgrades** : journalisation et correctifs automatiques dès le jour 1.
+    - **`--check --diff`** systématique, puis déploiement **canary** avant le parc entier.
+    - **Gardez une session SSH ouverte** pendant le test du durcissement SSH.
+    - **Playbook idempotent** : un second passage doit afficher `changed=0`.
+  en: |
+    - **`validate: "sshd -t -f %s"`** on every SSH configuration template.
+    - **Firewall `deny` by default**, then explicitly open SSH (as `limit`) and the web.
+    - **`reload` rather than `restart`** for SSH: ongoing sessions survive.
+    - **auditd + unattended-upgrades**: logging and automatic patches from day one.
+    - **`--check --diff`** systematically, then a **canary** deploy before the whole fleet.
+    - **Keep an SSH session open** while testing SSH hardening.
+    - **Idempotent playbook**: a second run must show `changed=0`.
+
+exercise:
+  statement:
+    fr: |
+      Complétez le playbook de durcissement avec deux tâches de pare-feu et une protection SSH :
+
+      1. Une tâche `community.general.ufw` qui met la politique entrante par défaut sur `deny`.
+      2. Une tâche `community.general.ufw` qui autorise le port 443/tcp (HTTPS).
+      3. Une tâche `ansible.posix.sysctl` qui désactive le transfert IP (`net.ipv4.ip_forward` à `0`),
+         appliquée immédiatement et de façon persistante.
+
+      Donnez aussi la commande qui simule l'application en affichant les différences, sans rien changer.
+    en: |
+      Complete the hardening playbook with two firewall tasks and one SSH protection:
+
+      1. A `community.general.ufw` task setting the default inbound policy to `deny`.
+      2. A `community.general.ufw` task allowing port 443/tcp (HTTPS).
+      3. An `ansible.posix.sysctl` task disabling IP forwarding (`net.ipv4.ip_forward` to `0`), applied
+         immediately and persistently.
+
+      Also give the command that simulates applying it while showing the differences, changing nothing.
+  solution:
+    file: solution.yml
+    lang: yaml
+    code: |
+      ---
+      - name: Firewall and kernel hardening
+        hosts: all
+        become: true
+        tasks:
+          - name: Default deny inbound
+            community.general.ufw:
+              direction: incoming
+              policy: deny
+
+          - name: Allow HTTPS
+            community.general.ufw:
+              rule: allow
+              port: "443"
+              proto: tcp
+
+          - name: Disable IP forwarding (not a router)
+            ansible.posix.sysctl:
+              name: net.ipv4.ip_forward
+              value: "0"
+              state: present
+              sysctl_set: true # apply now
+              reload: true     # persist across reboots
+      # Dry run with diffs (changes nothing):
+      #   ansible-playbook solution.yml --check --diff
+    note:
+      fr: "On fixe `deny` avant d'ouvrir 443 : jamais de fenêtre grande ouverte. `sysctl_set: true` applique tout de suite, `reload: true` rend le réglage persistant. `--check --diff` montre tout sans appliquer."
+      en: "Set `deny` before opening 443: no wide-open window. `sysctl_set: true` applies immediately, `reload: true` makes the setting persistent. `--check --diff` shows everything without applying."
+
+quiz:
+  - q:
+      fr: "Pourquoi utiliser `validate: \"sshd -t -f %s\"` sur le template SSH ?"
+      en: "Why use `validate: \"sshd -t -f %s\"` on the SSH template?"
+    options:
+      fr:
+        - "Pour chiffrer le fichier de configuration"
+        - "Pour refuser une configuration invalide avant de l'installer et éviter de se verrouiller dehors"
+        - "Pour accélérer le rechargement de SSH"
+        - "Pour compresser la configuration"
+      en:
+        - "To encrypt the configuration file"
+        - "To reject an invalid configuration before installing it and avoid locking yourself out"
+        - "To speed up the SSH reload"
+        - "To compress the configuration"
+    answer: 1
+    why:
+      fr: "`sshd -t` teste la syntaxe du fichier temporaire ; s'il échoue, le fichier n'est pas installé et l'accès SSH est préservé."
+      en: "`sshd -t` tests the temporary file's syntax; if it fails, the file is not installed and SSH access is preserved."
+  - q:
+      fr: "Dans quel ordre configurer un pare-feu UFW de façon sûre ?"
+      en: "In what order should you safely configure a UFW firewall?"
+    options:
+      fr:
+        - "Ouvrir tous les ports, puis bloquer ceux qu'on ne veut pas"
+        - "Désactiver le pare-feu puis le réactiver"
+        - "Poser la politique `deny` par défaut, puis autoriser explicitement le strict nécessaire"
+        - "Autoriser uniquement le trafic sortant"
+      en:
+        - "Open all ports, then block the ones you do not want"
+        - "Disable the firewall then re-enable it"
+        - "Set the default `deny` policy, then explicitly allow only what is strictly needed"
+        - "Allow outbound traffic only"
+    answer: 2
+    why:
+      fr: "Le moindre privilège réseau : on refuse tout en entrée, puis on ouvre explicitement SSH et le web. Jamais l'inverse, qui laisserait une fenêtre grande ouverte."
+      en: "Network least privilege: deny everything inbound, then explicitly open SSH and the web. Never the reverse, which would leave a wide-open window."
+  - q:
+      fr: "À quoi sert unattended-upgrades dans un playbook de durcissement ?"
+      en: "What is unattended-upgrades for in a hardening playbook?"
+    options:
+      fr:
+        - "À appliquer automatiquement les correctifs de sécurité"
+        - "À désactiver les mises à jour"
+        - "À redémarrer le serveur chaque nuit"
+        - "À chiffrer le disque"
+      en:
+        - "To automatically apply security patches"
+        - "To disable updates"
+        - "To reboot the server every night"
+        - "To encrypt the disk"
+    answer: 0
+    why:
+      fr: "unattended-upgrades installe les correctifs de sécurité sans intervention : une faille connue non corrigée est la première cause de compromission."
+      en: "unattended-upgrades installs security patches without intervention: a known, unpatched flaw is the leading cause of compromise."
+  - q:
+      fr: "Quel réglage SSH empêche la connexion directe du compte root ?"
+      en: "Which SSH setting prevents direct root login?"
+    options:
+      fr:
+        - "`MaxAuthTries 3`"
+        - "`X11Forwarding no`"
+        - "`PermitRootLogin no`"
+        - "`AllowUsers deploy`"
+      en:
+        - "`MaxAuthTries 3`"
+        - "`X11Forwarding no`"
+        - "`PermitRootLogin no`"
+        - "`AllowUsers deploy`"
+    answer: 2
+    why:
+      fr: "`PermitRootLogin no` interdit la connexion SSH directe en root ; on se connecte en utilisateur normal puis on utilise sudo."
+      en: "`PermitRootLogin no` forbids direct SSH login as root; you log in as a normal user then use sudo."
+  - q:
+      fr: "Pourquoi déployer un durcissement d'abord sur un seul serveur « canary » ?"
+      en: "Why deploy hardening to a single \"canary\" server first?"
+    options:
+      fr:
+        - "Parce que c'est obligatoire techniquement"
+        - "Pour détecter un problème (par ex. perte d'accès SSH) sur un seul hôte avant tout le parc"
+        - "Parce que les autres serveurs ne supportent pas Ansible"
+        - "Pour économiser de la bande passante"
+      en:
+        - "Because it is technically mandatory"
+        - "To catch a problem (e.g. loss of SSH access) on one host before the whole fleet"
+        - "Because the other servers do not support Ansible"
+        - "To save bandwidth"
+    answer: 1
+    why:
+      fr: "Le canary limite le rayon d'impact : si le durcissement casse l'accès, un seul serveur est touché et on corrige avant de déployer partout."
+      en: "The canary limits the blast radius: if hardening breaks access, only one server is affected and you fix it before rolling out everywhere."

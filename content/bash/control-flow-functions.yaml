@@ -1,0 +1,510 @@
+description:
+  fr: "Donner de la logique à vos scripts Bash : conditions avec [[ ]], boucles for et while, case, et fonctions réutilisables avec arguments et codes de retour."
+  en: "Give your Bash scripts logic: conditions with [[ ]], for and while loops, case, and reusable functions with arguments and return codes."
+duration: 30
+
+intro:
+  fr: |
+    Un script qui ne fait qu'exécuter des commandes à la suite est utile, mais limité. Pour **décider** (si le
+    disque est plein, alerter), **répéter** (vérifier chaque serveur d'une liste) et **réutiliser** (une
+    fonction de journalisation appelée partout), il faut les structures de contrôle : conditions, boucles et
+    fonctions.
+
+    Pensez à un **aiguillage de train** : la condition `if` choisit la voie, la boucle `for` fait passer
+    chaque wagon, et la fonction est une manœuvre que l'on a nommée une fois pour la rejouer quand on veut.
+    Ces trois briques transforment une suite de commandes en un véritable programme.
+
+    Dans cette leçon, vous apprendrez à comparer des valeurs et des fichiers avec `[[ ]]`, à boucler sur des
+    listes et des lignes, à choisir parmi plusieurs cas avec `case`, et à écrire des **fonctions** propres qui
+    prennent des arguments et renvoient un code de succès ou d'échec. Tous les exemples restent en mode strict
+    (`set -euo pipefail`) et gardent les variables entre guillemets, les réflexes de la leçon précédente.
+  en: |
+    A script that only runs commands in sequence is useful but limited. To **decide** (if the disk is full,
+    alert), **repeat** (check each server in a list) and **reuse** (a logging function called everywhere), you
+    need control structures: conditions, loops and functions.
+
+    Think of a **railway switch**: the `if` condition picks the track, the `for` loop sends each carriage
+    through, and the function is a manoeuvre you named once to replay whenever you like. These three bricks
+    turn a sequence of commands into a real program.
+
+    In this lesson you will learn to compare values and files with `[[ ]]`, to loop over lists and lines, to
+    choose among cases with `case`, and to write clean **functions** that take arguments and return a success
+    or failure code. All examples stay in strict mode (`set -euo pipefail`) and keep variables quoted, the
+    reflexes from the previous lesson.
+
+sections:
+  - heading:
+      fr: "Les conditions avec [[ ]]"
+      en: "Conditions with [[ ]]"
+    body:
+      fr: |
+        En Bash moderne, on teste une condition avec `[[ ... ]]` (plus sûr que l'ancien `[ ... ]`). Un `if`
+        exécute un bloc selon le résultat :
+
+        ```bash
+        if [[ "$user" == "root" ]]; then
+            echo "running as root"
+        elif [[ -z "$user" ]]; then
+            echo "no user set"
+        else
+            echo "running as $user"
+        fi
+        ```
+
+        | Test | Signification |
+        |---|---|
+        | `[[ "$a" == "$b" ]]` | chaînes égales |
+        | `[[ "$a" != "$b" ]]` | chaînes différentes |
+        | `[[ -z "$s" ]]` / `[[ -n "$s" ]]` | chaîne vide / non vide |
+        | `[[ "$n" -gt 10 ]]` | nombre supérieur à 10 (`-lt`, `-ge`, `-le`, `-eq`) |
+        | `[[ -f "$p" ]]` / `[[ -d "$p" ]]` | fichier régulier / répertoire existe |
+        | `[[ "$s" =~ ^[0-9]+$ ]]` | correspond à une expression régulière |
+
+        Pour l'**arithmétique**, on utilise `(( ... ))` : `if (( port > 1024 ))`. Un détail de sécurité :
+        `[[ ]]` ne découpe pas les variables et gère mieux les valeurs vides que `[ ]`, ce qui évite des
+        erreurs classiques. Gardez quand même vos variables entre guillemets à l'intérieur.
+      en: |
+        In modern Bash, you test a condition with `[[ ... ]]` (safer than the old `[ ... ]`). An `if` runs a
+        block depending on the result:
+
+        ```bash
+        if [[ "$user" == "root" ]]; then
+            echo "running as root"
+        elif [[ -z "$user" ]]; then
+            echo "no user set"
+        else
+            echo "running as $user"
+        fi
+        ```
+
+        | Test | Meaning |
+        |---|---|
+        | `[[ "$a" == "$b" ]]` | strings equal |
+        | `[[ "$a" != "$b" ]]` | strings different |
+        | `[[ -z "$s" ]]` / `[[ -n "$s" ]]` | empty / non-empty string |
+        | `[[ "$n" -gt 10 ]]` | number greater than 10 (`-lt`, `-ge`, `-le`, `-eq`) |
+        | `[[ -f "$p" ]]` / `[[ -d "$p" ]]` | regular file / directory exists |
+        | `[[ "$s" =~ ^[0-9]+$ ]]` | matches a regular expression |
+
+        For **arithmetic**, use `(( ... ))`: `if (( port > 1024 ))`. A security detail: `[[ ]]` does not split
+        variables and handles empty values better than `[ ]`, avoiding classic errors. Still, keep your
+        variables quoted inside it.
+  - heading:
+      fr: "Les boucles for et while"
+      en: "for and while loops"
+    body:
+      fr: |
+        La boucle `for` répète un bloc pour chaque élément d'une liste ; la boucle `while` répète tant qu'une
+        condition reste vraie :
+
+        ```bash
+        # for over an explicit list
+        for host in web-01 web-02 db-01; do
+            echo "checking $host"
+        done
+
+        # read a file line by line (the safe idiom)
+        while IFS= read -r line; do
+            echo "line: $line"
+        done < /etc/hostname
+        ```
+
+        L'idiome `while IFS= read -r line` est **la** bonne façon de lire un fichier ligne par ligne : `IFS=`
+        préserve les espaces, et `-r` empêche `read` d'interpréter les antislashs. Évitez `for line in
+        $(cat fichier)` : cette forme découpe sur les espaces et casse dès qu'une ligne en contient.
+
+        Pour parcourir des fichiers, utilisez un **glob** directement, jamais la sortie de `ls` :
+        `for f in /var/log/*.log; do ...; done`. On contrôle une boucle avec `break` (sortir) et `continue`
+        (passer à l'élément suivant). Comme toujours, chaque variable utilisée dans la boucle reste entre
+        guillemets.
+      en: |
+        The `for` loop repeats a block for each item of a list; the `while` loop repeats while a condition
+        stays true:
+
+        ```bash
+        # for over an explicit list
+        for host in web-01 web-02 db-01; do
+            echo "checking $host"
+        done
+
+        # read a file line by line (the safe idiom)
+        while IFS= read -r line; do
+            echo "line: $line"
+        done < /etc/hostname
+        ```
+
+        The idiom `while IFS= read -r line` is **the** right way to read a file line by line: `IFS=` preserves
+        spaces, and `-r` stops `read` from interpreting backslashes. Avoid `for line in $(cat file)`: that form
+        splits on spaces and breaks as soon as a line contains one.
+
+        To walk over files, use a **glob** directly, never the output of `ls`:
+        `for f in /var/log/*.log; do ...; done`. You control a loop with `break` (leave) and `continue` (skip
+        to the next item). As always, every variable used in the loop stays quoted.
+  - heading:
+      fr: "Les fonctions : nommer et réutiliser"
+      en: "Functions: name and reuse"
+    body:
+      fr: |
+        Une **fonction** regroupe des commandes sous un nom. On y accède aux arguments par `$1`, `$2`, … et le
+        code de retour se fixe avec `return` (0 = succès) :
+
+        ```bash
+        # A reusable logging helper, timestamped, written to stderr.
+        log() {
+            echo "[$(date +%T)] $*" >&2      # $* = all arguments joined
+        }
+
+        is_valid_port() {
+            local port="$1"                  # 'local' keeps the variable inside the function
+            [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 ))
+        }
+
+        if is_valid_port "443"; then
+            log "port 443 is valid"
+        fi
+        ```
+
+        Deux règles essentielles. Déclarez vos variables internes avec `local` : sans cela, elles « fuient »
+        dans le reste du script et peuvent écraser une autre variable. Et distinguez **code de retour** (0/1,
+        pour dire succès ou échec, testable par `if`) et **sortie texte** (ce que la fonction `echo`, à
+        capturer avec `$(ma_fonction)`). Une fonction qui renvoie un objet logique utilise `return` ; une
+        fonction qui calcule une valeur l'`echo`. Les mélanger est une source classique de confusion.
+      en: |
+        A **function** groups commands under a name. Inside it, arguments are `$1`, `$2`, … and the return
+        code is set with `return` (0 = success):
+
+        ```bash
+        # A reusable logging helper, timestamped, written to stderr.
+        log() {
+            echo "[$(date +%T)] $*" >&2      # $* = all arguments joined
+        }
+
+        is_valid_port() {
+            local port="$1"                  # 'local' keeps the variable inside the function
+            [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 ))
+        }
+
+        if is_valid_port "443"; then
+            log "port 443 is valid"
+        fi
+        ```
+
+        Two essential rules. Declare your internal variables with `local`: without it, they "leak" into the
+        rest of the script and may overwrite another variable. And distinguish the **return code** (0/1, to say
+        success or failure, testable by `if`) from the **text output** (what the function `echo`es, captured
+        with `$(my_function)`). A function returning a logical result uses `return`; a function computing a
+        value `echo`es it. Mixing the two is a classic source of confusion.
+
+examples:
+  - title:
+      fr: "Conditions : classer un service par port"
+      en: "Conditions: classifying a service by port"
+    file: classify.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      port="${1:-0}"
+
+      # Arithmetic comparison uses (( ... )); string/file tests use [[ ... ]].
+      if (( port == 22 )); then
+          echo "SSH: encrypted remote admin"
+      elif (( port == 23 )); then
+          echo "Telnet: NOT encrypted - should be disabled"
+      elif (( port >= 1 && port <= 1023 )); then
+          echo "well-known port"
+      else
+          echo "high or unknown port"
+      fi
+
+      # Combine conditions with && (and) / || (or)
+      if (( port < 1024 )) && [[ "$port" != "443" ]]; then
+          echo "note: privileged port other than HTTPS"
+      fi
+    output: |
+      $ ./classify.sh 23
+      Telnet: NOT encrypted - should be disabled
+      note: privileged port other than HTTPS
+    note:
+      fr: "On utilise `(( ))` pour comparer des nombres et `[[ ]]` pour comparer des chaînes. `&&` et `||` combinent les conditions. `${1:-0}` fournit un port par défaut compatible avec `set -u`."
+      en: "Use `(( ))` to compare numbers and `[[ ]]` to compare strings. `&&` and `||` combine conditions. `${1:-0}` provides a default port compatible with `set -u`."
+
+  - title:
+      fr: "Boucles : vérifier une liste d'hôtes"
+      en: "Loops: checking a list of hosts"
+    file: ping-hosts.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      hosts=("web-01.example.com" "db-01.example.com" "cache-01.example.com")
+      down=0
+
+      # Loop over an array: "${hosts[@]}" keeps each element intact, quoted.
+      for host in "${hosts[@]}"; do
+          # -c1 sends one packet, -W2 waits 2s. || marks failure without set -e stopping us.
+          if ping -c1 -W2 "$host" >/dev/null 2>&1; then
+              echo "UP   $host"
+          else
+              echo "DOWN $host"
+              (( down += 1 ))
+          fi
+      done
+
+      echo "Unreachable: $down"
+    output: |
+      UP   web-01.example.com
+      DOWN db-01.example.com
+      UP   cache-01.example.com
+      Unreachable: 1
+    note:
+      fr: "`\"${hosts[@]}\"` est la forme correcte pour parcourir un tableau sans découper les éléments. Le `if` autour de `ping` capture l'échec sans que `set -e` n'arrête tout, car l'échec est géré."
+      en: "`\"${hosts[@]}\"` is the correct form to loop over an array without splitting elements. The `if` around `ping` captures failure without `set -e` halting everything, because the failure is handled."
+
+  - title:
+      fr: "Lire un fichier ligne par ligne, proprement"
+      en: "Reading a file line by line, cleanly"
+    file: read-lines.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      file="${1:?usage: read-lines.sh <file>}"   # :? prints the message and exits if unset
+
+      count=0
+      # The safe idiom: IFS= preserves whitespace, -r keeps backslashes literal.
+      while IFS= read -r line; do
+          # Skip blank lines and comments (common when reading config files)
+          [[ -z "$line" || "$line" == \#* ]] && continue
+          (( count += 1 ))
+          echo "$count: $line"
+      done < "$file"
+
+      echo "Non-empty, non-comment lines: $count"
+    output: |
+      $ ./read-lines.sh /etc/hosts
+      1: 127.0.0.1 localhost
+      2: 192.0.2.10 web-01.example.com
+      Non-empty, non-comment lines: 2
+    note:
+      fr: "`${1:?message}` exige l'argument et sort avec le message s'il manque. L'idiome `while IFS= read -r` lit chaque ligne sans altérer les espaces ni les antislashs ; `continue` saute les lignes vides et les commentaires."
+      en: "`${1:?message}` requires the argument and exits with the message if missing. The `while IFS= read -r` idiom reads each line without mangling spaces or backslashes; `continue` skips blank and comment lines."
+
+  - title:
+      fr: "case et fonctions réutilisables"
+      en: "case and reusable functions"
+    file: dispatch.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Reusable logger: all helpers write to stderr so stdout stays clean for data.
+      log()  { echo "[INFO] $*" >&2; }
+      fail() { echo "[FAIL] $*" >&2; exit 1; }
+
+      action="${1:-help}"
+
+      # case is cleaner than many elif for a fixed set of known choices.
+      case "$action" in
+          start)   log "starting service" ;;
+          stop)    log "stopping service" ;;
+          status)  log "service is running" ;;
+          help|-h) echo "usage: $0 {start|stop|status}" ;;
+          *)       fail "unknown action: $action" ;;   # * = default case
+      esac
+    output: |
+      $ ./dispatch.sh deploy
+      [FAIL] unknown action: deploy
+    note:
+      fr: "`case` compare une valeur à plusieurs motifs (`help|-h` regroupe deux cas, `*` est le cas par défaut). Les fonctions `log` et `fail` factorisent la journalisation et la sortie en erreur, réutilisables partout."
+      en: "`case` matches a value against patterns (`help|-h` groups two cases, `*` is the default). The `log` and `fail` functions factor out logging and error exit, reusable everywhere."
+
+mistake:
+  fr: |
+    **Boucler sur `$(ls)` ou `$(cat fichier)`.**
+
+    Écrire `for f in $(ls *.log)` ou `for line in $(cat hosts.txt)` semble naturel, mais c'est fragile :
+    Bash découpe la sortie sur **tous** les espaces, pas seulement les retours à la ligne. Un nom de fichier
+    comme `access log.txt` devient deux éléments, et la boucle casse. Les bonnes formes sont le **glob**
+    direct (`for f in *.log`) pour les fichiers et l'idiome `while IFS= read -r line; do ...; done < fichier`
+    pour les lignes. Autre piège : oublier `local` dans une fonction, ce qui laisse ses variables écraser
+    celles du reste du script.
+  en: |
+    **Looping over `$(ls)` or `$(cat file)`.**
+
+    Writing `for f in $(ls *.log)` or `for line in $(cat hosts.txt)` feels natural, but it is fragile: Bash
+    splits the output on **all** whitespace, not just newlines. A file name like `access log.txt` becomes two
+    elements, and the loop breaks. The right forms are the direct **glob** (`for f in *.log`) for files and the
+    idiom `while IFS= read -r line; do ...; done < file` for lines. Another trap: forgetting `local` in a
+    function, which lets its variables overwrite those of the rest of the script.
+
+bestPractice:
+  fr: |
+    - **Préférez `[[ ]]` à `[ ]`** pour les tests : plus sûr avec les variables vides et les comparaisons.
+    - **Utilisez `(( ))` pour l'arithmétique** et les comparaisons numériques, `[[ ]]` pour les chaînes et les
+      fichiers.
+    - **Lisez les fichiers avec `while IFS= read -r line`** et parcourez les fichiers avec un glob, jamais avec
+      `ls` ou `cat`.
+    - **Déclarez `local`** toutes les variables internes d'une fonction, pour éviter qu'elles ne fuient.
+    - **Distinguez code de retour et sortie texte** : `return 0/1` pour un test, `echo` pour une valeur à
+      capturer.
+    - **Factorisez** la journalisation et la gestion d'erreur dans des fonctions (`log`, `fail`) réutilisables.
+  en: |
+    - **Prefer `[[ ]]` to `[ ]`** for tests: safer with empty variables and comparisons.
+    - **Use `(( ))` for arithmetic** and numeric comparisons, `[[ ]]` for strings and files.
+    - **Read files with `while IFS= read -r line`** and iterate files with a glob, never with `ls` or `cat`.
+    - **Declare `local`** on every internal variable of a function, to stop it leaking.
+    - **Distinguish return code from text output**: `return 0/1` for a test, `echo` for a value to capture.
+    - **Factor out** logging and error handling into reusable functions (`log`, `fail`).
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un script `check-services.sh` qui reçoit une liste de noms de services en arguments (par
+      exemple `./check-services.sh sshd nginx cron`) et, pour chacun :
+
+      1. écrit une fonction `is_active` qui renvoie 0 si `systemctl is-active <service>` indique `active`,
+         sinon 1 ;
+      2. affiche `OK   <service>` ou `DOWN <service>` selon le résultat ;
+      3. à la fin, affiche combien de services sont arrêtés et sort avec `exit 1` si au moins un l'est.
+
+      Restez en mode strict et gardez vos variables entre guillemets.
+    en: |
+      Write a script `check-services.sh` that receives a list of service names as arguments (for example
+      `./check-services.sh sshd nginx cron`) and, for each one:
+
+      1. write an `is_active` function returning 0 if `systemctl is-active <service>` reports `active`,
+         otherwise 1;
+      2. print `OK   <service>` or `DOWN <service>` depending on the result;
+      3. at the end, print how many services are down and exit with `exit 1` if at least one is.
+
+      Stay in strict mode and keep variables quoted.
+  solution:
+    file: check-services.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Returns 0 (success) when the service is active, 1 otherwise.
+      is_active() {
+          local service="$1"
+          [[ "$(systemctl is-active "$service" 2>/dev/null)" == "active" ]]
+      }
+
+      down=0
+      # "$@" expands to all arguments, each kept as a separate quoted word.
+      for service in "$@"; do
+          if is_active "$service"; then
+              echo "OK   $service"
+          else
+              echo "DOWN $service"
+              (( down += 1 ))
+          fi
+      done
+
+      echo "Services down: $down"
+      (( down == 0 )) || exit 1        # non-zero exit if any service is down
+    note:
+      fr: "La fonction `is_active` renvoie un code (testable par `if`), pas du texte. `\"$@\"` parcourt tous les arguments proprement. `(( down == 0 )) || exit 1` sort en échec si au moins un service est arrêté : un planificateur peut alors alerter."
+      en: "The `is_active` function returns a code (testable by `if`), not text. `\"$@\"` iterates all arguments cleanly. `(( down == 0 )) || exit 1` exits with failure if any service is down: a scheduler can then alert."
+
+quiz:
+  - q:
+      fr: "Quelle construction compare deux nombres en Bash ?"
+      en: "Which construct compares two numbers in Bash?"
+    options:
+      fr:
+        - "`(( a > b ))`"
+        - "`{{ a > b }}`"
+        - "`< a > b >`"
+        - "`compare a b`"
+      en:
+        - "`(( a > b ))`"
+        - "`{{ a > b }}`"
+        - "`< a > b >`"
+        - "`compare a b`"
+    answer: 0
+    why:
+      fr: "`(( ... ))` évalue une expression arithmétique : `(( a > b ))` compare deux nombres. Pour les chaînes et les fichiers, on utilise `[[ ... ]]`."
+      en: "`(( ... ))` evaluates an arithmetic expression: `(( a > b ))` compares two numbers. For strings and files, use `[[ ... ]]`."
+  - q:
+      fr: "Quelle est la façon sûre de lire un fichier ligne par ligne ?"
+      en: "What is the safe way to read a file line by line?"
+    options:
+      fr:
+        - "`for line in $(cat file)`"
+        - "`while IFS= read -r line; do ...; done < file`"
+        - "`ls file | while read`"
+        - "`echo file | for`"
+      en:
+        - "`for line in $(cat file)`"
+        - "`while IFS= read -r line; do ...; done < file`"
+        - "`ls file | while read`"
+        - "`echo file | for`"
+    answer: 1
+    why:
+      fr: "`while IFS= read -r line` préserve les espaces (`IFS=`) et les antislashs (`-r`). `for line in $(cat ...)` découpe sur tous les espaces et casse."
+      en: "`while IFS= read -r line` preserves spaces (`IFS=`) and backslashes (`-r`). `for line in $(cat ...)` splits on all whitespace and breaks."
+  - q:
+      fr: "Pourquoi déclarer une variable avec `local` dans une fonction ?"
+      en: "Why declare a variable with `local` inside a function?"
+    options:
+      fr:
+        - "Pour la rendre plus rapide"
+        - "Pour la chiffrer"
+        - "Pour éviter qu'elle ne fuite et n'écrase une variable du reste du script"
+        - "Parce que les fonctions l'exigent toujours"
+      en:
+        - "To make it faster"
+        - "To encrypt it"
+        - "To stop it leaking and overwriting a variable in the rest of the script"
+        - "Because functions always require it"
+    answer: 2
+    why:
+      fr: "Sans `local`, une variable définie dans une fonction est globale : elle peut écraser une autre variable du script et provoquer des bugs difficiles à trouver."
+      en: "Without `local`, a variable set in a function is global: it can overwrite another script variable and cause hard-to-find bugs."
+  - q:
+      fr: "Dans une fonction, comment distinguer un succès logique d'une valeur à récupérer ?"
+      en: "In a function, how do you distinguish a logical success from a value to retrieve?"
+    options:
+      fr:
+        - "`return 0/1` pour le code, `echo` pour la valeur capturée avec `$(...)`"
+        - "Les deux se font avec `return`"
+        - "Les deux se font avec `echo`"
+        - "On ne peut pas renvoyer de valeur"
+      en:
+        - "`return 0/1` for the code, `echo` for the value captured with `$(...)`"
+        - "Both use `return`"
+        - "Both use `echo`"
+        - "You cannot return a value"
+    answer: 0
+    why:
+      fr: "`return` fixe un code de sortie (0 succès, testable par `if`) ; pour renvoyer une valeur, la fonction l'`echo` et l'appelant la capture avec `$(ma_fonction)`."
+      en: "`return` sets an exit code (0 success, testable by `if`); to return a value, the function `echo`es it and the caller captures it with `$(my_function)`."
+  - q:
+      fr: "À quoi sert le motif `*)` dans un bloc `case` ?"
+      en: "What is the `*)` pattern for in a `case` block?"
+    options:
+      fr:
+        - "À répéter le premier cas"
+        - "À quitter le case"
+        - "À capturer tous les cas non prévus (cas par défaut)"
+        - "À commenter le bloc"
+      en:
+        - "To repeat the first case"
+        - "To exit the case"
+        - "To catch every unhandled case (the default)"
+        - "To comment the block"
+    answer: 2
+    why:
+      fr: "Dans un `case`, `*)` correspond à tout ce qui n'a pas été reconnu : c'est le cas par défaut, idéal pour signaler une valeur invalide."
+      en: "In a `case`, `*)` matches anything not recognised: it is the default case, ideal to flag an invalid value."

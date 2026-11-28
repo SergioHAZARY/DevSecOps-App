@@ -1,0 +1,548 @@
+description:
+  fr: "Scanner l'Infrastructure as Code avec Checkov : Terraform, Kubernetes et Dockerfile, identifiants de check CKV, suppression inline, fichier .checkov.yaml et une policy YAML personnalisée."
+  en: "Scan Infrastructure as Code with Checkov: Terraform, Kubernetes and Dockerfile, CKV check IDs, inline skip, a .checkov.yaml config and a custom YAML policy."
+duration: 30
+
+intro:
+  fr: |
+    Une faille de sécurité ne vient pas toujours du code applicatif : très souvent, elle vient de
+    l'**infrastructure**. Un bucket de stockage rendu public, un groupe de sécurité ouvert au monde entier,
+    une base de données sans chiffrement — tout cela se décrit aujourd'hui en **Infrastructure as Code**
+    (IaC), et se scanne donc comme du code. **Checkov** (de Prisma Cloud/Bridgecrew) est l'un des outils les
+    plus complets pour cela.
+
+    L'analogie : avant d'emménager, un diagnostiqueur immobilier vérifie le plan de la maison — l'électricité
+    est-elle aux normes ? les fenêtres ferment-elles ? la porte blindée est-elle vraiment blindée ? Il
+    travaille sur les **plans**, avant même la construction. Checkov lit vos plans d'infrastructure
+    (Terraform, Kubernetes, Dockerfile) et signale les configurations dangereuses **avant** le déploiement.
+
+    Dans cette leçon vous allez scanner un fichier Terraform volontairement vulnérable, voir chaque problème
+    identifié par un **check** (`CKV_AWS_...`), corriger le fichier, supprimer un check précis en ligne avec
+    une justification, configurer Checkov avec un `.checkov.yaml`, et écrire une **policy personnalisée**.
+  en: |
+    A security flaw does not always come from application code: very often it comes from the
+    **infrastructure**. A storage bucket made public, a security group open to the whole world, a database
+    with no encryption — all of this is now described in **Infrastructure as Code** (IaC), and is therefore
+    scanned like code. **Checkov** (by Prisma Cloud/Bridgecrew) is one of the most complete tools for this.
+
+    The analogy: before moving in, a property surveyor checks the house plans — is the wiring up to code? do
+    the windows close? is the reinforced door actually reinforced? They work on the **plans**, before
+    construction. Checkov reads your infrastructure plans (Terraform, Kubernetes, Dockerfile) and flags
+    dangerous configurations **before** deployment.
+
+    In this lesson you will scan a deliberately vulnerable Terraform file, see each problem identified by a
+    **check** (`CKV_AWS_...`), fix the file, skip a precise check inline with a justification, configure
+    Checkov with a `.checkov.yaml`, and write a **custom policy**.
+
+sections:
+  - heading:
+      fr: "Ce que Checkov analyse et comment"
+      en: "What Checkov analyses and how"
+    body:
+      fr: |
+        Checkov applique des **politiques** (des centaines, intégrées) à des fichiers de configuration. Il
+        couvre de nombreux frameworks :
+
+        | Framework | Exemples de fichiers |
+        |---|---|
+        | Terraform | `*.tf`, le plan `tfplan` |
+        | Kubernetes | manifestes `*.yaml` |
+        | Dockerfile | `Dockerfile` |
+        | CloudFormation, ARM, Bicep | modèles cloud natifs |
+        | Helm, Kustomize | charts et overlays |
+
+        Chaque règle porte un **identifiant** stable : `CKV_AWS_18` (logs d'accès S3), `CKV_K8S_...`
+        (Kubernetes), `CKV_DOCKER_...` (Dockerfile). Cet identifiant est la clé pour **documenter**,
+        **supprimer** ou **filtrer** une règle.
+
+        On lance Checkov via Docker, en montant le dossier à analyser :
+
+        ```bash
+        docker run --rm -v "$(pwd):/tf" bridgecrew/checkov -d /tf
+        ```
+
+        Options utiles : `-d <dir>` (dossier), `-f <file>` (un fichier), `--framework terraform`, `--compact`
+        (sortie courte), `--output sarif`, `--soft-fail` (ne pas renvoyer un code d'échec). Par défaut,
+        Checkov renvoie `1` s'il trouve au moins un échec — idéal pour bloquer la CI.
+      en: |
+        Checkov applies **policies** (hundreds, built in) to configuration files. It covers many frameworks:
+
+        | Framework | Example files |
+        |---|---|
+        | Terraform | `*.tf`, the `tfplan` plan |
+        | Kubernetes | `*.yaml` manifests |
+        | Dockerfile | `Dockerfile` |
+        | CloudFormation, ARM, Bicep | native cloud templates |
+        | Helm, Kustomize | charts and overlays |
+
+        Each rule has a stable **identifier**: `CKV_AWS_18` (S3 access logs), `CKV_K8S_...` (Kubernetes),
+        `CKV_DOCKER_...` (Dockerfile). This identifier is the key to **documenting**, **skipping** or
+        **filtering** a rule.
+
+        You run Checkov via Docker, mounting the folder to analyse:
+
+        ```bash
+        docker run --rm -v "$(pwd):/tf" bridgecrew/checkov -d /tf
+        ```
+
+        Useful options: `-d <dir>` (folder), `-f <file>` (one file), `--framework terraform`, `--compact`
+        (short output), `--output sarif`, `--soft-fail` (do not return a failure code). By default, Checkov
+        returns `1` if it finds at least one failure — ideal for blocking CI.
+  - heading:
+      fr: "Supprimer un check et configurer Checkov"
+      en: "Skipping a check and configuring Checkov"
+    body:
+      fr: |
+        Comme tout outil, Checkov produit parfois un faux positif ou signale un risque accepté. On le
+        **supprime** de façon tracée, de deux manières :
+
+        **1. En ligne**, directement dans le code Terraform, avec un commentaire `checkov:skip` qui exige une
+        raison :
+
+        ```hcl
+        resource "aws_s3_bucket" "logs" {
+          # checkov:skip=CKV_AWS_18:This is itself the access-log bucket, no recursion
+          bucket = "my-access-logs"
+        }
+        ```
+
+        La raison après le `:` est obligatoire pour que la suppression soit auditable. On ne supprime qu'un
+        **check précis** par son identifiant, jamais tous.
+
+        **2. Globalement**, dans un fichier **`.checkov.yaml`** à la racine, pour appliquer une configuration
+        à tout le dépôt : quels frameworks scanner, quels checks ignorer (`skip-check`), quels dossiers
+        exclure, le format de sortie. Versionné, ce fichier fait passer chaque réglage par une revue.
+
+        La règle d'or reste identique aux autres outils : supprimer une règle **nommée et justifiée**, pas
+        désactiver des pans entiers de contrôle « pour que ça passe ».
+      en: |
+        Like any tool, Checkov sometimes produces a false positive or flags an accepted risk. You **skip** it
+        in a traced way, in two ways:
+
+        **1. Inline**, directly in the Terraform code, with a `checkov:skip` comment that requires a reason:
+
+        ```hcl
+        resource "aws_s3_bucket" "logs" {
+          # checkov:skip=CKV_AWS_18:This is itself the access-log bucket, no recursion
+          bucket = "my-access-logs"
+        }
+        ```
+
+        The reason after the `:` is mandatory so the skip is auditable. You skip only a **precise check** by
+        its identifier, never all of them.
+
+        **2. Globally**, in a **`.checkov.yaml`** file at the root, to apply a configuration to the whole
+        repository: which frameworks to scan, which checks to skip (`skip-check`), which folders to exclude,
+        the output format. Versioned, this file puts every setting through a review.
+
+        The golden rule is the same as the other tools: skip a **named, justified** check, do not disable
+        whole swathes of control "to make it pass".
+  - heading:
+      fr: "Écrire une policy personnalisée"
+      en: "Writing a custom policy"
+    body:
+      fr: |
+        Les politiques intégrées couvrent les grands risques, mais chaque organisation a ses propres règles :
+        « toutes nos ressources doivent porter une étiquette `owner` », « aucun bucket ne doit être dans telle
+        région ». Checkov permet d'écrire des **politiques personnalisées**.
+
+        Le format le plus simple est une policy **YAML** qui décrit une condition sur un type de ressource :
+
+        ```yaml
+        metadata:
+          id: "CKV_CUSTOM_1"
+          name: "S3 buckets must have an owner tag"
+          category: "GENERAL_SECURITY"
+        definition:
+          cond_type: "attribute"
+          resource_types: ["aws_s3_bucket"]
+          attribute: "tags.owner"
+          operator: "exists"
+        ```
+
+        On la range dans un dossier (par exemple `policies/`) et on l'active avec
+        `--external-checks-dir policies/`. Checkov applique alors cette règle en plus des siennes. Pour une
+        logique plus complexe, Checkov supporte aussi des policies en Python.
+
+        Les politiques personnalisées portent un identifiant `CKV_CUSTOM_...` et s'intègrent au même flux :
+        elles apparaissent dans le rapport, échouent le build, et peuvent être supprimées en ligne comme les
+        autres. C'est ainsi qu'on fait respecter des conventions internes directement dans le pipeline.
+      en: |
+        Built-in policies cover the major risks, but every organisation has its own rules: "all our resources
+        must carry an `owner` tag", "no bucket may be in a given region". Checkov lets you write **custom
+        policies**.
+
+        The simplest format is a **YAML** policy describing a condition on a resource type:
+
+        ```yaml
+        metadata:
+          id: "CKV_CUSTOM_1"
+          name: "S3 buckets must have an owner tag"
+          category: "GENERAL_SECURITY"
+        definition:
+          cond_type: "attribute"
+          resource_types: ["aws_s3_bucket"]
+          attribute: "tags.owner"
+          operator: "exists"
+        ```
+
+        You put it in a folder (for example `policies/`) and enable it with `--external-checks-dir policies/`.
+        Checkov then applies this rule on top of its own. For more complex logic, Checkov also supports Python
+        policies.
+
+        Custom policies carry a `CKV_CUSTOM_...` identifier and plug into the same flow: they appear in the
+        report, fail the build, and can be skipped inline like the others. This is how you enforce internal
+        conventions directly in the pipeline.
+
+examples:
+  - title:
+      fr: "Infrastructure Terraform vulnérable"
+      en: "Vulnerable Terraform infrastructure"
+    file: main.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      resource "aws_s3_bucket" "data" {
+        bucket = "example-company-data"
+      }
+
+      # DANGER: the bucket is made public to everyone
+      resource "aws_s3_bucket_public_access_block" "data" {
+        bucket                  = aws_s3_bucket.data.id
+        block_public_acls       = false
+        block_public_policy     = false
+        ignore_public_acls      = false
+        restrict_public_buckets = false
+      }
+
+      resource "aws_security_group" "web" {
+        name = "web-sg"
+        # DANGER: SSH open to the entire Internet
+        ingress {
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+
+      # DANGER: database without encryption at rest
+      resource "aws_db_instance" "main" {
+        allocated_storage = 20
+        engine            = "postgres"
+        instance_class    = "db.t3.micro"
+        storage_encrypted = false
+      }
+    note:
+      fr: "Trois erreurs classiques : un bucket S3 public, un groupe de sécurité qui expose SSH (port 22) à `0.0.0.0/0` (tout Internet), et une base de données sans chiffrement au repos. Chacune correspond à un check Checkov. Ce fichier déploie une infrastructure fonctionnelle mais dangereuse."
+      en: "Three classic mistakes: a public S3 bucket, a security group exposing SSH (port 22) to `0.0.0.0/0` (the whole Internet), and a database without encryption at rest. Each maps to a Checkov check. This file deploys a working but dangerous infrastructure."
+
+  - title:
+      fr: "Le scan Checkov qui identifie chaque check"
+      en: "The Checkov scan that identifies each check"
+    file: checkov-scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Scan the Terraform folder; Checkov returns exit code 1 on any failed check.
+      docker run --rm -v "$(pwd):/tf" bridgecrew/checkov -d /tf --compact
+      echo "exit code: $?"
+    output: |
+      terraform scan results:
+      Passed checks: 5, Failed checks: 3, Skipped checks: 0
+
+      Check: CKV_AWS_53 "S3 Block Public ACLs is set to false"
+        FAILED for resource: aws_s3_bucket_public_access_block.data
+      Check: CKV_AWS_260 "Ensure no security groups allow ingress from 0.0.0.0:0 to port 22"
+        FAILED for resource: aws_security_group.web
+      Check: CKV_AWS_16 "Ensure all data stored in RDS is securely encrypted at rest"
+        FAILED for resource: aws_db_instance.main
+      exit code: 1
+    note:
+      fr: "Chaque échec donne un identifiant stable (`CKV_AWS_260`), le nom lisible du contrôle et la ressource fautive. Ces identifiants sont la clé pour documenter une exception, supprimer un check précis ou le filtrer. Le code de retour `1` fait échouer la CI."
+      en: "Each failure gives a stable identifier (`CKV_AWS_260`), the human-readable check name and the offending resource. These identifiers are the key to documenting an exception, skipping a precise check or filtering it. Exit code `1` fails CI."
+
+  - title:
+      fr: "Terraform corrigé, avec une suppression justifiée"
+      en: "Fixed Terraform, with a justified skip"
+    file: main.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_s3_bucket" "data" {
+        bucket = "example-company-data"
+        tags   = { owner = "data-platform" }   # satisfies our custom policy
+      }
+
+      # Fixed: the bucket blocks all public access
+      resource "aws_s3_bucket_public_access_block" "data" {
+        bucket                  = aws_s3_bucket.data.id
+        block_public_acls       = true
+        block_public_policy     = true
+        ignore_public_acls      = true
+        restrict_public_buckets = true
+      }
+
+      resource "aws_security_group" "web" {
+        name = "web-sg"
+        # Fixed: SSH restricted to the internal admin network only
+        ingress {
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["10.0.0.0/8"]
+        }
+        # This rule intentionally allows HTTP from anywhere (a public web server)
+        # checkov:skip=CKV_AWS_260:Public web server, port 80 is meant to be open
+        ingress {
+          from_port   = 80
+          to_port     = 80
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+
+      # Fixed: encryption at rest enabled
+      resource "aws_db_instance" "main" {
+        allocated_storage = 20
+        engine            = "postgres"
+        instance_class    = "db.t3.micro"
+        storage_encrypted = true
+      }
+    output: |
+      Passed checks: 8, Failed checks: 0, Skipped checks: 1
+      Skipped: CKV_AWS_260 on aws_security_group.web
+        Suppress comment: Public web server, port 80 is meant to be open
+      exit code: 0
+    note:
+      fr: "Les trois failles sont corrigées. Pour le port 80 d'un serveur web public, ouvrir à `0.0.0.0/0` est **voulu** : on supprime le check `CKV_AWS_260` **en ligne** avec une raison. La suppression est tracée dans le rapport (`Skipped`) et versionnée, donc revue."
+      en: "The three flaws are fixed. For port 80 of a public web server, opening to `0.0.0.0/0` is **intended**: we skip the `CKV_AWS_260` check **inline** with a reason. The skip is traced in the report (`Skipped`) and versioned, so reviewed."
+
+  - title:
+      fr: "Configuration .checkov.yaml et policy personnalisée"
+      en: ".checkov.yaml config and a custom policy"
+    file: .checkov.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # .checkov.yaml - repository-wide Checkov configuration (versioned, reviewed)
+      framework:
+        - terraform
+        - dockerfile
+      directory:
+        - .
+      # Exclude generated/vendored folders from the scan
+      skip-path:
+        - ".terraform/.*"
+        - "examples/.*"
+      # Global skips (prefer inline skips; use this only for repo-wide decisions)
+      skip-check:
+        - CKV_AWS_18   # access logging handled centrally by the platform team
+      # Load our own policies on top of the built-in ones
+      external-checks-dir:
+        - policies
+      output: sarif
+      compact: true
+      # Fail the run on any remaining failed check
+      soft-fail: false
+    output: |
+      # policies/require-owner-tag.yaml (loaded by external-checks-dir):
+      #   metadata:
+      #     id: "CKV_CUSTOM_1"
+      #     name: "S3 buckets must carry an owner tag"
+      #     category: "GENERAL_SECURITY"
+      #   definition:
+      #     cond_type: "attribute"
+      #     resource_types: ["aws_s3_bucket"]
+      #     attribute: "tags.owner"
+      #     operator: "exists"
+      # Scan result:
+      #   CKV_CUSTOM_1 PASSED for aws_s3_bucket.data (owner tag present)
+    note:
+      fr: "Le `.checkov.yaml` centralise la configuration : frameworks, exclusions, suppressions globales, format SARIF, et le chargement des policies maison via `external-checks-dir`. La policy `CKV_CUSTOM_1` impose une étiquette `owner` sur chaque bucket — une convention interne désormais contrôlée automatiquement."
+      en: "The `.checkov.yaml` centralises configuration: frameworks, exclusions, global skips, SARIF format, and loading custom policies via `external-checks-dir`. The `CKV_CUSTOM_1` policy requires an `owner` tag on each bucket — an internal convention now enforced automatically."
+
+mistake:
+  fr: |
+    **Désactiver globalement une famille de checks (ou lancer avec `--soft-fail`) dès qu'un scan est rouge.**
+
+    Face à un premier scan Checkov qui échoue sur une dizaine de règles, la tentation est de tout
+    neutraliser : `skip-check` en masse ou `--soft-fail` pour que la CI ne bloque jamais. On perd alors tout
+    l'intérêt de l'outil. La bonne pratique est de **corriger** la configuration quand c'est possible (c'est
+    souvent une ligne : `storage_encrypted = true`), et de ne supprimer qu'un **check précis et justifié**,
+    en ligne avec un commentaire `checkov:skip`, pour les rares cas d'exception réellement voulus. Une
+    suppression sans raison est une porte laissée ouverte.
+  en: |
+    **Globally disabling a family of checks (or running with `--soft-fail`) as soon as a scan is red.**
+
+    Faced with a first Checkov scan failing on a dozen rules, the temptation is to neutralise everything:
+    mass `skip-check` or `--soft-fail` so CI never blocks. You then lose all the tool's value. The good
+    practice is to **fix** the configuration when possible (it is often one line: `storage_encrypted = true`),
+    and to skip only a **precise, justified check**, inline with a `checkov:skip` comment, for the rare,
+    genuinely intended exceptions. A skip with no reason is a door left open.
+
+bestPractice:
+  fr: |
+    - **Scannez l'IaC tôt** : hook `pre-commit`, puis CI, avant tout déploiement.
+    - **Corrigez plutôt que supprimer** : la plupart des échecs se règlent en une ou deux lignes.
+    - **Supprimez en ligne et par check précis** (`checkov:skip=ID:raison`), jamais une famille entière.
+    - **Centralisez la config** dans `.checkov.yaml` versionné ; sortie SARIF pour *Code scanning*.
+    - **Écrivez des policies maison** pour vos conventions internes (`CKV_CUSTOM_...`).
+    - **Faites échouer la CI** (pas de `--soft-fail` par défaut) sur les checks restants.
+  en: |
+    - **Scan IaC early**: a `pre-commit` hook, then CI, before any deployment.
+    - **Fix rather than skip**: most failures are solved in one or two lines.
+    - **Skip inline and per precise check** (`checkov:skip=ID:reason`), never a whole family.
+    - **Centralise the config** in a versioned `.checkov.yaml`; SARIF output for *Code scanning*.
+    - **Write custom policies** for your internal conventions (`CKV_CUSTOM_...`).
+    - **Fail CI** (no default `--soft-fail`) on the remaining checks.
+
+exercise:
+  statement:
+    fr: |
+      Un scan Checkov sur votre Terraform signale, entre autres :
+
+      ```text
+      CKV_AWS_16  FAILED  aws_db_instance.main   (RDS not encrypted at rest)
+      CKV_AWS_260 FAILED  aws_security_group.lb  (ingress 0.0.0.0/0 to port 22)
+      ```
+
+      1. Pour `CKV_AWS_16`, donnez la ligne Terraform à ajouter/modifier pour corriger.
+      2. Pour `CKV_AWS_260`, l'équipe confirme que ce groupe est un **bastion** et que l'ouverture SSH est
+         un risque assumé temporairement. Écrivez la suppression en ligne correcte, avec justification.
+      3. Pourquoi corriger `CKV_AWS_16` mais seulement supprimer `CKV_AWS_260` ?
+    en: |
+      A Checkov scan on your Terraform reports, among others:
+
+      ```text
+      CKV_AWS_16  FAILED  aws_db_instance.main   (RDS not encrypted at rest)
+      CKV_AWS_260 FAILED  aws_security_group.lb  (ingress 0.0.0.0/0 to port 22)
+      ```
+
+      1. For `CKV_AWS_16`, give the Terraform line to add/change to fix it.
+      2. For `CKV_AWS_260`, the team confirms this group is a **bastion** and that the SSH opening is a
+         temporarily accepted risk. Write the correct inline skip, with a justification.
+      3. Why fix `CKV_AWS_16` but only skip `CKV_AWS_260`?
+  solution:
+    file: main.tf
+    lang: hcl
+    code: |
+      # 1. Fix CKV_AWS_16: enable encryption at rest on the database.
+      resource "aws_db_instance" "main" {
+        allocated_storage = 20
+        engine            = "postgres"
+        instance_class    = "db.t3.micro"
+        storage_encrypted = true   # <-- the fix
+      }
+
+      # 2. Skip CKV_AWS_260 inline, with a justification, because open SSH is
+      #    intended here (a bastion host) and accepted as a temporary risk.
+      resource "aws_security_group" "lb" {
+        name = "bastion-sg"
+        # checkov:skip=CKV_AWS_260:Bastion host, SSH exposure is an accepted temporary risk (review 2026-09)
+        ingress {
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+
+      # 3. CKV_AWS_16 is a real misconfiguration with a trivial fix (one line), so we
+      #    FIX it. CKV_AWS_260 is an intended design choice (a bastion), not a mistake,
+      #    so we SKIP it with a documented, dated justification instead of weakening it.
+    note:
+      fr: "On corrige ce qui est une vraie erreur (chiffrement manquant, une ligne) et on supprime, de façon tracée, ce qui est un choix de conception assumé (le bastion). La distinction clé : réparer un défaut vs documenter une exception voulue — jamais supprimer par confort."
+      en: "You fix what is a real mistake (missing encryption, one line) and skip, in a traced way, what is an intended design choice (the bastion). The key distinction: repair a defect vs document an intended exception — never skip for convenience."
+
+quiz:
+  - q:
+      fr: "Que scanne Checkov ?"
+      en: "What does Checkov scan?"
+    options:
+      fr:
+        - "Le trafic réseau en temps réel"
+        - "Des fichiers d'Infrastructure as Code (Terraform, Kubernetes, Dockerfile...)"
+        - "Les mots de passe des utilisateurs"
+        - "Le code binaire compilé"
+      en:
+        - "Real-time network traffic"
+        - "Infrastructure as Code files (Terraform, Kubernetes, Dockerfile...)"
+        - "User passwords"
+        - "Compiled binary code"
+    answer: 1
+    why:
+      fr: "Checkov applique des centaines de politiques à des fichiers IaC pour trouver les mauvaises configurations (bucket public, port ouvert, chiffrement manquant) avant le déploiement."
+      en: "Checkov applies hundreds of policies to IaC files to find misconfigurations (public bucket, open port, missing encryption) before deployment."
+  - q:
+      fr: "À quoi sert l'identifiant `CKV_AWS_260` dans un résultat ?"
+      en: "What is the identifier `CKV_AWS_260` for in a result?"
+    options:
+      fr:
+        - "C'est le numéro de port concerné"
+        - "C'est l'identifiant stable du check, utilisé pour documenter, supprimer ou filtrer la règle"
+        - "C'est le prix de l'outil"
+        - "C'est la version de Terraform"
+      en:
+        - "It is the port number concerned"
+        - "It is the check's stable identifier, used to document, skip or filter the rule"
+        - "It is the tool's price"
+        - "It is the Terraform version"
+    answer: 1
+    why:
+      fr: "Chaque règle Checkov a un identifiant stable. On s'en sert pour cibler une suppression (`checkov:skip=CKV_AWS_260`), filtrer, ou documenter une exception."
+      en: "Each Checkov rule has a stable identifier. You use it to target a skip (`checkov:skip=CKV_AWS_260`), filter, or document an exception."
+  - q:
+      fr: "Comment supprimer un check précis de façon correcte ?"
+      en: "How do you skip a precise check correctly?"
+    options:
+      fr:
+        - "En supprimant la ressource"
+        - "Avec un commentaire inline `checkov:skip=ID:raison` incluant une justification"
+        - "En lançant toujours `--soft-fail`"
+        - "En renommant le fichier .tf"
+      en:
+        - "By deleting the resource"
+        - "With an inline `checkov:skip=ID:reason` comment including a justification"
+        - "By always running `--soft-fail`"
+        - "By renaming the .tf file"
+    answer: 1
+    why:
+      fr: "Le `checkov:skip=ID:raison` cible un seul check et exige une raison, rendant la suppression auditable et versionnée. `--soft-fail` neutraliserait au contraire toute la détection."
+      en: "The `checkov:skip=ID:reason` targets a single check and requires a reason, making the skip auditable and versioned. `--soft-fail` would instead neutralise all detection."
+  - q:
+      fr: "À quoi sert une policy personnalisée (CKV_CUSTOM_...) ?"
+      en: "What is a custom policy (CKV_CUSTOM_...) for?"
+    options:
+      fr:
+        - "À désactiver les politiques intégrées"
+        - "À faire respecter une convention interne (par ex. une étiquette owner obligatoire)"
+        - "À accélérer le scan"
+        - "À chiffrer le state Terraform"
+      en:
+        - "To disable the built-in policies"
+        - "To enforce an internal convention (e.g. a mandatory owner tag)"
+        - "To speed up the scan"
+        - "To encrypt the Terraform state"
+    answer: 1
+    why:
+      fr: "Les policies maison (YAML ou Python, chargées via `--external-checks-dir`) ajoutent vos règles internes au contrôle automatique, en plus des centaines de politiques intégrées."
+      en: "Custom policies (YAML or Python, loaded via `--external-checks-dir`) add your internal rules to the automated check, on top of the hundreds of built-in policies."
+  - q:
+      fr: "Face à `storage_encrypted = false` signalé par Checkov, quelle est la meilleure réponse ?"
+      en: "Facing `storage_encrypted = false` flagged by Checkov, what is the best response?"
+    options:
+      fr:
+        - "Supprimer le check globalement"
+        - "Lancer avec --soft-fail"
+        - "Corriger en mettant `storage_encrypted = true`"
+        - "Ignorer l'alerte sans rien changer"
+      en:
+        - "Skip the check globally"
+        - "Run with --soft-fail"
+        - "Fix it by setting `storage_encrypted = true`"
+        - "Ignore the alert without changing anything"
+    answer: 2
+    why:
+      fr: "C'est une vraie mauvaise configuration avec un correctif d'une ligne. On corrige plutôt que de supprimer : la suppression ne se justifie que pour un choix de conception assumé, pas pour un défaut facile à réparer."
+      en: "It is a real misconfiguration with a one-line fix. You fix rather than skip: a skip is only justified for an intended design choice, not for an easily repaired defect."

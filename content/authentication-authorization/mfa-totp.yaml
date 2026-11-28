@@ -1,0 +1,516 @@
+description:
+  fr: "MFA et TOTP : comprendre et implémenter les codes à usage unique (RFC 6238), les codes de secours et les passkeys WebAuthn."
+  en: "MFA and TOTP: understand and implement one-time codes (RFC 6238), backup codes and WebAuthn passkeys."
+duration: 30
+
+intro:
+  fr: |
+    La **MFA** (*Multi-Factor Authentication*, authentification multifacteur) exige **plusieurs preuves**
+    d'identité de natures différentes : quelque chose que vous **savez** (mot de passe), que vous
+    **possédez** (téléphone, clé de sécurité) ou que vous **êtes** (empreinte). Même si un attaquant vole
+    votre mot de passe, il lui manque le deuxième facteur.
+
+    Le facteur « possession » le plus répandu est le **TOTP** (*Time-based One-Time Password*, mot de passe
+    à usage unique basé sur le temps) : le code à 6 chiffres qui change toutes les 30 secondes dans une
+    application comme Google Authenticator ou Aegis. Imaginez un cadran qui tourne, synchronisé entre votre
+    téléphone et le serveur grâce à un secret partagé une seule fois : à chaque instant, les deux affichent
+    le même nombre.
+
+    Dans cette leçon, vous implémentez le TOTP **à la main** avec la bibliothèque standard de Python (pour
+    comprendre la RFC 6238), puis avec `pyotp`. Vous verrez aussi les **codes de secours** et un aperçu de
+    **WebAuthn / passkeys**, le facteur le plus résistant à l'hameçonnage.
+  en: |
+    **MFA** (*Multi-Factor Authentication*) requires **several proofs** of identity of different natures:
+    something you **know** (password), something you **have** (phone, security key) or something you **are**
+    (fingerprint). Even if an attacker steals your password, they lack the second factor.
+
+    The most common "have" factor is **TOTP** (*Time-based One-Time Password*): the 6-digit code that
+    changes every 30 seconds in an app like Google Authenticator or Aegis. Picture a rotating dial,
+    synchronised between your phone and the server thanks to a secret shared once: at every moment, both
+    show the same number.
+
+    In this lesson you implement TOTP **by hand** with Python's standard library (to understand RFC 6238),
+    then with `pyotp`. You will also see **backup codes** and an overview of **WebAuthn / passkeys**, the
+    factor most resistant to phishing.
+
+sections:
+  - heading:
+      fr: "Les trois facteurs et pourquoi le SMS est le plus faible"
+      en: "The three factors and why SMS is the weakest"
+    body:
+      fr: |
+        Un facteur n'a de valeur que combiné à un autre **d'une catégorie différente** : deux mots de passe
+        ne font pas de la MFA.
+
+        | Facteur | Catégorie | Exemples | Résistance à l'hameçonnage |
+        |---|---|---|---|
+        | Connaissance | Ce que vous savez | Mot de passe, code PIN | Faible |
+        | Possession | Ce que vous avez | TOTP, clé FIDO2, passkey | Moyenne à très forte |
+        | Inhérence | Ce que vous êtes | Empreinte, visage | Moyenne (local) |
+
+        Tous les seconds facteurs ne se valent pas :
+
+        - **SMS / appel** : vulnérable au *SIM swapping* (détournement de la carte SIM) et à l'interception
+          réseau. À éviter quand une meilleure option existe.
+        - **TOTP** : bon compromis, hors ligne, mais **hameçonnable** — un site piégé peut demander le code
+          et le rejouer dans les 30 secondes.
+        - **WebAuthn / passkey (FIDO2)** : la clé vérifie l'origine du site ; un code ne « fuit » jamais,
+          ce qui le rend **résistant à l'hameçonnage**. C'est le facteur recommandé pour les comptes sensibles.
+
+        La MFA ne remplace pas un bon mot de passe haché (Argon2/bcrypt) : elle **s'ajoute** en deuxième
+        barrière. On protège d'abord correctement le premier facteur, puis on exige le second.
+      en: |
+        A factor is only valuable combined with another **from a different category**: two passwords are not
+        MFA.
+
+        | Factor | Category | Examples | Phishing resistance |
+        |---|---|---|---|
+        | Knowledge | Something you know | Password, PIN | Weak |
+        | Possession | Something you have | TOTP, FIDO2 key, passkey | Medium to very strong |
+        | Inherence | Something you are | Fingerprint, face | Medium (local) |
+
+        Not all second factors are equal:
+
+        - **SMS / call**: vulnerable to *SIM swapping* and network interception. Avoid it when a better
+          option exists.
+        - **TOTP**: a good compromise, offline, but **phishable** — a fake site can ask for the code and
+          replay it within 30 seconds.
+        - **WebAuthn / passkey (FIDO2)**: the key verifies the site's origin; a code never "leaks", which
+          makes it **phishing-resistant**. It is the recommended factor for sensitive accounts.
+
+        MFA does not replace a well-hashed password (Argon2/bcrypt): it **adds** a second barrier. First
+        protect the first factor properly, then require the second.
+  - heading:
+      fr: "Comment fonctionne le TOTP (RFC 6238)"
+      en: "How TOTP works (RFC 6238)"
+    body:
+      fr: |
+        Le TOTP est un **HOTP** (RFC 4226) dont le compteur est… le **temps**. La recette :
+
+        1. Le serveur génère un **secret** aléatoire (encodé en Base32) et le partage **une fois** avec
+           l'application d'authentification, via un **QR code** (URI `otpauth://totp/...`).
+        2. À chaque vérification, les deux côtés calculent le même pas de temps :
+           **`T = floor((temps_unix_actuel) / 30)`**.
+        3. Ils calculent **`HMAC-SHA1(secret, T)`**, puis en extraient 6 chiffres par une *troncature
+           dynamique* (RFC 4226).
+        4. Le serveur compare le code saisi avec le sien.
+
+        Comme les horloges dérivent, le serveur accepte une petite **fenêtre** (le pas précédent et le
+        suivant, soit ±30 s). Deux règles de sécurité capitales :
+
+        - **Usage unique** : un code déjà utilisé doit être refusé jusqu'à la fin de son pas de temps, sinon
+          il est rejouable.
+        - **Limitation des tentatives** : un code à 6 chiffres n'offre qu'un million de possibilités ; sans
+          plafond, la force brute le casse. On limite comme pour un mot de passe.
+
+        Le secret se stocke **chiffré** côté serveur (il permet de régénérer tous les codes). Les paramètres
+        par défaut — SHA-1, 6 chiffres, pas de 30 s — sont ceux attendus par toutes les applications grand public.
+      en: |
+        TOTP is an **HOTP** (RFC 4226) whose counter is… **time**. The recipe:
+
+        1. The server generates a random **secret** (Base32-encoded) and shares it **once** with the
+           authenticator app, via a **QR code** (`otpauth://totp/...` URI).
+        2. On every verification, both sides compute the same time step:
+           **`T = floor((current_unix_time) / 30)`**.
+        3. They compute **`HMAC-SHA1(secret, T)`**, then extract 6 digits with *dynamic truncation*
+           (RFC 4226).
+        4. The server compares the entered code with its own.
+
+        Because clocks drift, the server accepts a small **window** (the previous and next step, i.e.
+        ±30 s). Two crucial security rules:
+
+        - **Single use**: a code already used must be refused until the end of its time step, otherwise it
+          is replayable.
+        - **Rate limiting**: a 6-digit code offers only a million possibilities; without a cap, brute force
+          breaks it. Limit it like a password.
+
+        The secret is stored **encrypted** on the server (it allows regenerating every code). The default
+        parameters — SHA-1, 6 digits, 30-second step — are those expected by every consumer app.
+  - heading:
+      fr: "Codes de secours et passkeys WebAuthn"
+      en: "Backup codes and WebAuthn passkeys"
+    body:
+      fr: |
+        **Codes de secours.** Que se passe-t-il si l'utilisateur perd son téléphone ? On génère, au moment
+        de l'activation de la MFA, une dizaine de **codes à usage unique** à imprimer ou enregistrer. Côté
+        serveur, on les **hache** (comme des mots de passe) et on en **supprime** chacun après usage. Ils
+        évitent le verrouillage définitif du compte, qui pousse sinon à désactiver la MFA.
+
+        **WebAuthn / passkeys.** La norme **FIDO2/WebAuthn** remplace (ou complète) le mot de passe par une
+        **paire de clés cryptographiques** : la clé privée reste dans l'appareil (ou une clé USB FIDO2), la
+        clé publique est enregistrée par le serveur. À la connexion, le serveur envoie un défi que
+        l'appareil **signe**. Deux propriétés fortes :
+
+        | Propriété | Conséquence |
+        |---|---|
+        | La signature est liée à l'origine (le domaine) | Un site d'hameçonnage ne peut pas la réutiliser |
+        | Aucun secret partagé ne transite | Rien à voler côté serveur, rien à rejouer |
+
+        Une **passkey** est une clé WebAuthn synchronisée entre les appareils de l'utilisateur (via le
+        trousseau du système). C'est aujourd'hui la méthode la plus sûre et la plus simple : **résistante à
+        l'hameçonnage** par construction. Le TOTP reste un excellent facteur par défaut, universel et hors ligne.
+      en: |
+        **Backup codes.** What if the user loses their phone? At MFA activation, generate a dozen
+        **single-use codes** to print or save. On the server, **hash** them (like passwords) and **delete**
+        each after use. They avoid permanent account lockout, which otherwise pushes users to disable MFA.
+
+        **WebAuthn / passkeys.** The **FIDO2/WebAuthn** standard replaces (or complements) the password with
+        a **cryptographic key pair**: the private key stays in the device (or a FIDO2 USB key), the public
+        key is registered by the server. At login, the server sends a challenge that the device **signs**.
+        Two strong properties:
+
+        | Property | Consequence |
+        |---|---|
+        | The signature is bound to the origin (the domain) | A phishing site cannot reuse it |
+        | No shared secret travels | Nothing to steal server-side, nothing to replay |
+
+        A **passkey** is a WebAuthn credential synced across the user's devices (via the system keychain). It
+        is today the safest and simplest method: **phishing-resistant** by design. TOTP remains an excellent
+        default factor, universal and offline.
+
+examples:
+  - title:
+      fr: "TOTP à la main avec la bibliothèque standard (RFC 6238)"
+      en: "TOTP by hand with the standard library (RFC 6238)"
+    file: totp_stdlib.py
+    lang: python
+    kind: secure
+    code: |
+      import base64
+      import hashlib
+      import hmac
+      import struct
+      import time
+
+
+      def totp(secret_base32: str, step: int = 30, digits: int = 6, t: float | None = None) -> str:
+          # 1) Decode the shared Base32 secret the server generated once
+          key = base64.b32decode(secret_base32)
+          # 2) The counter is the current time divided into 30-second steps (RFC 6238)
+          counter = int((t if t is not None else time.time()) // step)
+          msg = struct.pack(">Q", counter)
+          # 3) HMAC-SHA1 of the counter under the secret (HOTP, RFC 4226)
+          digest = hmac.new(key, msg, hashlib.sha1).digest()
+          # 4) Dynamic truncation: the low nibble picks a 4-byte offset
+          offset = digest[-1] & 0x0F
+          code = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % (10 ** digits)
+          return str(code).zfill(digits)
+
+
+      # Shared secret (Base32). In production it is random and stored encrypted.
+      SECRET = "JBSWY3DPEHPK3PXP"
+      # Fixed timestamp so the printed value is reproducible for this demo
+      print("Code at t=59   :", totp(SECRET, t=59))
+      print("Code now       :", totp(SECRET))
+    output: |
+      Code at t=59   : 972039
+      Code now       : 611514
+    note:
+      fr: "Ces quatre étapes sont exactement la RFC 6238 : compteur temporel, HMAC-SHA1, troncature dynamique, modulo. `t=59` donne un résultat reproductible ; sans `t`, le code dépend de l'heure réelle et change toutes les 30 secondes."
+      en: "These four steps are exactly RFC 6238: time counter, HMAC-SHA1, dynamic truncation, modulo. `t=59` gives a reproducible result; without `t`, the code depends on the real time and changes every 30 seconds."
+
+  - title:
+      fr: "Vérification sûre avec `pyotp` : fenêtre, usage unique, limitation"
+      en: "Safe verification with `pyotp`: window, single use, rate limiting"
+    file: verify_totp.py
+    lang: python
+    kind: secure
+    code: |
+      import pyotp
+
+      # The server generated this once and stores it ENCRYPTED, per user
+      secret = pyotp.random_base32()
+      totp = pyotp.TOTP(secret)
+
+      # Share it with the authenticator app as an otpauth:// URI (rendered as a QR code)
+      uri = totp.provisioning_uri(name="alice@example.com", issuer_name="DevSecOpsApp")
+      print("Enrol URI:", uri)
+
+      # --- Verification, with the three security rules ---
+      _used_steps: set[int] = set()
+      _attempts = {"count": 0}
+
+
+      def verify(code: str) -> bool:
+          # Rule 1: rate-limit attempts (a 6-digit code has only 1e6 values)
+          _attempts["count"] += 1
+          if _attempts["count"] > 5:
+              raise RuntimeError("too many attempts")
+          # valid_window=1 tolerates one step of clock drift (+/- 30s)
+          if not totp.verify(code, valid_window=1):
+              return False
+          # Rule 2: single use - refuse a code already accepted in this step
+          step = pyotp.utils.time.time() // 30
+          if step in _used_steps:
+              return False
+          _used_steps.add(step)
+          return True
+
+
+      # In a real login: verify the password first, THEN require this second factor
+    note:
+      fr: "`pyotp` implémente la RFC 6238. Les garde-fous indispensables s'ajoutent autour : `valid_window=1` pour la dérive d'horloge, le rejeu bloqué par le suivi du pas de temps, et la limitation des tentatives contre la force brute."
+      en: "`pyotp` implements RFC 6238. The essential guards wrap around it: `valid_window=1` for clock drift, replay blocked by tracking the time step, and rate limiting against brute force."
+
+  - title:
+      fr: "Codes de secours : générer, hacher, consommer"
+      en: "Backup codes: generate, hash, consume"
+    file: backup_codes.py
+    lang: python
+    kind: secure
+    code: |
+      import secrets
+      import hashlib
+
+
+      def generate_backup_codes(n: int = 10) -> tuple[list[str], list[str]]:
+          plain, hashed = [], []
+          for _ in range(n):
+              # Show each code once to the user; store only its hash
+              code = f"{secrets.randbelow(10**8):08d}"  # 8-digit single-use code
+              plain.append(code)
+              hashed.append(hashlib.sha256(code.encode()).hexdigest())
+          return plain, hashed
+
+
+      def consume_backup_code(stored_hashes: list[str], code: str) -> bool:
+          h = hashlib.sha256(code.encode()).hexdigest()
+          # Compare in constant time against each stored hash, then burn the code
+          for i, stored in enumerate(stored_hashes):
+              if secrets.compare_digest(stored, h):
+                  del stored_hashes[i]  # single use: remove so it cannot be replayed
+                  return True
+          return False
+
+
+      plain, hashed = generate_backup_codes()
+      print("Show to user once:", plain[0], "...")
+      print("Use it once      :", consume_backup_code(hashed, plain[0]))
+      print("Reuse is refused :", consume_backup_code(hashed, plain[0]))
+    output: |
+      Show to user once: 48210973 ...
+      Use it once      : True
+      Reuse is refused : False
+    note:
+      fr: "Les codes de secours se traitent comme des mots de passe : affichés une seule fois, stockés **hachés**, comparés en temps constant et **supprimés** après usage. Ils évitent le verrouillage du compte en cas de perte du téléphone."
+      en: "Backup codes are treated like passwords: shown once, stored **hashed**, compared in constant time and **deleted** after use. They prevent account lockout if the phone is lost."
+
+  - title:
+      fr: "Aperçu WebAuthn : démarrer l'enregistrement d'une passkey (Node.js)"
+      en: "WebAuthn overview: starting passkey registration (Node.js)"
+    file: webauthn.js
+    lang: javascript
+    kind: secure
+    code: |
+      const { generateRegistrationOptions } = require("@simplewebauthn/server");
+
+      // The relying party is YOUR domain; the signature will be bound to this origin,
+      // which is what makes WebAuthn resistant to phishing (a fake site cannot reuse it).
+      const RP_ID = "app.example";
+
+      async function startRegistration(user) {
+        const options = await generateRegistrationOptions({
+          rpName: "DevSecOps App",
+          rpID: RP_ID,
+          userName: user.email,
+          // Ask the authenticator to prove user presence/verification
+          authenticatorSelection: { userVerification: "preferred", residentKey: "preferred" },
+        });
+        // Store options.challenge in the session; the browser's navigator.credentials
+        // .create() will sign it, and the server verifies the signature + origin.
+        return options;
+      }
+
+      // No shared secret ever leaves the device: the server keeps only the PUBLIC key.
+      module.exports = { startRegistration };
+    note:
+      fr: "Avec WebAuthn/passkeys, le serveur ne conserve qu'une **clé publique** ; la clé privée ne quitte jamais l'appareil et la signature est liée à l'origine. Un site d'hameçonnage ne peut donc pas rejouer l'authentification."
+      en: "With WebAuthn/passkeys, the server keeps only a **public key**; the private key never leaves the device and the signature is bound to the origin. A phishing site therefore cannot replay the authentication."
+
+mistake:
+  fr: |
+    **Accepter le même code TOTP plusieurs fois, ou ne pas limiter les tentatives.**
+
+    Un code à 6 chiffres n'a qu'un million de valeurs possibles et reste valide ~30 à 60 secondes. Sans
+    **limitation des tentatives**, un attaquant peut le forcer en quelques secondes ; sans contrôle
+    d'**usage unique**, un code intercepté est rejouable pendant toute sa fenêtre. Autre erreur : stocker le
+    secret TOTP en clair — il permet de recalculer tous les codes, il doit être **chiffré au repos**.
+    Enfin, oublier les **codes de secours** condamne l'utilisateur qui perd son téléphone à désactiver la
+    MFA, ce qui annule tout le bénéfice.
+  en: |
+    **Accepting the same TOTP code several times, or not rate-limiting attempts.**
+
+    A 6-digit code has only a million possible values and stays valid ~30 to 60 seconds. Without **rate
+    limiting**, an attacker can brute-force it in seconds; without a **single-use** check, an intercepted
+    code is replayable for its whole window. Another mistake: storing the TOTP secret in clear — it allows
+    recomputing every code, so it must be **encrypted at rest**. Finally, forgetting **backup codes**
+    condemns a user who loses their phone to disabling MFA, which cancels the whole benefit.
+
+bestPractice:
+  fr: |
+    - **TOTP comme facteur par défaut** (RFC 6238, SHA-1/6 chiffres/30 s) ; privilégier **WebAuthn/passkeys** sur les comptes sensibles.
+    - **Secret TOTP chiffré au repos** ; jamais en clair en base ni dans les journaux.
+    - **Usage unique + fenêtre réduite** (`valid_window=1`) pour tolérer la dérive sans ouvrir au rejeu.
+    - **Limiter les tentatives** du second facteur, comme pour un mot de passe.
+    - **Codes de secours hachés**, à usage unique, pour éviter le verrouillage du compte.
+    - **Éviter le SMS** quand une meilleure option existe (risque de SIM swapping).
+  en: |
+    - **TOTP as the default factor** (RFC 6238, SHA-1/6 digits/30 s); prefer **WebAuthn/passkeys** on sensitive accounts.
+    - **TOTP secret encrypted at rest**; never in clear in the database or in logs.
+    - **Single use + a small window** (`valid_window=1`) to tolerate drift without opening to replay.
+    - **Rate-limit** second-factor attempts, as for a password.
+    - **Hashed, single-use backup codes** to prevent account lockout.
+    - **Avoid SMS** when a better option exists (SIM-swapping risk).
+
+exercise:
+  statement:
+    fr: |
+      Un développeur ajoute le TOTP ainsi :
+
+      ```python
+      import pyotp
+
+      def verify(secret, code):
+          return pyotp.TOTP(secret).verify(code)
+      ```
+
+      1. Citez deux faiblesses de sécurité de cette vérification (indice : rejeu, force brute).
+      2. Proposez une version améliorée qui refuse un code déjà utilisé dans le même pas de temps et qui
+         bloque après 5 tentatives échouées.
+    en: |
+      A developer adds TOTP like this:
+
+      ```python
+      import pyotp
+
+      def verify(secret, code):
+          return pyotp.TOTP(secret).verify(code)
+      ```
+
+      1. Name two security weaknesses of this verification (hint: replay, brute force).
+      2. Propose an improved version that refuses a code already used in the same time step and blocks after
+         5 failed attempts.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import time
+      import pyotp
+
+
+      class TotpVerifier:
+          def __init__(self, secret: str):
+              self.totp = pyotp.TOTP(secret)
+              self._used_steps: set[int] = set()
+              self._fails = 0
+
+          def verify(self, code: str) -> bool:
+              # Weakness 1 fixed: cap attempts so a 6-digit code cannot be brute-forced
+              if self._fails >= 5:
+                  raise RuntimeError("locked: too many attempts")
+              # valid_window=1 tolerates +/- 30s of clock drift
+              if not self.totp.verify(code, valid_window=1):
+                  self._fails += 1
+                  return False
+              # Weakness 2 fixed: a code is single-use within its 30-second step
+              step = int(time.time()) // 30
+              if step in self._used_steps:
+                  return False
+              self._used_steps.add(step)
+              self._fails = 0
+              return True
+    note:
+      fr: "Faiblesses : le code original est rejouable (aucun suivi du pas de temps) et sans limite de tentatives (force brute possible sur 10^6 valeurs). La version corrigée ajoute l'usage unique par pas et le verrouillage après 5 échecs."
+      en: "Weaknesses: the original code is replayable (no time-step tracking) and has no attempt limit (brute force over 10^6 values). The fixed version adds single use per step and a lockout after 5 failures."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qui constitue une véritable authentification multifacteur ?"
+      en: "What constitutes true multi-factor authentication?"
+    options:
+      fr:
+        - "Deux mots de passe différents"
+        - "Un mot de passe suivi d'une question secrète"
+        - "Des preuves de catégories différentes : quelque chose que l'on sait, que l'on possède, ou que l'on est"
+        - "Un mot de passe très long"
+      en:
+        - "Two different passwords"
+        - "A password followed by a secret question"
+        - "Proofs from different categories: something you know, have, or are"
+        - "A very long password"
+    answer: 2
+    why:
+      fr: "La MFA combine des facteurs de natures différentes ; deux éléments de connaissance (mot de passe + question) restent un seul facteur."
+      en: "MFA combines factors of different natures; two knowledge elements (password + question) are still a single factor."
+  - q:
+      fr: "Sur quoi repose le calcul d'un code TOTP (RFC 6238) ?"
+      en: "What is a TOTP code (RFC 6238) computed from?"
+    options:
+      fr:
+        - "HMAC-SHA1 d'un compteur temporel (temps / 30 s) avec un secret partagé"
+        - "Le chiffrement AES du mot de passe"
+        - "Un nombre tiré au hasard par le serveur à chaque connexion"
+        - "Le haché SHA-256 de l'adresse e-mail"
+      en:
+        - "HMAC-SHA1 of a time counter (time / 30 s) with a shared secret"
+        - "AES encryption of the password"
+        - "A random number drawn by the server at each login"
+        - "The SHA-256 hash of the e-mail address"
+    answer: 0
+    why:
+      fr: "Le TOTP applique HMAC-SHA1 à un compteur dérivé du temps, puis tronque le résultat en 6 chiffres ; les deux côtés partagent le même secret."
+      en: "TOTP applies HMAC-SHA1 to a time-derived counter, then truncates the result to 6 digits; both sides share the same secret."
+  - q:
+      fr: "Pourquoi faut-il refuser un code TOTP déjà utilisé dans le même pas de temps ?"
+      en: "Why must a TOTP code already used in the same time step be refused?"
+    options:
+      fr:
+        - "Pour économiser de la mémoire"
+        - "Parce qu'un code intercepté serait sinon rejouable pendant sa fenêtre de validité"
+        - "Parce que le code change de longueur"
+        - "Pour accélérer la vérification"
+      en:
+        - "To save memory"
+        - "Because an intercepted code would otherwise be replayable during its validity window"
+        - "Because the code changes length"
+        - "To speed up verification"
+    answer: 1
+    why:
+      fr: "Sans contrôle d'usage unique, un attaquant qui capte le code le rejoue dans les 30-60 secondes ; le suivi du pas de temps l'empêche."
+      en: "Without a single-use check, an attacker who captures the code replays it within 30-60 seconds; tracking the time step prevents that."
+  - q:
+      fr: "Pourquoi WebAuthn / passkeys résiste-t-il à l'hameçonnage, contrairement au TOTP ?"
+      en: "Why is WebAuthn / passkeys resistant to phishing, unlike TOTP?"
+    options:
+      fr:
+        - "Parce que les codes sont plus longs"
+        - "Parce qu'il utilise un SMS"
+        - "Parce qu'il change toutes les 10 secondes"
+        - "Parce que la signature est liée à l'origine du site et qu'aucun secret ne transite"
+      en:
+        - "Because the codes are longer"
+        - "Because it uses an SMS"
+        - "Because it changes every 10 seconds"
+        - "Because the signature is bound to the site's origin and no secret travels"
+    answer: 3
+    why:
+      fr: "La clé WebAuthn signe un défi lié au domaine ; un site d'hameçonnage ne peut pas réutiliser la signature, et le serveur ne détient qu'une clé publique."
+      en: "The WebAuthn key signs a challenge bound to the domain; a phishing site cannot reuse the signature, and the server holds only a public key."
+  - q:
+      fr: "Comment stocker les codes de secours côté serveur ?"
+      en: "How should backup codes be stored server-side?"
+    options:
+      fr:
+        - "Hachés et supprimés après usage, comme des mots de passe"
+        - "En clair dans un fichier texte"
+        - "Dans un cookie côté client"
+        - "Dans l'URL de connexion"
+      en:
+        - "Hashed and deleted after use, like passwords"
+        - "In clear in a text file"
+        - "In a client-side cookie"
+        - "In the login URL"
+    answer: 0
+    why:
+      fr: "Les codes de secours sont des secrets à usage unique : on les hache, on les compare en temps constant et on les supprime une fois utilisés."
+      en: "Backup codes are single-use secrets: hash them, compare in constant time and delete them once used."

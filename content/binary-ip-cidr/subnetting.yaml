@@ -1,0 +1,323 @@
+description:
+  fr: "Découper un réseau en sous-réseaux : subnetting à longueur fixe et VLSM, pour segmenter et sécuriser un réseau."
+  en: "Split a network into subnets: fixed-length subnetting and VLSM, to segment and secure a network."
+duration: 25
+
+intro:
+  fr: |
+    Le **subnetting** (découpage en sous-réseaux) consiste à prendre un grand réseau et à le partager en
+    plusieurs petits réseaux indépendants. On le fait en **empruntant des bits** à la partie machine pour
+    agrandir la partie réseau : chaque bit emprunté double le nombre de sous-réseaux.
+
+    Pourquoi découper ? Pour **segmenter**. Mettre les serveurs, les postes de travail et les imprimantes dans
+    des sous-réseaux séparés limite la casse en cas d'intrusion : un attaquant qui compromet une imprimante ne
+    se retrouve pas automatiquement sur le même réseau que la base de données. C'est le principe de défense en
+    profondeur appliqué au réseau.
+
+    Imaginez un grand immeuble que l'on divise en appartements : chacun a sa porte, et on contrôle qui passe
+    d'un appartement à l'autre. Dans cette leçon vous découperez un `/24` en sous-réseaux égaux, puis vous
+    apprendrez le **VLSM** (tailles variables) pour ne pas gaspiller d'adresses. Vérifiez chaque découpage avec
+    le **calculateur CIDR** en bas de page.
+  en: |
+    **Subnetting** means taking one large network and splitting it into several smaller, independent networks.
+    You do it by **borrowing bits** from the host part to grow the network part: each borrowed bit doubles the
+    number of subnets.
+
+    Why split? To **segment**. Putting servers, workstations and printers in separate subnets limits the
+    damage of an intrusion: an attacker who compromises a printer does not automatically land on the same
+    network as the database. This is defense in depth applied to the network.
+
+    Picture a large building divided into flats: each has its own door, and you control who moves between them.
+    In this lesson you will split a `/24` into equal subnets, then learn **VLSM** (variable-length subnetting)
+    to avoid wasting addresses. Check every split with the **CIDR calculator** at the bottom of the page.
+
+sections:
+  - heading:
+      fr: "Découpage à longueur fixe : emprunter des bits"
+      en: "Fixed-length subnetting: borrowing bits"
+    body:
+      fr: |
+        Partons de `192.168.1.0/24` (256 adresses) et découpons-le en **4 sous-réseaux égaux**. Pour obtenir
+        4 sous-réseaux il faut 2 bits (2^2 = 4), donc on passe de `/24` à `/26`. Le pas entre réseaux est
+        2^(32−26) = **64**.
+
+        | Sous-réseau | Plage | Réseau | Broadcast | Machines utilisables |
+        |---|---|---|---|---|
+        | 192.168.1.0/26 | .0 - .63 | .0 | .63 | .1 - .62 (62) |
+        | 192.168.1.64/26 | .64 - .127 | .64 | .127 | .65 - .126 (62) |
+        | 192.168.1.128/26 | .128 - .191 | .128 | .191 | .129 - .190 (62) |
+        | 192.168.1.192/26 | .192 - .255 | .192 | .255 | .193 - .254 (62) |
+
+        Règle générale : pour **N** sous-réseaux, empruntez **b** bits tels que 2^b ≥ N. Chaque sous-réseau
+        contient alors 2^(bits machine restants) adresses.
+      en: |
+        Start from `192.168.1.0/24` (256 addresses) and split it into **4 equal subnets**. To get 4 subnets
+        you need 2 bits (2^2 = 4), so you move from `/24` to `/26`. The step between networks is
+        2^(32−26) = **64**.
+
+        | Subnet | Range | Network | Broadcast | Usable hosts |
+        |---|---|---|---|---|
+        | 192.168.1.0/26 | .0 - .63 | .0 | .63 | .1 - .62 (62) |
+        | 192.168.1.64/26 | .64 - .127 | .64 | .127 | .65 - .126 (62) |
+        | 192.168.1.128/26 | .128 - .191 | .128 | .191 | .129 - .190 (62) |
+        | 192.168.1.192/26 | .192 - .255 | .192 | .255 | .193 - .254 (62) |
+
+        General rule: for **N** subnets, borrow **b** bits such that 2^b ≥ N. Each subnet then holds
+        2^(remaining host bits) addresses.
+  - heading:
+      fr: "VLSM : des sous-réseaux de tailles différentes"
+      en: "VLSM: subnets of different sizes"
+    body:
+      fr: |
+        Découper en parts égales gaspille des adresses quand les besoins diffèrent. Le **VLSM** (*Variable
+        Length Subnet Mask*) attribue à chaque segment juste la taille qu'il lui faut. On commence toujours par
+        le **plus grand** besoin.
+
+        Exemple : découper `10.0.0.0/24` pour quatre segments.
+
+        | Segment | Machines voulues | Préfixe choisi | Capacité | Plage attribuée |
+        |---|---|---|---|---|
+        | Serveurs | 100 | /25 | 126 | 10.0.0.0 - 10.0.0.127 |
+        | Postes | 50 | /26 | 62 | 10.0.0.128 - 10.0.0.191 |
+        | Imprimantes | 20 | /27 | 30 | 10.0.0.192 - 10.0.0.223 |
+        | Lien routeur | 2 | /30 | 2 | 10.0.0.224 - 10.0.0.227 |
+
+        Chaque préfixe est le plus petit qui couvre le besoin (`/25` donne 126 ≥ 100, `/30` donne 2 pour un
+        lien point à point). On enchaîne les blocs sans trou, et il reste même de la place après `.227`.
+      en: |
+        Splitting into equal parts wastes addresses when needs differ. **VLSM** (*Variable Length Subnet Mask*)
+        gives each segment exactly the size it needs. Always start with the **largest** requirement.
+
+        Example: split `10.0.0.0/24` for four segments.
+
+        | Segment | Hosts needed | Chosen prefix | Capacity | Assigned range |
+        |---|---|---|---|---|
+        | Servers | 100 | /25 | 126 | 10.0.0.0 - 10.0.0.127 |
+        | Workstations | 50 | /26 | 62 | 10.0.0.128 - 10.0.0.191 |
+        | Printers | 20 | /27 | 30 | 10.0.0.192 - 10.0.0.223 |
+        | Router link | 2 | /30 | 2 | 10.0.0.224 - 10.0.0.227 |
+
+        Each prefix is the smallest that covers the need (`/25` gives 126 ≥ 100, `/30` gives 2 for a
+        point-to-point link). Blocks follow one another with no gap, and there is even room left after `.227`.
+
+examples:
+  - title:
+      fr: "Découper un /24 en quatre /26"
+      en: "Split a /24 into four /26 subnets"
+    file: equal_subnets.py
+    lang: python
+    kind: neutral
+    code: |
+      import ipaddress
+
+      base = ipaddress.ip_network("192.168.1.0/24")
+
+      # subnets(new_prefix=26) splits the /24 into equal /26 blocks
+      for sub in base.subnets(new_prefix=26):
+          hosts = list(sub.hosts())
+          print(f"{str(sub):<18} {sub.network_address} - {sub.broadcast_address}  "
+                f"({len(hosts)} hosts)")
+    output: |
+      192.168.1.0/26     192.168.1.0 - 192.168.1.63  (62 hosts)
+      192.168.1.64/26    192.168.1.64 - 192.168.1.127  (62 hosts)
+      192.168.1.128/26   192.168.1.128 - 192.168.1.191  (62 hosts)
+      192.168.1.192/26   192.168.1.192 - 192.168.1.255  (62 hosts)
+    note:
+      fr: "Passer de /24 à /26 emprunte 2 bits (2^2 = 4 sous-réseaux). Chaque bloc fait 64 adresses et 62 machines."
+      en: "Moving from /24 to /26 borrows 2 bits (2^2 = 4 subnets). Each block holds 64 addresses and 62 hosts."
+
+  - title:
+      fr: "Choisir le bon préfixe selon le nombre de machines"
+      en: "Pick the right prefix from the host count"
+    file: prefix_for_hosts.py
+    lang: python
+    kind: neutral
+    code: |
+      import math
+
+      def prefix_for(hosts: int) -> int:
+          # +2 for the network and broadcast addresses that are never usable
+          needed = hosts + 2
+          host_bits = math.ceil(math.log2(needed))  # bits to cover 'needed' addresses
+          return 32 - host_bits
+
+      for want in (100, 50, 20, 2):
+          p = prefix_for(want)
+          capacity = 2 ** (32 - p) - 2
+          print(f"{want:>3} hosts -> /{p}  (capacity {capacity})")
+    output: |
+      100 hosts -> /25  (capacity 126)
+       50 hosts -> /26  (capacity 62)
+       20 hosts -> /27  (capacity 30)
+        2 hosts -> /30  (capacity 2)
+    note:
+      fr: "On prend le plus petit préfixe qui couvre le besoin +2. 100 machines → /25 (126 utilisables), base du VLSM."
+      en: "Take the smallest prefix that covers the need +2. 100 hosts → /25 (126 usable), the basis of VLSM."
+
+  - title:
+      fr: "Segmenter pour la sécurité : isoler un sous-réseau sensible"
+      en: "Segment for security: isolate a sensitive subnet"
+    file: vlsm_plan.py
+    lang: python
+    kind: secure
+    code: |
+      import ipaddress
+
+      base = ipaddress.ip_network("10.0.0.0/24")
+
+      # Largest-first VLSM allocation inside the /24
+      plan = [("servers", 25), ("workstations", 26), ("printers", 27), ("router-link", 30)]
+
+      cursor = int(base.network_address)
+      for name, prefix in plan:
+          sub = ipaddress.ip_network((cursor, prefix))
+          print(f"{name:<13} {str(sub):<15} usable={sub.num_addresses - 2}")
+          cursor += sub.num_addresses  # move to the start of the next free block
+
+      # Security win: a NetworkPolicy/firewall can now forbid printers -> servers traffic
+    output: |
+      servers       10.0.0.0/25     usable=126
+      workstations  10.0.0.128/26   usable=62
+      printers      10.0.0.192/27   usable=30
+      router-link   10.0.0.224/30   usable=2
+    note:
+      fr: "Chaque segment occupe un bloc distinct. Des sous-réseaux séparés permettent au pare-feu d'interdire, par exemple, le trafic des imprimantes vers les serveurs."
+      en: "Each segment occupies a distinct block. Separate subnets let the firewall forbid, for example, printer-to-server traffic."
+
+mistake:
+  fr: |
+    **Faire chevaucher des sous-réseaux ou oublier le −2 à chaque bloc.**
+
+    En VLSM, si vous attribuez `10.0.0.0/25` (jusqu'à `.127`) puis démarrez le suivant à `10.0.0.64`, les deux
+    plages se **chevauchent** : le routage devient imprévisible. Repartez toujours de l'adresse qui suit le
+    broadcast précédent. Et n'oubliez pas que chaque sous-réseau perd 2 adresses (réseau + broadcast) : un `/30`
+    n'offre que **2** machines, pas 4.
+  en: |
+    **Letting subnets overlap, or forgetting the −2 in each block.**
+
+    In VLSM, if you assign `10.0.0.0/25` (up to `.127`) then start the next one at `10.0.0.64`, the two ranges
+    **overlap**: routing becomes unpredictable. Always restart from the address right after the previous
+    broadcast. And remember each subnet loses 2 addresses (network + broadcast): a `/30` offers only **2**
+    hosts, not 4.
+
+bestPractice:
+  fr: |
+    - **Attribuez du plus grand au plus petit** (VLSM) pour éviter les trous et les chevauchements.
+    - **Choisissez le préfixe au plus juste** : 2^(bits machine) − 2 ≥ nombre de machines voulu.
+    - **Segmentez par sensibilité** : serveurs, postes et invités dans des sous-réseaux distincts.
+    - **Documentez le plan d'adressage** et laissez de la marge pour la croissance.
+    - **Vérifiez chaque bloc** avec le calculateur CIDR avant de configurer routeurs et pare-feux.
+  en: |
+    - **Allocate largest to smallest** (VLSM) to avoid gaps and overlaps.
+    - **Choose the tightest prefix**: 2^(host bits) − 2 ≥ the number of hosts needed.
+    - **Segment by sensitivity**: servers, workstations and guests in separate subnets.
+    - **Document the addressing plan** and leave headroom for growth.
+    - **Check every block** with the CIDR calculator before configuring routers and firewalls.
+
+exercise:
+  statement:
+    fr: |
+      On vous donne le réseau `172.16.4.0/24`. Vous devez créer trois segments :
+
+      - un segment de 60 machines (postes) ;
+      - un segment de 25 machines (serveurs) ;
+      - un lien point à point de 2 machines (routeur).
+
+      Proposez un plan VLSM (préfixe et plage de chaque segment), puis vérifiez-le en Python.
+    en: |
+      You are given the network `172.16.4.0/24`. You must create three segments:
+
+      - a 60-host segment (workstations);
+      - a 25-host segment (servers);
+      - a 2-host point-to-point link (router).
+
+      Propose a VLSM plan (prefix and range of each segment), then check it in Python.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import ipaddress
+
+      base = ipaddress.ip_network("172.16.4.0/24")
+
+      # Largest first: 60 -> /26 (62), 25 -> /27 (30), 2 -> /30 (2)
+      plan = [("workstations", 26), ("servers", 27), ("router-link", 30)]
+
+      cursor = int(base.network_address)
+      for name, prefix in plan:
+          sub = ipaddress.ip_network((cursor, prefix))
+          print(f"{name:<13} {str(sub):<16} {sub.network_address} - {sub.broadcast_address}")
+          cursor += sub.num_addresses
+    note:
+      fr: "60 machines → /26 (172.16.4.0/26), 25 → /27 (172.16.4.64/27), 2 → /30 (172.16.4.96/30). Aucun chevauchement, blocs contigus."
+      en: "60 hosts → /26 (172.16.4.0/26), 25 → /27 (172.16.4.64/27), 2 → /30 (172.16.4.96/30). No overlap, contiguous blocks."
+
+quiz:
+  - q:
+      fr: "Combien de bits faut-il emprunter pour créer 4 sous-réseaux égaux ?"
+      en: "How many bits must you borrow to create 4 equal subnets?"
+    options:
+      fr: ["1", "2", "4", "8"]
+      en: ["1", "2", "4", "8"]
+    answer: 1
+    why:
+      fr: "2^2 = 4, donc 2 bits suffisent. Passer d'un /24 à un /26 crée exactement 4 sous-réseaux."
+      en: "2^2 = 4, so 2 bits are enough. Moving a /24 to a /26 creates exactly 4 subnets."
+  - q:
+      fr: "Dans le VLSM, par quelle taille de segment doit-on commencer ?"
+      en: "In VLSM, which segment size should you start with?"
+    options:
+      fr:
+        - "Par le plus petit segment"
+        - "Par le plus grand segment"
+        - "Par ordre alphabétique des noms"
+        - "L'ordre n'a aucune importance"
+      en:
+        - "The smallest segment"
+        - "The largest segment"
+        - "Alphabetical order of names"
+        - "The order does not matter"
+    answer: 1
+    why:
+      fr: "On place d'abord le plus gros besoin pour garantir un bloc contigu ; les petits se logent ensuite sans trou."
+      en: "Place the largest requirement first to guarantee a contiguous block; the small ones fit afterwards with no gap."
+  - q:
+      fr: "Quel préfixe convient pour un segment de 50 machines ?"
+      en: "Which prefix suits a 50-host segment?"
+    options:
+      fr: ["/24", "/25", "/26", "/27"]
+      en: ["/24", "/25", "/26", "/27"]
+    answer: 2
+    why:
+      fr: "/26 offre 62 machines utilisables (≥ 50), alors que /27 n'en offre que 30. On prend le plus juste : /26."
+      en: "/26 offers 62 usable hosts (≥ 50), whereas /27 offers only 30. Pick the tightest: /26."
+  - q:
+      fr: "Pourquoi segmenter un réseau en sous-réseaux améliore-t-il la sécurité ?"
+      en: "Why does segmenting a network into subnets improve security?"
+    options:
+      fr:
+        - "Cela limite la propagation d'une intrusion entre segments"
+        - "Cela chiffre automatiquement le trafic"
+        - "Cela supprime le besoin de pare-feu"
+        - "Cela accélère toujours le réseau"
+      en:
+        - "It limits how far an intrusion spreads between segments"
+        - "It automatically encrypts the traffic"
+        - "It removes the need for a firewall"
+        - "It always speeds up the network"
+    answer: 0
+    why:
+      fr: "Des segments séparés permettent de contrôler le trafic entre eux : un segment compromis n'expose pas tout le reste."
+      en: "Separate segments let you control traffic between them: a compromised segment does not expose everything else."
+  - q:
+      fr: "Combien de machines utilisables un lien /30 fournit-il ?"
+      en: "How many usable hosts does a /30 link provide?"
+    options:
+      fr: ["4", "3", "2", "1"]
+      en: ["4", "3", "2", "1"]
+    answer: 2
+    why:
+      fr: "/30 = 4 adresses, moins le réseau et le broadcast : 2 machines, idéal pour un lien point à point."
+      en: "/30 = 4 addresses, minus the network and broadcast: 2 hosts, ideal for a point-to-point link."
+
+widgets: [cidr-calculator]

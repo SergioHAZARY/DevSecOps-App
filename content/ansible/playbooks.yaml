@@ -1,0 +1,459 @@
+description:
+  fr: "Écrire des playbooks Ansible idempotents avec FQCN, variables, boucles, conditions et handlers pour automatiser une configuration de façon reproductible."
+  en: "Write idempotent Ansible playbooks with FQCN, variables, loops, conditionals and handlers to automate a configuration in a reproducible way."
+duration: 40
+
+intro:
+  fr: |
+    Les commandes ad hoc règlent une action unique, mais une vraie configuration en demande des dizaines,
+    dans un ordre précis. Un **playbook** (littéralement « cahier de jeu ») est un fichier YAML qui décrit
+    cette suite d'étapes une fois pour toutes. On le relit, on le corrige, on le partage et on le rejoue
+    autant qu'on veut.
+
+    C'est la différence entre dicter une recette à l'oral et l'écrire : la recette écrite donne toujours le
+    même gâteau. La propriété clé s'appelle l'**idempotence** : relancer le playbook sur un serveur déjà
+    configuré ne change rien et ne casse rien. Ansible compare l'état voulu à l'état réel et n'agit que
+    s'il y a un écart.
+
+    Vous allez écrire un playbook qui installe et configure NGINX : paquets, fichier de configuration généré
+    depuis un modèle, service relancé seulement quand la configuration change grâce à un **handler**.
+  en: |
+    Ad-hoc commands handle a single action, but a real configuration needs dozens of them, in a precise
+    order. A **playbook** is a YAML file describing that sequence of steps once and for all. You reread it,
+    fix it, share it and replay it as often as you like.
+
+    It is the difference between dictating a recipe out loud and writing it down: the written recipe always
+    yields the same cake. The key property is called **idempotence**: re-running the playbook on an already
+    configured server changes nothing and breaks nothing. Ansible compares the desired state to the actual
+    state and acts only when there is a gap.
+
+    You will write a playbook that installs and configures NGINX: packages, a configuration file generated
+    from a template, and the service reloaded only when the configuration changes, thanks to a **handler**.
+
+sections:
+  - heading:
+      fr: "Anatomie d'un playbook"
+      en: "Anatomy of a playbook"
+    body:
+      fr: |
+        Un playbook est une liste de **plays**. Chaque play associe une **cible** (`hosts`) à une liste de
+        **tâches** (`tasks`). Chaque tâche appelle un **module** par son nom complet (**FQCN**, *Fully
+        Qualified Collection Name*, comme `ansible.builtin.apt`).
+
+        | Clé du play | Rôle |
+        |---|---|
+        | `hosts` | Le groupe ou l'hôte ciblé |
+        | `become` | Élever les privilèges (sudo) pour le play |
+        | `vars` | Variables locales au play |
+        | `tasks` | La liste ordonnée des tâches |
+        | `handlers` | Tâches déclenchées seulement sur notification |
+
+        Le FQCN est devenu obligatoire dans les bonnes pratiques modernes : `ansible.builtin.copy` est
+        explicite et sans ambiguïté, là où l'ancien `copy` pouvait désigner un module d'une autre
+        collection. Chaque tâche porte un `name` lisible qui s'affiche à l'exécution.
+      en: |
+        A playbook is a list of **plays**. Each play ties a **target** (`hosts`) to a list of **tasks**.
+        Each task calls a **module** by its full name (**FQCN**, *Fully Qualified Collection Name*, such as
+        `ansible.builtin.apt`).
+
+        | Play key | Purpose |
+        |---|---|
+        | `hosts` | The targeted group or host |
+        | `become` | Elevate privileges (sudo) for the play |
+        | `vars` | Variables local to the play |
+        | `tasks` | The ordered list of tasks |
+        | `handlers` | Tasks triggered only on notification |
+
+        FQCN has become mandatory in modern best practice: `ansible.builtin.copy` is explicit and
+        unambiguous, where the old bare `copy` could mean a module from another collection. Every task has
+        a readable `name` that is printed at run time.
+  - heading:
+      fr: "Variables, facts, boucles et conditions"
+      en: "Variables, facts, loops and conditionals"
+    body:
+      fr: |
+        Les **variables** rendent un playbook réutilisable. Elles viennent de `vars`, de `group_vars`,
+        de `host_vars`, ou de la ligne de commande (`-e`). On les lit avec la syntaxe Jinja2 `{{ var }}`.
+
+        Les **facts** sont des variables découvertes automatiquement sur la cible : `ansible_facts`
+        contient l'OS, la RAM, les interfaces réseau... Elles permettent d'adapter le comportement à la
+        machine.
+
+        - Une **boucle** répète une tâche : `loop: [nginx, curl]` installe plusieurs paquets.
+        - Une **condition** `when:` n'exécute la tâche que si l'expression est vraie, par exemple
+          `when: ansible_facts['os_family'] == "Debian"`.
+
+        Ces mécanismes évitent de dupliquer des tâches et rendent un seul playbook capable de gérer des
+        serveurs légèrement différents.
+      en: |
+        **Variables** make a playbook reusable. They come from `vars`, from `group_vars`, from `host_vars`,
+        or from the command line (`-e`). You read them with Jinja2 syntax `{{ var }}`.
+
+        **Facts** are variables discovered automatically on the target: `ansible_facts` holds the OS, RAM,
+        network interfaces... They let you adapt behaviour to the machine.
+
+        - A **loop** repeats a task: `loop: [nginx, curl]` installs several packages.
+        - A **conditional** `when:` runs the task only if the expression is true, for example
+          `when: ansible_facts['os_family'] == "Debian"`.
+
+        These mechanisms avoid duplicating tasks and let a single playbook manage slightly different
+        servers.
+  - heading:
+      fr: "Handlers, tags et idempotence"
+      en: "Handlers, tags and idempotence"
+    body:
+      fr: |
+        Un **handler** est une tâche spéciale qui ne s'exécute **que** si une autre tâche la notifie, et
+        seulement une fois à la fin du play. Cas typique : recharger NGINX uniquement quand son fichier de
+        configuration a vraiment changé. Sans handler, on relancerait le service à chaque passage, même
+        inutilement.
+
+        Les **tags** permettent de ne jouer qu'une partie du playbook : `ansible-playbook site.yml
+        --tags nginx`. Enfin, **validez toujours** avec `--check --diff` : `--check` simule, `--diff`
+        montre ligne par ligne ce qui changerait dans les fichiers.
+
+        | Résultat d'une tâche | Signification |
+        |---|---|
+        | `ok` | État déjà conforme, rien à faire |
+        | `changed` | Ansible a modifié quelque chose |
+        | `skipping` | La condition `when` était fausse |
+        | `failed` | La tâche a échoué, le play s'arrête pour cet hôte |
+
+        Un playbook *idempotent* affiche `changed=0` au second passage : c'est le signe qu'il est correct.
+      en: |
+        A **handler** is a special task that runs **only** if another task notifies it, and only once at
+        the end of the play. Typical case: reload NGINX only when its configuration file actually changed.
+        Without a handler, you would restart the service on every run, even needlessly.
+
+        **Tags** let you play only part of the playbook: `ansible-playbook site.yml --tags nginx`. Finally,
+        **always validate** with `--check --diff`: `--check` simulates, `--diff` shows line by line what
+        would change in the files.
+
+        | Task result | Meaning |
+        |---|---|
+        | `ok` | State already compliant, nothing to do |
+        | `changed` | Ansible modified something |
+        | `skipping` | The `when` condition was false |
+        | `failed` | The task failed, the play stops for that host |
+
+        An *idempotent* playbook shows `changed=0` on the second run: that is the sign it is correct.
+
+examples:
+  - title:
+      fr: "Un premier playbook complet et idempotent"
+      en: "A first complete, idempotent playbook"
+    file: nginx.yml
+    lang: yaml
+    kind: secure
+    code: |
+      ---
+      - name: Install and configure NGINX
+        hosts: web
+        become: true # elevate to root via sudo for the whole play
+        vars:
+          server_name: example.com
+          packages:
+            - nginx
+            - curl
+
+        tasks:
+          - name: Install packages
+            ansible.builtin.apt:
+              name: "{{ packages }}" # a list variable, installed in one call
+              state: present
+              update_cache: true
+            # Only run on Debian/Ubuntu, using a gathered fact
+            when: ansible_facts['os_family'] == "Debian"
+
+          - name: Deploy the site configuration from a template
+            ansible.builtin.template:
+              src: site.conf.j2
+              dest: /etc/nginx/sites-available/site.conf
+              owner: root
+              group: root
+              mode: "0644" # quoted so YAML keeps it a string, not octal 420
+            notify: Reload nginx # triggers the handler ONLY if this file changed
+
+          - name: Enable the site (symlink)
+            ansible.builtin.file:
+              src: /etc/nginx/sites-available/site.conf
+              dest: /etc/nginx/sites-enabled/site.conf
+              state: link
+            notify: Reload nginx
+
+          - name: Ensure nginx is started and enabled at boot
+            ansible.builtin.service:
+              name: nginx
+              state: started
+              enabled: true
+
+        handlers:
+          - name: Reload nginx
+            ansible.builtin.service:
+              name: nginx
+              state: reloaded
+    note:
+      fr: "Le handler `Reload nginx` ne tourne qu'à la fin du play, et seulement si une tâche l'a notifié. Les permissions (`mode: \"0644\"`) sont entre guillemets pour que YAML les garde en texte."
+      en: "The `Reload nginx` handler runs only at the end of the play, and only if a task notified it. The permissions (`mode: \"0644\"`) are quoted so YAML keeps them as text."
+
+  - title:
+      fr: "Le modèle Jinja2 rempli par les variables"
+      en: "The Jinja2 template filled by the variables"
+    file: site.conf.j2
+    lang: nginx
+    kind: neutral
+    code: |
+      # This file is managed by Ansible - do not edit by hand
+      server {
+          listen 80;
+          server_name {{ server_name }};
+
+          # Security headers applied to every response
+          add_header X-Content-Type-Options "nosniff" always;
+          add_header X-Frame-Options "DENY" always;
+
+          location / {
+              root /var/www/html;
+              index index.html;
+          }
+      }
+    output: |
+      # Rendered on the target for server_name=example.com:
+      server {
+          listen 80;
+          server_name example.com;
+          ...
+      }
+    note:
+      fr: "Un fichier `.j2` est un modèle : Ansible y remplace `{{ server_name }}` par la valeur de la variable. L'en-tête de commentaire prévient qu'il ne faut pas éditer le fichier à la main sur le serveur."
+      en: "A `.j2` file is a template: Ansible replaces `{{ server_name }}` with the variable's value. The comment header warns not to edit the file by hand on the server."
+
+  - title:
+      fr: "Valider avant d'appliquer : --check --diff"
+      en: "Validate before applying: --check --diff"
+    file: run.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. Static syntax check (no connection needed)
+      ansible-playbook nginx.yml --syntax-check
+
+      # 2. Dry run: simulate and show file-level diffs, change nothing
+      ansible-playbook nginx.yml --check --diff
+
+      # 3. Apply for real
+      ansible-playbook nginx.yml
+
+      # 4. Run again: a correct playbook reports changed=0 (idempotence)
+      ansible-playbook nginx.yml
+    output: |
+      PLAY RECAP *********************************************************
+      web1  : ok=5  changed=0  unreachable=0  failed=0  skipped=0
+      web2  : ok=5  changed=0  unreachable=0  failed=0  skipped=0
+    note:
+      fr: "Le second `ansible-playbook` montre `changed=0` : le playbook est idempotent, il n'a rien eu à refaire. C'est le test de qualité le plus simple et le plus fiable."
+      en: "The second `ansible-playbook` shows `changed=0`: the playbook is idempotent, it had nothing to redo. This is the simplest and most reliable quality test."
+
+  - title:
+      fr: "Non idempotent : l'anti-exemple à ne pas suivre"
+      en: "Not idempotent: the anti-example to avoid"
+    file: bad.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      ---
+      - name: A fragile, non-idempotent play
+        hosts: web
+        become: true
+        tasks:
+          # Problem 1: shell appends to the file on EVERY run -> grows forever
+          - name: Add a line to the config
+            ansible.builtin.shell: echo "worker_connections 1024;" >> /etc/nginx/nginx.conf
+
+          # Problem 2: restarts the service unconditionally, even when nothing changed
+          - name: Restart nginx
+            ansible.builtin.shell: systemctl restart nginx
+    note:
+      fr: "Chaque exécution ajoute une ligne en double et redémarre le service pour rien. La bonne version utilise `ansible.builtin.lineinfile` (idempotent) et un handler `notify` au lieu de `shell`."
+      en: "Each run adds a duplicate line and restarts the service for nothing. The right version uses `ansible.builtin.lineinfile` (idempotent) and a `notify` handler instead of `shell`."
+
+mistake:
+  fr: |
+    **Confondre « ça a marché » avec « c'est idempotent ».**
+
+    Un playbook qui utilise `ansible.builtin.shell` ou `command` pour tout fonctionne souvent au premier
+    passage, mais refait aveuglément son travail à chaque exécution : il ajoute des lignes en double,
+    redémarre des services sans raison, et peut finir par casser la configuration. Utilisez les modules
+    dédiés (`apt`, `template`, `lineinfile`, `service`), qui comparent l'état voulu à l'état réel et
+    n'agissent qu'en cas d'écart. Vérifiez toujours qu'un second passage affiche `changed=0`.
+  en: |
+    **Mistaking "it worked" for "it is idempotent".**
+
+    A playbook that uses `ansible.builtin.shell` or `command` for everything often works on the first run,
+    but blindly redoes its work on every execution: it appends duplicate lines, restarts services for no
+    reason, and can eventually break the configuration. Use the dedicated modules (`apt`, `template`,
+    `lineinfile`, `service`), which compare the desired state to the actual state and act only when there
+    is a gap. Always check that a second run shows `changed=0`.
+
+bestPractice:
+  fr: |
+    - **FQCN partout** : `ansible.builtin.apt`, jamais le nom court `apt`.
+    - **Modules dédiés** plutôt que `shell`/`command` : ils sont idempotents.
+    - **Handlers + `notify`** pour relancer un service seulement quand sa configuration change.
+    - **`template` avec un en-tête « géré par Ansible »** pour les fichiers générés.
+    - **`--syntax-check` puis `--check --diff`** avant d'appliquer en production.
+    - **Testez l'idempotence** : un second passage doit afficher `changed=0`.
+    - **Nommez chaque tâche** (`name:`) : les journaux deviennent lisibles.
+  en: |
+    - **FQCN everywhere**: `ansible.builtin.apt`, never the short name `apt`.
+    - **Dedicated modules** rather than `shell`/`command`: they are idempotent.
+    - **Handlers + `notify`** to restart a service only when its configuration changes.
+    - **`template` with a "managed by Ansible" header** for generated files.
+    - **`--syntax-check` then `--check --diff`** before applying in production.
+    - **Test idempotence**: a second run must show `changed=0`.
+    - **Name every task** (`name:`): the logs become readable.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un playbook `users.yml` qui, sur le groupe `web`, avec élévation de privilèges :
+
+      1. Crée un utilisateur système `appsvc` sans shell de connexion (`/usr/sbin/nologin`).
+      2. Installe les paquets `git` et `rsync` en une seule tâche grâce à une boucle ou une liste.
+      3. Dépose la clé publique SSH `files/appsvc.pub` dans les clés autorisées de `appsvc`
+         (module `ansible.posix.authorized_key`).
+
+      Utilisez les FQCN et des tâches idempotentes.
+    en: |
+      Write a playbook `users.yml` that, on the `web` group, with privilege escalation:
+
+      1. Creates a system user `appsvc` with no login shell (`/usr/sbin/nologin`).
+      2. Installs the `git` and `rsync` packages in a single task using a loop or a list.
+      3. Drops the SSH public key `files/appsvc.pub` into `appsvc`'s authorized keys
+         (module `ansible.posix.authorized_key`).
+
+      Use FQCN and idempotent tasks.
+  solution:
+    file: users.yml
+    lang: yaml
+    code: |
+      ---
+      - name: Create a service account and tools
+        hosts: web
+        become: true
+        tasks:
+          - name: Create the appsvc system user without a login shell
+            ansible.builtin.user:
+              name: appsvc
+              system: true
+              shell: /usr/sbin/nologin # cannot be used for interactive login
+              create_home: false
+
+          - name: Install required tools
+            ansible.builtin.apt:
+              name:
+                - git
+                - rsync
+              state: present
+              update_cache: true
+
+          - name: Authorize the appsvc SSH public key
+            ansible.posix.authorized_key:
+              user: appsvc
+              state: present
+              key: "{{ lookup('ansible.builtin.file', 'files/appsvc.pub') }}"
+    note:
+      fr: "`shell: /usr/sbin/nologin` empêche toute connexion interactive avec ce compte de service. La liste dans `name:` installe les deux paquets idempotemment, sans boucle explicite."
+      en: "`shell: /usr/sbin/nologin` prevents any interactive login with this service account. The list under `name:` installs both packages idempotently, with no explicit loop."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que l'idempotence d'un playbook ?"
+      en: "What is a playbook's idempotence?"
+    options:
+      fr:
+        - "Le fait qu'il s'exécute plus vite à chaque passage"
+        - "Le fait que le relancer sur un serveur déjà conforme ne change rien"
+        - "Le fait qu'il chiffre les variables"
+        - "Le fait qu'il fonctionne sur tous les systèmes d'exploitation"
+      en:
+        - "That it runs faster on each pass"
+        - "That re-running it on an already compliant server changes nothing"
+        - "That it encrypts variables"
+        - "That it works on every operating system"
+    answer: 1
+    why:
+      fr: "Un playbook idempotent compare l'état voulu à l'état réel et n'agit qu'en cas d'écart : un second passage affiche `changed=0`."
+      en: "An idempotent playbook compares the desired state to the actual one and acts only on a gap: a second run shows `changed=0`."
+  - q:
+      fr: "Quand un handler s'exécute-t-il ?"
+      en: "When does a handler run?"
+    options:
+      fr:
+        - "Au début de chaque play"
+        - "À chaque tâche, systématiquement"
+        - "Seulement s'il a été notifié, une fois à la fin du play"
+        - "Uniquement avec l'option `--check`"
+      en:
+        - "At the start of every play"
+        - "On every task, systematically"
+        - "Only if it was notified, once at the end of the play"
+        - "Only with the `--check` flag"
+    answer: 2
+    why:
+      fr: "Un handler attend une notification (`notify`) et ne tourne qu'une fois, à la fin du play : idéal pour recharger un service après un changement réel."
+      en: "A handler waits for a notification (`notify`) and runs only once, at the end of the play: ideal to reload a service after a real change."
+  - q:
+      fr: "Que signifie FQCN dans `ansible.builtin.copy` ?"
+      en: "What does FQCN mean in `ansible.builtin.copy`?"
+    options:
+      fr:
+        - "Fully Qualified Collection Name : le nom complet et sans ambiguïté du module"
+        - "Fast Query Connection Node"
+        - "File Quota Configuration Name"
+        - "Final Quality Check Number"
+      en:
+        - "Fully Qualified Collection Name: the module's full, unambiguous name"
+        - "Fast Query Connection Node"
+        - "File Quota Configuration Name"
+        - "Final Quality Check Number"
+    answer: 0
+    why:
+      fr: "Le FQCN (`collection.nom_du_module`) lève toute ambiguïté : `ansible.builtin.copy` désigne précisément le module `copy` de la collection `ansible.builtin`."
+      en: "The FQCN (`collection.module_name`) removes all ambiguity: `ansible.builtin.copy` points precisely to the `copy` module of the `ansible.builtin` collection."
+  - q:
+      fr: "À quoi sert `--check --diff` lors d'un `ansible-playbook` ?"
+      en: "What is `--check --diff` for when running `ansible-playbook`?"
+    options:
+      fr:
+        - "À exécuter le playbook deux fois d'affilée"
+        - "À supprimer les variables sensibles"
+        - "À accélérer la connexion SSH"
+        - "À simuler l'exécution en montrant ligne par ligne ce qui changerait"
+      en:
+        - "To run the playbook twice in a row"
+        - "To delete sensitive variables"
+        - "To speed up the SSH connection"
+        - "To simulate the run and show line by line what would change"
+    answer: 3
+    why:
+      fr: "`--check` simule sans rien modifier et `--diff` affiche les différences de contenu des fichiers : on voit l'effet avant de l'appliquer."
+      en: "`--check` simulates without changing anything and `--diff` prints the file content differences: you see the effect before applying it."
+  - q:
+      fr: "Quel module est idempotent pour s'assurer qu'une ligne existe dans un fichier ?"
+      en: "Which module is idempotent for ensuring a line exists in a file?"
+    options:
+      fr:
+        - "`ansible.builtin.lineinfile`"
+        - "`ansible.builtin.shell`"
+        - "`ansible.builtin.command`"
+        - "`ansible.builtin.debug`"
+      en:
+        - "`ansible.builtin.lineinfile`"
+        - "`ansible.builtin.shell`"
+        - "`ansible.builtin.command`"
+        - "`ansible.builtin.debug`"
+    answer: 0
+    why:
+      fr: "`lineinfile` garantit la présence (ou l'absence) d'une ligne sans la dupliquer, contrairement à un `echo >>` lancé via `shell`."
+      en: "`lineinfile` guarantees a line is present (or absent) without duplicating it, unlike an `echo >>` run via `shell`."

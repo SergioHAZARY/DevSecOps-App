@@ -1,0 +1,391 @@
+description:
+  fr: "Centraliser la sécurité des API avec une passerelle : authentification, rate limiting et quotas via Kong déclaratif, NGINX et AWS API Gateway avec usage plans et WAF."
+  en: "Centralize API security with a gateway: authentication, rate limiting and quotas via declarative Kong, NGINX and AWS API Gateway with usage plans and a WAF."
+duration: 25
+
+intro:
+  fr: |
+    Au fil des leçons précédentes, chaque API a dû gérer elle-même son authentification, son rate limiting, sa
+    validation. Dans une architecture à dix microservices, répéter cette sécurité dix fois est source d'erreurs et
+    d'incohérences. La solution : une **API Gateway** (passerelle d'API) qui centralise ces préoccupations
+    **devant** les services.
+
+    L'analogie : la passerelle est l'accueil unique d'un grand immeuble. Au lieu que chaque bureau contrôle les
+    badges, vérifie les rendez-vous et compte les visiteurs, un seul comptoir d'entrée s'en charge pour tous. Les
+    services, derrière, se concentrent sur leur métier.
+
+    Une passerelle assure typiquement : **routage** (quelle requête va vers quel service), **authentification**
+    (clés, JWT, OAuth2), **rate limiting / quotas**, **terminaison TLS**, journalisation et souvent un **WAF**.
+    Dans cette leçon, vous allez configurer ces fonctions de trois façons : **Kong** en mode **déclaratif**
+    (config as code), **NGINX** comme passerelle légère, et **AWS API Gateway** avec ses **usage plans** (clés +
+    quotas) protégé par **AWS WAF**.
+  en: |
+    Across the previous lessons, each API had to handle its own authentication, rate limiting and validation. In
+    a ten-microservice architecture, repeating this security ten times breeds errors and inconsistency. The
+    solution: an **API Gateway** that centralizes these concerns **in front of** the services.
+
+    The analogy: the gateway is the single front desk of a large building. Instead of each office checking
+    badges, verifying appointments and counting visitors, one entrance desk does it for all of them. The services
+    behind focus on their business logic.
+
+    A gateway typically provides: **routing** (which request goes to which service), **authentication** (keys,
+    JWT, OAuth2), **rate limiting / quotas**, **TLS termination**, logging and often a **WAF**. In this lesson
+    you will configure these functions three ways: **Kong** in **declarative** mode (config as code), **NGINX**
+    as a lightweight gateway, and **AWS API Gateway** with its **usage plans** (keys + quotas) protected by **AWS
+    WAF**.
+
+sections:
+  - heading:
+      fr: "Ce qu'une passerelle centralise"
+      en: "What a gateway centralizes"
+    body:
+      fr: |
+        Une passerelle déplace les préoccupations transverses hors des services :
+
+        | Fonction | Sans passerelle | Avec passerelle |
+        |---|---|---|
+        | Authentification | Réécrite dans chaque service | Vérifiée une fois, au bord |
+        | Rate limiting | Incohérent d'un service à l'autre | Politique unique et centralisée |
+        | TLS | Chaque service gère ses certificats | Terminaison TLS à la passerelle |
+        | Journalisation | Éparpillée | Centralisée, format homogène |
+        | WAF | Rare | Branché devant tous les services |
+
+        Le bénéfice sécurité est double : **cohérence** (une seule politique, pas d'oubli dans un service isolé) et
+        **réduction de la surface** (les services internes ne sont pas exposés directement, seule la passerelle
+        l'est). Attention toutefois : la passerelle ne **remplace pas** la sécurité des services. Un service doit
+        toujours valider ses entrées et vérifier l'autorisation au niveau de l'objet — la passerelle est une
+        couche *supplémentaire*, pas un substitut (défense en profondeur).
+      en: |
+        A gateway moves cross-cutting concerns out of the services:
+
+        | Function | Without a gateway | With a gateway |
+        |---|---|---|
+        | Authentication | Rewritten in each service | Checked once, at the edge |
+        | Rate limiting | Inconsistent across services | One central policy |
+        | TLS | Each service manages its certs | TLS termination at the gateway |
+        | Logging | Scattered | Centralized, uniform format |
+        | WAF | Rare | Wired in front of all services |
+
+        The security benefit is twofold: **consistency** (one policy, no gap in an isolated service) and **reduced
+        surface** (internal services are not directly exposed, only the gateway is). Beware, though: the gateway
+        does **not replace** service-level security. A service must still validate its inputs and check
+        object-level authorization — the gateway is an *extra* layer, not a substitute (defense in depth).
+  - heading:
+      fr: "Kong, NGINX, AWS API Gateway"
+      en: "Kong, NGINX, AWS API Gateway"
+    body:
+      fr: |
+        Trois passerelles répandues, trois philosophies :
+
+        - **Kong** : passerelle riche en **plugins** (auth, rate limiting, transformations). En mode **déclaratif**
+          (`kong.yml`), toute la configuration est un fichier versionné dans Git (*config as code*) — idéal pour le
+          DevSecOps : revue, reproductibilité, pas de clic manuel.
+
+        - **NGINX** : léger et universel. On s'en sert comme passerelle avec `proxy_pass`, `limit_req` (rate
+          limiting), la terminaison TLS et des vérifications d'en-tête. Parfait quand on veut une passerelle simple
+          sans dépendance lourde.
+
+        - **AWS API Gateway** : service managé. On y attache des **API keys** regroupées dans des **usage plans**
+          qui définissent des **quotas** (ex. 10 000 requêtes/jour) et un **throttling** (débit/rafale). On le
+          protège avec **AWS WAF** pour filtrer les attaques web, et on utilise l'authentification IAM/Cognito ou
+          un *authorizer* Lambda.
+
+        Quel que soit l'outil, les principes restent : **authentifier**, **limiter**, **journaliser**, et ne
+        jamais exposer un service interne sans passer par la passerelle.
+      en: |
+        Three common gateways, three philosophies:
+
+        - **Kong**: a plugin-rich gateway (auth, rate limiting, transformations). In **declarative** mode
+          (`kong.yml`), the whole configuration is a file versioned in Git (*config as code*) — ideal for
+          DevSecOps: review, reproducibility, no manual clicks.
+
+        - **NGINX**: lightweight and universal. You use it as a gateway with `proxy_pass`, `limit_req` (rate
+          limiting), TLS termination and header checks. Perfect when you want a simple gateway with no heavy
+          dependency.
+
+        - **AWS API Gateway**: a managed service. You attach **API keys** grouped into **usage plans** that define
+          **quotas** (e.g. 10,000 requests/day) and **throttling** (rate/burst). You protect it with **AWS WAF**
+          to filter web attacks, and use IAM/Cognito authentication or a Lambda *authorizer*.
+
+        Whatever the tool, the principles hold: **authenticate**, **rate-limit**, **log**, and never expose an
+        internal service without going through the gateway.
+
+examples:
+  - title:
+      fr: "Vulnérable : services exposés sans passerelle"
+      en: "Vulnerable: services exposed with no gateway"
+    file: docker-compose.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - each microservice is published directly, unprotected.
+      services:
+        users:
+          image: users-service:1.0
+          ports:
+            - "8001:8001"       # directly on the Internet, no auth/rate limit
+        orders:
+          image: orders-service:1.0
+          ports:
+            - "8002:8002"       # same: anyone can hit it, no central control
+        payments:
+          image: payments-service:1.0
+          ports:
+            - "8003:8003"       # a payments service exposed raw to the world
+      # No authentication gateway, no rate limiting, no TLS termination,
+      # no WAF. Each service would have to reinvent all of that - or not.
+    note:
+      fr: "Chaque service est publié tel quel : aucune authentification centrale, aucun rate limiting, aucun WAF. La surface d'attaque est maximale et la sécurité, incohérente d'un service à l'autre. Exposer directement un service de paiement est particulièrement risqué."
+      en: "Each service is published as-is: no central authentication, no rate limiting, no WAF. The attack surface is maximal and security is inconsistent across services. Exposing a payments service directly is especially risky."
+
+  - title:
+      fr: "Sécurisé : Kong déclaratif (auth + rate limiting)"
+      en: "Secure: declarative Kong (auth + rate limiting)"
+    file: kong.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Declarative Kong config (config as code, versioned in Git).
+      _format_version: "3.0"
+
+      services:
+        - name: users
+          url: http://users-service:8001   # internal, not exposed directly
+          routes:
+            - name: users-route
+              paths: ["/users"]
+          plugins:
+            # Require a valid API key on every request to this service.
+            - name: key-auth
+            # Central rate limit: 60/min and 10000/day per consumer.
+            - name: rate-limiting
+              config:
+                minute: 60
+                day: 10000
+                policy: redis           # shared across gateway nodes
+                redis_host: redis
+
+      consumers:
+        - username: mobile-app
+          keyauth_credentials:
+            - key: changeme-rotate-in-vault   # the app's API key
+
+      plugins:
+        # A global request-size cap to blunt oversized-payload abuse.
+        - name: request-size-limiting
+          config:
+            allowed_payload_size: 8          # 8 MB max body
+    output: |
+      # Without a key:  curl http://gateway/users  -> 401 No API key found
+      # Over the limit: 61st call in a minute      -> 429 API rate limit exceeded
+    note:
+      fr: "Toute la sécurité est déclarée dans un fichier versionné : `key-auth` impose une clé, `rate-limiting` (via Redis, partagé entre nœuds) borne le débit et le quota journalier. Les services restent internes, seule la passerelle est exposée. C'est la *config as code*."
+      en: "All the security is declared in a versioned file: `key-auth` enforces a key, `rate-limiting` (via Redis, shared across nodes) bounds the rate and daily quota. Services stay internal, only the gateway is exposed. This is *config as code*."
+
+  - title:
+      fr: "Sécurisé : NGINX comme passerelle légère"
+      en: "Secure: NGINX as a lightweight gateway"
+    file: nginx.conf
+    lang: nginx
+    kind: secure
+    code: |
+      http {
+          # Central rate limit by client IP, shared zone.
+          limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+          # Map valid API keys to a simple allow flag.
+          map $http_x_api_key $is_valid_key {
+              default 0;
+              "changeme-rotate-in-vault" 1;
+          }
+
+          server {
+              listen 443 ssl;
+              server_name api.example.com;
+              ssl_certificate     /etc/nginx/tls/fullchain.pem;  # TLS at the edge
+              ssl_certificate_key /etc/nginx/tls/privkey.pem;
+
+              location /users/ {
+                  # Reject requests without a valid API key (central auth).
+                  if ($is_valid_key = 0) { return 401; }
+                  limit_req zone=api burst=20 nodelay;   # central rate limit
+                  limit_req_status 429;
+                  # Forward to the internal service (not publicly exposed).
+                  proxy_pass http://users-service:8001/;
+                  proxy_set_header X-Real-IP $remote_addr;
+              }
+          }
+      }
+    output: |
+      # No/invalid key:   curl https://api.example.com/users/  -> 401
+      # Too many requests: flood past 10r/s                     -> 429
+    note:
+      fr: "NGINX fait passerelle : terminaison TLS, authentification par clé (`map` + test), rate limiting (`limit_req`), et `proxy_pass` vers un service interne jamais exposé directement. Léger et sans dépendance lourde, idéal pour une petite architecture."
+      en: "NGINX acts as the gateway: TLS termination, API-key authentication (`map` + check), rate limiting (`limit_req`), and `proxy_pass` to an internal service never exposed directly. Lightweight and dependency-free, ideal for a small architecture."
+
+  - title:
+      fr: "Sécurisé : AWS API Gateway (usage plan + WAF)"
+      en: "Secure: AWS API Gateway (usage plan + WAF)"
+    file: usage-plan.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # Create an API key and a usage plan that caps quota and throttling.
+
+      # 1. Create an API key for a client (the mobile app).
+      KEY_ID=$(aws apigateway create-api-key --name mobile-app --enabled \
+        --query id --output text)
+
+      # 2. Usage plan: 10000 req/day quota, 50 req/s with a 100 burst.
+      PLAN_ID=$(aws apigateway create-usage-plan --name standard \
+        --throttle rateLimit=50,burstLimit=100 \
+        --quota limit=10000,period=DAY \
+        --query id --output text)
+
+      # 3. Attach the key to the plan.
+      aws apigateway create-usage-plan-key --usage-plan-id "$PLAN_ID" \
+        --key-id "$KEY_ID" --key-type API_KEY
+
+      # 4. Put AWS WAF in front to filter common web attacks (SQLi, XSS).
+      aws wafv2 associate-web-acl \
+        --web-acl-arn "arn:aws:wafv2:eu-west-1:123456789012:regional/webacl/api-protect/abcd" \
+        --resource-arn "arn:aws:apigateway:eu-west-1::/restapis/myapi/stages/prod"
+    output: |
+      # A client exceeding the plan is throttled/quota-limited by AWS:
+      #   429 Too Many Requests   (rate/burst exceeded)
+      #   429 Limit Exceeded      (daily quota reached)
+      # WAF blocks SQLi/XSS payloads with 403 before they reach the API.
+    note:
+      fr: "L'**usage plan** associe une clé d'API à un **quota** (10000/jour) et un **throttling** (50 r/s, rafale 100), gérés par AWS. **AWS WAF** placé devant filtre les attaques web (SQLi, XSS). Le service managé applique ces limites sans code à écrire."
+      en: "The **usage plan** ties an API key to a **quota** (10000/day) and **throttling** (50 r/s, burst 100), managed by AWS. **AWS WAF** in front filters web attacks (SQLi, XSS). The managed service enforces these limits with no code to write."
+
+mistake:
+  fr: |
+    **Croire que la passerelle dispense de sécuriser les services.** Une passerelle centralise l'authentification
+    et le rate limiting, mais elle ne connaît pas la logique métier : elle ne peut pas vérifier qu'une facture
+    appartient bien à l'utilisateur (autorisation au niveau de l'objet, cf. BOLA) ni valider finement toutes les
+    entrées. Chaque service doit garder **sa propre** validation et ses contrôles d'autorisation. Autre erreur
+    grave : laisser les services internes **joignables directement** (ports publiés) en parallèle de la
+    passerelle — un attaquant contourne alors toute la sécurité centrale en tapant le service en direct. Les
+    services ne doivent être accessibles **que** via la passerelle.
+  en: |
+    **Believing the gateway removes the need to secure the services.** A gateway centralizes authentication and
+    rate limiting, but it does not know the business logic: it cannot check that an invoice truly belongs to the
+    user (object-level authorization, cf. BOLA) or finely validate every input. Each service must keep **its own**
+    validation and authorization checks. Another serious mistake: leaving internal services **directly reachable**
+    (published ports) alongside the gateway — an attacker then bypasses all central security by hitting the
+    service directly. Services must be reachable **only** through the gateway.
+
+bestPractice:
+  fr: |
+    - **Centralisez** authentification, rate limiting, TLS et journalisation à la passerelle pour une politique cohérente.
+    - **N'exposez jamais** les services internes directement : seule la passerelle est joignable de l'extérieur.
+    - **Gérez la passerelle en config as code** (Kong déclaratif, IaC) : versionnée, revue, reproductible.
+    - **Ajoutez un WAF** devant la passerelle pour filtrer les attaques web (SQLi, XSS).
+    - **Gardez la sécurité dans les services** : validation des entrées et autorisation au niveau de l'objet. Défense en profondeur.
+  en: |
+    - **Centralize** authentication, rate limiting, TLS and logging at the gateway for a consistent policy.
+    - **Never expose** internal services directly: only the gateway is reachable from outside.
+    - **Manage the gateway as config as code** (declarative Kong, IaC): versioned, reviewed, reproducible.
+    - **Add a WAF** in front of the gateway to filter web attacks (SQLi, XSS).
+    - **Keep security in the services**: input validation and object-level authorization. Defense in depth.
+
+exercise:
+  statement:
+    fr: |
+      Vous mettez en place une passerelle **Kong déclarative** devant un service `orders` (sur
+      `http://orders-service:8002`). Vous devez :
+      1. router `/orders` vers ce service ;
+      2. exiger une **clé d'API** sur toutes les requêtes ;
+      3. limiter à **100 requêtes/minute**.
+
+      Écrivez le fragment `kong.yml` correspondant (service, route et plugins).
+    en: |
+      You are setting up a **declarative Kong** gateway in front of an `orders` service (at
+      `http://orders-service:8002`). You must:
+      1. route `/orders` to this service;
+      2. require an **API key** on all requests;
+      3. limit to **100 requests/minute**.
+
+      Write the matching `kong.yml` fragment (service, route and plugins).
+  solution:
+    file: kong.yml
+    lang: yaml
+    code: |
+      _format_version: "3.0"
+
+      services:
+        - name: orders
+          url: http://orders-service:8002   # internal service, not exposed
+          routes:
+            - name: orders-route
+              paths: ["/orders"]
+          plugins:
+            # 2. Require a valid API key on every request.
+            - name: key-auth
+            # 3. Central rate limit: 100 requests per minute.
+            - name: rate-limiting
+              config:
+                minute: 100
+                policy: local
+
+      consumers:
+        - username: partner-app
+          keyauth_credentials:
+            - key: changeme-rotate-in-vault
+    note:
+      fr: "Le `service` pointe vers le service interne et la `route` capte `/orders`. `key-auth` impose la clé d'API, `rate-limiting` borne à 100/min. Le consommateur `partner-app` détient une clé (à faire tourner via un coffre)."
+      en: "The `service` points to the internal service and the `route` captures `/orders`. `key-auth` enforces the API key, `rate-limiting` caps at 100/min. The `partner-app` consumer holds a key (to be rotated via a vault)."
+
+quiz:
+  - q:
+      fr: "Quel est le principal bénéfice sécurité d'une API Gateway ?"
+      en: "What is the main security benefit of an API Gateway?"
+    options:
+      fr: ["Elle remplace la base de données", "Elle centralise auth, rate limiting et TLS pour une politique cohérente", "Elle chiffre les disques", "Elle supprime le besoin de HTTPS"]
+      en: ["It replaces the database", "It centralizes auth, rate limiting and TLS for a consistent policy", "It encrypts disks", "It removes the need for HTTPS"]
+    answer: 1
+    why:
+      fr: "La passerelle regroupe les préoccupations transverses (authentification, rate limiting, TLS, logs) en un point unique, assurant cohérence et réduisant la surface exposée."
+      en: "The gateway groups cross-cutting concerns (authentication, rate limiting, TLS, logs) in one place, ensuring consistency and reducing the exposed surface."
+  - q:
+      fr: "Qu'apporte le mode déclaratif de Kong (kong.yml) ?"
+      en: "What does Kong's declarative mode (kong.yml) bring?"
+    options:
+      fr: ["Une configuration versionnée en Git (config as code)", "Un chiffrement plus rapide", "La suppression des services", "Un WAF intégré obligatoire"]
+      en: ["A Git-versioned configuration (config as code)", "Faster encryption", "The removal of services", "A mandatory built-in WAF"]
+    answer: 0
+    why:
+      fr: "En déclaratif, toute la configuration de la passerelle est un fichier versionnable, revu et reproductible, ce qui correspond à l'esprit DevSecOps (config as code)."
+      en: "In declarative mode, the whole gateway configuration is a versionable, reviewed and reproducible file, matching the DevSecOps spirit (config as code)."
+  - q:
+      fr: "Dans AWS API Gateway, à quoi sert un usage plan ?"
+      en: "In AWS API Gateway, what is a usage plan for?"
+    options:
+      fr: ["À chiffrer les réponses", "À associer des clés d'API à des quotas et un throttling", "À générer des certificats", "À compiler le code"]
+      en: ["To encrypt responses", "To tie API keys to quotas and throttling", "To generate certificates", "To compile code"]
+    answer: 1
+    why:
+      fr: "Un usage plan relie des clés d'API à un quota (ex. 10000/jour) et un débit/rafale (throttling), appliqués automatiquement par le service managé."
+      en: "A usage plan links API keys to a quota (e.g. 10000/day) and a rate/burst (throttling), enforced automatically by the managed service."
+  - q:
+      fr: "Pourquoi ne faut-il pas exposer les services internes directement en plus de la passerelle ?"
+      en: "Why should internal services not be exposed directly alongside the gateway?"
+    options:
+      fr: ["Cela ralentit la passerelle", "Un attaquant contournerait toute la sécurité centrale en tapant le service en direct", "Cela consomme trop de mémoire", "Cela désactive le DNS"]
+      en: ["It slows the gateway", "An attacker would bypass all central security by hitting the service directly", "It uses too much memory", "It disables DNS"]
+    answer: 1
+    why:
+      fr: "Si un service interne reste joignable en direct, l'authentification et le rate limiting de la passerelle sont contournés ; les services ne doivent être accessibles que via la passerelle."
+      en: "If an internal service stays directly reachable, the gateway's authentication and rate limiting are bypassed; services must be reachable only through the gateway."
+  - q:
+      fr: "La passerelle dispense-t-elle les services de valider leurs entrées et l'autorisation ?"
+      en: "Does the gateway free services from validating inputs and authorization?"
+    options:
+      fr: ["Oui, elle fait tout", "Oui, si un WAF est présent", "Non, chaque service garde sa validation et son autorisation au niveau de l'objet", "Non, mais seulement pour l'authentification"]
+      en: ["Yes, it does everything", "Yes, if a WAF is present", "No, each service keeps its own validation and object-level authorization", "No, but only for authentication"]
+    answer: 2
+    why:
+      fr: "La passerelle ignore la logique métier : elle ne peut pas vérifier qu'un objet appartient à l'utilisateur ni valider finement les entrées. Les services conservent ces contrôles (défense en profondeur)."
+      en: "The gateway is unaware of business logic: it cannot verify an object belongs to the user or finely validate inputs. Services keep these checks (defense in depth)."

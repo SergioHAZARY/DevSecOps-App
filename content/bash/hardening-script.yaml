@@ -1,0 +1,596 @@
+description:
+  fr: "Écrire un script Bash de durcissement Linux idempotent et prudent : réglages sysctl, SSH et pare-feu UFW, avec mode simulation (dry-run) et sauvegarde automatique avant toute modification."
+  en: "Write an idempotent, careful Linux hardening Bash script: sysctl, SSH and UFW firewall settings, with a dry-run mode and automatic backup before any change."
+duration: 40
+
+intro:
+  fr: |
+    Durcir un serveur, c'est **réduire sa surface d'attaque** : désactiver ce qui est inutile, resserrer les
+    réglages réseau, fermer les ports, verrouiller SSH. Contrairement à l'audit (qui constate), le durcissement
+    **modifie** le système — c'est précisément ce qui le rend délicat. Un mauvais réglage SSH, et vous perdez
+    l'accès à distance ; une mauvaise règle de pare-feu, et vous coupez le service.
+
+    Un bon script de durcissement se comporte comme un **chirurgien prudent** : il photographie avant
+    d'opérer (sauvegarde), il peut d'abord **simuler** l'intervention (dry-run), et il peut être relancé dix
+    fois sans aggraver les choses (idempotence). C'est cette discipline qui distingue un script de production
+    d'un script qui casse un serveur sur deux.
+
+    Dans cette leçon, vous construirez un **script de durcissement** couvrant trois domaines : les paramètres
+    noyau via `sysctl`, la configuration `sshd`, et le pare-feu `ufw`. Vous apprendrez trois techniques
+    indispensables : **l'idempotence** (le script produit toujours le même état final), le **dry-run** (tout
+    afficher sans rien changer), et la **sauvegarde avant modification** (pour pouvoir revenir en arrière).
+  en: |
+    Hardening a server means **reducing its attack surface**: disabling what is useless, tightening network
+    settings, closing ports, locking down SSH. Unlike auditing (which observes), hardening **modifies** the
+    system — which is precisely what makes it delicate. One wrong SSH setting and you lose remote access; one
+    wrong firewall rule and you cut off the service.
+
+    A good hardening script behaves like a **careful surgeon**: it photographs before operating (backup), it
+    can first **simulate** the intervention (dry-run), and it can be re-run ten times without making things
+    worse (idempotence). This discipline is what separates a production script from one that breaks every
+    other server.
+
+    In this lesson you will build a **hardening script** covering three areas: kernel parameters via `sysctl`,
+    the `sshd` configuration, and the `ufw` firewall. You will learn three essential techniques:
+    **idempotence** (the script always produces the same final state), **dry-run** (show everything without
+    changing anything), and **backup before modification** (so you can roll back).
+
+sections:
+  - heading:
+      fr: "Idempotence : relançable sans danger"
+      en: "Idempotence: safely re-runnable"
+    body:
+      fr: |
+        Un script **idempotent** donne le même résultat qu'on le lance une ou cent fois. C'est vital pour le
+        durcissement : on doit pouvoir le rejouer après une mise à jour sans accumuler de doublons ni casser
+        l'état.
+
+        La mauvaise approche ajoute aveuglément une ligne :
+
+        ```bash
+        # NOT idempotent: each run appends a duplicate line.
+        echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+        ```
+
+        La bonne approche vérifie d'abord, puis modifie **en place** la directive si elle existe, ou l'ajoute
+        une seule fois :
+
+        ```bash
+        set_directive() {
+            local key="$1" value="$2" file="$3"
+            if grep -qE "^[[:space:]]*#?[[:space:]]*$key\b" "$file"; then
+                sed -i.bak -E "s|^[[:space:]]*#?[[:space:]]*$key\b.*|$key $value|" "$file"
+            else
+                echo "$key $value" >> "$file"     # add once if absent
+            fi
+        }
+        ```
+
+        Ce schéma « chercher puis remplacer ou ajouter » est le cœur de tout durcissement idempotent. Lancé
+        plusieurs fois, il laisse exactement une ligne `PermitRootLogin no`, jamais dix. De même, `ufw` est
+        naturellement idempotent : rejouer `ufw allow 22/tcp` ne crée pas de doublon.
+      en: |
+        An **idempotent** script gives the same result whether run once or a hundred times. This is vital for
+        hardening: you must be able to replay it after an update without piling up duplicates or breaking the
+        state.
+
+        The bad approach blindly appends a line:
+
+        ```bash
+        # NOT idempotent: each run appends a duplicate line.
+        echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+        ```
+
+        The good approach checks first, then edits the directive **in place** if it exists, or adds it once:
+
+        ```bash
+        set_directive() {
+            local key="$1" value="$2" file="$3"
+            if grep -qE "^[[:space:]]*#?[[:space:]]*$key\b" "$file"; then
+                sed -i.bak -E "s|^[[:space:]]*#?[[:space:]]*$key\b.*|$key $value|" "$file"
+            else
+                echo "$key $value" >> "$file"     # add once if absent
+            fi
+        }
+        ```
+
+        This "find then replace or add" pattern is the heart of any idempotent hardening. Run several times, it
+        leaves exactly one `PermitRootLogin no` line, never ten. Likewise, `ufw` is naturally idempotent:
+        replaying `ufw allow 22/tcp` creates no duplicate.
+  - heading:
+      fr: "Dry-run et sauvegarde avant modification"
+      en: "Dry-run and backup before modification"
+    body:
+      fr: |
+        Avant de modifier un serveur de production, on veut **voir ce qui va changer** sans rien changer. C'est
+        le **dry-run** (mode simulation), piloté par une variable :
+
+        ```bash
+        DRY_RUN="${DRY_RUN:-1}"      # default: simulate. Set DRY_RUN=0 to apply.
+
+        run() {
+            if (( DRY_RUN )); then
+                echo "[DRY-RUN] would run: $*"
+            else
+                "$@"                  # actually execute the command and its arguments
+            fi
+        }
+
+        run sysctl -w net.ipv4.conf.all.rp_filter=1
+        ```
+
+        Par défaut, le script **simule** ; il ne modifie le système que si on l'exécute explicitement avec
+        `DRY_RUN=0`. C'est un filet de sécurité : on lit d'abord le plan, on vérifie, puis on applique.
+
+        Deuxième filet : **sauvegarder chaque fichier avant de le modifier**, avec un horodatage, pour pouvoir
+        revenir en arrière :
+
+        ```bash
+        backup_file() {
+            local f="$1"
+            [[ -f "$f" ]] && cp -a "$f" "$f.bak-$(date +%F_%H%M%S)"
+        }
+        ```
+
+        Enfin, règle d'or du durcissement SSH : **validez la configuration avant de recharger le service**.
+        `sshd -t` teste le fichier ; ne rechargez `sshd` que s'il est valide, sinon vous risquez de verrouiller
+        votre propre accès. Gardez toujours une session SSH ouverte pendant le test.
+      en: |
+        Before modifying a production server, you want to **see what will change** without changing anything.
+        This is the **dry-run** (simulation mode), driven by a variable:
+
+        ```bash
+        DRY_RUN="${DRY_RUN:-1}"      # default: simulate. Set DRY_RUN=0 to apply.
+
+        run() {
+            if (( DRY_RUN )); then
+                echo "[DRY-RUN] would run: $*"
+            else
+                "$@"                  # actually execute the command and its arguments
+            fi
+        }
+
+        run sysctl -w net.ipv4.conf.all.rp_filter=1
+        ```
+
+        By default, the script **simulates**; it only modifies the system if you explicitly run it with
+        `DRY_RUN=0`. It is a safety net: read the plan first, verify, then apply.
+
+        Second net: **back up each file before modifying it**, with a timestamp, so you can roll back:
+
+        ```bash
+        backup_file() {
+            local f="$1"
+            [[ -f "$f" ]] && cp -a "$f" "$f.bak-$(date +%F_%H%M%S)"
+        }
+        ```
+
+        Finally, the golden rule of SSH hardening: **validate the configuration before reloading the service**.
+        `sshd -t` tests the file; only reload `sshd` if it is valid, otherwise you risk locking yourself out.
+        Always keep an SSH session open during the test.
+  - heading:
+      fr: "Les trois domaines : sysctl, sshd, ufw"
+      en: "The three areas: sysctl, sshd, ufw"
+    body:
+      fr: |
+        **sysctl** règle le noyau à l'exécution. Quelques paramètres réseau de durcissement courants :
+
+        | Paramètre | Valeur | Effet |
+        |---|---|---|
+        | `net.ipv4.conf.all.rp_filter` | `1` | anti-usurpation d'adresse (anti-spoofing) |
+        | `net.ipv4.icmp_echo_ignore_broadcasts` | `1` | ignore les pings de diffusion |
+        | `net.ipv4.conf.all.accept_redirects` | `0` | refuse les redirections ICMP |
+        | `kernel.randomize_va_space` | `2` | ASLR complet (anti-exploitation) |
+
+        On les écrit dans `/etc/sysctl.d/99-hardening.conf` pour qu'ils persistent au redémarrage, puis on
+        applique avec `sysctl --system`.
+
+        **sshd** : les directives sûres sont `PermitRootLogin no`, `PasswordAuthentication no` (clés
+        uniquement), `PermitEmptyPasswords no`, `X11Forwarding no`. Toujours `sshd -t` avant de recharger.
+
+        **ufw** (*Uncomplicated Firewall*) est le pare-feu simple de Debian/Ubuntu. La politique de base
+        sûre : tout refuser en entrée, tout autoriser en sortie, puis ouvrir seulement le nécessaire :
+
+        ```bash
+        ufw default deny incoming
+        ufw default allow outgoing
+        ufw limit 22/tcp               # 'limit' = rate-limit SSH against brute force
+        ufw --force enable
+        ```
+
+        `ufw limit` restreint le débit des connexions SSH, une protection simple contre la force brute. On
+        ouvre uniquement les ports des services réellement exposés (par exemple 80 et 443 pour un serveur web).
+      en: |
+        **sysctl** tunes the kernel at runtime. A few common network hardening parameters:
+
+        | Parameter | Value | Effect |
+        |---|---|---|
+        | `net.ipv4.conf.all.rp_filter` | `1` | anti address spoofing |
+        | `net.ipv4.icmp_echo_ignore_broadcasts` | `1` | ignore broadcast pings |
+        | `net.ipv4.conf.all.accept_redirects` | `0` | refuse ICMP redirects |
+        | `kernel.randomize_va_space` | `2` | full ASLR (anti-exploitation) |
+
+        You write them to `/etc/sysctl.d/99-hardening.conf` so they persist across reboots, then apply with
+        `sysctl --system`.
+
+        **sshd**: the safe directives are `PermitRootLogin no`, `PasswordAuthentication no` (keys only),
+        `PermitEmptyPasswords no`, `X11Forwarding no`. Always `sshd -t` before reloading.
+
+        **ufw** (*Uncomplicated Firewall*) is the simple Debian/Ubuntu firewall. The safe baseline policy:
+        deny everything inbound, allow everything outbound, then open only what is needed:
+
+        ```bash
+        ufw default deny incoming
+        ufw default allow outgoing
+        ufw limit 22/tcp               # 'limit' = rate-limit SSH against brute force
+        ufw --force enable
+        ```
+
+        `ufw limit` rate-limits SSH connections, a simple protection against brute force. You open only the
+        ports of services actually exposed (for example 80 and 443 for a web server).
+
+examples:
+  - title:
+      fr: "Version dangereuse : durcissement aveugle"
+      en: "Dangerous version: blind hardening"
+    file: harden-bad.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # ANTI-PATTERN: no backup, not idempotent, no dry-run, no validation.
+
+      # 1. Appends a duplicate line on every run (not idempotent).
+      echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+      echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+
+      # 2. Reloads SSH WITHOUT testing the config: a typo locks you out.
+      systemctl reload sshd
+
+      # 3. Enables a deny-all firewall WITHOUT allowing SSH first:
+      #    the next command can cut your own remote session.
+      ufw default deny incoming
+      ufw --force enable
+    output: |
+      # After two runs, sshd_config has duplicate lines; if there is a typo,
+      # sshd fails to reload and remote access may be lost.
+    note:
+      fr: "Trois fautes qui peuvent couper l'accès : ajout non idempotent (doublons), rechargement sans `sshd -t`, et pare-feu « deny all » activé avant d'autoriser SSH. Ce script peut verrouiller un serveur distant en une exécution."
+      en: "Three faults that can cut off access: non-idempotent append (duplicates), reload without `sshd -t`, and a deny-all firewall enabled before allowing SSH. This script can lock out a remote server in one run."
+
+  - title:
+      fr: "Idempotence : fixer une directive proprement"
+      en: "Idempotence: setting a directive cleanly"
+    file: set-directive.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Set 'key value' in a config file, idempotently: replace if present
+      # (even if commented), add once if absent. Backs up before editing.
+      set_directive() {
+          local key="$1" value="$2" file="$3"
+          cp -a "$file" "$file.bak-$(date +%F_%H%M%S)"     # backup first
+          if grep -qE "^[[:space:]]*#?[[:space:]]*${key}\b" "$file"; then
+              sed -i -E "s|^[[:space:]]*#?[[:space:]]*${key}\b.*|${key} ${value}|" "$file"
+          else
+              echo "${key} ${value}" >> "$file"
+          fi
+      }
+
+      set_directive PermitRootLogin no /etc/ssh/sshd_config
+      set_directive PasswordAuthentication no /etc/ssh/sshd_config
+      grep -E '^(PermitRootLogin|PasswordAuthentication)' /etc/ssh/sshd_config
+    output: |
+      PermitRootLogin no
+      PasswordAuthentication no
+    note:
+      fr: "La fonction gère les trois cas : directive présente, commentée (`#PermitRootLogin`), ou absente. Rejouée, elle laisse toujours exactement une ligne correcte. Une sauvegarde horodatée est créée avant chaque modification."
+      en: "The function handles all three cases: directive present, commented (`#PermitRootLogin`), or absent. Replayed, it always leaves exactly one correct line. A timestamped backup is created before each change."
+
+  - title:
+      fr: "Le script de durcissement complet avec dry-run"
+      en: "The complete hardening script with dry-run"
+    file: harden.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Idempotent Linux hardening: sysctl, sshd, ufw.
+      # SIMULATES by default. Apply for real with: DRY_RUN=0 sudo ./harden.sh
+      set -euo pipefail
+
+      DRY_RUN="${DRY_RUN:-1}"
+      log() { echo "[$(date +%T)] $*" >&2; }
+
+      # run: execute, or just print, depending on DRY_RUN.
+      run() {
+          if (( DRY_RUN )); then echo "[DRY-RUN] $*"; else "$@"; fi
+      }
+
+      backup_file() {
+          local f="$1"
+          [[ -f "$f" ]] || return 0
+          if (( DRY_RUN )); then echo "[DRY-RUN] backup $f"; else cp -a "$f" "$f.bak-$(date +%F_%H%M%S)"; fi
+      }
+
+      # --- 1. Kernel hardening via a dedicated sysctl drop-in ---
+      sysctl_file=/etc/sysctl.d/99-hardening.conf
+      log "Writing $sysctl_file"
+      if (( DRY_RUN )); then
+          echo "[DRY-RUN] would write hardening sysctl keys to $sysctl_file"
+      else
+          cat > "$sysctl_file" <<'EOF'
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      net.ipv4.conf.all.accept_redirects = 0
+      kernel.randomize_va_space = 2
+      EOF
+      fi
+      run sysctl --system
+
+      # --- 2. SSH hardening (idempotent), then VALIDATE before reload ---
+      sshd=/etc/ssh/sshd_config
+      backup_file "$sshd"
+      for kv in "PermitRootLogin no" "PasswordAuthentication no" \
+                "PermitEmptyPasswords no" "X11Forwarding no"; do
+          key="${kv% *}"; value="${kv#* }"
+          if (( DRY_RUN )); then
+              echo "[DRY-RUN] set $key $value in $sshd"
+          else
+              if grep -qE "^[[:space:]]*#?[[:space:]]*${key}\b" "$sshd"; then
+                  sed -i -E "s|^[[:space:]]*#?[[:space:]]*${key}\b.*|${key} ${value}|" "$sshd"
+              else
+                  echo "${key} ${value}" >> "$sshd"
+              fi
+          fi
+      done
+      # Only reload if the config is valid: never lock yourself out.
+      if (( DRY_RUN )); then
+          echo "[DRY-RUN] sshd -t && systemctl reload sshd"
+      else
+          sshd -t && systemctl reload sshd
+      fi
+
+      # --- 3. Firewall: allow SSH FIRST, then deny-all inbound, then enable ---
+      run ufw default deny incoming
+      run ufw default allow outgoing
+      run ufw limit 22/tcp            # rate-limited SSH
+      run ufw allow 80/tcp
+      run ufw allow 443/tcp
+      run ufw --force enable
+
+      log "Hardening complete (DRY_RUN=$DRY_RUN)"
+    output: |
+      [02:40:00] Writing /etc/sysctl.d/99-hardening.conf
+      [DRY-RUN] would write hardening sysctl keys to /etc/sysctl.d/99-hardening.conf
+      [DRY-RUN] sysctl --system
+      [DRY-RUN] set PermitRootLogin no in /etc/ssh/sshd_config
+      [DRY-RUN] set PasswordAuthentication no in /etc/ssh/sshd_config
+      [DRY-RUN] sshd -t && systemctl reload sshd
+      [DRY-RUN] ufw default deny incoming
+      [DRY-RUN] ufw limit 22/tcp
+      [DRY-RUN] ufw --force enable
+      [02:40:00] Hardening complete (DRY_RUN=1)
+    note:
+      fr: "Par défaut le script **simule** : on lit le plan sans rien casser. L'ordre du pare-feu est crucial (`limit 22/tcp` avant `enable`). SSH n'est rechargé qu'après `sshd -t`. On applique réellement avec `DRY_RUN=0 sudo ./harden.sh`, une session SSH de secours ouverte."
+      en: "By default the script **simulates**: you read the plan without breaking anything. The firewall order is crucial (`limit 22/tcp` before `enable`). SSH is only reloaded after `sshd -t`. You apply for real with `DRY_RUN=0 sudo ./harden.sh`, keeping a backup SSH session open."
+
+  - title:
+      fr: "Vérifier l'état après durcissement"
+      en: "Verifying the state after hardening"
+    file: verify-harden.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      echo "== sysctl =="
+      # Read back a couple of keys to confirm they took effect.
+      sysctl net.ipv4.conf.all.rp_filter kernel.randomize_va_space
+
+      echo "== sshd =="
+      grep -E '^(PermitRootLogin|PasswordAuthentication)' /etc/ssh/sshd_config
+
+      echo "== ufw =="
+      ufw status verbose | head -8
+    output: |
+      == sysctl ==
+      net.ipv4.conf.all.rp_filter = 1
+      kernel.randomize_va_space = 2
+      == sshd ==
+      PermitRootLogin no
+      PasswordAuthentication no
+      == ufw ==
+      Status: active
+      Default: deny (incoming), allow (outgoing)
+      22/tcp                     LIMIT       Anywhere
+    note:
+      fr: "Après le durcissement, on **relit** l'état réel pour confirmer que chaque réglage a pris. C'est l'équivalent d'un mini-audit de validation : durcir sans vérifier laisse place aux faux positifs."
+      en: "After hardening, you **read back** the real state to confirm each setting took effect. It is the equivalent of a mini validation audit: hardening without verifying leaves room for false positives."
+
+mistake:
+  fr: |
+    **Recharger SSH ou activer un pare-feu « deny all » sans filet.**
+
+    C'est l'erreur qui coupe l'accès à un serveur distant. Deux variantes. D'abord, modifier `sshd_config`
+    puis `systemctl reload sshd` **sans** `sshd -t` : une faute de frappe rend la configuration invalide, sshd
+    ne redémarre pas, et vous êtes dehors. Toujours tester avec `sshd -t` et garder une session SSH ouverte.
+    Ensuite, activer `ufw default deny incoming` **avant** d'avoir autorisé le port 22 : la règle s'applique
+    immédiatement et coupe votre propre connexion. L'ordre correct est toujours : autoriser SSH, **puis**
+    poser la politique de refus, **puis** activer. Et rien de tout cela sans sauvegarde ni dry-run préalable.
+  en: |
+    **Reloading SSH or enabling a "deny all" firewall with no safety net.**
+
+    This is the mistake that cuts off access to a remote server. Two variants. First, editing `sshd_config`
+    then `systemctl reload sshd` **without** `sshd -t`: a typo makes the config invalid, sshd fails to start,
+    and you are locked out. Always test with `sshd -t` and keep an SSH session open. Second, enabling
+    `ufw default deny incoming` **before** allowing port 22: the rule applies immediately and cuts your own
+    connection. The correct order is always: allow SSH, **then** set the deny policy, **then** enable. And
+    none of this without a backup and a prior dry-run.
+
+bestPractice:
+  fr: |
+    - **Rendez le script idempotent** : « chercher puis remplacer ou ajouter », jamais `>>` aveugle. Relançable
+      sans doublons.
+    - **Simulez d'abord (dry-run)** : par défaut le script n'affiche que ce qu'il ferait ; on applique avec
+      `DRY_RUN=0`.
+    - **Sauvegardez chaque fichier** avant de le modifier, avec horodatage, pour pouvoir revenir en arrière.
+    - **Validez avant de recharger** : `sshd -t` avant `reload`, et gardez une session SSH de secours ouverte.
+    - **Ordonnez le pare-feu** : autoriser SSH, puis `deny incoming`, puis `enable`. Jamais l'inverse.
+    - **Vérifiez l'état final** en relisant les réglages : durcir sans contrôler n'a aucune valeur.
+  en: |
+    - **Make the script idempotent**: "find then replace or add", never a blind `>>`. Re-runnable without
+      duplicates.
+    - **Simulate first (dry-run)**: by default the script only prints what it would do; you apply with
+      `DRY_RUN=0`.
+    - **Back up each file** before modifying it, with a timestamp, so you can roll back.
+    - **Validate before reloading**: `sshd -t` before `reload`, and keep a backup SSH session open.
+    - **Order the firewall**: allow SSH, then `deny incoming`, then `enable`. Never the reverse.
+    - **Verify the final state** by reading the settings back: hardening without checking is worthless.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez au script de durcissement une fonction `ensure_sysctl` qui applique un paramètre `sysctl` de
+      façon **idempotente** et compatible avec le **dry-run**. Elle doit :
+
+      1. prendre une clé (ex. `net.ipv4.ip_forward`) et une valeur (ex. `0`) ;
+      2. en dry-run, afficher `[DRY-RUN] would set <clé> = <valeur>` ;
+      3. sinon, écrire ou remplacer la ligne `<clé> = <valeur>` dans `/etc/sysctl.d/99-hardening.conf` (sans
+         doublon) puis appliquer avec `sysctl -w <clé>=<valeur>`.
+
+      Réutilisez la variable `DRY_RUN` du script.
+    en: |
+      Add to the hardening script an `ensure_sysctl` function that applies a `sysctl` parameter
+      **idempotently** and compatibly with the **dry-run**. It must:
+
+      1. take a key (e.g. `net.ipv4.ip_forward`) and a value (e.g. `0`);
+      2. in dry-run, print `[DRY-RUN] would set <key> = <value>`;
+      3. otherwise, write or replace the line `<key> = <value>` in `/etc/sysctl.d/99-hardening.conf` (no
+         duplicate) then apply with `sysctl -w <key>=<value>`.
+
+      Reuse the script's `DRY_RUN` variable.
+  solution:
+    file: ensure-sysctl.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      DRY_RUN="${DRY_RUN:-1}"
+      conf=/etc/sysctl.d/99-hardening.conf
+
+      ensure_sysctl() {
+          local key="$1" value="$2"
+          if (( DRY_RUN )); then
+              echo "[DRY-RUN] would set $key = $value"
+              return 0
+          fi
+          # Idempotent write: replace the key's line if present, else append once.
+          if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$conf" 2>/dev/null; then
+              sed -i -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$conf"
+          else
+              echo "${key} = ${value}" >> "$conf"
+          fi
+          sysctl -w "${key}=${value}"      # apply immediately, without a reboot
+      }
+
+      ensure_sysctl net.ipv4.ip_forward 0
+    note:
+      fr: "La fonction respecte le dry-run (affiche sans agir) et l'idempotence (remplace la ligne existante ou l'ajoute une fois). `sysctl -w` applique la valeur tout de suite, tandis que l'écriture dans le fichier la rend persistante au redémarrage."
+      en: "The function honours dry-run (print without acting) and idempotence (replace the existing line or add it once). `sysctl -w` applies the value immediately, while writing it to the file makes it persist across reboots."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'un script idempotent ?"
+      en: "What is an idempotent script?"
+    options:
+      fr:
+        - "Un script qui ne peut être lancé qu'une fois"
+        - "Un script qui produit le même état final qu'on le lance une ou plusieurs fois"
+        - "Un script chiffré"
+        - "Un script sans variables"
+      en:
+        - "A script that can only be run once"
+        - "A script that produces the same final state whether run once or many times"
+        - "An encrypted script"
+        - "A script without variables"
+    answer: 1
+    why:
+      fr: "L'idempotence garantit qu'un script relancé n'accumule pas de doublons ni ne casse l'état : on peut le rejouer sans danger après chaque mise à jour."
+      en: "Idempotence guarantees a re-run script does not pile up duplicates or break state: you can safely replay it after each update."
+  - q:
+      fr: "Pourquoi exécuter `sshd -t` avant de recharger SSH ?"
+      en: "Why run `sshd -t` before reloading SSH?"
+    options:
+      fr:
+        - "Pour chiffrer la configuration"
+        - "Pour valider la configuration et éviter de se verrouiller dehors"
+        - "Pour accélérer le rechargement"
+        - "Pour sauvegarder le fichier"
+      en:
+        - "To encrypt the configuration"
+        - "To validate the configuration and avoid locking yourself out"
+        - "To speed up the reload"
+        - "To back up the file"
+    answer: 1
+    why:
+      fr: "`sshd -t` teste la syntaxe du fichier ; en ne rechargeant qu'après succès, on évite qu'une faute de frappe empêche sshd de démarrer et coupe l'accès distant."
+      en: "`sshd -t` tests the file's syntax; reloading only after success avoids a typo stopping sshd from starting and cutting remote access."
+  - q:
+      fr: "Dans quel ordre configurer le pare-feu ufw sans se couper ?"
+      en: "In which order should you configure the ufw firewall without cutting yourself off?"
+    options:
+      fr:
+        - "Activer, puis autoriser SSH, puis deny all"
+        - "Deny all, puis activer, puis autoriser SSH"
+        - "Autoriser SSH, puis deny incoming, puis activer"
+        - "L'ordre n'a pas d'importance"
+      en:
+        - "Enable, then allow SSH, then deny all"
+        - "Deny all, then enable, then allow SSH"
+        - "Allow SSH, then deny incoming, then enable"
+        - "The order does not matter"
+    answer: 2
+    why:
+      fr: "On autorise d'abord le port 22, puis on pose la politique de refus, puis on active : ainsi la connexion SSH en cours n'est jamais coupée par la règle deny."
+      en: "You first allow port 22, then set the deny policy, then enable: so the current SSH connection is never cut by the deny rule."
+  - q:
+      fr: "À quoi sert le mode dry-run dans un script de durcissement ?"
+      en: "What is the dry-run mode for in a hardening script?"
+    options:
+      fr:
+        - "À afficher ce que le script ferait sans rien modifier"
+        - "À exécuter le script deux fois plus vite"
+        - "À chiffrer les fichiers de configuration"
+        - "À supprimer les sauvegardes"
+      en:
+        - "To show what the script would do without changing anything"
+        - "To run the script twice as fast"
+        - "To encrypt the configuration files"
+        - "To delete backups"
+    answer: 0
+    why:
+      fr: "Le dry-run simule : il affiche chaque action prévue sans toucher au système, pour relire et valider le plan avant d'appliquer réellement avec `DRY_RUN=0`."
+      en: "Dry-run simulates: it prints every planned action without touching the system, so you can review and validate the plan before applying for real with `DRY_RUN=0`."
+  - q:
+      fr: "Pourquoi `echo \"PermitRootLogin no\" >> sshd_config` est-il une mauvaise méthode ?"
+      en: "Why is `echo \"PermitRootLogin no\" >> sshd_config` a bad method?"
+    options:
+      fr:
+        - "Parce que echo est interdit"
+        - "Parce qu'il ajoute une ligne en double à chaque exécution (non idempotent)"
+        - "Parce qu'il chiffre le fichier"
+        - "Parce qu'il supprime la directive"
+      en:
+        - "Because echo is forbidden"
+        - "Because it appends a duplicate line on every run (not idempotent)"
+        - "Because it encrypts the file"
+        - "Because it deletes the directive"
+    answer: 1
+    why:
+      fr: "`>>` ajoute toujours, sans vérifier : relancé, il crée des doublons et peut semer la confusion dans sshd. La bonne méthode cherche la directive puis la remplace ou l'ajoute une seule fois."
+      en: "`>>` always appends, without checking: re-run, it creates duplicates and can confuse sshd. The right method finds the directive then replaces or adds it only once."

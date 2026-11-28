@@ -1,0 +1,496 @@
+description:
+  fr: "Construire des portes de sécurité dans le pipeline : seuils par environnement, logique break-the-build, workflow d'exception avec expiration, agrégation multi-outils et Conftest/OPA."
+  en: "Build security gates in the pipeline: per-environment thresholds, break-the-build logic, an exception workflow with expiry, multi-tool aggregation and Conftest/OPA."
+duration: 30
+
+intro:
+  fr: |
+    Vous savez maintenant scanner les images, l'IaC et les clusters. Reste la question qui décide de tout :
+    **quand bloquer le pipeline ?** Une **porte de sécurité** (*security gate*) est le point du pipeline où
+    l'on compare les résultats des scanners à une règle et où l'on décide : on passe, ou on arrête (*break
+    the build*).
+
+    L'analogie : à l'aéroport, le portique de sécurité ne laisse pas tout passer ni ne bloque tout le monde.
+    Il applique une **règle** connue (pas de liquide de plus de 100 ml, pas d'objet tranchant) et un agent
+    peut accorder une **dérogation** tracée pour un cas particulier (un médicament). La porte de sécurité du
+    pipeline fonctionne pareil : une règle claire, un verdict automatique, et un mécanisme d'exception
+    maîtrisé.
+
+    Dans cette leçon vous allez définir des **seuils par environnement** (un dev tolérant, une prod stricte),
+    écrire la logique **break-the-build**, mettre en place un **workflow d'exception** avec expiration,
+    **agréger** les résultats de Trivy et Checkov en une seule décision, et découvrir **Conftest/OPA** pour
+    exprimer les règles de la porte en *policy as code*.
+  en: |
+    You can now scan images, IaC and clusters. One question decides everything: **when to block the
+    pipeline?** A **security gate** is the point in the pipeline where you compare the scanners' results to a
+    rule and decide: pass, or stop (*break the build*).
+
+    The analogy: at the airport, the security checkpoint does not let everything through nor block everyone.
+    It applies a known **rule** (no liquid over 100 ml, no sharp object) and an officer can grant a traced
+    **exception** for a special case (a medication). The pipeline's security gate works the same way: a clear
+    rule, an automatic verdict, and a controlled exception mechanism.
+
+    In this lesson you will define **per-environment thresholds** (a lenient dev, a strict prod), write the
+    **break-the-build** logic, set up an **exception workflow** with expiry, **aggregate** the Trivy and
+    Checkov results into a single decision, and discover **Conftest/OPA** to express the gate rules as *policy
+    as code*.
+
+sections:
+  - heading:
+      fr: "Des seuils par environnement"
+      en: "Per-environment thresholds"
+    body:
+      fr: |
+        Appliquer la même sévérité partout est irréaliste : bloquer un environnement de développement sur la
+        moindre alerte paralyse les équipes, tandis que laisser passer une faille critique en production est
+        inacceptable. La solution est un **seuil progressif** selon l'environnement.
+
+        | Environnement | Seuil de blocage | Esprit |
+        |---|---|---|
+        | **dev / feature** | Rien ne bloque (avertissements) | Vitesse, retour rapide |
+        | **staging** | Bloquer sur CRITICAL | Garde-fou avant la prod |
+        | **production** | Bloquer sur HIGH et CRITICAL | Tolérance zéro sur le livrable |
+
+        Le principe est le même que pour la baseline en SAST : on **durcit à mesure qu'on se rapproche de la
+        production**. On peut aussi faire varier d'autres critères : le nombre d'alertes toléré, l'exigence
+        d'un SBOM signé, l'obligation que les scanners aient tourné. L'important est que la règle soit
+        **explicite**, **versionnée**, et la même pour tout le monde — pas une décision prise au cas par cas
+        par la personne qui pousse le code.
+      en: |
+        Applying the same severity everywhere is unrealistic: blocking a development environment on the
+        slightest alert paralyses teams, while letting a critical flaw through to production is unacceptable.
+        The solution is a **progressive threshold** by environment.
+
+        | Environment | Blocking threshold | Spirit |
+        |---|---|---|
+        | **dev / feature** | Nothing blocks (warnings) | Speed, fast feedback |
+        | **staging** | Block on CRITICAL | Guard rail before prod |
+        | **production** | Block on HIGH and CRITICAL | Zero tolerance on the deliverable |
+
+        The principle is the same as the SAST baseline: you **tighten as you get closer to production**. You
+        can also vary other criteria: the number of alerts tolerated, the requirement for a signed SBOM, the
+        obligation that the scanners ran. The important thing is that the rule is **explicit**, **versioned**,
+        and the same for everyone — not a decision made case by case by whoever pushes the code.
+  - heading:
+      fr: "Break the build et agrégation"
+      en: "Break the build and aggregation"
+    body:
+      fr: |
+        **Break the build** signifie faire échouer le pipeline (`exit 1`) quand le verdict de la porte est
+        négatif. Chaque scanner renvoie un code de retour, mais une porte réelle combine **plusieurs**
+        scanners. Deux approches :
+
+        1. **Blocage par outil** : chaque étape bloque sur son propre seuil (Trivy `--exit-code 1`, Checkov
+           renvoie `1`). Simple, mais le pipeline s'arrête à la première étape rouge, et on ne voit pas
+           l'ensemble des problèmes d'un coup.
+        2. **Agrégation** : on laisse tous les scanners tourner (en capturant leur résultat), on **rassemble**
+           les rapports (souvent en SARIF), et une **étape finale de gate** applique la règle globale et
+           décide. L'avantage : une vue complète, une décision unique, et un seul endroit où vit la logique
+           de seuil.
+
+        En pratique, on combine : chaque scanner produit son rapport, une étape de gate lit l'ensemble et
+        décide selon l'environnement. On s'assure aussi que l'absence de résultat (un scanner qui n'a pas
+        tourné) **échoue** la porte plutôt que de la laisser passer : une porte qui laisse passer quand elle
+        ne sait pas ne protège rien.
+      en: |
+        **Break the build** means failing the pipeline (`exit 1`) when the gate's verdict is negative. Each
+        scanner returns an exit code, but a real gate combines **several** scanners. Two approaches:
+
+        1. **Per-tool blocking**: each step blocks on its own threshold (Trivy `--exit-code 1`, Checkov
+           returns `1`). Simple, but the pipeline stops at the first red step, and you do not see all the
+           problems at once.
+        2. **Aggregation**: you let all scanners run (capturing their result), **gather** the reports (often
+           in SARIF), and a **final gate step** applies the global rule and decides. The advantage: a complete
+           view, a single decision, and one place where the threshold logic lives.
+
+        In practice you combine both: each scanner produces its report, a gate step reads the whole and
+        decides per environment. You also make sure that a missing result (a scanner that did not run)
+        **fails** the gate rather than passing it: a gate that passes when it does not know protects nothing.
+  - heading:
+      fr: "Workflow d'exception et policy as code"
+      en: "Exception workflow and policy as code"
+    body:
+      fr: |
+        Une porte trop rigide est contournée ; une porte trop souple ne protège rien. Il faut un **workflow
+        d'exception** maîtrisé pour les cas légitimes (faille sans correctif, risque accepté temporairement).
+        Une bonne exception comporte :
+
+        - un **identifiant** précis de l'alerte concernée ;
+        - une **raison** et un **responsable** ;
+        - une **approbation** (par la sécurité, pas par la personne qui pousse) ;
+        - une **date d'expiration** : l'exception se périme et doit être renouvelée.
+
+        On centralise ces exceptions dans un fichier versionné (ou un outil dédié), et un contrôle vérifie
+        qu'aucune n'est expirée. Une exception sans date est une faille permanente déguisée.
+
+        Pour exprimer les règles de la porte de façon lisible et testable, on utilise la **policy as code**.
+        **Conftest** (fondé sur **OPA**, Open Policy Agent, et le langage Rego) évalue des fichiers
+        structurés (JSON des rapports, manifestes, plan Terraform) contre des politiques écrites en Rego :
+        « refuser si une alerte CRITICAL n'a pas d'exception valide ». La règle devient du code versionné,
+        testé, et réutilisable entre pipelines — le même esprit « sécurité comme du code » appliqué à la
+        décision de blocage elle-même.
+      en: |
+        A gate that is too rigid gets bypassed; a gate that is too loose protects nothing. You need a
+        controlled **exception workflow** for legitimate cases (a flaw with no fix, a temporarily accepted
+        risk). A good exception has:
+
+        - a precise **identifier** for the alert concerned;
+        - a **reason** and an **owner**;
+        - an **approval** (by security, not by the person pushing);
+        - an **expiry date**: the exception lapses and must be renewed.
+
+        You centralise these exceptions in a versioned file (or a dedicated tool), and a check verifies that
+        none is expired. An exception with no date is a disguised permanent flaw.
+
+        To express the gate rules in a readable, testable way, you use **policy as code**. **Conftest** (built
+        on **OPA**, Open Policy Agent, and the Rego language) evaluates structured files (report JSON,
+        manifests, a Terraform plan) against policies written in Rego: "deny if a CRITICAL alert has no valid
+        exception". The rule becomes versioned, tested, reusable code across pipelines — the same "security as
+        code" spirit applied to the blocking decision itself.
+
+examples:
+  - title:
+      fr: "Une porte qui agrège Trivy et Checkov par environnement"
+      en: "A gate aggregating Trivy and Checkov per environment"
+    file: gate.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+
+      ENVIRONMENT="${1:-dev}"
+      # Per-environment threshold: dev warns, staging blocks CRITICAL, prod HIGH+CRITICAL
+      case "$ENVIRONMENT" in
+        dev)        SEVERITY="" ;;                 # nothing blocks, report only
+        staging)    SEVERITY="CRITICAL" ;;
+        production) SEVERITY="HIGH,CRITICAL" ;;
+        *) echo "unknown environment: $ENVIRONMENT"; exit 2 ;;
+      esac
+
+      # Let BOTH scanners run and write their JSON (|| true: capture, do not stop here)
+      trivy config . --format json --output trivy.json || true
+      checkov -d . --output json --output-file-path . || true
+
+      # dev: never break the build, just surface the reports
+      [ -z "$SEVERITY" ] && { echo "dev: report-only, gate passes"; exit 0; }
+
+      # Aggregate: count blocking findings from both tools for this environment
+      TRIVY_HITS=$(jq --arg s "$SEVERITY" \
+        '[.Results[]?.Misconfigurations[]? | select($s | contains(.Severity))] | length' \
+        trivy.json 2>/dev/null || echo 0)
+      CHECKOV_FAILS=$(jq '.results.failed_checks | length' results_json.json 2>/dev/null || echo 0)
+
+      echo "env=$ENVIRONMENT  trivy=$TRIVY_HITS  checkov=$CHECKOV_FAILS"
+      if [ "$TRIVY_HITS" -gt 0 ] || [ "$CHECKOV_FAILS" -gt 0 ]; then
+        echo "GATE FAILED for $ENVIRONMENT"; exit 1
+      fi
+      echo "GATE PASSED for $ENVIRONMENT"
+    output: |
+      $ ./gate.sh production
+      env=production  trivy=1  checkov=2
+      GATE FAILED for production
+      # exit code 1 -> the production deployment is blocked
+
+      $ ./gate.sh dev
+      dev: report-only, gate passes
+      # exit code 0 -> dev keeps moving fast, reports still produced
+    note:
+      fr: "La porte fait tourner les deux scanners, agrège leurs résultats et applique le seuil de l'environnement. En `dev`, rien ne bloque (retour rapide) ; en `production`, une seule alerte agrégée fait échouer le déploiement. La logique de seuil vit en un seul endroit, versionné."
+      en: "The gate runs both scanners, aggregates their results and applies the environment threshold. In `dev`, nothing blocks (fast feedback); in `production`, a single aggregated alert fails the deployment. The threshold logic lives in one versioned place."
+
+  - title:
+      fr: "Un registre d'exceptions avec expiration"
+      en: "An exception register with expiry"
+    file: exceptions.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # Security exception register - versioned, reviewed, approved by security.
+      # A check in the gate rejects any exception past its expiry date.
+      exceptions:
+        - id: AVD-AWS-0107
+          scope: "aws_security_group.public_lb"
+          reason: "Public HTTPS load balancer, open 443 is intended"
+          owner: platform-team
+          approved_by: security-team
+          approved: "2026-03-01"
+          expires: "2026-09-01"
+
+        - id: CVE-2024-12345
+          scope: "base image debian:12"
+          reason: "No upstream fix yet; vulnerable parser not invoked"
+          owner: app-team
+          approved_by: security-team
+          approved: "2026-04-10"
+          expires: "2026-07-10"
+    output: |
+      # The gate validates this register before applying exceptions:
+      $ python check_exceptions.py exceptions.yaml
+      AVD-AWS-0107: valid until 2026-09-01  -> OK
+      CVE-2024-12345: EXPIRED on 2026-07-10 -> gate must re-raise this finding
+      # exit code 1 if any exception is expired
+    note:
+      fr: "Chaque exception est **nommée, justifiée, approuvée par la sécurité et datée**. Une étape du pipeline vérifie le registre : une exception expirée est rejetée, et l'alerte correspondante refait échouer la porte. C'est ce qui empêche une dérogation de devenir permanente."
+      en: "Each exception is **named, justified, approved by security and dated**. A pipeline step validates the register: an expired exception is rejected, and the matching alert fails the gate again. This is what prevents an exception from becoming permanent."
+
+  - title:
+      fr: "La règle de la porte en Rego (Conftest/OPA)"
+      en: "The gate rule in Rego (Conftest/OPA)"
+    file: gate.rego
+    lang: rego
+    kind: secure
+    code: |
+      package main
+
+      # Deny deployment if a Trivy report contains a CRITICAL misconfiguration.
+      # Conftest evaluates this policy against the scanner's JSON output.
+
+      # Collect every CRITICAL severity from the Trivy results
+      critical_findings[msg] {
+          result := input.Results[_]
+          finding := result.Misconfigurations[_]
+          finding.Severity == "CRITICAL"
+          msg := sprintf("CRITICAL misconfig %s in %s", [finding.ID, result.Target])
+      }
+
+      # The gate denies when at least one CRITICAL finding exists
+      deny[msg] {
+          msg := critical_findings[_]
+      }
+    output: |
+      $ trivy config . --format json --output trivy.json
+      $ conftest test trivy.json --policy gate.rego
+      FAIL - trivy.json - main - CRITICAL misconfig AVD-AWS-0080 in main.tf
+      1 test, 0 passed, 0 warnings, 1 failure
+      # exit code 1 -> break the build
+    note:
+      fr: "La règle de blocage devient du **code Rego**, versionné et testable. Conftest évalue le JSON de Trivy contre la politique : un `deny` fait échouer la commande (`exit 1`), donc le build. On peut réutiliser la même politique dans plusieurs pipelines et la tester unitairement."
+      en: "The blocking rule becomes **Rego code**, versioned and testable. Conftest evaluates Trivy's JSON against the policy: a `deny` fails the command (`exit 1`), hence the build. You can reuse the same policy across pipelines and unit-test it."
+
+  - title:
+      fr: "La porte complète en GitHub Actions"
+      en: "The complete gate in GitHub Actions"
+    file: .github/workflows/gate.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: security-gate
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        gate:
+          runs-on: ubuntu-latest
+          # The environment drives the threshold: PRs to main are treated as production
+          env:
+            TARGET_ENV: ${{ github.base_ref == 'main' && 'production' || 'staging' }}
+          steps:
+            - uses: actions/checkout@v4
+
+            # 1. Run scanners; keep going so the gate sees ALL results (not just the first)
+            - name: Trivy config
+              run: trivy config . --format json --output trivy.json
+              continue-on-error: true
+
+            - name: Checkov
+              run: checkov -d . -o json --output-file-path . || true
+
+            # 2. Validate the exception register (rejects expired exceptions)
+            - name: Validate exceptions
+              run: python check_exceptions.py exceptions.yaml
+
+            # 3. Aggregate and decide according to TARGET_ENV
+            - name: Gate decision
+              run: ./gate.sh "$TARGET_ENV"
+    output: |
+      TARGET_ENV=production
+      Trivy config: 1 CRITICAL found (reported)
+      Validate exceptions: all exceptions valid
+      Gate decision: env=production trivy=1 checkov=0
+      GATE FAILED for production
+      Error: Process completed with exit code 1
+    note:
+      fr: "Le pipeline laisse les scanners finir (`continue-on-error`), valide le registre d'exceptions, puis une **étape de gate unique** agrège et décide selon l'environnement cible. Une PR vers `main` est traitée comme la production : seuil strict. La décision est centralisée, pas éparpillée entre les étapes."
+      en: "The pipeline lets the scanners finish (`continue-on-error`), validates the exception register, then a **single gate step** aggregates and decides per target environment. A PR to `main` is treated as production: strict threshold. The decision is centralised, not scattered across steps."
+
+mistake:
+  fr: |
+    **Mettre le même seuil strict partout, ou laisser la porte passer quand un scanner n'a pas tourné.**
+
+    Un seuil « bloquer sur tout, partout » paralyse le développement : les équipes contournent la porte ou la
+    désactivent. À l'inverse, un seuil trop permissif en production laisse passer des failles graves. La
+    porte doit **s'adapter à l'environnement**, stricte en prod, tolérante en dev. L'autre piège est plus
+    sournois : si un scanner échoue à s'exécuter (réseau, erreur) et que la porte interprète « pas de
+    résultat » comme « rien à signaler », elle laisse passer. Une porte sûre **échoue par défaut** quand elle
+    ne dispose pas des résultats attendus : l'absence de preuve n'est pas une preuve d'absence.
+  en: |
+    **Setting the same strict threshold everywhere, or letting the gate pass when a scanner did not run.**
+
+    A "block on everything, everywhere" threshold paralyses development: teams bypass the gate or disable it.
+    Conversely, a too-permissive threshold in production lets serious flaws through. The gate must **adapt to
+    the environment**, strict in prod, lenient in dev. The other trap is subtler: if a scanner fails to run
+    (network, error) and the gate reads "no result" as "nothing to report", it lets things through. A safe
+    gate **fails by default** when it lacks the expected results: absence of evidence is not evidence of
+    absence.
+
+bestPractice:
+  fr: |
+    - **Des seuils par environnement** : dev tolérant, staging CRITICAL, prod HIGH+CRITICAL.
+    - **Agrégez** les résultats (Trivy, Checkov...) et décidez en une **étape de gate unique**, versionnée.
+    - **Échouez par défaut** : une porte qui ne sait pas doit bloquer, pas laisser passer.
+    - **Un workflow d'exception** avec identifiant, raison, approbation sécurité et **expiration**.
+    - **Validez le registre d'exceptions** à chaque exécution : rejetez celles qui sont périmées.
+    - **Exprimez les règles en policy as code** (Conftest/OPA) : versionnées, testées, réutilisables.
+  en: |
+    - **Per-environment thresholds**: lenient dev, CRITICAL staging, HIGH+CRITICAL prod.
+    - **Aggregate** the results (Trivy, Checkov...) and decide in a **single, versioned gate step**.
+    - **Fail by default**: a gate that does not know must block, not let through.
+    - **An exception workflow** with an identifier, reason, security approval and **expiry**.
+    - **Validate the exception register** on every run: reject expired ones.
+    - **Express the rules as policy as code** (Conftest/OPA): versioned, tested, reusable.
+
+exercise:
+  statement:
+    fr: |
+      On vous demande de concevoir la porte de sécurité d'un pipeline qui déploie vers `dev`, `staging` et
+      `production`. Les contraintes :
+
+      1. en `dev`, aucun scan ne doit bloquer (mais les rapports sont produits) ;
+      2. en `staging`, seules les failles `CRITICAL` bloquent ;
+      3. en `production`, les failles `HIGH` et `CRITICAL` bloquent ;
+      4. si l'un des scanners n'a pas pu s'exécuter, la porte doit **bloquer** en staging et production.
+
+      Décrivez la logique de la porte en répondant à chaque point, et expliquez pourquoi le point 4 est une
+      règle de sécurité importante.
+    en: |
+      You are asked to design the security gate of a pipeline that deploys to `dev`, `staging` and
+      `production`. The constraints:
+
+      1. in `dev`, no scan should block (but reports are produced);
+      2. in `staging`, only `CRITICAL` flaws block;
+      3. in `production`, `HIGH` and `CRITICAL` flaws block;
+      4. if one of the scanners could not run, the gate must **block** in staging and production.
+
+      Describe the gate logic answering each point, and explain why point 4 is an important security rule.
+  solution:
+    file: gate-design.md
+    lang: markdown
+    code: |
+      # Security gate design
+
+      Threshold table (the gate reads the target environment):
+        - dev        -> report-only: run scanners, publish reports, never exit 1
+        - staging    -> block if any CRITICAL finding (aggregated across tools)
+        - production -> block if any HIGH or CRITICAL finding (aggregated)
+
+      Logic:
+        1. dev: run all scanners with continue-on-error, upload reports, exit 0.
+        2. staging: aggregate findings, exit 1 if count(CRITICAL) > 0.
+        3. production: aggregate findings, exit 1 if count(HIGH or CRITICAL) > 0.
+        4. Fail-closed on missing results: before deciding, verify each expected
+           report file exists AND the scanner exited as expected. If a scanner did
+           not run (no report, crash), exit 1 in staging/production.
+
+      Why point 4 matters (fail-closed):
+        A gate decides from evidence. If a scanner silently failed and the gate reads
+        "no findings" as "safe", a broken scanner becomes a green light: real flaws
+        ship unseen. Failing closed means "no proof of safety = block". Absence of
+        evidence is not evidence of absence. (In dev, fail-open is acceptable for speed.)
+    note:
+      fr: "Le cœur est le tableau de seuils par environnement plus la règle *fail-closed* : en staging et prod, pas de résultat = blocage. Cela évite qu'un scanner en panne devienne un feu vert silencieux, le scénario le plus dangereux car invisible."
+      en: "The core is the per-environment threshold table plus the *fail-closed* rule: in staging and prod, no result = block. This prevents a broken scanner from becoming a silent green light, the most dangerous scenario because it is invisible."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'une porte de sécurité (security gate) dans un pipeline ?"
+      en: "What is a security gate in a pipeline?"
+    options:
+      fr:
+        - "Un pare-feu réseau"
+        - "Le point où l'on compare les résultats des scanners à une règle et où l'on décide de passer ou de bloquer"
+        - "Un outil de chiffrement"
+        - "Un type de conteneur"
+      en:
+        - "A network firewall"
+        - "The point where you compare scanner results to a rule and decide to pass or block"
+        - "An encryption tool"
+        - "A type of container"
+    answer: 1
+    why:
+      fr: "La porte applique une règle (un seuil) aux résultats des scanners et rend un verdict : le pipeline continue ou s'arrête (*break the build*). C'est le point de décision du DevSecOps."
+      en: "The gate applies a rule (a threshold) to the scanner results and returns a verdict: the pipeline continues or stops (*break the build*). It is the DevSecOps decision point."
+  - q:
+      fr: "Pourquoi des seuils différents par environnement ?"
+      en: "Why different thresholds per environment?"
+    options:
+      fr:
+        - "Pour compliquer le pipeline"
+        - "Pour garder dev rapide tout en étant strict en production (tolérance zéro sur le livrable)"
+        - "Parce que dev n'a pas de sécurité"
+        - "Pour désactiver les scanners en production"
+      en:
+        - "To complicate the pipeline"
+        - "To keep dev fast while being strict in production (zero tolerance on the deliverable)"
+        - "Because dev has no security"
+        - "To disable scanners in production"
+    answer: 1
+    why:
+      fr: "On durcit à mesure qu'on se rapproche de la production : dev tolérant pour la vitesse, prod strict pour ne rien laisser passer sur le livrable final. La règle reste explicite et versionnée."
+      en: "You tighten as you approach production: lenient dev for speed, strict prod to let nothing through on the final deliverable. The rule stays explicit and versioned."
+  - q:
+      fr: "Que doit faire une porte quand un scanner n'a pas pu s'exécuter ?"
+      en: "What should a gate do when a scanner could not run?"
+    options:
+      fr:
+        - "Laisser passer, puisqu'il n'y a pas de résultat"
+        - "Bloquer par défaut (fail-closed), car l'absence de preuve n'est pas une preuve d'absence"
+        - "Relancer le scanner à l'infini"
+        - "Supprimer le pipeline"
+      en:
+        - "Let it through, since there is no result"
+        - "Block by default (fail-closed), because absence of evidence is not evidence of absence"
+        - "Rerun the scanner forever"
+        - "Delete the pipeline"
+    answer: 1
+    why:
+      fr: "Une porte décide à partir de preuves. Interpréter « pas de résultat » comme « rien à signaler » transforme un scanner en panne en feu vert silencieux. En staging/prod, on bloque par défaut."
+      en: "A gate decides from evidence. Reading 'no result' as 'nothing to report' turns a broken scanner into a silent green light. In staging/prod, you block by default."
+  - q:
+      fr: "Quel champ rend un workflow d'exception sain ?"
+      en: "Which field makes an exception workflow healthy?"
+    options:
+      fr:
+        - "Une date d'expiration qui force à renouveler ou retirer l'exception"
+        - "La couleur de l'alerte"
+        - "Le nom de la branche"
+        - "Rien, une exception est définitive"
+      en:
+        - "An expiry date that forces renewing or removing the exception"
+        - "The alert colour"
+        - "The branch name"
+        - "Nothing, an exception is permanent"
+    answer: 0
+    why:
+      fr: "Une exception doit être nommée, justifiée, approuvée par la sécurité et **datée**. Sans expiration, c'est une faille permanente déguisée ; la date force une réévaluation."
+      en: "An exception must be named, justified, approved by security and **dated**. Without an expiry it is a disguised permanent flaw; the date forces a re-evaluation."
+  - q:
+      fr: "À quoi sert Conftest (OPA/Rego) dans une porte de sécurité ?"
+      en: "What is Conftest (OPA/Rego) for in a security gate?"
+    options:
+      fr:
+        - "À scanner les images Docker"
+        - "À exprimer les règles de la porte en policy as code, versionnée et testable"
+        - "À chiffrer les rapports"
+        - "À remplacer Git"
+      en:
+        - "To scan Docker images"
+        - "To express the gate rules as policy as code, versioned and testable"
+        - "To encrypt the reports"
+        - "To replace Git"
+    answer: 1
+    why:
+      fr: "Conftest évalue des fichiers structurés (JSON des rapports, manifestes) contre des politiques écrites en Rego. La règle de blocage devient du code versionné, testé et réutilisable entre pipelines."
+      en: "Conftest evaluates structured files (report JSON, manifests) against policies written in Rego. The blocking rule becomes versioned, tested code reusable across pipelines."

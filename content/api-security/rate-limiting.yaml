@@ -1,0 +1,406 @@
+description:
+  fr: "Protéger une API contre les abus avec le rate limiting : fenêtres fixe et glissante, token bucket exécutable, express-rate-limit, Flask-Limiter et NGINX limit_req."
+  en: "Protect an API against abuse with rate limiting: fixed and sliding windows, a runnable token bucket, express-rate-limit, Flask-Limiter and NGINX limit_req."
+duration: 22
+
+intro:
+  fr: |
+    Une API sans limite de débit est une porte sans serrure sur le flux : un attaquant peut tenter des milliers de
+    mots de passe à la seconde (force brute), saturer le service (déni de service), ou faire exploser votre facture
+    cloud. C'est la faille **API4** de l'OWASP : *Unrestricted Resource Consumption*. La parade s'appelle le **rate
+    limiting** (limitation de débit) et les **quotas**.
+
+    L'analogie : le rate limiting, c'est le videur qui ne laisse entrer qu'un certain nombre de personnes par
+    minute. Peu importe que la foule pousse : au-delà du débit autorisé, on attend dehors. Cela protège l'intérieur
+    de la saturation et empêche quelqu'un de monopoliser l'entrée.
+
+    Dans cette leçon, vous allez comprendre trois algorithmes — **fenêtre fixe**, **fenêtre glissante** et **token
+    bucket** (seau à jetons) — en implémentant un token bucket **exécutable** en Python pur. Puis vous verrez les
+    outils du quotidien : **express-rate-limit** (Node.js), **Flask-Limiter** avec Redis (Python) et la directive
+    **`limit_req`** de NGINX pour limiter au plus près du réseau.
+  en: |
+    An API with no rate limit is a doorless lock on the flow: an attacker can try thousands of passwords per
+    second (brute force), saturate the service (denial of service), or blow up your cloud bill. This is OWASP's
+    **API4** flaw: *Unrestricted Resource Consumption*. The fix is called **rate limiting** and **quotas**.
+
+    The analogy: rate limiting is the bouncer who lets in only so many people per minute. No matter how hard the
+    crowd pushes, beyond the allowed rate you wait outside. This protects the inside from saturation and stops
+    anyone from monopolising the entrance.
+
+    In this lesson you will understand three algorithms — **fixed window**, **sliding window** and **token
+    bucket** — by implementing a **runnable** token bucket in pure Python. Then you will see the everyday tools:
+    **express-rate-limit** (Node.js), **Flask-Limiter** with Redis (Python) and NGINX's **`limit_req`** directive
+    to limit as close to the network as possible.
+
+sections:
+  - heading:
+      fr: "Trois algorithmes de limitation"
+      en: "Three limiting algorithms"
+    body:
+      fr: |
+        Limiter le débit peut se faire de plusieurs façons, avec des compromis :
+
+        | Algorithme | Principe | Avantage | Limite |
+        |---|---|---|---|
+        | **Fenêtre fixe** | X requêtes par tranche de temps fixe (ex. 100/min) | Simple | Pic en bordure de fenêtre |
+        | **Fenêtre glissante** | Compte sur une fenêtre qui glisse en continu | Lisse les pics | Un peu plus coûteux |
+        | **Token bucket** | Un seau de jetons se remplit à débit constant ; chaque requête consomme un jeton | Autorise des rafales **contrôlées** | Deux paramètres à régler |
+
+        Le problème de la **fenêtre fixe** : avec 100 requêtes/minute, un client peut en envoyer 100 à 10h00:59
+        **et** 100 à 10h01:00, soit 200 en deux secondes. La **fenêtre glissante** corrige ce défaut. Le **token
+        bucket** est le plus souple : il permet des rafales (jusqu'à la taille du seau) tout en garantissant un
+        **débit moyen** (la vitesse de remplissage). C'est l'algorithme le plus répandu dans les API et les
+        passerelles.
+      en: |
+        Rate limiting can be done in several ways, with trade-offs:
+
+        | Algorithm | Principle | Advantage | Limit |
+        |---|---|---|---|
+        | **Fixed window** | X requests per fixed time slice (e.g. 100/min) | Simple | Spike at window edges |
+        | **Sliding window** | Counts over a window that slides continuously | Smooths spikes | Slightly costlier |
+        | **Token bucket** | A bucket of tokens refills at a constant rate; each request spends a token | Allows **controlled** bursts | Two parameters to tune |
+
+        The **fixed window** problem: with 100 requests/minute, a client can send 100 at 10:00:59 **and** 100 at
+        10:01:00, i.e. 200 in two seconds. The **sliding window** fixes this. The **token bucket** is the most
+        flexible: it allows bursts (up to the bucket size) while guaranteeing an **average rate** (the refill
+        speed). It is the most common algorithm in APIs and gateways.
+  - heading:
+      fr: "Où limiter : applicatif vs passerelle"
+      en: "Where to limit: application vs gateway"
+    body:
+      fr: |
+        On peut limiter à deux niveaux, idéalement les deux (défense en profondeur) :
+
+        - **Au niveau applicatif** : avec une bibliothèque comme **express-rate-limit** (Node.js) ou
+          **Flask-Limiter** (Python). Avantage : on connaît l'utilisateur authentifié, on peut appliquer des
+          limites par clé d'API ou par compte. Pour que la limite soit partagée entre plusieurs instances du
+          service, on stocke les compteurs dans **Redis** (sinon chaque instance compte de son côté).
+
+        - **Au niveau de la passerelle / reverse proxy** : avec **NGINX `limit_req`** (algorithme leaky bucket) ou
+          une API Gateway. Avantage : on rejette le trafic abusif **avant** qu'il n'atteigne l'application,
+          économisant ses ressources.
+
+        Un bon réglage renvoie un code HTTP **429 Too Many Requests** avec un en-tête **`Retry-After`** indiquant
+        au client quand réessayer, et des en-têtes `RateLimit-*` pour qu'un client honnête s'adapte. On applique
+        des limites **différenciées** : très strictes sur `/login` (anti-force-brute), plus souples sur la lecture.
+      en: |
+        You can limit at two levels, ideally both (defense in depth):
+
+        - **At the application level**: with a library like **express-rate-limit** (Node.js) or **Flask-Limiter**
+          (Python). Advantage: you know the authenticated user, so you can apply per-API-key or per-account
+          limits. For the limit to be shared across multiple service instances, you store the counters in
+          **Redis** (otherwise each instance counts on its own).
+
+        - **At the gateway / reverse proxy level**: with **NGINX `limit_req`** (leaky bucket algorithm) or an API
+          gateway. Advantage: you reject abusive traffic **before** it reaches the application, saving its
+          resources.
+
+        A good setup returns HTTP **429 Too Many Requests** with a **`Retry-After`** header telling the client
+        when to retry, and `RateLimit-*` headers so an honest client can adapt. You apply **differentiated**
+        limits: very strict on `/login` (anti-brute-force), looser on reads.
+
+examples:
+  - title:
+      fr: "Vulnérable : aucune limite sur /login"
+      en: "Vulnerable: no limit on /login"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - a login endpoint with no rate limiting at all.
+      from flask import Flask, request, jsonify
+
+      app = Flask(__name__)
+      USERS = {"alice": "s3cr3t"}
+
+
+      @app.post("/login")
+      def login():
+          data = request.get_json(force=True)
+          # No throttling: an attacker can POST thousands of password
+          # guesses per second until one works (credential brute force).
+          if USERS.get(data["user"]) == data["password"]:
+              return jsonify(status="ok")
+          return jsonify(status="invalid"), 401
+
+      # A simple loop from the attacker tries the whole dictionary in minutes:
+      #   for pwd in wordlist: requests.post(URL, json={"user":"alice","password":pwd})
+    output: |
+      # The server happily processes every attempt:
+      #   401 401 401 ... 200   <-- password eventually guessed, unthrottled
+    note:
+      fr: "Sans limite, l'endpoint `/login` accepte un nombre illimité de tentatives : un attaquant teste un dictionnaire entier en quelques minutes. C'est la faille API4 (consommation non restreinte) appliquée à la force brute."
+      en: "With no limit, the `/login` endpoint accepts unlimited attempts: an attacker tries a whole dictionary in minutes. This is the API4 flaw (unrestricted consumption) applied to brute force."
+
+  - title:
+      fr: "Sécurisé : token bucket exécutable (Python pur)"
+      en: "Secure: runnable token bucket (pure Python)"
+    file: token_bucket.py
+    lang: python
+    kind: secure
+    code: |
+      # Self-contained token bucket: run it to see requests allowed/denied.
+      import time
+
+
+      class TokenBucket:
+          def __init__(self, capacity: int, refill_per_sec: float):
+              self.capacity = capacity          # max burst size
+              self.refill = refill_per_sec      # steady average rate
+              self.tokens = float(capacity)
+              self.last = time.monotonic()
+
+          def allow(self) -> bool:
+              now = time.monotonic()
+              # Refill proportionally to elapsed time, capped at capacity.
+              self.tokens = min(self.capacity,
+                                self.tokens + (now - self.last) * self.refill)
+              self.last = now
+              if self.tokens >= 1:
+                  self.tokens -= 1              # spend one token per request
+                  return True
+              return False                      # bucket empty -> deny (429)
+
+
+      # Demo: capacity 5, refills 2 tokens/second.
+      bucket = TokenBucket(capacity=5, refill_per_sec=2)
+      results = [bucket.allow() for _ in range(8)]
+      print("First burst of 8:", results)
+      time.sleep(1)                             # 1s later, ~2 tokens refilled
+      print("After 1s wait:   ", bucket.allow())
+    output: |
+      First burst of 8: [True, True, True, True, True, False, False, False]
+      After 1s wait:    True
+    note:
+      fr: "Le seau démarre plein (5 jetons) : les 5 premières requêtes passent (rafale), les suivantes sont refusées. Après une pause, le seau se recharge (2 jetons/s) et autorise à nouveau. C'est exactement ce qui se passe dans une passerelle, en plus visuel."
+      en: "The bucket starts full (5 tokens): the first 5 requests pass (burst), the rest are denied. After a pause, the bucket refills (2 tokens/s) and allows again. This is exactly what happens in a gateway, made visual."
+
+  - title:
+      fr: "Sécurisé : express-rate-limit (Node.js) + Redis"
+      en: "Secure: express-rate-limit (Node.js) + Redis"
+    file: server.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const rateLimit = require("express-rate-limit");
+      const { RedisStore } = require("rate-limit-redis");
+      const { createClient } = require("redis");
+
+      const app = express();
+      const redis = createClient({ url: "redis://localhost:6379" });
+      redis.connect();
+
+      // Shared counters in Redis so the limit holds across all instances.
+      const loginLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000,        // 15-minute window
+        max: 5,                           // 5 login attempts per IP per window
+        standardHeaders: true,            // send RateLimit-* headers
+        legacyHeaders: false,
+        message: { error: "Too many attempts, try again later." },
+        store: new RedisStore({ sendCommand: (...a) => redis.sendCommand(a) }),
+      });
+
+      // Strict limit ONLY on the sensitive endpoint.
+      app.post("/login", loginLimiter, (req, res) => {
+        res.json({ status: "checked" });
+      });
+
+      app.listen(3000);
+    output: |
+      # The 6th attempt within 15 minutes is rejected:
+      #   HTTP/1.1 429 Too Many Requests
+      #   RateLimit-Limit: 5
+      #   RateLimit-Remaining: 0
+      #   {"error":"Too many attempts, try again later."}
+    note:
+      fr: "`express-rate-limit` applique une limite stricte (5/15 min) sur `/login`. Le store **Redis** rend le compteur partagé entre toutes les instances du service, sinon chacune compterait séparément. La réponse `429` + en-têtes `RateLimit-*` guide un client honnête."
+      en: "`express-rate-limit` applies a strict limit (5/15 min) on `/login`. The **Redis** store makes the counter shared across all service instances; otherwise each would count separately. The `429` response + `RateLimit-*` headers guide an honest client."
+
+  - title:
+      fr: "Sécurisé : NGINX limit_req (au plus près du réseau)"
+      en: "Secure: NGINX limit_req (closest to the network)"
+    file: nginx.conf
+    lang: nginx
+    kind: secure
+    code: |
+      # Limit at the reverse proxy so abuse never reaches the app.
+      http {
+          # Define a shared memory zone keyed by client IP; 10 req/second.
+          limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+          # A stricter zone for the login endpoint: 1 req/second.
+          limit_req_zone $binary_remote_addr zone=login:10m rate=1r/s;
+
+          server {
+              listen 443 ssl;
+              server_name api.example.com;
+
+              location /login {
+                  # burst=5 allows a small spike; nodelay serves them at once;
+                  # excess requests get 429.
+                  limit_req zone=login burst=5 nodelay;
+                  limit_req_status 429;
+                  proxy_pass http://backend;
+              }
+
+              location /api/ {
+                  limit_req zone=api burst=20 nodelay;
+                  limit_req_status 429;
+                  proxy_pass http://backend;
+              }
+          }
+      }
+    output: |
+      # Flooding /login past the rate returns, before the app is even hit:
+      #   HTTP/1.1 429 Too Many Requests
+    note:
+      fr: "`limit_req_zone` définit un débit par IP (ici 1r/s sur `/login`, 10r/s ailleurs), `burst` tolère une petite rafale. NGINX rejette le surplus en `429` **avant** d'atteindre l'application, économisant ses ressources. On combine idéalement proxy + applicatif."
+      en: "`limit_req_zone` defines a per-IP rate (here 1r/s on `/login`, 10r/s elsewhere), `burst` tolerates a small spike. NGINX rejects the excess with `429` **before** reaching the application, saving its resources. Ideally combine proxy + application."
+
+mistake:
+  fr: |
+    **Appliquer la même limite partout, ou compter par instance sans store partagé.** Deux erreurs fréquentes.
+    D'abord, mettre une limite unique (ex. 1000/min) sur toute l'API laisse `/login` grand ouvert à la force
+    brute : les endpoints sensibles doivent avoir des limites **beaucoup plus strictes** que la lecture. Ensuite,
+    compter en mémoire locale quand le service tourne en **plusieurs instances** : chaque instance autorise alors
+    sa propre part, et la limite effective est multipliée par le nombre d'instances. On stocke les compteurs dans
+    un **store partagé** (Redis). Enfin, renvoyez un vrai `429` avec `Retry-After`, pas un `500` ou un `403` qui
+    n'aide pas le client.
+  en: |
+    **Applying the same limit everywhere, or counting per instance without a shared store.** Two common mistakes.
+    First, putting a single limit (e.g. 1000/min) on the whole API leaves `/login` wide open to brute force:
+    sensitive endpoints must have **much stricter** limits than reads. Second, counting in local memory when the
+    service runs in **several instances**: each instance then allows its own share, and the effective limit is
+    multiplied by the instance count. Store counters in a **shared store** (Redis). Finally, return a real `429`
+    with `Retry-After`, not a `500` or a `403` that does not help the client.
+
+bestPractice:
+  fr: |
+    - **Limitez par endpoint** : très strict sur `/login` et les écritures, plus souple sur la lecture.
+    - **Utilisez un store partagé** (Redis) pour que la limite tienne sur toutes les instances du service.
+    - **Renvoyez `429` + `Retry-After`** et des en-têtes `RateLimit-*` pour guider les clients honnêtes.
+    - **Combinez les couches** : `limit_req` NGINX au bord du réseau + limitation applicative par utilisateur.
+    - **Préférez le token bucket** pour tolérer des rafales contrôlées tout en bornant le débit moyen.
+  en: |
+    - **Limit per endpoint**: very strict on `/login` and writes, looser on reads.
+    - **Use a shared store** (Redis) so the limit holds across all service instances.
+    - **Return `429` + `Retry-After`** and `RateLimit-*` headers to guide honest clients.
+    - **Combine layers**: NGINX `limit_req` at the network edge + per-user application limiting.
+    - **Prefer the token bucket** to tolerate controlled bursts while bounding the average rate.
+
+exercise:
+  statement:
+    fr: |
+      Complétez l'implémentation d'un **token bucket** : la méthode `allow()` doit recharger le seau en fonction
+      du temps écoulé, consommer un jeton si disponible (et renvoyer `True`), ou refuser (`False`) si le seau est
+      vide.
+
+      ```python
+      class TokenBucket:
+          def __init__(self, capacity, refill_per_sec):
+              self.capacity = capacity
+              self.refill = refill_per_sec
+              self.tokens = float(capacity)
+              self.last = time.monotonic()
+          def allow(self):
+              ...  # à compléter
+      ```
+    en: |
+      Complete the implementation of a **token bucket**: the `allow()` method must refill the bucket according to
+      the elapsed time, spend a token if available (and return `True`), or deny (`False`) if the bucket is empty.
+
+      ```python
+      class TokenBucket:
+          def __init__(self, capacity, refill_per_sec):
+              self.capacity = capacity
+              self.refill = refill_per_sec
+              self.tokens = float(capacity)
+              self.last = time.monotonic()
+          def allow(self):
+              ...  # to complete
+      ```
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import time
+
+
+      class TokenBucket:
+          def __init__(self, capacity, refill_per_sec):
+              self.capacity = capacity
+              self.refill = refill_per_sec
+              self.tokens = float(capacity)
+              self.last = time.monotonic()
+
+          def allow(self):
+              now = time.monotonic()
+              # 1. Refill based on elapsed time, never above capacity.
+              self.tokens = min(self.capacity,
+                                self.tokens + (now - self.last) * self.refill)
+              self.last = now
+              # 2. Spend a token if one is available, else deny.
+              if self.tokens >= 1:
+                  self.tokens -= 1
+                  return True
+              return False
+
+
+      # Quick check: 3 allowed immediately, then denied.
+      b = TokenBucket(capacity=3, refill_per_sec=1)
+      print([b.allow() for _ in range(5)])  # [True, True, True, False, False]
+    note:
+      fr: "La recharge est proportionnelle au temps écoulé et plafonnée à `capacity`. Une requête consomme un jeton si le seau n'est pas vide, sinon elle est refusée (ce qui correspond à un `429`). Le seau se recharge ensuite au débit configuré."
+      en: "The refill is proportional to elapsed time and capped at `capacity`. A request spends a token if the bucket is not empty, otherwise it is denied (which maps to a `429`). The bucket then refills at the configured rate."
+
+quiz:
+  - q:
+      fr: "Quelle faille OWASP API le rate limiting prévient-il principalement ?"
+      en: "Which OWASP API flaw does rate limiting mainly prevent?"
+    options:
+      fr: ["Unrestricted Resource Consumption (API4)", "Broken Object Level Authorization (API1)", "SSRF (API7)", "Security Misconfiguration (API8)"]
+      en: ["Unrestricted Resource Consumption (API4)", "Broken Object Level Authorization (API1)", "SSRF (API7)", "Security Misconfiguration (API8)"]
+    answer: 0
+    why:
+      fr: "Le rate limiting borne la consommation de ressources (force brute, DoS, explosion de coûts), ce qui correspond à la faille API4 de l'OWASP."
+      en: "Rate limiting bounds resource consumption (brute force, DoS, cost blow-up), which maps to OWASP's API4 flaw."
+  - q:
+      fr: "Quel est le défaut de l'algorithme de fenêtre fixe ?"
+      en: "What is the flaw of the fixed-window algorithm?"
+    options:
+      fr: ["Il consomme trop de mémoire", "Il autorise un pic double à la jonction de deux fenêtres", "Il bloque tout le trafic", "Il ne compte pas les requêtes"]
+      en: ["It uses too much memory", "It allows a double spike at the junction of two windows", "It blocks all traffic", "It does not count requests"]
+    answer: 1
+    why:
+      fr: "Avec une fenêtre fixe, un client peut envoyer la limite en fin de fenêtre puis à nouveau au début de la suivante, concentrant le double du débit sur un court instant."
+      en: "With a fixed window, a client can send the limit at the end of one window then again at the start of the next, concentrating double the rate in a short moment."
+  - q:
+      fr: "Quel avantage distinctif offre le token bucket ?"
+      en: "What distinctive advantage does the token bucket offer?"
+    options:
+      fr: ["Il interdit toute rafale", "Il autorise des rafales contrôlées tout en bornant le débit moyen", "Il n'a aucun paramètre", "Il chiffre les requêtes"]
+      en: ["It forbids any burst", "It allows controlled bursts while bounding the average rate", "It has no parameters", "It encrypts requests"]
+    answer: 1
+    why:
+      fr: "Le token bucket tolère une rafale jusqu'à la taille du seau, tout en garantissant un débit moyen égal à la vitesse de remplissage : souple et prévisible."
+      en: "The token bucket tolerates a burst up to the bucket size while guaranteeing an average rate equal to the refill speed: flexible and predictable."
+  - q:
+      fr: "Pourquoi stocker les compteurs dans Redis quand le service a plusieurs instances ?"
+      en: "Why store the counters in Redis when the service has several instances?"
+    options:
+      fr: ["Pour chiffrer les requêtes", "Pour que la limite soit partagée et non multipliée par instance", "Pour accélérer l'API", "Pour réduire les logs"]
+      en: ["To encrypt requests", "So the limit is shared and not multiplied per instance", "To speed up the API", "To reduce logs"]
+    answer: 1
+    why:
+      fr: "Sans store partagé, chaque instance applique la limite de son côté, et le débit total autorisé est multiplié par le nombre d'instances ; Redis centralise le compteur."
+      en: "Without a shared store, each instance applies the limit on its own, and the total allowed rate is multiplied by the instance count; Redis centralises the counter."
+  - q:
+      fr: "Quel code HTTP et quel en-tête renvoyer lorsqu'une limite est atteinte ?"
+      en: "Which HTTP code and header should you return when a limit is reached?"
+    options:
+      fr: ["500 avec Content-Type", "403 avec Set-Cookie", "200 avec Cache-Control", "429 avec Retry-After"]
+      en: ["500 with Content-Type", "403 with Set-Cookie", "200 with Cache-Control", "429 with Retry-After"]
+    answer: 3
+    why:
+      fr: "`429 Too Many Requests` signale une limite dépassée, et `Retry-After` indique au client honnête quand réessayer, ce qui évite qu'il insiste inutilement."
+      en: "`429 Too Many Requests` signals an exceeded limit, and `Retry-After` tells an honest client when to retry, avoiding needless hammering."
