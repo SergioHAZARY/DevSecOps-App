@@ -1,0 +1,373 @@
+description:
+  fr: "Chiffrer des données en pratique avec AES-256-GCM (nonce aléatoire et données additionnelles) et Fernet, et éviter les pièges du mode ECB, de l'IV statique et des clés en dur."
+  en: "Encrypt data in practice with AES-256-GCM (random nonce and additional data) and Fernet, and avoid the ECB mode, static IV and hard-coded key pitfalls."
+duration: 25
+
+intro:
+  fr: |
+    **AES** (*Advanced Encryption Standard*) est l'algorithme de chiffrement symétrique le plus utilisé au monde :
+    même clé pour chiffrer et déchiffrer. Mais utiliser AES correctement ne se résume pas à « appeler AES ». Le
+    **mode d'opération** (comment on enchaîne les blocs) et la gestion du **nonce/IV** (une valeur unique par
+    chiffrement) font toute la différence entre un chiffrement solide et un chiffrement qui *a l'air* chiffré mais
+    fuit l'information.
+
+    L'analogie : AES est un bon cadenas, mais la façon de s'en servir compte autant que le cadenas lui-même.
+    Chiffrer chaque bloc séparément avec la même clé (mode **ECB**), c'est comme tamponner le même motif sur
+    chaque page : les pages identiques se repèrent instantanément. Un IV réutilisé, c'est comme utiliser la même
+    combinaison partout : une fois devinée, tout tombe.
+
+    Dans cette leçon, vous allez voir **ce qu'il ne faut pas faire** (mode ECB, IV statique, clé codée en dur),
+    puis chiffrer correctement avec **AES-256-GCM** (nonce aléatoire + données additionnelles authentifiées) et
+    avec **Fernet**, deux outils de la bibliothèque `cryptography` de Python qui fournissent à la fois la
+    **confidentialité** et l'**intégrité**.
+  en: |
+    **AES** (*Advanced Encryption Standard*) is the world's most widely used symmetric encryption algorithm: the
+    same key encrypts and decrypts. But using AES correctly is not just "calling AES". The **mode of operation**
+    (how you chain the blocks) and the **nonce/IV** handling (a unique value per encryption) make all the
+    difference between solid encryption and encryption that *looks* encrypted but leaks information.
+
+    The analogy: AES is a good padlock, but how you use it matters as much as the padlock itself. Encrypting each
+    block separately with the same key (**ECB** mode) is like stamping the same pattern on every page: identical
+    pages stand out instantly. A reused IV is like using the same combination everywhere: once guessed,
+    everything falls.
+
+    In this lesson you will see **what not to do** (ECB mode, static IV, hard-coded key), then encrypt correctly
+    with **AES-256-GCM** (random nonce + authenticated additional data) and with **Fernet**, two tools from
+    Python's `cryptography` library that provide both **confidentiality** and **integrity**.
+
+sections:
+  - heading:
+      fr: "Modes d'opération et nonce"
+      en: "Modes of operation and the nonce"
+    body:
+      fr: |
+        AES chiffre des blocs de 16 octets. Le **mode d'opération** décide comment enchaîner ces blocs sur un
+        message plus long :
+
+        | Mode | Sécurité | Remarque |
+        |---|---|---|
+        | **ECB** | ❌ À proscrire | Blocs identiques → chiffré identique : fuite de motifs |
+        | **CBC** | ⚠️ Correct avec IV aléatoire | Mais pas d'authentification intégrée |
+        | **GCM** | ✅ Recommandé | Chiffre **et** authentifie (AEAD) |
+
+        Le **nonce** (ou **IV**, *Initialization Vector*) est une valeur **unique** utilisée à chaque chiffrement
+        pour que deux messages identiques produisent des chiffrés différents. Deux règles d'or : le nonce doit être
+        **aléatoire** (ou au moins jamais réutilisé avec la même clé) et il n'est **pas secret** (on le stocke à
+        côté du chiffré).
+
+        Le mode **GCM** est un *AEAD* (*Authenticated Encryption with Associated Data*) : il fournit la
+        confidentialité **et** garantit que le message n'a pas été altéré. On peut même y lier des **données
+        additionnelles** (AAD) authentifiées mais non chiffrées (ex. un en-tête, un identifiant) : si elles sont
+        modifiées, le déchiffrement échoue.
+      en: |
+        AES encrypts 16-byte blocks. The **mode of operation** decides how to chain these blocks over a longer
+        message:
+
+        | Mode | Security | Note |
+        |---|---|---|
+        | **ECB** | ❌ Forbidden | Identical blocks → identical ciphertext: pattern leak |
+        | **CBC** | ⚠️ OK with a random IV | But no built-in authentication |
+        | **GCM** | ✅ Recommended | Encrypts **and** authenticates (AEAD) |
+
+        The **nonce** (or **IV**, *Initialization Vector*) is a **unique** value used on each encryption so that
+        two identical messages produce different ciphertexts. Two golden rules: the nonce must be **random** (or
+        at least never reused with the same key) and it is **not secret** (you store it next to the ciphertext).
+
+        The **GCM** mode is an *AEAD* (*Authenticated Encryption with Associated Data*): it provides
+        confidentiality **and** guarantees the message was not altered. You can even bind **additional data**
+        (AAD) that is authenticated but not encrypted (e.g. a header, an ID): if it is modified, decryption fails.
+  - heading:
+      fr: "Les trois pièges mortels"
+      en: "The three deadly pitfalls"
+    body:
+      fr: |
+        Trois erreurs reviennent sans cesse et transforment un chiffrement en passoire :
+
+        1. **Le mode ECB.** Chaque bloc est chiffré indépendamment avec la même clé : deux blocs de texte clair
+           identiques donnent deux blocs chiffrés identiques. Sur une image, les contours restent visibles. Sur
+           des données structurées, les motifs fuient. **ECB ne doit jamais être utilisé.**
+
+        2. **L'IV/nonce statique ou réutilisé.** Si le même nonce sert pour deux messages avec la même clé, on
+           peut recouper l'information, et en GCM c'est catastrophique (la clé d'authentification peut être
+           retrouvée). Le nonce doit être **unique** à chaque chiffrement.
+
+        3. **La clé codée en dur** dans le code source. Une clé dans le dépôt Git, c'est une clé publique : elle
+           reste dans l'historique pour toujours. La clé vient d'un **coffre** (Vault, KMS) ou d'une variable
+           d'environnement injectée, jamais du code.
+
+        Les outils de haut niveau (`AESGCM`, `Fernet`) évitent la plupart de ces pièges : utilisez-les plutôt que
+        de câbler AES à la main.
+      en: |
+        Three mistakes recur endlessly and turn encryption into a sieve:
+
+        1. **ECB mode.** Each block is encrypted independently with the same key: two identical plaintext blocks
+           give two identical ciphertext blocks. On an image, the outlines remain visible. On structured data,
+           patterns leak. **ECB must never be used.**
+
+        2. **A static or reused IV/nonce.** If the same nonce is used for two messages with the same key, you can
+           cross-reference information, and in GCM it is catastrophic (the authentication key can be recovered).
+           The nonce must be **unique** on each encryption.
+
+        3. **A hard-coded key** in the source code. A key in the Git repo is a public key: it stays in the history
+           forever. The key comes from a **vault** (Vault, KMS) or an injected environment variable, never from
+           the code.
+
+        High-level tools (`AESGCM`, `Fernet`) avoid most of these pitfalls: use them rather than wiring AES by
+        hand.
+
+examples:
+  - title:
+      fr: "Vulnérable : ECB, IV statique, clé en dur"
+      en: "Vulnerable: ECB, static IV, hard-coded key"
+    file: crypto_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - three deadly mistakes in one snippet.
+      from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+      # Mistake 3: the key is hard-coded -> ends up in Git forever.
+      KEY = b"0123456789abcdef0123456789abcdef"  # 32 bytes, but public now
+
+
+      def encrypt(plaintext: bytes) -> bytes:
+          # Mistake 1: ECB mode -> identical plaintext blocks give identical
+          # ciphertext blocks, leaking the structure of the data.
+          cipher = Cipher(algorithms.AES(KEY), modes.ECB())
+          enc = cipher.encryptor()
+          # (padding omitted for brevity)
+          return enc.update(plaintext) + enc.finalize()
+
+
+      # Two identical 16-byte blocks -> two identical ciphertext blocks:
+      block = b"SECRET__SECRET__"
+      out = encrypt(block + block)
+      print("First block :", out[:16].hex())
+      print("Second block:", out[16:32].hex(), "(identical -> ECB leak)")
+    output: |
+      First block : 8f2b1c...
+      Second block: 8f2b1c... (identical -> ECB leak)
+      # Same ciphertext for same plaintext = the famous "ECB penguin" leak.
+    note:
+      fr: "Trois fautes : mode **ECB** (deux blocs identiques donnent deux chiffrés identiques, la structure fuit), pas de nonce, et clé **codée en dur** dans le code. C'est l'exemple canonique de chiffrement qui *a l'air* sûr mais ne l'est pas."
+      en: "Three faults: **ECB** mode (two identical blocks give two identical ciphertexts, the structure leaks), no nonce, and a **hard-coded** key in the code. This is the canonical example of encryption that *looks* safe but is not."
+
+  - title:
+      fr: "Sécurisé : AES-256-GCM (nonce aléatoire + AAD)"
+      en: "Secure: AES-256-GCM (random nonce + AAD)"
+    file: crypto_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+      from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+      # The key comes from the environment / a vault, NEVER from the code.
+      # (Here we generate one for the demo; in prod: AWS KMS, Vault, etc.)
+      KEY = AESGCM.generate_key(bit_length=256)   # AES-256
+
+
+      def encrypt(plaintext: bytes, header: bytes) -> tuple[bytes, bytes]:
+          aesgcm = AESGCM(KEY)
+          # A FRESH random 12-byte nonce for EVERY encryption.
+          nonce = os.urandom(12)
+          # `header` is Additional Authenticated Data: not encrypted, but
+          # tamper-protected (decryption fails if it changes).
+          ciphertext = aesgcm.encrypt(nonce, plaintext, header)
+          return nonce, ciphertext          # store the nonce alongside
+
+
+      def decrypt(nonce: bytes, ciphertext: bytes, header: bytes) -> bytes:
+          return AESGCM(KEY).decrypt(nonce, ciphertext, header)
+
+
+      header = b"invoice-1023"
+      nonce, ct = encrypt(b"amount=42.00", header)
+      print("Plaintext back:", decrypt(nonce, ct, header).decode())
+
+      # Encrypting the SAME message again gives a DIFFERENT ciphertext,
+      # because the nonce is new each time:
+      nonce2, ct2 = encrypt(b"amount=42.00", header)
+      print("Same msg, different ciphertext:", ct.hex() != ct2.hex())
+    output: |
+      Plaintext back: amount=42.00
+      Same msg, different ciphertext: True
+    note:
+      fr: "`AESGCM` fournit confidentialité **et** intégrité. Un **nonce aléatoire** de 12 octets est généré à chaque chiffrement, donc le même message donne des chiffrés différents. L'en-tête passé en AAD est authentifié : le modifier fait échouer le déchiffrement. La clé vient d'un coffre, pas du code."
+      en: "`AESGCM` provides confidentiality **and** integrity. A fresh 12-byte **random nonce** is generated per encryption, so the same message yields different ciphertexts. The header passed as AAD is authenticated: changing it makes decryption fail. The key comes from a vault, not the code."
+
+  - title:
+      fr: "Sécurisé : Fernet (chiffrement clé en main)"
+      en: "Secure: Fernet (turnkey encryption)"
+    file: fernet_example.py
+    lang: python
+    kind: secure
+    code: |
+      from cryptography.fernet import Fernet, InvalidToken
+
+      # Fernet = AES-128-CBC + HMAC-SHA256 under the hood, with the nonce
+      # and authentication handled for you. The key is base64, 32 bytes.
+      # Generate once, store in a vault:  Fernet.generate_key()
+      KEY = b"zbQ8X3n5J2kL9pQ7rS1tU4vW6xY0aB3cD5eF7gH9iJ="   # demo key
+      f = Fernet(KEY)
+
+
+      def encrypt(message: bytes) -> bytes:
+          # A token bundles ciphertext + timestamp + HMAC. Nonce handled.
+          return f.encrypt(message)
+
+
+      def decrypt(token: bytes) -> bytes:
+          # Raises InvalidToken if the data was tampered with or the key is wrong.
+          return f.decrypt(token)
+
+
+      token = encrypt(b"api_key=changeme-in-vault")
+      print("Token:", token[:24], b"...")
+      print("Decrypted:", decrypt(token).decode())
+
+      # Tampering is detected (integrity):
+      try:
+          decrypt(token[:-1] + b"X")
+      except InvalidToken:
+          print("Tampering detected: InvalidToken")
+    output: |
+      Token: b'gAAAAABl...' b'...'
+      Decrypted: api_key=changeme-in-vault
+      Tampering detected: InvalidToken
+    note:
+      fr: "`Fernet` est le choix le plus simple quand on n'a pas de besoin précis : il combine chiffrement et authentification, gère le nonce tout seul, et lève `InvalidToken` si le message a été altéré. Idéal pour éviter les erreurs de bas niveau. La clé se stocke dans un coffre."
+      en: "`Fernet` is the simplest choice when you have no specific requirement: it combines encryption and authentication, handles the nonce itself, and raises `InvalidToken` if the message was tampered with. Ideal for avoiding low-level mistakes. The key is stored in a vault."
+
+mistake:
+  fr: |
+    **Réutiliser un nonce/IV ou choisir le mode ECB.** Le mode **ECB** laisse apparaître les motifs (deux blocs
+    identiques donnent le même chiffré) : il ne cache rien de la structure. Réutiliser un **nonce** avec la même
+    clé est tout aussi grave, surtout en GCM où cela peut révéler la clé d'authentification. Troisième faute
+    fréquente : **coder la clé en dur** dans le source — elle finit dans Git pour toujours. Enfin, utiliser du
+    chiffrement **sans authentification** (AES-CBC seul) laisse un attaquant modifier le chiffré sans être
+    détecté : préférez un mode AEAD (GCM) ou un outil clé en main comme Fernet.
+  en: |
+    **Reusing a nonce/IV or choosing ECB mode.** **ECB** mode leaks patterns (two identical blocks give the same
+    ciphertext): it hides nothing of the structure. Reusing a **nonce** with the same key is just as serious,
+    especially in GCM where it can reveal the authentication key. A third common fault: **hard-coding the key** in
+    the source — it ends up in Git forever. Finally, using encryption **without authentication** (AES-CBC alone)
+    lets an attacker modify the ciphertext undetected: prefer an AEAD mode (GCM) or a turnkey tool like Fernet.
+
+bestPractice:
+  fr: |
+    - **Utilisez un mode AEAD** (AES-256-GCM) ou un outil clé en main (Fernet) : confidentialité **et** intégrité.
+    - **Générez un nonce aléatoire unique** à chaque chiffrement ; stockez-le à côté du chiffré (il n'est pas secret).
+    - **Ne jamais utiliser le mode ECB** ni réutiliser un IV/nonce avec la même clé.
+    - **La clé vient d'un coffre** (Vault, KMS) ou d'une variable d'environnement, jamais du code source.
+    - **Liez des données additionnelles (AAD)** quand un contexte (en-tête, ID) doit être authentifié avec le message.
+  en: |
+    - **Use an AEAD mode** (AES-256-GCM) or a turnkey tool (Fernet): confidentiality **and** integrity.
+    - **Generate a unique random nonce** on each encryption; store it next to the ciphertext (it is not secret).
+    - **Never use ECB mode** or reuse an IV/nonce with the same key.
+    - **The key comes from a vault** (Vault, KMS) or an environment variable, never from the source code.
+    - **Bind additional data (AAD)** when a context (header, ID) must be authenticated along with the message.
+
+exercise:
+  statement:
+    fr: |
+      Un développeur chiffre des données ainsi :
+
+      ```python
+      cipher = Cipher(algorithms.AES(KEY), modes.ECB())
+      ```
+      avec `KEY` écrit en dur dans le fichier.
+
+      1. Citez **deux** problèmes de sécurité.
+      2. Réécrivez le chiffrement avec **AES-256-GCM** et un **nonce aléatoire** (la clé étant lue depuis
+         l'environnement).
+    en: |
+      A developer encrypts data like this:
+
+      ```python
+      cipher = Cipher(algorithms.AES(KEY), modes.ECB())
+      ```
+      with `KEY` hard-coded in the file.
+
+      1. Name **two** security problems.
+      2. Rewrite the encryption with **AES-256-GCM** and a **random nonce** (the key read from the environment).
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import os
+      import base64
+      from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+      # Problems:
+      #  1. ECB mode leaks patterns (identical blocks -> identical ciphertext).
+      #  2. The key is hard-coded -> it leaks into Git history permanently.
+
+      # Fix: key from the environment, AES-256-GCM, fresh random nonce.
+      KEY = base64.b64decode(os.environ["AES_KEY_B64"])   # 32 bytes = AES-256
+
+
+      def encrypt(plaintext: bytes) -> tuple[bytes, bytes]:
+          aesgcm = AESGCM(KEY)
+          nonce = os.urandom(12)                 # unique per encryption
+          ct = aesgcm.encrypt(nonce, plaintext, None)
+          return nonce, ct
+
+
+      def decrypt(nonce: bytes, ct: bytes) -> bytes:
+          return AESGCM(KEY).decrypt(nonce, ct, None)
+    note:
+      fr: "Problème 1 : ECB fuit les motifs. Problème 2 : clé en dur. La correction utilise AES-256-GCM (authentifié), un nonce aléatoire par message, et lit la clé depuis l'environnement — jamais depuis le code."
+      en: "Problem 1: ECB leaks patterns. Problem 2: hard-coded key. The fix uses AES-256-GCM (authenticated), a random nonce per message, and reads the key from the environment — never from the code."
+
+quiz:
+  - q:
+      fr: "Pourquoi le mode ECB est-il dangereux ?"
+      en: "Why is ECB mode dangerous?"
+    options:
+      fr: ["Il est trop lent", "Des blocs de texte clair identiques donnent des blocs chiffrés identiques (fuite de motifs)", "Il nécessite deux clés", "Il ne fonctionne qu'avec SHA-256"]
+      en: ["It is too slow", "Identical plaintext blocks give identical ciphertext blocks (pattern leak)", "It needs two keys", "It only works with SHA-256"]
+    answer: 1
+    why:
+      fr: "En ECB, chaque bloc est chiffré indépendamment avec la même clé : la structure du texte clair transparaît dans le chiffré, ce qui est une fuite d'information majeure."
+      en: "In ECB, each block is encrypted independently with the same key: the plaintext structure shows through in the ciphertext, a major information leak."
+  - q:
+      fr: "Quelle règle s'applique au nonce (IV) en AES-GCM ?"
+      en: "What rule applies to the nonce (IV) in AES-GCM?"
+    options:
+      fr: ["Il doit être unique à chaque chiffrement et n'est pas secret", "Il doit être identique à chaque fois", "Il doit rester secret comme la clé", "Il n'est pas nécessaire"]
+      en: ["It must be unique on each encryption and is not secret", "It must be identical every time", "It must stay secret like the key", "It is not needed"]
+    answer: 0
+    why:
+      fr: "Le nonce doit être unique pour chaque chiffrement (jamais réutilisé avec la même clé) mais n'est pas secret : on le stocke à côté du chiffré."
+      en: "The nonce must be unique for each encryption (never reused with the same key) but is not secret: it is stored next to the ciphertext."
+  - q:
+      fr: "Qu'apporte le mode GCM par rapport à CBC ?"
+      en: "What does GCM add compared to CBC?"
+    options:
+      fr: ["Il est plus simple à retenir", "Il chiffre ET authentifie (AEAD), détectant toute altération", "Il n'a pas besoin de clé", "Il compresse les données"]
+      en: ["It is easier to remember", "It encrypts AND authenticates (AEAD), detecting any tampering", "It needs no key", "It compresses data"]
+    answer: 1
+    why:
+      fr: "GCM est un mode AEAD : il assure la confidentialité et garantit l'intégrité ; toute modification du chiffré (ou de l'AAD) fait échouer le déchiffrement."
+      en: "GCM is an AEAD mode: it ensures confidentiality and guarantees integrity; any change to the ciphertext (or the AAD) makes decryption fail."
+  - q:
+      fr: "Où doit venir la clé de chiffrement ?"
+      en: "Where should the encryption key come from?"
+    options:
+      fr: ["Codée en dur dans le source", "D'un commentaire", "D'un coffre (Vault, KMS) ou d'une variable d'environnement", "De l'URL de la requête"]
+      en: ["Hard-coded in the source", "From a comment", "From a vault (Vault, KMS) or an environment variable", "From the request URL"]
+    answer: 2
+    why:
+      fr: "Une clé codée en dur finit dans Git pour toujours ; la clé doit provenir d'un coffre ou d'une variable d'environnement injectée, hors du code versionné."
+      en: "A hard-coded key ends up in Git forever; the key must come from a vault or an injected environment variable, outside the versioned code."
+  - q:
+      fr: "Pour quel besoin Fernet est-il un bon choix ?"
+      en: "For what need is Fernet a good choice?"
+    options:
+      fr: ["Hacher des mots de passe", "Un chiffrement symétrique simple avec intégrité, sans gérer soi-même le nonce", "Signer un certificat TLS", "Générer des clés SSH"]
+      en: ["Hashing passwords", "Simple symmetric encryption with integrity, without handling the nonce yourself", "Signing a TLS certificate", "Generating SSH keys"]
+    answer: 1
+    why:
+      fr: "Fernet combine chiffrement et authentification et gère le nonce automatiquement ; c'est le choix sûr et simple pour chiffrer une donnée sans câbler AES à la main."
+      en: "Fernet combines encryption and authentication and handles the nonce automatically; it is the safe, simple choice to encrypt data without wiring AES by hand."

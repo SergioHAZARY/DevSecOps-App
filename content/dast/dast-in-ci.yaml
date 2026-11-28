@@ -1,0 +1,532 @@
+description:
+  fr: "Intégrer le DAST au pipeline : démarrer un environnement éphémère avec Docker Compose, lancer ZAP en CI avec un seuil qui bloque, produire HTML/SARIF/JSON et planifier un scan complet nocturne."
+  en: "Integrate DAST into the pipeline: spin up an ephemeral environment with Docker Compose, run ZAP in CI with a blocking threshold, produce HTML/SARIF/JSON and schedule a nightly full scan."
+duration: 30
+
+intro:
+  fr: |
+    Le DAST teste une application **en fonctionnement**. Pour l'intégrer à un pipeline, il faut donc une
+    application qui tourne — et c'est tout le défi : un scanner n'a rien à tester s'il n'y a pas de serveur
+    à l'autre bout. La solution moderne est l'**environnement éphémère** : on démarre l'application le temps
+    du scan, puis on la détruit.
+
+    L'analogie : pour tester les freins d'une voiture, il faut la faire rouler, pas la lire sur plan. Mais
+    on ne teste pas les freins sur l'autoroute avec des passagers : on utilise une piste d'essai, créée pour
+    l'occasion et vidée après. L'environnement éphémère est cette piste d'essai, montée en quelques secondes
+    par `docker compose` et supprimée à la fin du job.
+
+    Dans cette leçon vous allez démarrer une application vulnérable avec Compose, lancer un **scan baseline
+    ZAP** en CI avec un seuil qui fait échouer le build, produire des rapports **HTML, SARIF et JSON**, les
+    téléverser comme artefacts, et programmer un **scan complet** planifié toutes les nuits — plus lent, donc
+    hors du chemin critique des pull requests.
+  en: |
+    DAST tests a **running** application. To integrate it into a pipeline you therefore need a running
+    application — and that is the whole challenge: a scanner has nothing to test if there is no server at the
+    other end. The modern solution is the **ephemeral environment**: you start the application for the
+    duration of the scan, then tear it down.
+
+    The analogy: to test a car's brakes you have to drive it, not read a blueprint. But you do not test the
+    brakes on the motorway with passengers: you use a test track, created for the occasion and emptied
+    afterwards. The ephemeral environment is that test track, spun up in seconds by `docker compose` and
+    removed at the end of the job.
+
+    In this lesson you will start a vulnerable application with Compose, run a **ZAP baseline scan** in CI
+    with a threshold that fails the build, produce **HTML, SARIF and JSON** reports, upload them as
+    artifacts, and schedule a **full scan** every night — slower, hence off the critical path of pull
+    requests.
+
+sections:
+  - heading:
+      fr: "L'environnement éphémère"
+      en: "The ephemeral environment"
+    body:
+      fr: |
+        Un pipeline DAST suit toujours la même chorégraphie :
+
+        1. **Construire** l'image de l'application (ou la récupérer).
+        2. **Démarrer** l'application et ses dépendances (base de données, cache) avec `docker compose up -d`.
+        3. **Attendre** qu'elle soit prête : un scan lancé trop tôt teste un serveur qui répond encore des
+           erreurs. On attend un *health check* (`curl` en boucle sur `/health` jusqu'à un `200`).
+        4. **Scanner** avec ZAP.
+        5. **Détruire** l'environnement (`docker compose down`) et **archiver** les rapports, toujours.
+
+        L'intérêt de l'éphémère est triple : l'environnement est **propre** à chaque run (pas d'état résiduel
+        d'un test précédent), **isolé** (on scanne sans toucher la production), et **reproductible** (le même
+        `compose.yml` donne le même environnement partout). Le point le plus souvent oublié est l'attente de
+        disponibilité : sans elle, le scan échoue de façon aléatoire selon la vitesse de démarrage.
+      en: |
+        A DAST pipeline always follows the same choreography:
+
+        1. **Build** the application image (or pull it).
+        2. **Start** the application and its dependencies (database, cache) with `docker compose up -d`.
+        3. **Wait** for it to be ready: a scan launched too early tests a server that still returns errors.
+           You wait for a *health check* (a `curl` loop on `/health` until a `200`).
+        4. **Scan** with ZAP.
+        5. **Tear down** the environment (`docker compose down`) and **archive** the reports, always.
+
+        The ephemeral approach has three benefits: the environment is **clean** on every run (no leftover
+        state from a previous test), **isolated** (you scan without touching production), and **reproducible**
+        (the same `compose.yml` gives the same environment everywhere). The most often forgotten point is
+        waiting for readiness: without it, the scan fails randomly depending on startup speed.
+  - heading:
+      fr: "ZAP en CI et les seuils"
+      en: "ZAP in CI and thresholds"
+    body:
+      fr: |
+        L'intégration la plus simple est l'action GitHub officielle `zaproxy/action-baseline`, qui
+        enveloppe le script `zap-baseline.py` vu dans une leçon précédente. Elle démarre ZAP, explore la
+        cible, lance le scan passif et publie un rapport.
+
+        | Entrée | Rôle |
+        |---|---|
+        | `target` | URL de l'application démarrée |
+        | `rules_file_name` | Fichier `.tsv` IGNORE/WARN/FAIL (le seuil) |
+        | `cmd_options` | Options passées à ZAP (`-j` pour le spider AJAX) |
+        | `fail_action` | Fait échouer le job quand une règle `FAIL` est déclenchée |
+        | `allow_issue_writing` | Crée/maj une issue GitHub (désactivable) |
+
+        Le **seuil** vit dans le fichier de règles : on met en `FAIL` les quelques alertes que l'équipe
+        s'engage à corriger (absence de CSP, cookie sans `HttpOnly`…) et on garde le reste en `WARN`. Le
+        principe est identique à ZAP en ligne de commande : code de retour `1` sur un `FAIL`, `2` sur des
+        `WARN`. On commence avec peu de `FAIL`, puis on durcit. Hors GitHub, on reproduit la même logique en
+        appelant directement l'image Docker `ghcr.io/zaproxy/zaproxy:stable` et en lisant son code de retour.
+      en: |
+        The simplest integration is the official GitHub action `zaproxy/action-baseline`, which wraps the
+        `zap-baseline.py` script seen in an earlier lesson. It starts ZAP, spiders the target, runs the
+        passive scan and publishes a report.
+
+        | Input | Role |
+        |---|---|
+        | `target` | URL of the started application |
+        | `rules_file_name` | The IGNORE/WARN/FAIL `.tsv` file (the threshold) |
+        | `cmd_options` | Options passed to ZAP (`-j` for the AJAX spider) |
+        | `fail_action` | Fails the job when a `FAIL` rule is triggered |
+        | `allow_issue_writing` | Creates/updates a GitHub issue (can be disabled) |
+
+        The **threshold** lives in the rules file: you set to `FAIL` the few alerts the team commits to fix
+        (missing CSP, cookie without `HttpOnly`…) and keep the rest as `WARN`. The principle is identical to
+        ZAP on the command line: exit code `1` on a `FAIL`, `2` on `WARN`s. Start with few `FAIL`s, then
+        tighten. Outside GitHub, you reproduce the same logic by calling the Docker image
+        `ghcr.io/zaproxy/zaproxy:stable` directly and reading its exit code.
+  - heading:
+      fr: "Rapports et scan complet nocturne"
+      en: "Reports and the nightly full scan"
+    body:
+      fr: |
+        Un scan DAST doit produire des **rapports** exploitables et les conserver. ZAP génère plusieurs
+        formats à la fois : **HTML** (lisible par un humain), **SARIF** (pour le *code scanning* de GitHub et
+        les agrégateurs), **JSON** et **XML** (pour un traitement automatique). On les téléverse comme
+        artefacts du build avec `actions/upload-artifact`, et on importe le SARIF dans l'onglet *Security*
+        pour un suivi dans le temps.
+
+        Mais un scan **complet** (actif), qui envoie de vraies charges d'attaque, prend facilement 30 minutes
+        à plusieurs heures : trop long pour chaque pull request. La stratégie classique sépare donc deux
+        niveaux :
+
+        | | Scan baseline | Scan complet (actif) |
+        |---|---|---|
+        | Déclencheur | Chaque pull request | Planifié la nuit (`schedule`) |
+        | Durée | 1-3 minutes | 30 min à plusieurs heures |
+        | Nature | Passif (navigation) | Actif (charges d'attaque) |
+        | Rôle | Retour rapide | Couverture profonde |
+
+        Le scan baseline garde le feedback rapide sur les pull requests ; le scan complet planifié (`cron`)
+        tourne la nuit sur l'environnement de test et remonte les failles plus profondes sans ralentir les
+        développeurs.
+      en: |
+        A DAST scan must produce usable **reports** and keep them. ZAP generates several formats at once:
+        **HTML** (human-readable), **SARIF** (for GitHub *code scanning* and aggregators), **JSON** and
+        **XML** (for automated processing). You upload them as build artifacts with `actions/upload-artifact`,
+        and import the SARIF into the *Security* tab for tracking over time.
+
+        But a **full** (active) scan, which sends real attack payloads, easily takes 30 minutes to several
+        hours: too long for every pull request. The classic strategy therefore separates two levels:
+
+        | | Baseline scan | Full (active) scan |
+        |---|---|---|
+        | Trigger | Every pull request | Scheduled at night (`schedule`) |
+        | Duration | 1-3 minutes | 30 min to several hours |
+        | Nature | Passive (browsing) | Active (attack payloads) |
+        | Role | Fast feedback | Deep coverage |
+
+        The baseline scan keeps fast feedback on pull requests; the scheduled full scan (`cron`) runs at night
+        against the test environment and surfaces deeper flaws without slowing developers down.
+
+examples:
+  - title:
+      fr: "L'environnement éphémère avec Docker Compose"
+      en: "The ephemeral environment with Docker Compose"
+    file: compose.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      services:
+        app:
+          build: .
+          ports:
+            - "8080:8080"
+          environment:
+            DATABASE_URL: "postgres://app:changeme-in-vault@db:5432/app"
+          depends_on:
+            db:
+              condition: service_healthy   # wait for the DB before starting the app
+
+        db:
+          image: postgres:16
+          environment:
+            POSTGRES_USER: app
+            POSTGRES_PASSWORD: changeme-in-vault
+            POSTGRES_DB: app
+          healthcheck:
+            # The app only starts once this returns success
+            test: ["CMD-SHELL", "pg_isready -U app"]
+            interval: 3s
+            retries: 10
+    output: |
+      $ docker compose up -d --build
+      [+] Running 3/3
+       Network ci_default   Created
+       Container ci-db-1     Healthy
+       Container ci-app-1    Started
+      # Wait for the app itself before scanning:
+      $ until curl -sf http://localhost:8080/health; do sleep 2; done
+      {"status":"ok"}
+    note:
+      fr: "Le `depends_on: condition: service_healthy` et le `healthcheck` garantissent que la base est prête avant l'application. La boucle `until curl` attend ensuite que l'application réponde `200` sur `/health` : c'est l'étape anti-flakiness indispensable avant tout scan."
+      en: "The `depends_on: condition: service_healthy` and the `healthcheck` guarantee the database is ready before the app. The `until curl` loop then waits for the app to answer `200` on `/health`: this is the anti-flakiness step that is indispensable before any scan."
+
+  - title:
+      fr: "Le scan baseline ZAP en GitHub Actions"
+      en: "The ZAP baseline scan in GitHub Actions"
+    file: .github/workflows/dast.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: dast-baseline
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        baseline:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            # 1. Spin up the ephemeral app and wait until it is ready
+            - name: Start app
+              run: |
+                docker compose up -d --build
+                until curl -sf http://localhost:8080/health; do sleep 2; done
+
+            # 2. ZAP baseline scan; the .tsv rules file holds the FAIL threshold
+            - name: ZAP baseline
+              uses: zaproxy/action-baseline@v0.12.0
+              with:
+                target: "http://localhost:8080"
+                rules_file_name: ".zap/rules.tsv"
+                cmd_options: "-j -I"          # AJAX spider; -I = warnings alone do not fail
+                fail_action: true             # a FAIL rule fails the job
+                allow_issue_writing: false
+
+            # 3. Keep the reports even if the scan failed
+            - name: Upload reports
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                name: zap-reports
+                path: |
+                  report_html.html
+                  report_json.json
+
+            # 4. Always tear down the ephemeral environment
+            - name: Tear down
+              if: always()
+              run: docker compose down -v
+    output: |
+      Total of 42 URLs
+      WARN-NEW: Cross-Domain Misconfiguration [10098] x 3
+      FAIL-NEW: Content Security Policy (CSP) Header Not Set [10038] x 5
+      FAIL-NEW: 1  WARN-NEW: 1  IGNORE: 2  PASS: 51
+      Error: Process completed with exit code 1.
+      Uploading artifact zap-reports (2 files)
+    note:
+      fr: "Le job suit la chorégraphie complète : démarrer, attendre, scanner, archiver, détruire. Les deux `if: always()` garantissent que les rapports sont téléversés et l'environnement nettoyé **même quand le scan échoue**. Le `FAIL` sur la CSP fait échouer la pull request ; les `WARN` restent visibles."
+      en: "The job follows the full choreography: start, wait, scan, archive, tear down. The two `if: always()` guarantee the reports are uploaded and the environment cleaned up **even when the scan fails**. The `FAIL` on the CSP fails the pull request; the `WARN`s stay visible."
+
+  - title:
+      fr: "Le scan complet planifié la nuit"
+      en: "The scheduled nightly full scan"
+    file: .github/workflows/dast-nightly.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: dast-full-nightly
+      on:
+        schedule:
+          - cron: "0 2 * * *"   # every day at 02:00 UTC, off the PR critical path
+        workflow_dispatch: {}   # allow a manual run too
+
+      permissions:
+        contents: read
+        security-events: write  # to publish the SARIF to code scanning
+
+      jobs:
+        full-scan:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Start app
+              run: |
+                docker compose up -d --build
+                until curl -sf http://localhost:8080/health; do sleep 2; done
+
+            # Full (active) scan: sends real attack payloads, so it is slow -> nightly only
+            - name: ZAP full scan
+              uses: zaproxy/action-full-scan@v0.12.0
+              with:
+                target: "http://localhost:8080"
+                rules_file_name: ".zap/rules.tsv"
+                cmd_options: "-j"
+                allow_issue_writing: false
+
+            - name: Upload SARIF to code scanning
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: report_sarif.sarif
+
+            - name: Tear down
+              if: always()
+              run: docker compose down -v
+    output: |
+      ZAP Full Scan (active) in progress...
+      Active Scan: SQL Injection, XSS, Path Traversal, Remote OS Command Injection...
+      WARN-NEW: Absence of Anti-CSRF Tokens [10202] x 2
+      FAIL-NEW: SQL Injection [40018] x 1
+      Scan completed in 47m12s. SARIF uploaded to code scanning.
+    note:
+      fr: "Le scan complet envoie de vraies charges d'attaque (injection SQL, XSS…) : il trouve des failles que le baseline ne peut pas voir, mais il prend 47 minutes. Le déclencheur `cron` le place la nuit, hors du chemin des pull requests. Le SARIF est publié dans *Code scanning* pour le suivi dans le temps."
+      en: "The full scan sends real attack payloads (SQL injection, XSS…): it finds flaws the baseline cannot see, but it takes 47 minutes. The `cron` trigger places it at night, off the pull-request path. The SARIF is published to *Code scanning* for tracking over time."
+
+  - title:
+      fr: "Reproduire la logique hors GitHub (GitLab, Jenkins)"
+      en: "Reproducing the logic outside GitHub (GitLab, Jenkins)"
+    file: dast.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. Ephemeral environment
+      docker compose up -d --build
+      until curl -sf http://localhost:8080/health; do sleep 2; done
+
+      # 2. Baseline scan via the Docker image; -I so warnings alone do not fail,
+      #    -c applies the rules file that holds the FAIL threshold.
+      set +e
+      docker run --rm --network host -v "$(pwd):/zap/wrk" \
+        ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+        -t http://localhost:8080 -c rules.tsv -I \
+        -r report_html.html -J report_json.json
+      ZAP_EXIT=$?   # 0 clean, 1 a FAIL rule triggered, 2 only WARN, 3 scan error
+      set -e
+
+      # 3. Always tear down
+      docker compose down -v
+
+      # 4. Turn the exit code into a build decision
+      echo "ZAP exit code: $ZAP_EXIT"
+      [ "$ZAP_EXIT" -eq 1 ] && { echo "DAST gate failed: a FAIL rule triggered."; exit 1; }
+      exit 0
+    output: |
+      {"status":"ok"}
+      FAIL-NEW: 0  WARN-NEW: 3  IGNORE: 1  PASS: 48
+      ZAP exit code: 2
+      # exit 0 : only warnings, the build passes (and the reports are archived)
+    note:
+      fr: "La même chorégraphie en script portable : démarrer, attendre, scanner, détruire, décider. On capture le code de retour de ZAP (`set +e` autour) pour pouvoir **toujours** nettoyer l'environnement avant de décider du sort du build. Ici le scan ne renvoie que des `WARN` (code 2) : le build passe."
+      en: "The same choreography as a portable script: start, wait, scan, tear down, decide. We capture ZAP's exit code (`set +e` around it) so we can **always** clean up the environment before deciding the build's fate. Here the scan returns only `WARN`s (code 2): the build passes."
+
+mistake:
+  fr: |
+    **Lancer le scan complet (actif) de ZAP à chaque pull request.**
+
+    Le scan actif envoie des milliers de charges d'attaque et peut durer de 30 minutes à plusieurs heures.
+    Le placer sur le chemin critique de chaque pull request ralentit tellement les développeurs qu'ils
+    finissent par désactiver le job ou fusionner sans l'attendre. La bonne séparation : un **baseline**
+    rapide (passif, 1 à 3 minutes) sur chaque pull request pour un retour immédiat, et un **scan complet**
+    planifié la nuit (`cron`) pour la couverture profonde. Oublier de détruire l'environnement éphémère
+    après le scan est l'autre erreur courante : les conteneurs et volumes s'accumulent sur le runner.
+  en: |
+    **Running ZAP's full (active) scan on every pull request.**
+
+    The active scan sends thousands of attack payloads and can last from 30 minutes to several hours. Putting
+    it on the critical path of every pull request slows developers so much that they end up disabling the job
+    or merging without waiting. The right split: a fast **baseline** (passive, 1 to 3 minutes) on every pull
+    request for immediate feedback, and a **full scan** scheduled at night (`cron`) for deep coverage.
+    Forgetting to tear down the ephemeral environment after the scan is the other common mistake: containers
+    and volumes pile up on the runner.
+
+bestPractice:
+  fr: |
+    - **Environnement éphémère** : démarrer, scanner, **détruire** dans le même job.
+    - **Attendez la disponibilité** (health check) avant de scanner, sinon le job est instable.
+    - **Baseline sur chaque PR, scan complet planifié la nuit** (`cron`).
+    - **Un seuil clair** dans le fichier de règles `.tsv` ; peu de `FAIL`, puis on durcit.
+    - **Produisez HTML + SARIF + JSON** et téléversez-les avec `if: always()`.
+    - **Importez le SARIF** dans *Code scanning* pour suivre les tendances.
+    - **Nettoyez toujours** (`docker compose down -v`, `if: always()`).
+  en: |
+    - **Ephemeral environment**: start, scan, **tear down** in the same job.
+    - **Wait for readiness** (health check) before scanning, otherwise the job is flaky.
+    - **Baseline on every PR, full scan scheduled at night** (`cron`).
+    - **A clear threshold** in the `.tsv` rules file; few `FAIL`s, then tighten.
+    - **Produce HTML + SARIF + JSON** and upload them with `if: always()`.
+    - **Import the SARIF** into *Code scanning* to track trends.
+    - **Always clean up** (`docker compose down -v`, `if: always()`).
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe se plaint que le job DAST rend les pull requests « interminables » : il dure 40 minutes.
+      En l'examinant, vous voyez qu'il lance `zaproxy/action-full-scan` à chaque PR. De plus, le job ne
+      nettoie pas l'environnement : des conteneurs restent sur le runner.
+
+      Proposez une réorganisation en répondant à ces points :
+
+      1. Quel type de scan mettre sur les pull requests, et pourquoi ?
+      2. Où et comment faire tourner le scan complet ?
+      3. Comment garantir que l'environnement éphémère est toujours détruit, même si le scan échoue ?
+    en: |
+      Your team complains that the DAST job makes pull requests "endless": it takes 40 minutes. Looking into
+      it, you see it runs `zaproxy/action-full-scan` on every PR. Also, the job does not clean up the
+      environment: containers stay on the runner.
+
+      Propose a reorganisation answering these points:
+
+      1. What type of scan should run on pull requests, and why?
+      2. Where and how should the full scan run?
+      3. How do you guarantee the ephemeral environment is always torn down, even if the scan fails?
+  solution:
+    file: answer.md
+    lang: markdown
+    code: |
+      # Reorganising the DAST pipeline
+
+      1. Put a BASELINE scan on pull requests
+         Use zaproxy/action-baseline (passive, 1-3 minutes). It gives fast feedback on headers and
+         configuration without sending attack payloads, so it does not block PRs for 40 minutes.
+
+      2. Move the full scan to a nightly schedule
+         Create a separate workflow triggered by:
+           on:
+             schedule:
+               - cron: "0 2 * * *"
+             workflow_dispatch: {}
+         It runs zaproxy/action-full-scan against the ephemeral test environment at night, off the
+         PR critical path, and publishes the SARIF to code scanning.
+
+      3. Always tear down the environment
+         Add a cleanup step guarded by if: always() so it runs on success AND failure:
+           - name: Tear down
+             if: always()
+             run: docker compose down -v
+         The same guard on the artifact upload keeps the reports even when the scan fails.
+    note:
+      fr: "La clé est la séparation baseline (rapide, sur chaque PR) / scan complet (lent, planifié la nuit), et l'usage systématique de `if: always()` pour le nettoyage et l'archivage. On réconcilie retour rapide et couverture profonde sans frustrer l'équipe."
+      en: "The key is splitting baseline (fast, every PR) from full scan (slow, scheduled at night), and the systematic use of `if: always()` for cleanup and archiving. You reconcile fast feedback and deep coverage without frustrating the team."
+
+quiz:
+  - q:
+      fr: "Pourquoi le DAST a-t-il besoin d'un environnement éphémère en CI ?"
+      en: "Why does DAST need an ephemeral environment in CI?"
+    options:
+      fr:
+        - "Parce que le DAST analyse le code source"
+        - "Parce que le DAST teste une application en fonctionnement : il faut la démarrer puis la détruire"
+        - "Parce que Docker l'impose"
+        - "Pour chiffrer les rapports"
+      en:
+        - "Because DAST analyses source code"
+        - "Because DAST tests a running application: it must be started then destroyed"
+        - "Because Docker requires it"
+        - "To encrypt the reports"
+    answer: 1
+    why:
+      fr: "Le DAST attaque une application qui tourne. L'environnement éphémère la démarre le temps du scan, dans un état propre et isolé, puis la supprime : aucun impact sur la production."
+      en: "DAST attacks a running application. The ephemeral environment starts it for the scan, in a clean and isolated state, then removes it: no impact on production."
+  - q:
+      fr: "Pourquoi attendre un health check avant de lancer le scan ?"
+      en: "Why wait for a health check before launching the scan?"
+    options:
+      fr:
+        - "Pour rendre le scan plus lent"
+        - "Pour éviter de scanner un serveur pas encore prêt, ce qui rend le job instable"
+        - "Parce que ZAP refuse de démarrer sinon"
+        - "Pour chiffrer la cible"
+      en:
+        - "To make the scan slower"
+        - "To avoid scanning a server that is not ready yet, which makes the job flaky"
+        - "Because ZAP refuses to start otherwise"
+        - "To encrypt the target"
+    answer: 1
+    why:
+      fr: "Un scan lancé trop tôt teste une application qui répond encore des erreurs : résultats faussés et échecs aléatoires. On attend un `200` sur `/health` avant de scanner."
+      en: "A scan launched too early tests an app still returning errors: skewed results and random failures. You wait for a `200` on `/health` before scanning."
+  - q:
+      fr: "Quelle est la bonne répartition entre scan baseline et scan complet ?"
+      en: "What is the right split between baseline and full scan?"
+    options:
+      fr:
+        - "Baseline sur chaque PR, scan complet planifié la nuit"
+        - "Scan complet sur chaque PR, baseline une fois par an"
+        - "Les deux à chaque commit"
+        - "Aucun des deux en CI"
+      en:
+        - "Baseline on every PR, full scan scheduled at night"
+        - "Full scan on every PR, baseline once a year"
+        - "Both on every commit"
+        - "Neither in CI"
+    answer: 0
+    why:
+      fr: "Le baseline est rapide (passif) et donne un retour immédiat sur chaque PR ; le scan complet (actif) est long et tourne la nuit via `cron`, hors du chemin critique des développeurs."
+      en: "The baseline is fast (passive) and gives immediate feedback on every PR; the full scan (active) is slow and runs at night via `cron`, off the developers' critical path."
+  - q:
+      fr: "À quoi sert `if: always()` sur l'étape de nettoyage et d'archivage ?"
+      en: "What is `if: always()` for on the cleanup and archiving step?"
+    options:
+      fr:
+        - "À relancer le scan en boucle"
+        - "À garantir que le nettoyage et l'archivage s'exécutent même quand le scan échoue"
+        - "À ignorer les erreurs de ZAP"
+        - "À accélérer le job"
+      en:
+        - "To rerun the scan in a loop"
+        - "To guarantee cleanup and archiving run even when the scan fails"
+        - "To ignore ZAP errors"
+        - "To speed up the job"
+    answer: 1
+    why:
+      fr: "Sans `if: always()`, une étape de nettoyage ou d'archivage est sautée dès qu'une étape précédente échoue. On l'ajoute pour toujours détruire l'environnement et conserver les rapports."
+      en: "Without `if: always()`, a cleanup or archiving step is skipped as soon as a previous step fails. You add it to always tear down the environment and keep the reports."
+  - q:
+      fr: "Quel format de rapport ZAP convient pour l'onglet Code scanning de GitHub ?"
+      en: "Which ZAP report format suits GitHub's Code scanning tab?"
+    options:
+      fr:
+        - "HTML"
+        - "PDF"
+        - "SARIF"
+        - "CSV"
+      en:
+        - "HTML"
+        - "PDF"
+        - "SARIF"
+        - "CSV"
+    answer: 2
+    why:
+      fr: "Le SARIF est le format standard d'import dans *Code scanning* et dans les agrégateurs. Le HTML sert à la lecture humaine, le JSON/XML au traitement automatique."
+      en: "SARIF is the standard import format for *Code scanning* and for aggregators. HTML is for human reading, JSON/XML for automated processing."

@@ -1,0 +1,321 @@
+description:
+  fr: "Scanner les images de conteneurs à la recherche de vulnérabilités avec Trivy et Grype, poser des seuils de sévérité en CI et gérer les faux positifs avec .trivyignore."
+  en: "Scan container images for vulnerabilities with Trivy and Grype, set severity gates in CI and manage false positives with .trivyignore."
+duration: 22
+
+intro:
+  fr: |
+    Une image Docker contient votre application **et** tout ce dont elle dépend : système de base, bibliothèques,
+    paquets. Chacun de ces composants peut porter une **vulnérabilité connue** (une *CVE*, *Common Vulnerabilities
+    and Exposures*). Vous pouvez écrire un code parfait et livrer quand même une image truffée de failles, juste à
+    cause d'une vieille version d'OpenSSL dans l'image de base.
+
+    L'analogie : scanner une image, c'est passer un colis au détecteur avant expédition. On ne contrôle pas
+    seulement ce qu'on y a mis soi-même, mais aussi l'emballage et le rembourrage fournis par d'autres. Un
+    **scanner d'images** compare la liste des paquets de l'image à des bases de données de vulnérabilités
+    publiques et signale ceux qui sont vulnérables.
+
+    Dans cette leçon, vous allez scanner une image avec **Trivy** (le scanner open source le plus répandu) et
+    **Grype**, comprendre les niveaux de **sévérité** (LOW → CRITICAL), configurer un **seuil qui fait échouer la
+    CI** sur les failles graves, et gérer les **faux positifs** avec un fichier `.trivyignore`. L'objectif : qu'une
+    image vulnérable ne puisse **jamais** atteindre la production.
+  en: |
+    A Docker image contains your application **and** everything it depends on: the base OS, libraries, packages.
+    Each of these components can carry a **known vulnerability** (a *CVE*, *Common Vulnerabilities and
+    Exposures*). You can write perfect code and still ship an image riddled with flaws, simply because of an old
+    OpenSSL version in the base image.
+
+    The analogy: scanning an image is like running a parcel through a detector before shipping. You check not
+    only what you put in yourself, but also the packaging and padding supplied by others. An **image scanner**
+    compares the image's package list to public vulnerability databases and flags the vulnerable ones.
+
+    In this lesson you will scan an image with **Trivy** (the most widespread open-source scanner) and **Grype**,
+    understand the **severity** levels (LOW → CRITICAL), configure a **gate that fails CI** on serious flaws, and
+    manage **false positives** with a `.trivyignore` file. The goal: a vulnerable image must **never** reach
+    production.
+
+sections:
+  - heading:
+      fr: "Sévérités et seuils de blocage"
+      en: "Severities and blocking gates"
+    body:
+      fr: |
+        Un scanner classe chaque vulnérabilité par **sévérité**, généralement issue du score CVSS :
+
+        | Sévérité | Signification | Action typique en CI |
+        |---|---|---|
+        | `CRITICAL` | Exploitable à distance, impact majeur | **Bloquer** la livraison |
+        | `HIGH` | Grave, souvent exploitable | **Bloquer** (ou corriger vite) |
+        | `MEDIUM` | Modérée | Suivre, corriger planifié |
+        | `LOW` | Faible impact | Informationnel |
+
+        Le drapeau clé de Trivy est **`--exit-code 1`** combiné à **`--severity HIGH,CRITICAL`** : le scan renvoie
+        un code d'erreur si une faille HIGH ou CRITICAL est trouvée, ce qui **fait échouer le pipeline**. Sans ce
+        code de sortie, le scan ne fait qu'afficher un rapport que personne ne lit. On ajoute souvent
+        `--ignore-unfixed` pour ne bloquer que sur les failles ayant un correctif disponible (sinon on bloque sur
+        des CVE qu'on ne peut pas encore corriger).
+      en: |
+        A scanner classifies each vulnerability by **severity**, usually derived from the CVSS score:
+
+        | Severity | Meaning | Typical CI action |
+        |---|---|---|
+        | `CRITICAL` | Remotely exploitable, major impact | **Block** the release |
+        | `HIGH` | Serious, often exploitable | **Block** (or fix fast) |
+        | `MEDIUM` | Moderate | Track, planned fix |
+        | `LOW` | Low impact | Informational |
+
+        Trivy's key flag is **`--exit-code 1`** combined with **`--severity HIGH,CRITICAL`**: the scan returns an
+        error code if a HIGH or CRITICAL flaw is found, which **fails the pipeline**. Without that exit code, the
+        scan only prints a report nobody reads. You often add `--ignore-unfixed` to block only on flaws with an
+        available fix (otherwise you block on CVEs you cannot yet remediate).
+  - heading:
+      fr: "Trivy, Grype et les faux positifs"
+      en: "Trivy, Grype and false positives"
+    body:
+      fr: |
+        **Trivy** (Aqua Security) et **Grype** (Anchore) sont deux scanners open source complémentaires. Trivy va
+        plus loin que les CVE : il détecte aussi les **secrets** en clair et les **mauvaises configurations** (IaC,
+        Dockerfile). Grype est focalisé sur les vulnérabilités de paquets et s'intègre bien avec Syft pour les
+        SBOM.
+
+        | Outil | Points forts |
+        |---|---|
+        | **Trivy** | CVE + secrets + misconfigs, très rapide, standard de fait |
+        | **Grype** | Vulnérabilités de paquets, excellent duo avec Syft (SBOM) |
+
+        Un scanner produit parfois des **faux positifs** (une CVE signalée mais non exploitable dans votre
+        contexte) ou des CVE sans correctif. Plutôt que de désactiver le scan, on **exempte précisément** la CVE
+        concernée dans un fichier **`.trivyignore`**, avec un commentaire justifiant la décision et, idéalement,
+        une date d'expiration. Désactiver tout le scan « parce qu'il bloque » revient à retirer le détecteur de
+        fumée parce qu'il sonne.
+      en: |
+        **Trivy** (Aqua Security) and **Grype** (Anchore) are two complementary open-source scanners. Trivy goes
+        beyond CVEs: it also detects clear-text **secrets** and **misconfigurations** (IaC, Dockerfile). Grype
+        focuses on package vulnerabilities and integrates well with Syft for SBOMs.
+
+        | Tool | Strengths |
+        |---|---|
+        | **Trivy** | CVE + secrets + misconfigs, very fast, de-facto standard |
+        | **Grype** | Package vulnerabilities, excellent pair with Syft (SBOM) |
+
+        A scanner sometimes produces **false positives** (a CVE reported but not exploitable in your context) or
+        CVEs with no fix. Rather than disabling the scan, you **exempt the specific CVE** in a **`.trivyignore`**
+        file, with a comment justifying the decision and, ideally, an expiry date. Disabling the whole scan
+        "because it blocks" is like removing the smoke detector because it beeps.
+
+examples:
+  - title:
+      fr: "Dangereux : scan sans seuil (ne bloque rien)"
+      en: "Dangerous: scan with no gate (blocks nothing)"
+    file: .github/workflows/scan-bad.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - the scan runs but can never fail the build.
+      name: scan
+      on: [push]
+      jobs:
+        trivy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - run: docker build -t app:ci .
+            - name: Scan (report only)
+              # No --exit-code: Trivy ALWAYS returns 0, even with CRITICALs.
+              # The vulnerabilities are printed... and silently ignored.
+              run: trivy image app:ci || true
+            # `|| true` guarantees the step never fails. The pipeline is
+            # green, the image ships, the CRITICAL CVEs go to production.
+    output: |
+      # Trivy finds criticals but the job is green:
+      # Total: 14 (HIGH: 11, CRITICAL: 3)
+      # ...
+      # Job status: success     <-- vulnerable image shipped anyway
+    note:
+      fr: "Le scan tourne mais `|| true` (et l'absence de `--exit-code`) garantit que l'étape réussit toujours. Un rapport que personne ne lit ne protège de rien : l'image avec 3 failles critiques part en production. C'est l'illusion de sécurité la plus courante."
+      en: "The scan runs but `|| true` (and the lack of `--exit-code`) guarantees the step always passes. A report nobody reads protects nothing: the image with 3 critical flaws ships to production. This is the most common security illusion."
+
+  - title:
+      fr: "Sécurisé : seuil HIGH/CRITICAL qui fait échouer la CI"
+      en: "Secure: HIGH/CRITICAL gate that fails CI"
+    file: .github/workflows/scan-good.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: scan
+      on: [push, pull_request]
+      permissions:
+        contents: read
+      jobs:
+        trivy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - run: docker build -t app:ci .
+            - name: Scan and FAIL on HIGH/CRITICAL
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                image-ref: app:ci
+                format: table
+                # The gate: a fixable HIGH/CRITICAL fails the whole job.
+                exit-code: "1"
+                severity: HIGH,CRITICAL
+                ignore-unfixed: true        # only block on fixable flaws
+                trivyignores: .trivyignore  # honour documented exceptions
+    output: |
+      # With a fixable CRITICAL present, the job fails and blocks the merge:
+      # app:ci (debian 12.4)
+      # Total: 1 (CRITICAL: 1)
+      # library: openssl  CVE-2024-XXXX  CRITICAL  fixed: 3.0.13-1~deb12u1
+      # Error: Process completed with exit code 1.
+    note:
+      fr: "`exit-code: 1` + `severity: HIGH,CRITICAL` transforme le scan en véritable barrière : une faille corrigeable fait échouer le job et bloque la fusion. `ignore-unfixed: true` évite de bloquer sur des CVE sans correctif, `.trivyignore` gère les exceptions assumées."
+      en: "`exit-code: 1` + `severity: HIGH,CRITICAL` turns the scan into a real gate: a fixable flaw fails the job and blocks the merge. `ignore-unfixed: true` avoids blocking on unfixable CVEs, `.trivyignore` handles accepted exceptions."
+
+  - title:
+      fr: "Scanner en local avec Trivy et Grype"
+      en: "Scanning locally with Trivy and Grype"
+    file: scan.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      IMAGE=app:1.4.0
+
+      # 1. Trivy: vulnerabilities, fail on fixable HIGH/CRITICAL.
+      trivy image --severity HIGH,CRITICAL --ignore-unfixed \
+        --exit-code 1 "$IMAGE"
+
+      # 2. Trivy also finds clear-text secrets and misconfigs in the image.
+      trivy image --scanners vuln,secret,misconfig "$IMAGE"
+
+      # 3. Grype as a second opinion (different vuln database).
+      grype "$IMAGE" --fail-on high
+
+      # 4. Generate an SBOM for provenance / later re-scanning.
+      trivy image --format cyclonedx --output sbom.json "$IMAGE"
+    output: |
+      app:1.4.0 (alpine 3.19.1)
+      Total: 0 (HIGH: 0, CRITICAL: 0)
+      # Grype:
+      No vulnerabilities found at or above severity: high
+    note:
+      fr: "Trivy et Grype s'utilisent en local avant de pousser, avec un `--exit-code`/`--fail-on` pour un vrai échec. Trivy scanne aussi secrets et misconfigs, et génère un SBOM (CycloneDX) qui servira à re-scanner l'image plus tard sans la reconstruire."
+      en: "Trivy and Grype are used locally before pushing, with `--exit-code`/`--fail-on` for a real failure. Trivy also scans secrets and misconfigs, and generates an SBOM (CycloneDX) used to re-scan the image later without rebuilding it."
+
+mistake:
+  fr: |
+    **Lancer le scan mais ne jamais le faire échouer.** C'est l'erreur fondamentale : sans `--exit-code 1` (ou
+    avec un `|| true`), Trivy affiche les vulnérabilités mais le pipeline reste vert, et l'image vulnérable part
+    quand même. Un scan qui ne bloque rien est de la décoration. Erreur symétrique : face à un faux positif,
+    **désactiver tout le scan** au lieu d'exempter la seule CVE concernée. On exempte précisément dans
+    `.trivyignore`, avec une justification et une date de revue, et on garde le scan actif pour tout le reste.
+  en: |
+    **Running the scan but never failing on it.** This is the fundamental mistake: without `--exit-code 1` (or
+    with a `|| true`), Trivy prints the vulnerabilities but the pipeline stays green, and the vulnerable image
+    ships anyway. A scan that blocks nothing is decoration. The symmetric mistake: faced with a false positive,
+    **disabling the whole scan** instead of exempting the single CVE involved. You exempt precisely in
+    `.trivyignore`, with a justification and a review date, and keep the scan active for everything else.
+
+bestPractice:
+  fr: |
+    - **Faites échouer la CI** sur HIGH/CRITICAL (`--exit-code 1 --severity HIGH,CRITICAL`) : un scan sans seuil ne sert à rien.
+    - **Scannez tôt et souvent** : en local avant de pousser, en CI à chaque build, et périodiquement sur les images déjà en prod.
+    - **Ajoutez `--ignore-unfixed`** pour ne bloquer que sur les failles réellement corrigeables.
+    - **Gérez les exceptions dans `.trivyignore`** avec justification et date de revue, jamais en coupant tout le scan.
+    - **Combinez vuln + secret + misconfig** (Trivy) et croisez avec un second scanner (Grype) ; générez un SBOM.
+  en: |
+    - **Fail CI** on HIGH/CRITICAL (`--exit-code 1 --severity HIGH,CRITICAL`): a scan with no gate is useless.
+    - **Scan early and often**: locally before pushing, in CI on every build, and periodically on images already in prod.
+    - **Add `--ignore-unfixed`** to block only on genuinely fixable flaws.
+    - **Handle exceptions in `.trivyignore`** with justification and a review date, never by disabling the whole scan.
+    - **Combine vuln + secret + misconfig** (Trivy) and cross-check with a second scanner (Grype); generate an SBOM.
+
+exercise:
+  statement:
+    fr: |
+      Votre pipeline doit **refuser** toute image contenant une vulnérabilité **CRITICAL corrigeable**, mais une
+      CVE précise, `CVE-2024-0001`, est un faux positif confirmé (le composant vulnérable n'est pas utilisé).
+
+      1. Écrivez la commande Trivy qui fait échouer le build sur les CRITICAL corrigeables.
+      2. Écrivez le fichier `.trivyignore` qui exempte uniquement `CVE-2024-0001`, avec justification.
+    en: |
+      Your pipeline must **reject** any image containing a **fixable CRITICAL** vulnerability, but one specific
+      CVE, `CVE-2024-0001`, is a confirmed false positive (the vulnerable component is not used).
+
+      1. Write the Trivy command that fails the build on fixable CRITICALs.
+      2. Write the `.trivyignore` file that exempts only `CVE-2024-0001`, with justification.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      # 1. Fail the build on fixable CRITICAL vulnerabilities only.
+      trivy image \
+        --severity CRITICAL \
+        --ignore-unfixed \
+        --exit-code 1 \
+        app:1.4.0
+
+      # 2. .trivyignore - exempt ONLY the confirmed false positive:
+      cat > .trivyignore <<'EOF'
+      # CVE-2024-0001: false positive - the vulnerable codec is never
+      # imported by our app. Reviewed 2026-01-10, re-check 2026-07-10.
+      CVE-2024-0001
+      EOF
+    note:
+      fr: "La commande ne bloque que sur les CRITICAL corrigeables (`--ignore-unfixed --exit-code 1`). Le `.trivyignore` exempte précisément la seule CVE en faux positif, documentée et datée : le scan reste actif pour tout le reste."
+      en: "The command blocks only on fixable CRITICALs (`--ignore-unfixed --exit-code 1`). The `.trivyignore` exempts precisely the single false-positive CVE, documented and dated: the scan stays active for everything else."
+
+quiz:
+  - q:
+      fr: "Que signifie une CVE ?"
+      en: "What does a CVE mean?"
+    options:
+      fr: ["Une vulnérabilité connue et répertoriée publiquement", "Un format d'image Docker", "Une commande Trivy", "Un type de certificat"]
+      en: ["A publicly known and catalogued vulnerability", "A Docker image format", "A Trivy command", "A type of certificate"]
+    answer: 0
+    why:
+      fr: "CVE (Common Vulnerabilities and Exposures) est l'identifiant standard d'une vulnérabilité publiquement connue ; les scanners comparent les paquets de l'image à ces bases."
+      en: "CVE (Common Vulnerabilities and Exposures) is the standard identifier of a publicly known vulnerability; scanners compare the image's packages to these databases."
+  - q:
+      fr: "Quel drapeau Trivy fait échouer la CI sur une faille grave ?"
+      en: "Which Trivy flag fails CI on a serious flaw?"
+    options:
+      fr: ["--format table", "--exit-code 1", "--quiet", "--help"]
+      en: ["--format table", "--exit-code 1", "--quiet", "--help"]
+    answer: 1
+    why:
+      fr: "`--exit-code 1` (avec `--severity HIGH,CRITICAL`) renvoie un code d'erreur quand une faille correspondante est trouvée, ce qui fait échouer le pipeline."
+      en: "`--exit-code 1` (with `--severity HIGH,CRITICAL`) returns an error code when a matching flaw is found, failing the pipeline."
+  - q:
+      fr: "À quoi sert `--ignore-unfixed` ?"
+      en: "What is `--ignore-unfixed` for?"
+    options:
+      fr: ["À ignorer tous les scans", "À ne bloquer que sur les failles ayant un correctif disponible", "À chiffrer l'image", "À accélérer le build"]
+      en: ["To ignore all scans", "To block only on flaws with an available fix", "To encrypt the image", "To speed up the build"]
+    answer: 1
+    why:
+      fr: "`--ignore-unfixed` évite de bloquer la CI sur des CVE sans correctif disponible, et concentre le blocage sur ce qui est réellement corrigeable."
+      en: "`--ignore-unfixed` avoids blocking CI on CVEs with no available fix, focusing the gate on what is actually fixable."
+  - q:
+      fr: "Quelle est la bonne façon de traiter un faux positif confirmé ?"
+      en: "What is the right way to handle a confirmed false positive?"
+    options:
+      fr: ["Désactiver complètement le scan", "Supprimer l'image", "Exempter précisément la CVE dans `.trivyignore` avec justification", "Ignorer tous les CRITICAL"]
+      en: ["Disable the scan entirely", "Delete the image", "Exempt the specific CVE in `.trivyignore` with justification", "Ignore all CRITICALs"]
+    answer: 2
+    why:
+      fr: "On exempte uniquement la CVE concernée dans `.trivyignore`, documentée et datée, pour garder le scan actif sur tout le reste. Couper tout le scan rouvre la porte à toutes les failles."
+      en: "You exempt only the CVE involved in `.trivyignore`, documented and dated, to keep the scan active on everything else. Disabling the whole scan reopens the door to all flaws."
+  - q:
+      fr: "Au-delà des CVE, que peut aussi détecter Trivy dans une image ?"
+      en: "Beyond CVEs, what else can Trivy detect in an image?"
+    options:
+      fr: ["La vitesse du réseau", "Le nombre de couches uniquement", "La température du CPU", "Des secrets en clair et des mauvaises configurations"]
+      en: ["Network speed", "The layer count only", "CPU temperature", "Clear-text secrets and misconfigurations"]
+    answer: 3
+    why:
+      fr: "Trivy intègre plusieurs scanners (`vuln`, `secret`, `misconfig`) : il repère aussi des secrets en clair et des erreurs de configuration, pas seulement les CVE de paquets."
+      en: "Trivy bundles several scanners (`vuln`, `secret`, `misconfig`): it also finds clear-text secrets and configuration errors, not just package CVEs."

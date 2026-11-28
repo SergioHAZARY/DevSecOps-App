@@ -1,0 +1,369 @@
+description:
+  fr: "Détecter et bloquer les intrusions réseau avec Suricata : essentiels de suricata.yaml, syntaxe de règle valide et analyse des alertes eve.json avec jq."
+  en: "Detect and block network intrusions with Suricata: suricata.yaml essentials, valid rule syntax and analysing eve.json alerts with jq."
+duration: 25
+
+intro:
+  fr: |
+    Un pare-feu bloque des ports, un WAF inspecte le HTTP ; un **IDS/IPS** surveille **tout le trafic réseau** à
+    la recherche de comportements malveillants. **IDS** = *Intrusion Detection System* (il **détecte** et alerte) ;
+    **IPS** = *Intrusion Prevention System* (il **détecte et bloque**). La différence tient à sa position : en
+    copie du trafic (IDS) ou sur le chemin du trafic (IPS).
+
+    L'analogie : l'IDS est une caméra de surveillance qui enregistre et sonne une alarme ; l'IPS est le vigile qui
+    peut, en plus, fermer la porte. **Suricata** est le moteur open source de référence : il analyse les paquets
+    en temps réel, les compare à des milliers de **règles de signature**, et écrit ses découvertes dans un journal
+    structuré, `eve.json`.
+
+    Dans cette leçon, vous allez comprendre les réglages essentiels de `suricata.yaml`, écrire une **règle
+    valide** qui détecte une attaque, et analyser les alertes `eve.json` avec `jq`, l'outil indispensable pour
+    fouiller du JSON en ligne de commande.
+  en: |
+    A firewall blocks ports, a WAF inspects HTTP; an **IDS/IPS** watches **all network traffic** for malicious
+    behaviour. **IDS** = *Intrusion Detection System* (it **detects** and alerts); **IPS** = *Intrusion Prevention
+    System* (it **detects and blocks**). The difference is its position: on a copy of the traffic (IDS) or in the
+    traffic path (IPS).
+
+    The analogy: the IDS is a surveillance camera that records and rings an alarm; the IPS is the guard who can
+    also shut the door. **Suricata** is the reference open-source engine: it analyses packets in real time,
+    compares them to thousands of **signature rules**, and writes its findings to a structured log, `eve.json`.
+
+    In this lesson you will learn the essential settings of `suricata.yaml`, write a **valid rule** that detects
+    an attack, and analyse `eve.json` alerts with `jq`, the indispensable tool for digging through JSON on the
+    command line.
+
+sections:
+  - heading:
+      fr: "IDS vs IPS et suricata.yaml"
+      en: "IDS vs IPS and suricata.yaml"
+    body:
+      fr: |
+        Le mode de déploiement change tout :
+
+        | Mode | Position | Action | Risque |
+        |---|---|---|---|
+        | **IDS** | Copie du trafic (port mirror, `af-packet`) | Alerte seulement | Aucun sur le flux |
+        | **IPS** | En coupure (`nfqueue`, inline) | Alerte **et bloque** (`drop`) | Faux positif = coupure |
+
+        Le fichier `suricata.yaml` pilote tout. Trois réglages sont incontournables :
+
+        - **`HOME_NET`** : vos réseaux internes à protéger (ex. `[10.0.0.0/8,192.168.0.0/16]`). `EXTERNAL_NET`
+          est en général `!$HOME_NET` (tout le reste).
+        - **`af-packet`** : l'interface écoutée (ex. `eth0`) en mode IDS.
+        - **`outputs: eve-log`** : le journal JSON unifié (alertes, flux, DNS, HTTP, TLS).
+
+        On valide toujours la configuration avec `suricata -T -c /etc/suricata/suricata.yaml` avant de démarrer.
+      en: |
+        The deployment mode changes everything:
+
+        | Mode | Position | Action | Risk |
+        |---|---|---|---|
+        | **IDS** | Copy of traffic (port mirror, `af-packet`) | Alert only | None on the flow |
+        | **IPS** | Inline (`nfqueue`, inline) | Alert **and block** (`drop`) | False positive = outage |
+
+        The `suricata.yaml` file drives everything. Three settings are essential:
+
+        - **`HOME_NET`**: your internal networks to protect (e.g. `[10.0.0.0/8,192.168.0.0/16]`). `EXTERNAL_NET`
+          is usually `!$HOME_NET` (everything else).
+        - **`af-packet`**: the interface to listen on (e.g. `eth0`) in IDS mode.
+        - **`outputs: eve-log`**: the unified JSON log (alerts, flows, DNS, HTTP, TLS).
+
+        Always validate the configuration with `suricata -T -c /etc/suricata/suricata.yaml` before starting.
+  - heading:
+      fr: "Anatomie d'une règle Suricata"
+      en: "Anatomy of a Suricata rule"
+    body:
+      fr: |
+        Une règle Suricata suit toujours la même structure :
+
+        ```
+        action proto src_ip src_port direction dst_ip dst_port (options; sid:N; rev:M;)
+        ```
+
+        - **action** : `alert` (IDS), `drop` ou `reject` (IPS), `pass`.
+        - **proto** : `tcp`, `udp`, `http`, `tls`, `dns`, `ssh`…
+        - **direction** : `->` (vers) ou `<>` (bidirectionnel).
+        - **options** : `msg` (description lisible), `content` (motif recherché), `flow`, `classtype`, etc.
+        - **`sid`** : identifiant **unique** et **obligatoire**. Les règles perso utilisent la plage `≥ 1000000`.
+        - **`rev`** : numéro de révision de la règle.
+
+        Exemple complet : `alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"..."; content:"..."; sid:1000001; rev:1;)`.
+        On charge ses propres règles dans `/etc/suricata/rules/local.rules` et on teste leur syntaxe avec
+        `suricata -T`.
+      en: |
+        A Suricata rule always follows the same structure:
+
+        ```
+        action proto src_ip src_port direction dst_ip dst_port (options; sid:N; rev:M;)
+        ```
+
+        - **action**: `alert` (IDS), `drop` or `reject` (IPS), `pass`.
+        - **proto**: `tcp`, `udp`, `http`, `tls`, `dns`, `ssh`…
+        - **direction**: `->` (towards) or `<>` (bidirectional).
+        - **options**: `msg` (readable description), `content` (pattern to find), `flow`, `classtype`, etc.
+        - **`sid`**: a **unique** and **mandatory** identifier. Custom rules use the `≥ 1000000` range.
+        - **`rev`**: the rule's revision number.
+
+        Full example: `alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"..."; content:"..."; sid:1000001; rev:1;)`.
+        You load your own rules in `/etc/suricata/rules/local.rules` and test their syntax with `suricata -T`.
+
+examples:
+  - title:
+      fr: "Essentiels de suricata.yaml"
+      en: "suricata.yaml essentials"
+    file: suricata.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # /etc/suricata/suricata.yaml (essential excerpt)
+      vars:
+        address-groups:
+          # Define what we protect; everything else is external/untrusted.
+          HOME_NET: "[10.0.0.0/8,192.168.0.0/16,172.16.0.0/12]"
+          EXTERNAL_NET: "!$HOME_NET"
+
+      # IDS mode: listen on a copy of the traffic, never in the data path.
+      af-packet:
+        - interface: eth0
+          cluster-id: 99
+          cluster-type: cluster_flow
+          defrag: yes
+
+      # Load the official ruleset plus our own local rules.
+      default-rule-path: /etc/suricata/rules
+      rule-files:
+        - suricata.rules
+        - local.rules
+
+      outputs:
+        # EVE: one structured JSON log for alerts, flows, HTTP, DNS, TLS.
+        - eve-log:
+            enabled: yes
+            filetype: regular
+            filename: /var/log/suricata/eve.json
+            types:
+              - alert
+              - http
+              - dns
+              - tls
+              - flow
+    output: |
+      # Validate config + rules BEFORE starting the service:
+      #   suricata -T -c /etc/suricata/suricata.yaml -v
+      <Info> - Configuration provided was successfully loaded. Exiting.
+    note:
+      fr: "`HOME_NET` définit ce que l'on protège : une erreur ici rend la moitié des règles inopérantes. L'option `-T` valide la configuration et les règles sans lancer le moteur, à faire après chaque modification."
+      en: "`HOME_NET` defines what you protect: a mistake here makes half the rules ineffective. The `-T` option validates the configuration and rules without launching the engine, to run after every change."
+
+  - title:
+      fr: "Dangereux : règle invalide (ne charge pas)"
+      en: "Dangerous: an invalid rule (fails to load)"
+    file: broken.rules
+    lang: text
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - three mistakes that break the ruleset silently.
+
+      # 1. No sid: Suricata refuses to load the rule.
+      alert tcp any any -> any 22 (msg:"SSH seen";)
+
+      # 2. Duplicate sid 1000001 used twice -> load error.
+      alert tcp any any -> any 23 (msg:"Telnet"; sid:1000001; rev:1;)
+      alert tcp any any -> any 21 (msg:"FTP"; sid:1000001; rev:1;)
+
+      # 3. Unbalanced quotes in content -> parse error, whole file rejected.
+      alert http any any -> any any (msg:"bad; content:"admin; sid:1000003; rev:1;)
+    output: |
+      # suricata -T -c /etc/suricata/suricata.yaml
+      <Error> - rule 1: failed to parse signature - missing sid
+      <Error> - duplicate sid 1000001
+      <Error> - 1 rule files failed to load. Exiting.
+    note:
+      fr: "Une seule règle mal formée (sid manquant, sid dupliqué, guillemet non fermé) peut faire échouer le chargement de **tout** le fichier : Suricata tourne alors sans vos signatures. D'où l'importance de `suricata -T` avant chaque déploiement."
+      en: "A single malformed rule (missing sid, duplicate sid, unbalanced quote) can fail the loading of the **whole** file: Suricata then runs without your signatures. Hence the importance of `suricata -T` before every deployment."
+
+  - title:
+      fr: "Sécurisé : règles valides pour détecter des attaques"
+      en: "Secure: valid rules to detect attacks"
+    file: local.rules
+    lang: text
+    kind: secure
+    code: |
+      # /etc/suricata/rules/local.rules - custom signatures (sid >= 1000000).
+
+      # 1. Detect a path-traversal attempt reaching an internal web server.
+      alert http $EXTERNAL_NET any -> $HOME_NET any ( \
+          msg:"LOCAL Path traversal attempt (../)"; \
+          flow:to_server,established; \
+          http.uri; content:"../"; \
+          classtype:web-application-attack; sid:1000001; rev:1;)
+
+      # 2. Detect a SQL injection pattern in the query string.
+      alert http $EXTERNAL_NET any -> $HOME_NET any ( \
+          msg:"LOCAL SQLi UNION SELECT in URI"; \
+          flow:to_server,established; \
+          http.uri; content:"union"; nocase; content:"select"; nocase; \
+          distance:0; classtype:web-application-attack; sid:1000002; rev:1;)
+
+      # 3. Detect outbound connection to a known-bad IP (C2 beaconing).
+      alert tcp $HOME_NET any -> 203.0.113.66 any ( \
+          msg:"LOCAL Outbound to known C2 server"; \
+          flow:to_server; classtype:trojan-activity; sid:1000003; rev:1;)
+    output: |
+      # Triggered alert as written to /var/log/suricata/eve.json:
+      {"event_type":"alert","src_ip":"203.0.113.10","dest_ip":"10.0.0.5",
+       "alert":{"signature":"LOCAL SQLi UNION SELECT in URI","signature_id":1000002,
+       "category":"Web Application Attack","severity":1}}
+    note:
+      fr: "Chaque règle a un `sid` unique et un `msg` explicite. `http.uri; content:\"../\"` cherche le motif dans l'URL. La règle 3 détecte une exfiltration vers une IP de commande-et-contrôle : l'IDS voit aussi le trafic **sortant**."
+      en: "Each rule has a unique `sid` and an explicit `msg`. `http.uri; content:\"../\"` searches the pattern in the URL. Rule 3 detects exfiltration to a command-and-control IP: the IDS also watches **outbound** traffic."
+
+  - title:
+      fr: "Analyser eve.json avec jq"
+      en: "Analysing eve.json with jq"
+    file: analyze.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      EVE=/var/log/suricata/eve.json
+
+      # 1. Show only alert events, with time, source IP and signature.
+      jq -c 'select(.event_type=="alert")
+             | {ts:.timestamp, src:.src_ip, sig:.alert.signature}' "$EVE"
+
+      # 2. Top 10 attacking source IPs (most alerts first).
+      jq -r 'select(.event_type=="alert") | .src_ip' "$EVE" \
+        | sort | uniq -c | sort -rn | head -10
+
+      # 3. Count alerts by signature name to spot the dominant attack.
+      jq -r 'select(.event_type=="alert") | .alert.signature' "$EVE" \
+        | sort | uniq -c | sort -rn
+
+      # 4. Only high-severity alerts (severity 1 = most critical).
+      jq -c 'select(.event_type=="alert" and .alert.severity==1)
+             | {src:.src_ip, dst:.dest_ip, sig:.alert.signature}' "$EVE"
+    output: |
+      {"ts":"2026-01-10T14:02:11Z","src":"203.0.113.10","sig":"LOCAL SQLi UNION SELECT in URI"}
+         42 203.0.113.10
+          7 198.51.100.23
+         42 LOCAL SQLi UNION SELECT in URI
+          7 LOCAL Path traversal attempt (../)
+    note:
+      fr: "`jq` filtre le JSON ligne par ligne. `select(.event_type==\"alert\")` ne garde que les alertes ; combiné à `sort | uniq -c | sort -rn`, il produit instantanément un classement des attaquants et des attaques les plus fréquentes."
+      en: "`jq` filters JSON line by line. `select(.event_type==\"alert\")` keeps only alerts; combined with `sort | uniq -c | sort -rn`, it instantly produces a ranking of the most frequent attackers and attacks."
+
+mistake:
+  fr: |
+    **Déployer en mode IPS (`drop`) sans phase de détection.** Mettre Suricata en coupure et activer `drop` sur
+    des règles non éprouvées, c'est risquer de couper du trafic légitime : un faux positif devient une panne de
+    production. Comme pour un WAF, on commence en **IDS** (`alert`), on observe `eve.json` plusieurs jours, on
+    affine les règles, **puis** on bascule en IPS. Autre erreur fréquente : ne jamais lancer `suricata -T`, si
+    bien qu'une règle cassée empêche le chargement de tout le jeu de signatures sans qu'on le remarque.
+  en: |
+    **Deploying in IPS mode (`drop`) without a detection phase.** Putting Suricata inline and enabling `drop` on
+    unproven rules risks cutting legitimate traffic: a false positive becomes a production outage. As with a WAF,
+    you start in **IDS** (`alert`), watch `eve.json` for several days, refine the rules, **then** switch to IPS.
+    Another common mistake: never running `suricata -T`, so a broken rule prevents the whole signature set from
+    loading without anyone noticing.
+
+bestPractice:
+  fr: |
+    - **Validez toujours** avec `suricata -T -c suricata.yaml` avant de (re)démarrer.
+    - **Réglez `HOME_NET` correctement** : c'est le socle dont dépendent la plupart des règles.
+    - **Commencez en IDS**, passez en IPS seulement après avoir éprouvé les règles.
+    - **Mettez à jour les règles** avec `suricata-update` (règles ET/Emerging Threats) régulièrement.
+    - **Centralisez `eve.json`** vers un SIEM (ELK, Wazuh) et exploitez-le avec `jq` pour le triage rapide.
+  en: |
+    - **Always validate** with `suricata -T -c suricata.yaml` before (re)starting.
+    - **Set `HOME_NET` correctly**: it is the foundation most rules depend on.
+    - **Start in IDS**, move to IPS only after the rules are proven.
+    - **Update rules** with `suricata-update` (ET/Emerging Threats rules) regularly.
+    - **Centralise `eve.json`** into a SIEM (ELK, Wazuh) and mine it with `jq` for fast triage.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez détecter toute tentative d'accès à `/wp-login.php` (page de connexion WordPress souvent ciblée
+      par force brute) venant d'Internet vers vos serveurs web internes.
+
+      1. Écrivez une règle Suricata **valide** (avec `sid` unique ≥ 1000000) qui lève une alerte.
+      2. Donnez la commande `jq` qui, sur `eve.json`, affiche l'IP source de chaque alerte déclenchée par cette signature.
+    en: |
+      You want to detect any attempt to reach `/wp-login.php` (a WordPress login page often targeted by brute
+      force) coming from the Internet towards your internal web servers.
+
+      1. Write a **valid** Suricata rule (with a unique `sid` ≥ 1000000) that raises an alert.
+      2. Give the `jq` command that, on `eve.json`, prints the source IP of each alert triggered by that signature.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. The rule -> /etc/suricata/rules/local.rules
+      #    alert http $EXTERNAL_NET any -> $HOME_NET any ( \
+      #        msg:"LOCAL WordPress login access"; \
+      #        flow:to_server,established; \
+      #        http.uri; content:"/wp-login.php"; \
+      #        classtype:web-application-activity; sid:1000010; rev:1;)
+
+      # Validate before use:
+      suricata -T -c /etc/suricata/suricata.yaml
+
+      # 2. Source IPs of alerts from this signature (sid 1000010):
+      jq -r 'select(.event_type=="alert" and .alert.signature_id==1000010)
+             | .src_ip' /var/log/suricata/eve.json | sort | uniq -c | sort -rn
+    note:
+      fr: "La règle filtre `http.uri` sur `/wp-login.php`, avec un `sid` unique et `flow:to_server,established` pour ne matcher qu'une vraie requête. `jq` isole les alertes par `signature_id` puis compte les IP sources."
+      en: "The rule filters `http.uri` on `/wp-login.php`, with a unique `sid` and `flow:to_server,established` to match only a real request. `jq` isolates alerts by `signature_id` then counts source IPs."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre un IDS et un IPS ?"
+      en: "What is the difference between an IDS and an IPS?"
+    options:
+      fr: ["L'IDS chiffre, l'IPS déchiffre", "L'IDS détecte et alerte ; l'IPS détecte et bloque", "L'IDS est matériel, l'IPS logiciel", "Il n'y a aucune différence"]
+      en: ["The IDS encrypts, the IPS decrypts", "The IDS detects and alerts; the IPS detects and blocks", "The IDS is hardware, the IPS software", "There is no difference"]
+    answer: 1
+    why:
+      fr: "Un IDS se contente d'alerter (hors du chemin du trafic) ; un IPS, placé en coupure, peut en plus bloquer la connexion malveillante (`drop`)."
+      en: "An IDS only alerts (off the traffic path); an IPS, placed inline, can also block the malicious connection (`drop`)."
+  - q:
+      fr: "Quel champ est obligatoire et unique dans chaque règle Suricata ?"
+      en: "Which field is mandatory and unique in every Suricata rule?"
+    options:
+      fr: ["msg", "content", "sid", "classtype"]
+      en: ["msg", "content", "sid", "classtype"]
+    answer: 2
+    why:
+      fr: "`sid` identifie la signature de façon unique ; sans lui (ou en cas de doublon), Suricata refuse de charger la règle."
+      en: "`sid` uniquely identifies the signature; without it (or with a duplicate), Suricata refuses to load the rule."
+  - q:
+      fr: "Que vérifie la commande `suricata -T -c suricata.yaml` ?"
+      en: "What does the command `suricata -T -c suricata.yaml` check?"
+    options:
+      fr: ["La validité de la configuration et des règles, sans démarrer le moteur", "La vitesse du réseau", "Le niveau de chiffrement TLS", "Le nombre de CPU"]
+      en: ["The validity of the configuration and rules, without starting the engine", "The network speed", "The TLS encryption level", "The number of CPUs"]
+    answer: 0
+    why:
+      fr: "`-T` lance un test : il charge et valide la config et les règles puis quitte, ce qui évite de démarrer Suricata avec un fichier de règles cassé."
+      en: "`-T` runs a test: it loads and validates the config and rules then exits, avoiding starting Suricata with a broken rule file."
+  - q:
+      fr: "À quoi sert `eve.json` dans Suricata ?"
+      en: "What is `eve.json` used for in Suricata?"
+    options:
+      fr: ["À stocker les clés de chiffrement", "C'est le journal JSON structuré des alertes, flux, HTTP, DNS", "À configurer les interfaces", "À bloquer les ports"]
+      en: ["To store encryption keys", "It is the structured JSON log of alerts, flows, HTTP, DNS", "To configure interfaces", "To block ports"]
+    answer: 1
+    why:
+      fr: "`eve.json` est la sortie unifiée au format JSON ; on l'exploite avec `jq` ou on l'envoie vers un SIEM pour l'analyse."
+      en: "`eve.json` is the unified JSON output; you mine it with `jq` or ship it to a SIEM for analysis."
+  - q:
+      fr: "Pourquoi commencer en mode IDS (alerte) avant de passer en IPS (blocage) ?"
+      en: "Why start in IDS mode (alert) before switching to IPS (blocking)?"
+    options:
+      fr: ["Pour économiser de l'électricité", "Parce que l'IPS est payant", "Pour éprouver les règles et éviter qu'un faux positif coupe du trafic légitime", "Pour chiffrer le trafic"]
+      en: ["To save electricity", "Because IPS is paid", "To prove the rules and avoid a false positive cutting legitimate traffic", "To encrypt traffic"]
+    answer: 2
+    why:
+      fr: "En IPS, une règle trop large déclenche un `drop` qui coupe de vrais utilisateurs ; on observe d'abord en IDS, on affine, puis on bloque."
+      en: "In IPS, an overly broad rule triggers a `drop` that cuts real users; you observe first in IDS, refine, then block."

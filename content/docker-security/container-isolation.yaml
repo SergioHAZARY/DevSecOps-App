@@ -1,0 +1,326 @@
+description:
+  fr: "Comprendre comment Docker isole les conteneurs avec les namespaces, cgroups et capabilities, et pourquoi docker.sock et --privileged brisent cette isolation."
+  en: "Understand how Docker isolates containers with namespaces, cgroups and capabilities, and why docker.sock and --privileged break that isolation."
+duration: 22
+
+intro:
+  fr: |
+    Un **conteneur** n'est pas une machine virtuelle. Une VM émule un ordinateur complet avec son propre noyau ;
+    un conteneur, lui, **partage le noyau** de la machine hôte et se contente d'y être *isolé*. Cette distinction
+    est le cœur de la sécurité Docker : si l'isolation est mal configurée, s'échapper d'un conteneur, c'est se
+    retrouver directement sur l'hôte, avec tous les autres conteneurs à portée.
+
+    L'analogie : une VM, c'est un immeuble indépendant ; un conteneur, c'est un appartement dans un immeuble
+    partagé. Les murs (namespaces), les compteurs individuels (cgroups) et les clés limitées (capabilities)
+    séparent les locataires — mais si l'on donne à un locataire le passe du gardien, toute la séparation
+    s'effondre.
+
+    Dans cette leçon, vous allez découvrir les trois piliers de l'isolation Linux que Docker utilise —
+    **namespaces**, **cgroups**, **capabilities** — puis voir deux façons classiques de tout casser : monter le
+    **socket Docker** (`docker.sock`) dans un conteneur, et le lancer en **`--privileged`**. Comprendre ces
+    mécanismes, c'est comprendre pourquoi les leçons suivantes insistent tant sur le non-root et les capabilities.
+  en: |
+    A **container** is not a virtual machine. A VM emulates a full computer with its own kernel; a container
+    **shares the host's kernel** and is merely *isolated* within it. This distinction is the heart of Docker
+    security: if the isolation is misconfigured, escaping a container means landing straight on the host, with
+    every other container within reach.
+
+    The analogy: a VM is a standalone building; a container is a flat in a shared building. The walls
+    (namespaces), the individual meters (cgroups) and the limited keys (capabilities) separate the tenants — but
+    hand one tenant the caretaker's master key and the whole separation collapses.
+
+    In this lesson you will discover the three pillars of Linux isolation Docker relies on — **namespaces**,
+    **cgroups**, **capabilities** — then see two classic ways to break everything: mounting the **Docker socket**
+    (`docker.sock`) into a container, and running it **`--privileged`**. Understanding these mechanisms is
+    understanding why the following lessons insist so much on non-root and capabilities.
+
+sections:
+  - heading:
+      fr: "Namespaces, cgroups, capabilities"
+      en: "Namespaces, cgroups, capabilities"
+    body:
+      fr: |
+        Docker s'appuie sur trois fonctionnalités du noyau Linux :
+
+        | Mécanisme | Ce qu'il isole / limite | Analogie |
+        |---|---|---|
+        | **Namespaces** | Ce que le conteneur *voit* : processus (PID), réseau (NET), montages (MNT), utilisateurs (USER) | Les murs de l'appartement |
+        | **cgroups** | Ce que le conteneur *consomme* : CPU, mémoire, I/O | Les compteurs d'eau et d'électricité |
+        | **Capabilities** | Ce que root *peut faire* : découpe les pouvoirs de root en ~40 droits | Un trousseau de clés limité |
+
+        Les **namespaces** donnent à chaque conteneur sa propre vue : il croit avoir son `PID 1`, son réseau, son
+        système de fichiers. Les **cgroups** l'empêchent de monopoliser les ressources (un conteneur ne doit pas
+        faire tomber l'hôte). Les **capabilities** sont essentielles en sécurité : au lieu d'un root tout-puissant,
+        le noyau découpe ses pouvoirs (par ex. `NET_ADMIN`, `SYS_ADMIN`, `CHOWN`). Docker n'en accorde qu'un
+        sous-ensemble par défaut, et on peut les retirer presque toutes.
+      en: |
+        Docker relies on three Linux kernel features:
+
+        | Mechanism | What it isolates / limits | Analogy |
+        |---|---|---|
+        | **Namespaces** | What the container *sees*: processes (PID), network (NET), mounts (MNT), users (USER) | The flat's walls |
+        | **cgroups** | What the container *consumes*: CPU, memory, I/O | The water and electricity meters |
+        | **Capabilities** | What root *can do*: splits root's power into ~40 rights | A limited key ring |
+
+        **Namespaces** give each container its own view: it thinks it has its own `PID 1`, its own network, its
+        own filesystem. **cgroups** stop it from hogging resources (a container must not bring the host down).
+        **Capabilities** are key to security: instead of an all-powerful root, the kernel splits root's powers
+        (e.g. `NET_ADMIN`, `SYS_ADMIN`, `CHOWN`). Docker grants only a subset by default, and you can drop almost
+        all of them.
+  - heading:
+      fr: "Comment on brise l'isolation"
+      en: "How isolation gets broken"
+    body:
+      fr: |
+        Deux configurations réduisent l'isolation à néant et sont à proscrire hors d'un environnement de confiance :
+
+        - **Monter `/var/run/docker.sock`** dans un conteneur. Ce socket est l'API du démon Docker, qui tourne en
+          root sur l'hôte. Y accéder depuis un conteneur permet de **créer un nouveau conteneur privilégié montant
+          tout l'hôte** : c'est une évasion complète en quelques commandes. C'est pourtant courant (agents CI,
+          outils de monitoring) — une cible de choix pour un attaquant.
+
+        - **`--privileged`** : ce drapeau désactive l'essentiel des protections (toutes les capabilities, accès
+          aux périphériques, pas de restriction seccomp/AppArmor). Un processus root dans un conteneur privilégié
+          est quasiment root sur l'hôte.
+
+        D'autres options dangereuses : `--pid=host` (voir/signaler les processus de l'hôte), `--net=host` (partager
+        la pile réseau), `-v /:/host` (monter le système de fichiers hôte). La règle : **n'accordez jamais à un
+        conteneur plus que ce dont il a strictement besoin.**
+      en: |
+        Two configurations reduce isolation to nothing and must be banned outside a trusted environment:
+
+        - **Mounting `/var/run/docker.sock`** into a container. This socket is the Docker daemon's API, which runs
+          as root on the host. Reaching it from a container lets you **create a new privileged container mounting
+          the whole host**: a complete escape in a few commands. Yet it is common (CI agents, monitoring tools) —
+          a prime target for an attacker.
+
+        - **`--privileged`**: this flag disables most protections (all capabilities, device access, no
+          seccomp/AppArmor restriction). A root process in a privileged container is practically root on the host.
+
+        Other dangerous options: `--pid=host` (see/signal host processes), `--net=host` (share the network stack),
+        `-v /:/host` (mount the host filesystem). The rule: **never grant a container more than it strictly
+        needs.**
+
+examples:
+  - title:
+      fr: "Dangereux : docker.sock monté dans un conteneur"
+      en: "Dangerous: docker.sock mounted in a container"
+    file: dangerous-run.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # ANTI-PATTERN - mounting the Docker socket = handing over the host.
+
+      # A "harmless" monitoring container, with the Docker socket mounted:
+      docker run -d --name agent \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        monitoring/agent:latest
+
+      # If that container is compromised, the attacker escapes like this:
+      #   (inside the agent container, talking to the host daemon)
+      docker run -it --rm --privileged --pid=host \
+        -v /:/host alpine chroot /host sh
+      # -> full root shell on the HOST filesystem.
+    output: |
+      # From inside the compromised container:
+      #   / # cat /host/etc/shadow     <-- reading host password hashes
+      #   / # the container has effectively become root on the node
+    note:
+      fr: "Le socket Docker est l'API du démon root. Le monter dans un conteneur permet de lancer un conteneur privilégié montant `/`, donc d'obtenir un shell root sur l'hôte. C'est l'une des évasions les plus fréquentes : évitez `docker.sock` ou passez par un proxy en lecture seule."
+      en: "The Docker socket is the root daemon's API. Mounting it in a container lets you launch a privileged container mounting `/`, hence a root shell on the host. It is one of the most common escapes: avoid `docker.sock` or go through a read-only proxy."
+
+  - title:
+      fr: "Sécurisé : isolation renforcée au lancement"
+      en: "Secure: hardened isolation at launch"
+    file: hardened-run.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      docker run -d --name app \
+        --user 10001:10001 \                 # run as non-root UID
+        --cap-drop ALL \                      # remove every Linux capability
+        --security-opt no-new-privileges \    # block setuid escalation
+        --read-only \                         # read-only root filesystem
+        --tmpfs /tmp:rw,noexec,nosuid \       # writable /tmp, but no exec
+        --memory 256m --cpus 0.5 \            # cgroup limits: no host DoS
+        --pids-limit 100 \                    # cap process count (fork bombs)
+        registry.example.com/app:1.4.0
+
+      # NO docker.sock, NO --privileged, NO --pid=host, NO -v /:/host.
+      # The container sees only itself and can barely touch the kernel.
+    output: |
+      # Verify the container runs non-root with no capabilities:
+      #   docker exec app id         ->  uid=10001 gid=10001
+      #   docker exec app capsh --print | grep Current
+      #   Current: =                 <-- no capabilities at all
+    note:
+      fr: "Chaque drapeau referme une voie d'évasion : non-root, capabilities vidées, pas d'escalade, disque en lecture seule, limites cgroups. Aucune option dangereuse (`docker.sock`, `--privileged`). Même compromis, ce conteneur n'offre presque aucun levier."
+      en: "Each flag closes an escape path: non-root, dropped capabilities, no escalation, read-only disk, cgroup limits. No dangerous option (`docker.sock`, `--privileged`). Even compromised, this container offers almost no leverage."
+
+  - title:
+      fr: "Inspecter l'isolation d'un conteneur"
+      en: "Inspecting a container's isolation"
+    file: inspect.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Audit the isolation posture of a running container (authorised).
+
+      # 1. Is it privileged? (should be false)
+      docker inspect --format '{{.HostConfig.Privileged}}' app
+
+      # 2. Which capabilities does it keep / drop?
+      docker inspect --format 'Drop={{.HostConfig.CapDrop}} Add={{.HostConfig.CapAdd}}' app
+
+      # 3. Does it mount the Docker socket? (a major red flag)
+      docker inspect --format '{{json .Mounts}}' app | grep -q docker.sock \
+        && echo "DANGER: docker.sock is mounted" || echo "OK: no docker.sock"
+
+      # 4. What user does PID 1 run as inside the container?
+      docker exec app id
+
+      # 5. See the namespaces the kernel created for this container.
+      pid=$(docker inspect --format '{{.State.Pid}}' app)
+      sudo ls -l /proc/"$pid"/ns
+    output: |
+      false
+      Drop=[ALL] Add=[]
+      OK: no docker.sock
+      uid=10001 gid=10001
+      lrwxrwxrwx mnt -> mnt:[4026532abc]   net -> net:[4026532def]  ...
+    note:
+      fr: "`docker inspect` révèle la posture d'isolation : mode privilégié, capabilities, montages. Vérifier l'absence de `docker.sock` et le `uid` non-root sont les deux contrôles les plus importants. `/proc/<pid>/ns` montre les namespaces réellement créés."
+      en: "`docker inspect` reveals the isolation posture: privileged mode, capabilities, mounts. Checking there is no `docker.sock` and that the `uid` is non-root are the two most important checks. `/proc/<pid>/ns` shows the namespaces actually created."
+
+mistake:
+  fr: |
+    **Croire qu'un conteneur est une frontière de sécurité aussi étanche qu'une VM.** Comme le conteneur partage
+    le noyau de l'hôte, une faille du noyau ou une mauvaise configuration (privileged, docker.sock, montage de
+    `/`) permet de s'en échapper. Le danger le plus courant est de **monter `/var/run/docker.sock`** « pour que
+    l'outil puisse gérer des conteneurs » : c'est donner les clés de l'hôte. Si un composant a vraiment besoin de
+    parler au démon, on passe par un **proxy de socket en lecture seule** restreignant les appels d'API, jamais
+    le socket brut.
+  en: |
+    **Believing a container is a security boundary as tight as a VM.** Because the container shares the host's
+    kernel, a kernel flaw or a misconfiguration (privileged, docker.sock, mounting `/`) allows escape. The most
+    common danger is **mounting `/var/run/docker.sock`** "so the tool can manage containers": that hands over the
+    keys to the host. If a component genuinely needs to talk to the daemon, go through a **read-only socket
+    proxy** restricting the API calls, never the raw socket.
+
+bestPractice:
+  fr: |
+    - **Souvenez-vous** : un conteneur partage le noyau de l'hôte ; l'isolation n'est pas celle d'une VM.
+    - **N'utilisez jamais `--privileged`** en production ; c'est l'équivalent d'un accès root à l'hôte.
+    - **Ne montez pas `docker.sock`** dans un conteneur ; sinon utilisez un proxy de socket restreint.
+    - **Retirez les capabilities** (`--cap-drop ALL`) et n'en rajoutez qu'au strict besoin.
+    - **Fixez des limites cgroups** (`--memory`, `--cpus`, `--pids-limit`) pour éviter qu'un conteneur ne mette l'hôte à genoux.
+  en: |
+    - **Remember**: a container shares the host's kernel; isolation is not that of a VM.
+    - **Never use `--privileged`** in production; it is equivalent to root access on the host.
+    - **Do not mount `docker.sock`** in a container; otherwise use a restricted socket proxy.
+    - **Drop capabilities** (`--cap-drop ALL`) and add back only the strict minimum.
+    - **Set cgroup limits** (`--memory`, `--cpus`, `--pids-limit`) to stop a container from bringing the host to its knees.
+
+exercise:
+  statement:
+    fr: |
+      Un développeur vous propose cette commande pour lancer un outil de build dans un conteneur :
+
+      ```bash
+      docker run -d --privileged \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        build-tool:latest
+      ```
+
+      1. Citez **deux** raisons pour lesquelles cette commande est dangereuse.
+      2. Réécrivez un lancement durci (non-root, capabilities retirées, limites, sans option dangereuse).
+    en: |
+      A developer proposes this command to run a build tool in a container:
+
+      ```bash
+      docker run -d --privileged \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        build-tool:latest
+      ```
+
+      1. Name **two** reasons this command is dangerous.
+      2. Rewrite a hardened launch (non-root, dropped capabilities, limits, no dangerous option).
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # Why it is dangerous:
+      #  1. --privileged disables isolation: root in the container ~ root on
+      #     the host (all capabilities, device access, no seccomp/AppArmor).
+      #  2. Mounting docker.sock exposes the root daemon API: the container
+      #     can spawn a privileged container mounting / and own the host.
+
+      # Hardened launch (no privileged, no socket):
+      docker run -d --name build-tool \
+        --user 10001:10001 \
+        --cap-drop ALL \
+        --security-opt no-new-privileges \
+        --read-only \
+        --tmpfs /tmp:rw,noexec,nosuid \
+        --memory 512m --cpus 1 --pids-limit 200 \
+        build-tool:1.2.0            # pinned version, no :latest
+    note:
+      fr: "On supprime `--privileged` et le montage de `docker.sock`, les deux failles majeures. Le conteneur tourne non-root, sans capability, avec un disque en lecture seule et des limites cgroups : son rayon d'impact est minimal."
+      en: "We remove `--privileged` and the `docker.sock` mount, the two major flaws. The container runs non-root, with no capability, a read-only disk and cgroup limits: its blast radius is minimal."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence fondamentale entre un conteneur et une VM ?"
+      en: "What is the fundamental difference between a container and a VM?"
+    options:
+      fr: ["Le conteneur partage le noyau de l'hôte, la VM a le sien", "Le conteneur est toujours plus lent", "La VM ne peut pas être isolée", "Le conteneur n'utilise pas de réseau"]
+      en: ["The container shares the host kernel, the VM has its own", "The container is always slower", "The VM cannot be isolated", "The container uses no network"]
+    answer: 0
+    why:
+      fr: "Un conteneur partage le noyau de l'hôte et n'est qu'isolé par namespaces/cgroups ; une VM émule un ordinateur complet avec son propre noyau, d'où une frontière plus étanche."
+      en: "A container shares the host kernel and is only isolated by namespaces/cgroups; a VM emulates a full computer with its own kernel, hence a tighter boundary."
+  - q:
+      fr: "Que limitent les cgroups ?"
+      en: "What do cgroups limit?"
+    options:
+      fr: ["Ce que le conteneur voit", "Les ressources consommées : CPU, mémoire, I/O", "Les capabilities", "Le réseau uniquement"]
+      en: ["What the container sees", "The resources consumed: CPU, memory, I/O", "Capabilities", "The network only"]
+    answer: 1
+    why:
+      fr: "Les cgroups (control groups) plafonnent la consommation de ressources d'un conteneur, l'empêchant de monopoliser CPU, mémoire ou I/O de l'hôte."
+      en: "cgroups (control groups) cap a container's resource consumption, stopping it from hogging the host's CPU, memory or I/O."
+  - q:
+      fr: "Pourquoi monter `/var/run/docker.sock` dans un conteneur est-il dangereux ?"
+      en: "Why is mounting `/var/run/docker.sock` in a container dangerous?"
+    options:
+      fr: ["Cela ralentit Docker", "Cela remplit le disque", "Cela donne accès à l'API du démon root et permet l'évasion vers l'hôte", "Cela désactive le DNS"]
+      en: ["It slows Docker down", "It fills the disk", "It gives access to the root daemon API and enables host escape", "It disables DNS"]
+    answer: 2
+    why:
+      fr: "Le socket Docker est l'API du démon qui tourne en root ; y accéder permet de créer un conteneur privilégié montant l'hôte, soit une évasion complète."
+      en: "The Docker socket is the API of the daemon running as root; reaching it lets you create a privileged container mounting the host, a complete escape."
+  - q:
+      fr: "Que font les capabilities Linux ?"
+      en: "What do Linux capabilities do?"
+    options:
+      fr: ["Elles chiffrent le conteneur", "Elles découpent les pouvoirs de root en droits distincts", "Elles accélèrent les builds", "Elles gèrent le stockage"]
+      en: ["They encrypt the container", "They split root's powers into distinct rights", "They speed up builds", "They manage storage"]
+    answer: 1
+    why:
+      fr: "Les capabilities fragmentent l'omnipotence de root en ~40 droits séparés (NET_ADMIN, SYS_ADMIN…), que l'on peut accorder ou retirer finement avec `--cap-drop`/`--cap-add`."
+      en: "Capabilities break root's omnipotence into ~40 separate rights (NET_ADMIN, SYS_ADMIN…), which you can grant or drop finely with `--cap-drop`/`--cap-add`."
+  - q:
+      fr: "Quel drapeau désactive l'essentiel des protections d'isolation ?"
+      en: "Which flag disables most isolation protections?"
+    options:
+      fr: ["--read-only", "--cap-drop ALL", "--memory 256m", "--privileged"]
+      en: ["--read-only", "--cap-drop ALL", "--memory 256m", "--privileged"]
+    answer: 3
+    why:
+      fr: "`--privileged` accorde toutes les capabilities, l'accès aux périphériques et lève seccomp/AppArmor : un root dans ce conteneur est quasiment root sur l'hôte."
+      en: "`--privileged` grants all capabilities, device access and lifts seccomp/AppArmor: root in that container is practically root on the host."

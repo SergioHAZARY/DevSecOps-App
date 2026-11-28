@@ -1,0 +1,372 @@
+description:
+  fr: "Comprendre le hachage et le HMAC : intégrité vs confidentialité, pourquoi MD5 et SHA-1 sont cassés, et comparaison en temps constant avec la bibliothèque standard Python."
+  en: "Understand hashing and HMAC: integrity vs confidentiality, why MD5 and SHA-1 are broken, and constant-time comparison with Python's standard library."
+duration: 22
+
+intro:
+  fr: |
+    Le **hachage** est souvent confondu avec le chiffrement, mais ils ne font pas du tout la même chose. Chiffrer,
+    c'est transformer un message pour pouvoir le **retrouver** plus tard (avec une clé). Hacher, c'est produire une
+    **empreinte** irréversible d'une donnée : impossible de revenir en arrière. Le hachage sert à prouver
+    l'**intégrité** (« ce fichier n'a pas été modifié »), pas la confidentialité.
+
+    L'analogie : un hachage, c'est l'empreinte digitale d'un document. Deux documents identiques ont la même
+    empreinte ; changer une virgule change complètement l'empreinte. Mais à partir de l'empreinte, on ne peut pas
+    reconstituer le document — exactement comme une empreinte digitale n'est pas une photo de la personne.
+
+    Dans cette leçon, vous allez calculer des empreintes avec **hashlib** (bibliothèque standard de Python,
+    exécutable dans le navigateur), comprendre pourquoi **MD5 et SHA-1 sont cassés** et doivent disparaître,
+    découvrir le **HMAC** (un hachage avec clé secrète qui prouve l'authenticité d'un message), et surtout
+    utiliser **`hmac.compare_digest`** pour comparer deux empreintes **en temps constant**, une subtilité qui
+    évite une vraie faille (*timing attack*).
+  en: |
+    **Hashing** is often confused with encryption, but they do completely different things. Encrypting transforms
+    a message so you can **recover** it later (with a key). Hashing produces an irreversible **fingerprint** of
+    some data: you cannot go back. Hashing is used to prove **integrity** ("this file has not been modified"),
+    not confidentiality.
+
+    The analogy: a hash is a document's fingerprint. Two identical documents have the same fingerprint; changing
+    a comma changes the fingerprint entirely. But from the fingerprint you cannot rebuild the document — exactly
+    as a fingerprint is not a photo of the person.
+
+    In this lesson you will compute fingerprints with **hashlib** (Python's standard library, runnable in the
+    browser), understand why **MD5 and SHA-1 are broken** and must go, discover **HMAC** (a keyed hash that
+    proves a message's authenticity), and above all use **`hmac.compare_digest`** to compare two fingerprints in
+    **constant time**, a subtlety that prevents a real flaw (a *timing attack*).
+
+sections:
+  - heading:
+      fr: "Hachage : intégrité, pas confidentialité"
+      en: "Hashing: integrity, not confidentiality"
+    body:
+      fr: |
+        Une fonction de hachage transforme une donnée de taille quelconque en une empreinte de taille fixe. Un bon
+        hachage cryptographique a trois propriétés :
+
+        - **Irréversible** : on ne peut pas retrouver l'entrée à partir de l'empreinte.
+        - **Déterministe** : la même entrée donne toujours la même empreinte.
+        - **Résistant aux collisions** : il est infaisable de trouver deux entrées différentes avec la même empreinte.
+
+        | Algorithme | État | Usage |
+        |---|---|---|
+        | **MD5** | ❌ Cassé (collisions) | À bannir |
+        | **SHA-1** | ❌ Cassé (collisions, SHAttered 2017) | À bannir |
+        | **SHA-256 / SHA-3** | ✅ Sûr | Intégrité, signatures, empreintes |
+
+        Le hachage sert à vérifier l'**intégrité** : on publie l'empreinte SHA-256 d'un fichier (`sha256sum`), et
+        quiconque le télécharge recalcule l'empreinte pour s'assurer qu'il n'a pas été altéré. **Attention** : pour
+        les **mots de passe**, on n'utilise pas un simple SHA-256 mais des fonctions lentes et salées (bcrypt,
+        Argon2) — c'est le sujet d'une autre leçon.
+      en: |
+        A hash function turns data of any size into a fixed-size fingerprint. A good cryptographic hash has three
+        properties:
+
+        - **Irreversible**: you cannot recover the input from the fingerprint.
+        - **Deterministic**: the same input always gives the same fingerprint.
+        - **Collision-resistant**: it is infeasible to find two different inputs with the same fingerprint.
+
+        | Algorithm | State | Use |
+        |---|---|---|
+        | **MD5** | ❌ Broken (collisions) | Must be banned |
+        | **SHA-1** | ❌ Broken (collisions, SHAttered 2017) | Must be banned |
+        | **SHA-256 / SHA-3** | ✅ Safe | Integrity, signatures, fingerprints |
+
+        Hashing is used to verify **integrity**: you publish a file's SHA-256 fingerprint (`sha256sum`), and
+        anyone downloading it recomputes the fingerprint to be sure it was not tampered with. **Caution**: for
+        **passwords**, you do not use a plain SHA-256 but slow, salted functions (bcrypt, Argon2) — that is the
+        topic of another lesson.
+  - heading:
+      fr: "HMAC et comparaison en temps constant"
+      en: "HMAC and constant-time comparison"
+    body:
+      fr: |
+        Un hachage seul prouve l'intégrité, mais pas l'**authenticité** : si un attaquant modifie un message, il
+        peut aussi recalculer son hachage. Le **HMAC** (*Hash-based Message Authentication Code*) résout cela en
+        mélangeant une **clé secrète** au hachage. Seul celui qui connaît la clé peut produire un HMAC valide. On
+        s'en sert pour signer des webhooks, des cookies, des jetons.
+
+        Il reste un piège subtil au moment de **vérifier** un HMAC ou un jeton : comparer deux empreintes avec le
+        `==` habituel est dangereux. L'opérateur `==` s'arrête au premier octet qui diffère, donc la comparaison
+        prend un peu **plus de temps** quand le début est correct. En mesurant ces micro-délais, un attaquant peut
+        deviner le bon jeton octet par octet : c'est une **attaque temporelle** (*timing attack*).
+
+        La parade est **`hmac.compare_digest(a, b)`** : elle compare en **temps constant**, indépendamment de
+        l'endroit où les valeurs diffèrent, fermant cette fuite d'information. C'est la fonction à utiliser pour
+        toute comparaison de secret (jeton, signature, HMAC).
+      en: |
+        A hash alone proves integrity, but not **authenticity**: if an attacker modifies a message, they can also
+        recompute its hash. **HMAC** (*Hash-based Message Authentication Code*) solves this by mixing a **secret
+        key** into the hash. Only someone who knows the key can produce a valid HMAC. It is used to sign webhooks,
+        cookies and tokens.
+
+        A subtle trap remains when **verifying** an HMAC or a token: comparing two fingerprints with the usual
+        `==` is dangerous. The `==` operator stops at the first differing byte, so the comparison takes slightly
+        **longer** when the start is correct. By measuring these micro-delays, an attacker can guess the right
+        token byte by byte: this is a **timing attack**.
+
+        The fix is **`hmac.compare_digest(a, b)`**: it compares in **constant time**, regardless of where the
+        values differ, closing this information leak. It is the function to use for any secret comparison (token,
+        signature, HMAC).
+
+examples:
+  - title:
+      fr: "Hachage avec hashlib (exécutable)"
+      en: "Hashing with hashlib (runnable)"
+    file: hashing.py
+    lang: python
+    kind: secure
+    code: |
+      # Standard library only - runs in the playground.
+      import hashlib
+
+      data = b"The quick brown fox"
+
+      # SHA-256: the safe default for integrity / fingerprints.
+      print("SHA-256:", hashlib.sha256(data).hexdigest())
+
+      # Hashing is deterministic: same input -> same digest.
+      print("Again:  ", hashlib.sha256(data).hexdigest())
+
+      # Avalanche effect: one changed byte -> a completely different digest.
+      print("Changed:", hashlib.sha256(b"The quick brown foz").hexdigest())
+
+      # MD5 still "works" but is cryptographically broken - shown here only
+      # to contrast; never use it for security.
+      print("MD5 (broken!):", hashlib.md5(data).hexdigest())
+    output: |
+      SHA-256: b76f3a3f7b5e2c... (64 hex chars, same every time)
+      Again:   b76f3a3f7b5e2c...
+      Changed: 1a9c0e44d2f8b1... (totally different: avalanche effect)
+      MD5 (broken!): a2e5c1f0...
+    note:
+      fr: "`hashlib.sha256(...).hexdigest()` produit une empreinte déterministe de 64 caractères hexadécimaux. Changer un seul octet change toute l'empreinte (effet d'avalanche). MD5 est montré uniquement pour le contraste : il ne doit jamais servir à la sécurité."
+      en: "`hashlib.sha256(...).hexdigest()` produces a deterministic 64-hex-char fingerprint. Changing a single byte changes the whole fingerprint (avalanche effect). MD5 is shown only for contrast: it must never be used for security."
+
+  - title:
+      fr: "Vulnérable : HMAC vérifié avec =="
+      en: "Vulnerable: HMAC verified with =="
+    file: verify_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - comparing secrets with == leaks timing information.
+      import hmac
+      import hashlib
+
+      SECRET = b"changeme-webhook-secret"
+
+
+      def is_valid(message: bytes, received_sig: str) -> bool:
+          expected = hmac.new(SECRET, message, hashlib.sha256).hexdigest()
+          # DANGER: == stops at the first differing character, so a guess
+          # with a correct prefix takes measurably longer. An attacker can
+          # recover the signature byte by byte (timing attack).
+          return expected == received_sig
+
+
+      # The signature itself is computed correctly, but the COMPARISON leaks.
+      msg = b'{"event":"payment"}'
+      good = hmac.new(SECRET, msg, hashlib.sha256).hexdigest()
+      print("Valid signature accepted:", is_valid(msg, good))
+      print("Forged signature rejected:", is_valid(msg, "00" * 32))
+    output: |
+      Valid signature accepted: True
+      Forged signature rejected: False
+      # It "works", but the == comparison is exploitable via timing analysis.
+    note:
+      fr: "Le HMAC est calculé correctement, mais la comparaison avec `==` s'arrête au premier octet différent : son temps d'exécution dépend du préfixe correct. En mesurant ces micro-délais, un attaquant reconstitue la signature octet par octet (timing attack)."
+      en: "The HMAC is computed correctly, but the `==` comparison stops at the first differing byte: its runtime depends on the correct prefix. By measuring these micro-delays, an attacker rebuilds the signature byte by byte (timing attack)."
+
+  - title:
+      fr: "Sécurisé : HMAC + compare_digest (temps constant)"
+      en: "Secure: HMAC + compare_digest (constant time)"
+    file: verify_secure.py
+    lang: python
+    kind: secure
+    code: |
+      # Standard library only - runs in the playground.
+      import hmac
+      import hashlib
+
+      SECRET = b"changeme-webhook-secret"
+
+
+      def sign(message: bytes) -> str:
+          # HMAC-SHA256: proves the message comes from someone with the key.
+          return hmac.new(SECRET, message, hashlib.sha256).hexdigest()
+
+
+      def is_valid(message: bytes, received_sig: str) -> bool:
+          expected = sign(message)
+          # FIX: constant-time comparison. Its duration does not depend on
+          # where the values differ, so it leaks no timing information.
+          return hmac.compare_digest(expected, received_sig)
+
+
+      msg = b'{"event":"payment"}'
+      good = sign(msg)
+      print("Signature:", good)
+      print("Valid accepted:", is_valid(msg, good))
+      print("Forged rejected:", is_valid(msg, "deadbeef" * 8))
+    output: |
+      Signature: 3f9a1c... (HMAC-SHA256, 64 hex chars)
+      Valid accepted: True
+      Forged rejected: False
+    note:
+      fr: "On signe avec HMAC-SHA256 (clé secrète) et on vérifie avec `hmac.compare_digest`, qui compare en temps constant quelle que soit la position de la différence. C'est la bonne façon de valider toute signature ou jeton, immunisée contre les timing attacks."
+      en: "We sign with HMAC-SHA256 (secret key) and verify with `hmac.compare_digest`, which compares in constant time regardless of where the difference is. This is the right way to validate any signature or token, immune to timing attacks."
+
+  - title:
+      fr: "Vérifier l'intégrité d'un fichier (sha256sum)"
+      en: "Verifying a file's integrity (sha256sum)"
+    file: verify.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. The publisher computes and shares the SHA-256 fingerprint.
+      sha256sum app-1.4.0.tar.gz > app-1.4.0.tar.gz.sha256
+      # app-1.4.0.tar.gz.sha256 contains: <hash>  app-1.4.0.tar.gz
+
+      # 2. After downloading, the user verifies the file was not tampered:
+      sha256sum -c app-1.4.0.tar.gz.sha256
+
+      # 3. NEVER trust an MD5 or SHA-1 checksum for this - both are broken:
+      #    an attacker can craft a malicious file with the same MD5/SHA-1.
+      #    Always publish and verify with SHA-256 (or SHA-3).
+    output: |
+      # Intact file:
+      app-1.4.0.tar.gz: OK
+      # Tampered file:
+      app-1.4.0.tar.gz: FAILED
+      sha256sum: WARNING: 1 computed checksum did NOT match
+    note:
+      fr: "`sha256sum -c` recalcule l'empreinte et la compare à celle publiée : `OK` si le fichier est intact, `FAILED` sinon. On publie toujours en SHA-256, jamais en MD5/SHA-1, car un attaquant peut fabriquer un fichier malveillant avec la même empreinte MD5/SHA-1."
+      en: "`sha256sum -c` recomputes the fingerprint and compares it to the published one: `OK` if the file is intact, `FAILED` otherwise. Always publish in SHA-256, never MD5/SHA-1, because an attacker can craft a malicious file with the same MD5/SHA-1 fingerprint."
+
+mistake:
+  fr: |
+    **Comparer un secret avec `==` et utiliser MD5/SHA-1.** Deux erreurs classiques. D'abord, vérifier un HMAC, un
+    jeton ou un mot de passe haché avec `==` (ou `!=`) crée une fuite temporelle exploitable : il faut
+    `hmac.compare_digest`. Ensuite, se fier à **MD5 ou SHA-1** pour l'intégrité ou les signatures : ces algorithmes
+    sont **cassés** (on sait fabriquer des collisions), donc un attaquant peut produire un fichier malveillant
+    ayant la même empreinte qu'un fichier légitime. On utilise SHA-256 ou SHA-3. Dernier rappel : le hachage ne
+    chiffre **rien** — ne l'utilisez jamais pour « cacher » une donnée que vous devrez relire.
+  en: |
+    **Comparing a secret with `==` and using MD5/SHA-1.** Two classic mistakes. First, verifying an HMAC, a token
+    or a hashed password with `==` (or `!=`) creates an exploitable timing leak: use `hmac.compare_digest`.
+    Second, relying on **MD5 or SHA-1** for integrity or signatures: these algorithms are **broken** (collisions
+    are feasible), so an attacker can produce a malicious file with the same fingerprint as a legitimate one. Use
+    SHA-256 or SHA-3. Final reminder: hashing encrypts **nothing** — never use it to "hide" data you will need to
+    read back.
+
+bestPractice:
+  fr: |
+    - **Utilisez SHA-256 ou SHA-3** pour l'intégrité et les empreintes ; bannissez MD5 et SHA-1.
+    - **Comparez les secrets avec `hmac.compare_digest`** (temps constant), jamais `==`.
+    - **Signez avec HMAC** (clé secrète) pour prouver l'authenticité d'un message, pas un simple hachage.
+    - **Ne confondez pas** hachage (intégrité, irréversible) et chiffrement (confidentialité, réversible).
+    - **Pour les mots de passe**, utilisez bcrypt/Argon2 (lents, salés), pas un SHA-256 brut.
+  en: |
+    - **Use SHA-256 or SHA-3** for integrity and fingerprints; ban MD5 and SHA-1.
+    - **Compare secrets with `hmac.compare_digest`** (constant time), never `==`.
+    - **Sign with HMAC** (secret key) to prove a message's authenticity, not a plain hash.
+    - **Do not confuse** hashing (integrity, irreversible) and encryption (confidentiality, reversible).
+    - **For passwords**, use bcrypt/Argon2 (slow, salted), not a raw SHA-256.
+
+exercise:
+  statement:
+    fr: |
+      Vous recevez des webhooks signés. Le code de vérification actuel est :
+
+      ```python
+      def verify(payload, signature):
+          expected = hmac.new(KEY, payload, hashlib.md5).hexdigest()
+          return expected == signature
+      ```
+
+      1. Identifiez **deux** faiblesses de sécurité.
+      2. Réécrivez la fonction correctement (bon algorithme, bonne comparaison).
+    en: |
+      You receive signed webhooks. The current verification code is:
+
+      ```python
+      def verify(payload, signature):
+          expected = hmac.new(KEY, payload, hashlib.md5).hexdigest()
+          return expected == signature
+      ```
+
+      1. Identify **two** security weaknesses.
+      2. Rewrite the function correctly (right algorithm, right comparison).
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import hmac
+      import hashlib
+
+      # Weaknesses:
+      #  1. MD5 is a broken hash: use SHA-256 for the HMAC.
+      #  2. `==` compares in variable time -> timing attack; use
+      #     hmac.compare_digest for a constant-time comparison.
+
+      def verify(payload: bytes, signature: str) -> bool:
+          expected = hmac.new(KEY, payload, hashlib.sha256).hexdigest()
+          return hmac.compare_digest(expected, signature)
+    note:
+      fr: "Faiblesse 1 : MD5 est cassé, on passe à SHA-256. Faiblesse 2 : `==` fuit le temps, on utilise `hmac.compare_digest`. La fonction corrigée résiste aux collisions et aux attaques temporelles."
+      en: "Weakness 1: MD5 is broken, switch to SHA-256. Weakness 2: `==` leaks timing, use `hmac.compare_digest`. The fixed function resists collisions and timing attacks."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre hachage et chiffrement ?"
+      en: "What is the difference between hashing and encryption?"
+    options:
+      fr: ["Le hachage est irréversible (intégrité) ; le chiffrement est réversible avec une clé (confidentialité)", "Ils sont identiques", "Le hachage utilise une clé publique", "Le chiffrement est toujours plus rapide"]
+      en: ["Hashing is irreversible (integrity); encryption is reversible with a key (confidentiality)", "They are identical", "Hashing uses a public key", "Encryption is always faster"]
+    answer: 0
+    why:
+      fr: "Hacher produit une empreinte irréversible pour vérifier l'intégrité ; chiffrer transforme un message pour le retrouver plus tard avec une clé (confidentialité)."
+      en: "Hashing produces an irreversible fingerprint to verify integrity; encryption transforms a message to recover it later with a key (confidentiality)."
+  - q:
+      fr: "Pourquoi MD5 et SHA-1 ne doivent-ils plus être utilisés ?"
+      en: "Why should MD5 and SHA-1 no longer be used?"
+    options:
+      fr: ["Ils sont trop lents", "On sait fabriquer des collisions : deux entrées différentes avec la même empreinte", "Ils nécessitent une clé", "Ils ne fonctionnent pas en Python"]
+      en: ["They are too slow", "Collisions are feasible: two different inputs with the same fingerprint", "They require a key", "They do not work in Python"]
+    answer: 1
+    why:
+      fr: "MD5 et SHA-1 sont cassés : un attaquant peut créer deux contenus distincts ayant la même empreinte, ce qui ruine leur usage pour l'intégrité et les signatures."
+      en: "MD5 and SHA-1 are broken: an attacker can create two distinct contents with the same fingerprint, which ruins their use for integrity and signatures."
+  - q:
+      fr: "Qu'apporte le HMAC par rapport à un simple hachage ?"
+      en: "What does HMAC add compared to a plain hash?"
+    options:
+      fr: ["Il est plus rapide", "Il chiffre le message", "Il mélange une clé secrète, prouvant l'authenticité du message", "Il réduit la taille de l'empreinte"]
+      en: ["It is faster", "It encrypts the message", "It mixes in a secret key, proving the message's authenticity", "It shrinks the fingerprint"]
+    answer: 2
+    why:
+      fr: "Le HMAC incorpore une clé secrète : seul celui qui la connaît peut produire un HMAC valide, ce qui prouve que le message provient d'une source autorisée."
+      en: "HMAC incorporates a secret key: only someone who knows it can produce a valid HMAC, proving the message comes from an authorized source."
+  - q:
+      fr: "Pourquoi utiliser `hmac.compare_digest` plutôt que `==` ?"
+      en: "Why use `hmac.compare_digest` rather than `==`?"
+    options:
+      fr: ["Pour comparer en temps constant et éviter une attaque temporelle", "Pour chiffrer la comparaison", "Parce que `==` ne marche pas sur les chaînes", "Pour accélérer le code"]
+      en: ["To compare in constant time and avoid a timing attack", "To encrypt the comparison", "Because `==` does not work on strings", "To speed up the code"]
+    answer: 0
+    why:
+      fr: "`==` s'arrête au premier octet différent, ce qui fait fuir de l'information temporelle ; `hmac.compare_digest` compare en temps constant et ferme cette faille."
+      en: "`==` stops at the first differing byte, leaking timing information; `hmac.compare_digest` compares in constant time and closes this flaw."
+  - q:
+      fr: "Quel algorithme utiliser pour publier l'empreinte d'un fichier à télécharger ?"
+      en: "Which algorithm should you use to publish a downloadable file's fingerprint?"
+    options:
+      fr: ["MD5", "SHA-1", "CRC32", "SHA-256"]
+      en: ["MD5", "SHA-1", "CRC32", "SHA-256"]
+    answer: 3
+    why:
+      fr: "SHA-256 (ou SHA-3) est résistant aux collisions ; MD5 et SHA-1 sont cassés et CRC32 n'est pas cryptographique, donc inadaptés pour garantir l'intégrité."
+      en: "SHA-256 (or SHA-3) is collision-resistant; MD5 and SHA-1 are broken and CRC32 is not cryptographic, so they are unfit to guarantee integrity."

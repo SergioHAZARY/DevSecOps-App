@@ -1,0 +1,457 @@
+description:
+  fr: "Comprendre les bases d'un workflow GitHub Actions : déclencheurs, jobs, steps, runners, matrice et cache, pour poser le premier pipeline d'une petite application Python/Node."
+  en: "Understand the basics of a GitHub Actions workflow: triggers, jobs, steps, runners, matrix and caching, to lay down the first pipeline of a small Python/Node app."
+duration: 20
+
+intro:
+  fr: |
+    **GitHub Actions** est le système d'intégration continue intégré à GitHub. Il exécute automatiquement
+    des tâches (tests, builds, scans de sécurité) à chaque événement de votre choix : un `git push`, une
+    pull request, une heure programmée. C'est le moteur sur lequel repose tout le reste de ce cours.
+
+    Imaginez une chaîne de montage : dès qu'une pièce (votre code) arrive, elle passe par des postes de
+    travail (compilation, tests, analyse). Chaque poste peut arrêter la chaîne si quelque chose ne va pas.
+    Un **workflow** décrit cette chaîne en YAML, dans le dossier `.github/workflows/`.
+
+    Dans cette leçon, vous allez écrire votre premier workflow pour une petite application Python/Node, en
+    découvrant son vocabulaire : les **déclencheurs** (*triggers*) qui lancent le workflow, les **jobs**
+    qui tournent en parallèle, les **steps** qui s'enchaînent, les **runners** qui exécutent tout, la
+    **matrice** qui teste plusieurs versions, et le **cache** qui accélère les dépendances. Ce workflow
+    servira de base que nous enrichirons de sécurité au fil des leçons suivantes.
+  en: |
+    **GitHub Actions** is GitHub's built-in continuous integration system. It automatically runs tasks
+    (tests, builds, security scans) on every event you choose: a `git push`, a pull request, a scheduled
+    time. It is the engine the rest of this course relies on.
+
+    Picture an assembly line: as soon as a part (your code) arrives, it moves through workstations
+    (compilation, tests, analysis). Each station can stop the line if something is wrong. A **workflow**
+    describes this line in YAML, inside the `.github/workflows/` folder.
+
+    In this lesson you will write your first workflow for a small Python/Node app, learning its vocabulary:
+    the **triggers** that start the workflow, the **jobs** that run in parallel, the **steps** that run in
+    sequence, the **runners** that execute everything, the **matrix** that tests several versions, and the
+    **cache** that speeds up dependencies. This workflow becomes the base we will enrich with security
+    through the following lessons.
+
+sections:
+  - heading:
+      fr: "Déclencheurs, jobs, steps, runners"
+      en: "Triggers, jobs, steps, runners"
+    body:
+      fr: |
+        Un workflow s'articule autour de quatre notions :
+
+        | Terme | Rôle |
+        |---|---|
+        | **`on`** (trigger) | L'événement qui lance le workflow : `push`, `pull_request`, `schedule`... |
+        | **`jobs`** | Des unités de travail **parallèles** par défaut, chacune sur sa propre machine |
+        | **`steps`** | Les étapes **séquentielles** d'un job : commandes ou actions réutilisables |
+        | **`runs-on`** (runner) | La machine qui exécute le job : `ubuntu-latest`, `windows-latest`... |
+
+        Chaque **step** fait une de deux choses : exécuter une commande shell avec `run:`, ou appeler une
+        **action** réutilisable avec `uses:` (par exemple `actions/checkout@v4` pour récupérer le code).
+        Les jobs étant parallèles, on crée une dépendance explicite avec `needs:` quand un job doit attendre
+        un autre.
+
+        Le déclencheur le plus courant en DevSecOps est `pull_request` : il fait tourner les contrôles
+        **avant** la fusion, pour bloquer le code défectueux. On y ajoute souvent `push` sur `main` pour
+        revalider après fusion. Un workflow minimal tient en une dizaine de lignes.
+      en: |
+        A workflow is built around four notions:
+
+        | Term | Role |
+        |---|---|
+        | **`on`** (trigger) | The event that starts the workflow: `push`, `pull_request`, `schedule`... |
+        | **`jobs`** | Work units that are **parallel** by default, each on its own machine |
+        | **`steps`** | The **sequential** steps of a job: commands or reusable actions |
+        | **`runs-on`** (runner) | The machine that runs the job: `ubuntu-latest`, `windows-latest`... |
+
+        Each **step** does one of two things: run a shell command with `run:`, or call a reusable **action**
+        with `uses:` (for example `actions/checkout@v4` to fetch the code). Since jobs are parallel, you
+        create an explicit dependency with `needs:` when a job must wait for another.
+
+        The most common trigger in DevSecOps is `pull_request`: it runs the checks **before** the merge, to
+        block broken code. You often add `push` on `main` to re-validate after merging. A minimal workflow
+        fits in about ten lines.
+  - heading:
+      fr: "Matrice : tester plusieurs versions"
+      en: "Matrix: testing several versions"
+    body:
+      fr: |
+        Une application doit souvent fonctionner sur plusieurs versions d'un langage ou système. Plutôt que
+        de copier-coller un job par version, on utilise une **matrice** (`strategy.matrix`) : GitHub génère
+        automatiquement une copie du job pour chaque combinaison.
+
+        ```yaml
+        strategy:
+          matrix:
+            python-version: ["3.11", "3.12", "3.13"]
+        ```
+
+        Ce bloc crée **trois** exécutions du même job, une par version de Python. La valeur courante est
+        accessible via `${{ matrix.python-version }}`. On peut croiser plusieurs axes (version × système
+        d'exploitation) et exclure certaines combinaisons avec `exclude`.
+
+        Pour la sécurité, la matrice a une vertu : elle garantit que vos contrôles passent sur **toutes**
+        les versions supportées, pas seulement sur celle du développeur. Une faille de dépendance peut
+        n'exister que sur une version précise. L'option `fail-fast: false` évite qu'un échec sur une version
+        n'annule les autres, utile pour voir d'un coup toutes les versions concernées.
+      en: |
+        An application often has to work on several versions of a language or system. Rather than copying a
+        job per version, you use a **matrix** (`strategy.matrix`): GitHub automatically generates a copy of
+        the job for each combination.
+
+        ```yaml
+        strategy:
+          matrix:
+            python-version: ["3.11", "3.12", "3.13"]
+        ```
+
+        This block creates **three** runs of the same job, one per Python version. The current value is
+        available via `${{ matrix.python-version }}`. You can cross several axes (version × operating
+        system) and exclude combinations with `exclude`.
+
+        For security, the matrix has a virtue: it ensures your checks pass on **every** supported version,
+        not only the developer's. A dependency flaw may exist only on a specific version. The option
+        `fail-fast: false` keeps a failure on one version from cancelling the others, useful to see every
+        affected version at once.
+  - heading:
+      fr: "Cache : accélérer sans sacrifier la fiabilité"
+      en: "Cache: speeding up without sacrificing reliability"
+    body:
+      fr: |
+        Installer les dépendances (`pip install`, `npm ci`) à chaque exécution est lent. Le **cache**
+        conserve ces dépendances entre deux exécutions. Le plus simple est d'utiliser l'option `cache`
+        intégrée aux actions de setup :
+
+        ```yaml
+        - uses: actions/setup-python@v5
+          with:
+            python-version: "3.12"
+            cache: "pip"           # restore the pip cache automatically
+        ```
+
+        Pour un contrôle plus fin, `actions/cache@v4` permet de définir une **clé** : le cache n'est réécrit
+        que si la clé change. On construit généralement la clé à partir du **hash du fichier de
+        verrouillage** (`requirements.txt`, `package-lock.json`), pour qu'un changement de dépendances
+        invalide le cache.
+
+        ```yaml
+        - uses: actions/cache@v4
+          with:
+            path: ~/.npm
+            key: npm-${{ hashFiles('package-lock.json') }}
+        ```
+
+        Attention à ne pas mettre de secret ou de donnée sensible dans un cache : les caches sont partagés
+        entre branches et peuvent être lus par d'autres workflows du dépôt. On ne met en cache que des
+        **dépendances publiques**, jamais des artefacts contenant des identifiants.
+      en: |
+        Installing dependencies (`pip install`, `npm ci`) on every run is slow. The **cache** keeps those
+        dependencies between runs. The simplest way is the `cache` option built into the setup actions:
+
+        ```yaml
+        - uses: actions/setup-python@v5
+          with:
+            python-version: "3.12"
+            cache: "pip"           # restore the pip cache automatically
+        ```
+
+        For finer control, `actions/cache@v4` lets you define a **key**: the cache is only rewritten when
+        the key changes. You usually build the key from the **hash of the lock file**
+        (`requirements.txt`, `package-lock.json`), so a dependency change invalidates the cache.
+
+        ```yaml
+        - uses: actions/cache@v4
+          with:
+            path: ~/.npm
+            key: npm-${{ hashFiles('package-lock.json') }}
+        ```
+
+        Be careful not to put any secret or sensitive data in a cache: caches are shared between branches
+        and can be read by other workflows in the repo. Cache only **public dependencies**, never artefacts
+        containing credentials.
+
+examples:
+  - title:
+      fr: "Un premier workflow : installer, lint et tester"
+      en: "A first workflow: install, lint and test"
+    file: .github/workflows/ci.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      name: ci
+
+      # Trigger: run on every pull request and on pushes to main
+      on:
+        pull_request:
+        push:
+          branches: [main]
+
+      jobs:
+        test:
+          runs-on: ubuntu-latest        # the runner: a fresh Ubuntu machine
+          steps:
+            - uses: actions/checkout@v4 # step 1: fetch the repository code
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+                cache: "pip"            # speed up repeated installs
+            - name: Install dependencies
+              run: pip install -r requirements.txt
+            - name: Run tests
+              run: pytest -q            # a non-zero exit fails the job
+    output: |
+      Run pytest -q
+      ........                                                          [100%]
+      8 passed in 1.12s
+    note:
+      fr: "Les quatre notions sont là : le déclencheur `on`, un job `test`, des steps séquentiels et le runner `ubuntu-latest`. Le step `checkout` est presque toujours le premier : sans lui, la machine ne contient pas votre code. Si `pytest` échoue, le job devient rouge et bloque la pull request."
+      en: "The four notions are here: the `on` trigger, a `test` job, sequential steps and the `ubuntu-latest` runner. The `checkout` step is almost always first: without it, the machine has none of your code. If `pytest` fails, the job turns red and blocks the pull request."
+
+  - title:
+      fr: "Tester plusieurs versions avec une matrice"
+      en: "Testing several versions with a matrix"
+    file: .github/workflows/matrix.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      name: ci-matrix
+      on: [pull_request]
+
+      jobs:
+        test:
+          runs-on: ubuntu-latest
+          strategy:
+            fail-fast: false            # one failing version does not cancel the others
+            matrix:
+              python-version: ["3.11", "3.12", "3.13"]
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: ${{ matrix.python-version }}
+                cache: "pip"
+            - run: pip install -r requirements.txt
+            - run: pytest -q
+    output: |
+      test (3.11)   8 passed in 1.20s
+      test (3.12)   8 passed in 1.08s
+      test (3.13)   8 passed in 1.15s
+    note:
+      fr: "Un seul bloc crée trois jobs, un par version. `${{ matrix.python-version }}` injecte la version courante. `fail-fast: false` laisse les trois aller au bout : on voit d'un coup si une faille ne touche qu'une version précise."
+      en: "A single block creates three jobs, one per version. `${{ matrix.python-version }}` injects the current version. `fail-fast: false` lets all three finish: you see at once whether a flaw only affects a specific version."
+
+  - title:
+      fr: "Un job Node avec cache explicite et dépendance needs"
+      en: "A Node job with explicit cache and a needs dependency"
+    file: .github/workflows/node.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      name: ci-node
+      on: [pull_request]
+
+      jobs:
+        build:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                node-version: "20"
+            - name: Cache npm dependencies
+              uses: actions/cache@v4
+              with:
+                path: ~/.npm
+                # Key tied to the lock file: a dependency change invalidates it
+                key: npm-${{ hashFiles('package-lock.json') }}
+            - run: npm ci           # clean, reproducible install from the lock file
+            - run: npm run build
+
+        test:
+          needs: build             # wait for "build" to succeed first
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                node-version: "20"
+            - run: npm ci
+            - run: npm test
+    output: |
+      build   added 214 packages, and audited 215 packages in 4s
+      test    Test Suites: 5 passed, 5 total
+    note:
+      fr: "`needs: build` crée une dépendance : `test` n'attend que si `build` réussit. La clé de cache dérive du `package-lock.json` : tant que les dépendances ne changent pas, l'installation est quasi instantanée. On ne met en cache que des paquets publics, jamais de secret."
+      en: "`needs: build` creates a dependency: `test` only runs if `build` succeeds. The cache key derives from `package-lock.json`: as long as dependencies do not change, the install is near-instant. Only public packages are cached, never a secret."
+
+mistake:
+  fr: |
+    **Mettre des données sensibles dans un cache, ou croire que les jobs s'exécutent dans l'ordre d'écriture.**
+
+    Deux pièges de débutant. D'abord, les caches sont **partagés entre branches** et lisibles par d'autres
+    workflows : y stocker un artefact contenant un jeton ou un fichier `.env` revient à le publier. On ne
+    met en cache que des dépendances publiques. Ensuite, les jobs sont **parallèles par défaut** : l'ordre
+    dans le fichier ne garantit rien. Pour qu'un job attende un autre, il faut `needs:`, sinon vos tests
+    peuvent démarrer avant la fin du build.
+  en: |
+    **Putting sensitive data in a cache, or assuming jobs run in the order they are written.**
+
+    Two beginner traps. First, caches are **shared between branches** and readable by other workflows:
+    storing an artefact that contains a token or a `.env` file there amounts to publishing it. Cache only
+    public dependencies. Second, jobs are **parallel by default**: the order in the file guarantees
+    nothing. For a job to wait for another you need `needs:`, otherwise your tests may start before the
+    build finishes.
+
+bestPractice:
+  fr: |
+    - **Déclenchez sur `pull_request`** pour bloquer le code défectueux avant la fusion.
+    - **Mettez `checkout@v4` en premier step** : sans le code, rien ne tourne.
+    - **Utilisez une matrice** pour valider toutes les versions supportées, avec `fail-fast: false`.
+    - **Dérivez la clé de cache du fichier de verrouillage** (`hashFiles`) pour un cache fiable.
+    - **Ne mettez jamais de secret en cache** : les caches sont partagés et persistants.
+    - **Ordonnez avec `needs:`** plutôt qu'avec l'ordre d'écriture, qui n'a aucun effet.
+  en: |
+    - **Trigger on `pull_request`** to block broken code before the merge.
+    - **Put `checkout@v4` as the first step**: without the code, nothing runs.
+    - **Use a matrix** to validate every supported version, with `fail-fast: false`.
+    - **Derive the cache key from the lock file** (`hashFiles`) for a reliable cache.
+    - **Never cache a secret**: caches are shared and persistent.
+    - **Order with `needs:`** rather than the writing order, which has no effect.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un workflow `.github/workflows/ci.yml` pour une application Node qui doit :
+
+      1. se déclencher sur chaque **pull request** ;
+      2. tester sur **deux** versions de Node (20 et 22) grâce à une matrice, sans qu'un échec sur l'une
+         annule l'autre ;
+      3. utiliser le cache npm intégré à `setup-node` ;
+      4. installer avec `npm ci` puis lancer `npm test`.
+    en: |
+      Write a workflow `.github/workflows/ci.yml` for a Node application that must:
+
+      1. trigger on every **pull request**;
+      2. test on **two** Node versions (20 and 22) via a matrix, without a failure on one cancelling the
+         other;
+      3. use the npm cache built into `setup-node`;
+      4. install with `npm ci` then run `npm test`.
+  solution:
+    file: ci.yml
+    lang: yaml
+    code: |
+      name: ci
+      on: [pull_request]
+
+      jobs:
+        test:
+          runs-on: ubuntu-latest
+          strategy:
+            fail-fast: false            # a failure on one version keeps the other running
+            matrix:
+              node-version: ["20", "22"]
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                node-version: ${{ matrix.node-version }}
+                cache: "npm"            # built-in npm cache, keyed on package-lock.json
+            - run: npm ci               # reproducible install from the lock file
+            - run: npm test
+    note:
+      fr: "La matrice génère deux jobs (Node 20 et 22). `cache: \"npm\"` active le cache sans configuration manuelle de clé. `fail-fast: false` garantit de voir le résultat des deux versions même si l'une échoue."
+      en: "The matrix generates two jobs (Node 20 and 22). `cache: \"npm\"` enables caching without manually configuring a key. `fail-fast: false` ensures you see both versions' results even if one fails."
+
+quiz:
+  - q:
+      fr: "Dans un workflow, que décrit la clé `on` ?"
+      en: "In a workflow, what does the `on` key describe?"
+    options:
+      fr:
+        - "La machine qui exécute les jobs"
+        - "L'événement qui déclenche le workflow"
+        - "La liste des dépendances à installer"
+        - "Le nom affiché du workflow"
+      en:
+        - "The machine that runs the jobs"
+        - "The event that triggers the workflow"
+        - "The list of dependencies to install"
+        - "The displayed name of the workflow"
+    answer: 1
+    why:
+      fr: "`on` définit le ou les déclencheurs (`push`, `pull_request`, `schedule`...). La machine est fixée par `runs-on`."
+      en: "`on` defines the trigger(s) (`push`, `pull_request`, `schedule`...). The machine is set by `runs-on`."
+  - q:
+      fr: "Par défaut, comment s'exécutent plusieurs jobs d'un même workflow ?"
+      en: "By default, how do several jobs of the same workflow run?"
+    options:
+      fr:
+        - "En parallèle, sauf dépendance `needs:`"
+        - "Toujours strictement dans l'ordre d'écriture"
+        - "Un seul job à la fois, choisi au hasard"
+        - "Seulement si la branche est `main`"
+      en:
+        - "In parallel, unless a `needs:` dependency is set"
+        - "Always strictly in the writing order"
+        - "One job at a time, chosen at random"
+        - "Only if the branch is `main`"
+    answer: 0
+    why:
+      fr: "Les jobs sont parallèles par défaut ; `needs:` crée une dépendance explicite pour qu'un job en attende un autre."
+      en: "Jobs are parallel by default; `needs:` creates an explicit dependency so a job waits for another."
+  - q:
+      fr: "À quoi sert `strategy.matrix` ?"
+      en: "What is `strategy.matrix` for?"
+    options:
+      fr:
+        - "À chiffrer les secrets du job"
+        - "À limiter le job à un seul runner"
+        - "À générer une copie du job pour chaque valeur (ex. version)"
+        - "À mettre les dépendances en cache"
+      en:
+        - "To encrypt the job's secrets"
+        - "To limit the job to a single runner"
+        - "To generate a copy of the job for each value (e.g. version)"
+        - "To cache the dependencies"
+    answer: 2
+    why:
+      fr: "La matrice duplique le job pour chaque combinaison de valeurs, idéal pour tester plusieurs versions d'un langage."
+      en: "The matrix duplicates the job for each combination of values, ideal for testing several versions of a language."
+  - q:
+      fr: "Sur quoi dérive-t-on généralement une clé de cache fiable ?"
+      en: "What do you usually derive a reliable cache key from?"
+    options:
+      fr:
+        - "La date et l'heure courantes"
+        - "Le nom de la branche uniquement"
+        - "Un nombre aléatoire à chaque run"
+        - "Le hash du fichier de verrouillage des dépendances"
+      en:
+        - "The current date and time"
+        - "The branch name only"
+        - "A random number on each run"
+        - "The hash of the dependency lock file"
+    answer: 3
+    why:
+      fr: "`hashFiles('package-lock.json')` lie la clé aux dépendances : le cache n'est invalidé que si elles changent, ce qui le rend fiable."
+      en: "`hashFiles('package-lock.json')` ties the key to the dependencies: the cache is invalidated only when they change, which makes it reliable."
+  - q:
+      fr: "Pourquoi ne faut-il jamais mettre un secret dans un cache GitHub Actions ?"
+      en: "Why should you never put a secret in a GitHub Actions cache?"
+    options:
+      fr:
+        - "Parce que les caches sont partagés entre branches et lisibles par d'autres workflows"
+        - "Parce que le cache ralentit le workflow"
+        - "Parce que les secrets expirent après 10 minutes"
+        - "Parce que le cache est effacé à chaque run"
+      en:
+        - "Because caches are shared between branches and readable by other workflows"
+        - "Because the cache slows the workflow down"
+        - "Because secrets expire after 10 minutes"
+        - "Because the cache is wiped on every run"
+    answer: 0
+    why:
+      fr: "Un cache est partagé et persistant ; y stocker un secret revient à l'exposer à d'autres branches et workflows du dépôt."
+      en: "A cache is shared and persistent; storing a secret there exposes it to other branches and workflows in the repo."

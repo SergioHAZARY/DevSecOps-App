@@ -1,0 +1,466 @@
+description:
+  fr: "Étiqueter, épingler par digest et publier ses images vers un registre comme GHCR, puis automatiser le build et le push dans un pipeline GitHub Actions sécurisé."
+  en: "Tag, pin by digest and publish images to a registry such as GHCR, then automate build and push in a secure GitHub Actions pipeline."
+duration: 35
+
+intro:
+  fr: |
+    Vous savez construire une image. Mais comment la partager entre votre machine, vos collègues et le
+    serveur de production ? Un **registre** (*registry*) est un entrepôt d'images, comme un dépôt Git l'est
+    pour le code. Docker Hub est le plus connu ; **GHCR** (GitHub Container Registry, `ghcr.io`) est souvent
+    plus pratique car il vit à côté de votre code sur GitHub.
+
+    Le piège classique : construire à la main, pousser avec le tag `latest`, et espérer que tout le monde a
+    la bonne version. C'est comme envoyer un colis sans étiquette : personne ne sait ce qu'il contient.
+    Une bonne **stratégie de tags** et l'épinglage par **digest** rendent chaque déploiement traçable et
+    reproductible.
+
+    Vous allez apprendre à étiqueter proprement, à épingler une image par son empreinte immuable, à vous
+    connecter à un registre avec un jeton (et non un mot de passe), puis à construire et publier
+    automatiquement vers GHCR avec GitHub Actions.
+  en: |
+    You can build an image. But how do you share it between your machine, your colleagues and the
+    production server? A **registry** is a warehouse of images, as a Git repository is for code. Docker Hub
+    is the best known; **GHCR** (GitHub Container Registry, `ghcr.io`) is often handier because it sits
+    next to your code on GitHub.
+
+    The classic trap: building by hand, pushing with the `latest` tag, and hoping everyone has the right
+    version. It is like shipping a parcel with no label: nobody knows what is inside. A good **tagging
+    strategy** and **digest** pinning make every deployment traceable and reproducible.
+
+    You will learn to tag cleanly, to pin an image by its immutable fingerprint, to log in to a registry
+    with a token (not a password), then to build and publish automatically to GHCR with GitHub Actions.
+
+sections:
+  - heading:
+      fr: "Stratégie de tags : jamais latest en production"
+      en: "Tagging strategy: never latest in production"
+    body:
+      fr: |
+        Un **tag** est une étiquette lisible pointant vers une image (`myapp:1.4.2`). Le tag `latest` n'a
+        rien de magique : c'est juste le tag par défaut, et il **bouge** à chaque push. S'appuyer dessus en
+        production, c'est ne jamais savoir quelle version tourne réellement.
+
+        | Type de tag | Exemple | Usage |
+        |---|---|---|
+        | Version sémantique | `myapp:1.4.2` | Release stable, immuable par convention |
+        | Mineure flottante | `myapp:1.4` | Suit les correctifs de la 1.4 |
+        | SHA de commit | `myapp:a1b2c3d` | Traçabilité exacte vers le code source |
+        | `latest` | `myapp:latest` | Pratique en dev, **à bannir** en prod |
+
+        La bonne pratique : attacher **plusieurs tags** à la même image (la version `1.4.2`, le SHA du
+        commit, éventuellement `1.4`). On garde ainsi un lien précis entre l'image déployée et le commit qui
+        l'a produite, ce qui est indispensable pour enquêter après un incident.
+      en: |
+        A **tag** is a readable label pointing to an image (`myapp:1.4.2`). The `latest` tag is not magic:
+        it is just the default tag, and it **moves** on every push. Relying on it in production means never
+        knowing which version is actually running.
+
+        | Tag type | Example | Use |
+        |---|---|---|
+        | Semantic version | `myapp:1.4.2` | Stable release, immutable by convention |
+        | Floating minor | `myapp:1.4` | Follows the 1.4 patches |
+        | Commit SHA | `myapp:a1b2c3d` | Exact traceability to the source code |
+        | `latest` | `myapp:latest` | Handy in dev, **ban it** in prod |
+
+        Best practice: attach **several tags** to the same image (the `1.4.2` version, the commit SHA,
+        possibly `1.4`). You keep a precise link between the deployed image and the commit that produced it,
+        which is essential for investigating after an incident.
+  - heading:
+      fr: "Épingler par digest"
+      en: "Pinning by digest"
+    body:
+      fr: |
+        Même un tag de version peut être réécrit : rien n'empêche techniquement de repousser `myapp:1.4.2`
+        avec un contenu différent. Le **digest** est l'empreinte cryptographique immuable de l'image, de la
+        forme `sha256:...`. Référencer une image par son digest (`myapp@sha256:9f86d0...`) garantit que vous
+        obtenez **exactement** les octets attendus.
+
+        | Référence | Immuable ? | Lisible ? |
+        |---|---|---|
+        | `myapp:latest` | Non | Oui |
+        | `myapp:1.4.2` | Par convention | Oui |
+        | `myapp@sha256:9f86d0...` | Oui, cryptographiquement | Non |
+
+        En production durcie, on déploie par digest : c'est la défense contre une attaque de chaîne
+        d'approvisionnement où un tag serait détourné. On récupère le digest après le build (`docker
+        buildx imagetools inspect`) et on le fige dans le manifeste de déploiement. Lisibilité d'un côté,
+        garantie d'intégrité de l'autre : on combine souvent tag *et* digest.
+      en: |
+        Even a version tag can be rewritten: nothing technically prevents re-pushing `myapp:1.4.2` with
+        different content. The **digest** is the image's immutable cryptographic fingerprint, of the form
+        `sha256:...`. Referencing an image by its digest (`myapp@sha256:9f86d0...`) guarantees you get
+        **exactly** the expected bytes.
+
+        | Reference | Immutable? | Readable? |
+        |---|---|---|
+        | `myapp:latest` | No | Yes |
+        | `myapp:1.4.2` | By convention | Yes |
+        | `myapp@sha256:9f86d0...` | Yes, cryptographically | No |
+
+        In hardened production you deploy by digest: this is the defense against a supply-chain attack where
+        a tag is hijacked. You read the digest after the build (`docker buildx imagetools inspect`) and
+        freeze it in the deployment manifest. Readability on one side, integrity guarantee on the other: tag
+        *and* digest are often combined.
+  - heading:
+      fr: "Login par jeton et build en CI"
+      en: "Token login and CI builds"
+    body:
+      fr: |
+        Pour pousser vers un registre, il faut s'authentifier. **N'utilisez jamais votre mot de passe de
+        compte** : créez un **jeton** à portée limitée (sur GitHub, un *Personal Access Token* ou, en CI, le
+        `GITHUB_TOKEN` automatique). Un jeton se révoque sans changer votre mot de passe et ne donne que les
+        droits strictement nécessaires (ici `write:packages`).
+
+        En CI, on ne construit plus à la main. Les actions officielles de Docker font tout :
+
+        | Action | Rôle |
+        |---|---|
+        | `docker/login-action` | Se connecter au registre avec un jeton |
+        | `docker/setup-buildx-action` | Activer BuildKit/Buildx |
+        | `docker/metadata-action` | Générer tags et labels automatiquement |
+        | `docker/build-push-action` | Construire et pousser l'image |
+
+        `metadata-action` lit le contexte Git (branche, tag, SHA) et produit les bons tags sans que vous les
+        écriviez à la main. On en profite pour activer la **provenance** (attestation de build) et on donne
+        au job la permission minimale `packages: write`.
+      en: |
+        To push to a registry you must authenticate. **Never use your account password**: create a
+        limited-scope **token** (on GitHub, a Personal Access Token or, in CI, the automatic
+        `GITHUB_TOKEN`). A token can be revoked without changing your password and grants only the strictly
+        needed rights (here `write:packages`).
+
+        In CI you no longer build by hand. Docker's official actions do everything:
+
+        | Action | Purpose |
+        |---|---|
+        | `docker/login-action` | Log in to the registry with a token |
+        | `docker/setup-buildx-action` | Enable BuildKit/Buildx |
+        | `docker/metadata-action` | Generate tags and labels automatically |
+        | `docker/build-push-action` | Build and push the image |
+
+        `metadata-action` reads the Git context (branch, tag, SHA) and produces the right tags without you
+        typing them by hand. You also enable **provenance** (a build attestation) and give the job the
+        minimal `packages: write` permission.
+
+examples:
+  - title:
+      fr: "VULNÉRABLE : build et push à la main avec latest"
+      en: "VULNERABLE: manual build and push with latest"
+    file: bad-push.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # Problem 1: logs in with the account PASSWORD piped on the command line
+      echo "$DOCKERHUB_PASSWORD" | docker login -u myuser --password-stdin
+
+      # Problem 2: only the "latest" tag -> nobody knows which build this is
+      docker build -t myuser/myapp:latest .
+
+      # Problem 3: pushing "latest" overwrites whatever was there before
+      docker push myuser/myapp:latest
+
+      # Problem 4: production pulls "latest" -> non-reproducible deployments
+      # ssh prod 'docker pull myuser/myapp:latest && docker run myuser/myapp:latest'
+    note:
+      fr: "Mot de passe de compte au lieu d'un jeton révocable, tag `latest` qui écrase tout, déploiements impossibles à tracer : chaque ligne est un anti-pattern. La version CI corrige tout cela."
+      en: "Account password instead of a revocable token, `latest` tag overwriting everything, untraceable deployments: every line is an anti-pattern. The CI version fixes all of it."
+
+  - title:
+      fr: "Étiqueter proprement et lire le digest"
+      en: "Tag cleanly and read the digest"
+    file: tag.sh
+    lang: bash
+    kind: secure
+    code: |
+      VERSION=1.4.2
+      SHA=$(git rev-parse --short HEAD)   # e.g. a1b2c3d
+
+      # Attach SEVERAL tags to the SAME build: version + commit SHA
+      docker build \
+        -t ghcr.io/acme/myapp:${VERSION} \
+        -t ghcr.io/acme/myapp:${SHA} \
+        .
+
+      docker push ghcr.io/acme/myapp:${VERSION}
+      docker push ghcr.io/acme/myapp:${SHA}
+
+      # Read the immutable digest to deploy by it in production
+      docker buildx imagetools inspect ghcr.io/acme/myapp:${VERSION} \
+        --format '{{json .Manifest.Digest}}'
+    output: |
+      "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      # Deploy by digest for a reproducible, tamper-proof reference:
+      #   docker run ghcr.io/acme/myapp@sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+    note:
+      fr: "La même image porte le tag de version ET le SHA du commit : traçabilité parfaite. Le digest `sha256:...` sert ensuite de référence immuable pour un déploiement reproductible."
+      en: "The same image carries the version tag AND the commit SHA: perfect traceability. The `sha256:...` digest then serves as an immutable reference for a reproducible deployment."
+
+  - title:
+      fr: "SÉCURISÉ : build et push automatiques vers GHCR"
+      en: "SECURE: automatic build and push to GHCR"
+    file: .github/workflows/build.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: build-and-push
+
+      on:
+        push:
+          branches: [main]
+          tags: ["v*"]
+
+      # Least privilege: read the code, write packages, write provenance attestation
+      permissions:
+        contents: read
+        packages: write
+        id-token: write
+
+      jobs:
+        docker:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            - name: Log in to GHCR with the automatic token (no password)
+              uses: docker/login-action@v3
+              with:
+                registry: ghcr.io
+                username: ${{ github.actor }}
+                password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Enable Buildx (BuildKit)
+              uses: docker/setup-buildx-action@v3
+
+            - name: Compute tags and labels from the Git context
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                images: ghcr.io/${{ github.repository }}
+                tags: |
+                  type=semver,pattern={{version}}
+                  type=sha
+
+            - name: Build and push
+              uses: docker/build-push-action@v6
+              with:
+                context: .
+                push: true
+                tags: ${{ steps.meta.outputs.tags }}
+                labels: ${{ steps.meta.outputs.labels }}
+                provenance: true # signed build attestation for supply-chain trust
+                cache-from: type=gha
+                cache-to: type=gha,mode=max
+    note:
+      fr: "`metadata-action` génère les tags (version + SHA) depuis le contexte Git. On utilise le `GITHUB_TOKEN` automatique, jamais un mot de passe. `provenance: true` attache une attestation de build signée."
+      en: "`metadata-action` generates the tags (version + SHA) from the Git context. The automatic `GITHUB_TOKEN` is used, never a password. `provenance: true` attaches a signed build attestation."
+
+  - title:
+      fr: "Scanner l'image dans le même pipeline"
+      en: "Scan the image in the same pipeline"
+    file: scan.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Add this step after build-push, before any deploy step
+      - name: Scan the pushed image for known vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          format: table
+          # Fail the pipeline on HIGH and CRITICAL findings -> block the release
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+    output: |
+      ghcr.io/acme/myapp:1.4.2 (debian 12.7)
+      Total: 2 (HIGH: 1, CRITICAL: 1)
+      Error: Process completed with exit code 1.
+    note:
+      fr: "Publier une image ne suffit pas : on la scanne avec Trivy dans le pipeline et on fait **échouer** le build sur les failles HIGH/CRITICAL, pour qu'une image vulnérable ne parte jamais en production."
+      en: "Publishing an image is not enough: scan it with Trivy in the pipeline and **fail** the build on HIGH/CRITICAL flaws, so a vulnerable image never reaches production."
+
+mistake:
+  fr: |
+    **Déployer `latest` en production et se connecter au registre avec son mot de passe.**
+
+    Le tag `latest` bouge à chaque push : deux serveurs qui font `docker pull myapp:latest` à une heure
+    d'intervalle peuvent obtenir des images différentes, et vous ne savez jamais ce qui tourne réellement.
+    Pire, un rollback devient impossible : vers quelle version revenir ? Utilisez des tags de version et le
+    SHA du commit, et déployez par digest en production. Côté authentification, un mot de passe de compte
+    donne tous les droits et ne se révoque pas sans tout casser : utilisez un jeton à portée limitée (ou le
+    `GITHUB_TOKEN` en CI), révocable indépendamment.
+  en: |
+    **Deploying `latest` in production and logging in to the registry with your password.**
+
+    The `latest` tag moves on every push: two servers that run `docker pull myapp:latest` an hour apart can
+    get different images, and you never know what is actually running. Worse, a rollback becomes impossible:
+    which version do you go back to? Use version tags and the commit SHA, and deploy by digest in
+    production. On authentication, an account password grants all rights and cannot be revoked without
+    breaking everything: use a limited-scope token (or the `GITHUB_TOKEN` in CI), revocable independently.
+
+bestPractice:
+  fr: |
+    - **Jamais `latest` en production** : tags de version sémantique + SHA de commit.
+    - **Déploiement par digest** (`@sha256:...`) pour une référence immuable et vérifiable.
+    - **Jeton à portée limitée** pour le login, jamais un mot de passe de compte ; `GITHUB_TOKEN` en CI.
+    - **`docker/metadata-action`** pour générer les tags automatiquement depuis le contexte Git.
+    - **`provenance: true`** pour attacher une attestation de build signée (confiance de la chaîne).
+    - **Scan de l'image (Trivy)** dans le pipeline, échec sur HIGH/CRITICAL avant tout déploiement.
+    - **Permissions minimales** du workflow : `contents: read`, `packages: write`.
+  en: |
+    - **Never `latest` in production**: semantic version tags + commit SHA.
+    - **Deploy by digest** (`@sha256:...`) for an immutable, verifiable reference.
+    - **Limited-scope token** for login, never an account password; `GITHUB_TOKEN` in CI.
+    - **`docker/metadata-action`** to generate tags automatically from the Git context.
+    - **`provenance: true`** to attach a signed build attestation (supply-chain trust).
+    - **Image scan (Trivy)** in the pipeline, fail on HIGH/CRITICAL before any deployment.
+    - **Minimal workflow permissions**: `contents: read`, `packages: write`.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez les étapes d'un job GitHub Actions qui publie une image vers GHCR. Votre réponse doit :
+
+      1. Déclarer les permissions minimales nécessaires (lecture du code, écriture des packages).
+      2. Se connecter à `ghcr.io` en utilisant le `GITHUB_TOKEN` automatique et `github.actor`.
+      3. Construire et pousser l'image `ghcr.io/<repo>` avec, au minimum, un tag basé sur le SHA du commit.
+
+      Vous pouvez utiliser les actions officielles `docker/login-action` et `docker/build-push-action`.
+    en: |
+      Write the steps of a GitHub Actions job that publishes an image to GHCR. Your answer must:
+
+      1. Declare the minimal permissions needed (read the code, write packages).
+      2. Log in to `ghcr.io` using the automatic `GITHUB_TOKEN` and `github.actor`.
+      3. Build and push the `ghcr.io/<repo>` image with, at minimum, a commit-SHA-based tag.
+
+      You may use the official `docker/login-action` and `docker/build-push-action` actions.
+  solution:
+    file: publish.yml
+    lang: yaml
+    code: |
+      name: publish
+
+      on:
+        push:
+          branches: [main]
+
+      permissions:
+        contents: read
+        packages: write
+
+      jobs:
+        docker:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            - name: Log in to GHCR with the automatic token
+              uses: docker/login-action@v3
+              with:
+                registry: ghcr.io
+                username: ${{ github.actor }}
+                password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Build and push tagged with the commit SHA
+              uses: docker/build-push-action@v6
+              with:
+                context: .
+                push: true
+                # github.sha is the full commit hash: an exact, traceable tag
+                tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+    note:
+      fr: "Les permissions sont réduites à `contents: read` et `packages: write`. Le login utilise le `GITHUB_TOKEN` révocable, jamais un mot de passe, et le tag `github.sha` relie l'image au commit exact."
+      en: "Permissions are reduced to `contents: read` and `packages: write`. Login uses the revocable `GITHUB_TOKEN`, never a password, and the `github.sha` tag links the image to the exact commit."
+
+quiz:
+  - q:
+      fr: "Pourquoi éviter le tag `latest` en production ?"
+      en: "Why avoid the `latest` tag in production?"
+    options:
+      fr:
+        - "Parce qu'il est payant"
+        - "Parce qu'il bouge à chaque push : on ne sait jamais quelle version tourne"
+        - "Parce qu'il est plus lent à télécharger"
+        - "Parce qu'il chiffre l'image"
+      en:
+        - "Because it costs money"
+        - "Because it moves on every push: you never know which version runs"
+        - "Because it is slower to pull"
+        - "Because it encrypts the image"
+    answer: 1
+    why:
+      fr: "`latest` n'est que le tag par défaut et se réécrit sans cesse : impossible de savoir ce qui tourne ni de revenir à une version précise."
+      en: "`latest` is just the default tag and gets rewritten constantly: impossible to know what runs or to roll back to a precise version."
+  - q:
+      fr: "Qu'est-ce qu'un digest d'image (`sha256:...`) garantit ?"
+      en: "What does an image digest (`sha256:...`) guarantee?"
+    options:
+      fr:
+        - "Que l'image est signée par Docker Inc."
+        - "Que l'image est la plus récente"
+        - "Qu'on obtient exactement les mêmes octets, de façon immuable"
+        - "Que l'image est gratuite"
+      en:
+        - "That the image is signed by Docker Inc."
+        - "That the image is the newest one"
+        - "That you get exactly the same bytes, immutably"
+        - "That the image is free"
+    answer: 2
+    why:
+      fr: "Le digest est l'empreinte cryptographique du contenu : le référencer garantit l'intégrité, contrairement à un tag qui peut être réécrit."
+      en: "The digest is the content's cryptographic fingerprint: referencing it guarantees integrity, unlike a tag that can be rewritten."
+  - q:
+      fr: "Comment faut-il s'authentifier auprès d'un registre dans un pipeline CI ?"
+      en: "How should you authenticate to a registry in a CI pipeline?"
+    options:
+      fr:
+        - "Avec un jeton à portée limitée (par ex. le GITHUB_TOKEN), jamais un mot de passe de compte"
+        - "Avec le mot de passe personnel du mainteneur"
+        - "Sans authentification, le registre est public"
+        - "En désactivant TLS"
+      en:
+        - "With a limited-scope token (e.g. the GITHUB_TOKEN), never an account password"
+        - "With the maintainer's personal password"
+        - "Without authentication, the registry is public"
+        - "By disabling TLS"
+    answer: 0
+    why:
+      fr: "Un jeton à portée limitée ne donne que les droits nécessaires et se révoque sans changer le mot de passe du compte : bien plus sûr."
+      en: "A limited-scope token grants only the needed rights and can be revoked without changing the account password: far safer."
+  - q:
+      fr: "Quel est le rôle de `docker/metadata-action` ?"
+      en: "What is `docker/metadata-action`'s role?"
+    options:
+      fr:
+        - "Scanner l'image"
+        - "Signer l'image avec Cosign"
+        - "Supprimer les anciennes images"
+        - "Générer automatiquement tags et labels depuis le contexte Git"
+      en:
+        - "Scan the image"
+        - "Sign the image with Cosign"
+        - "Delete old images"
+        - "Automatically generate tags and labels from the Git context"
+    answer: 3
+    why:
+      fr: "`metadata-action` lit la branche, le tag et le SHA Git pour produire les bons tags et labels sans les écrire à la main."
+      en: "`metadata-action` reads the branch, tag and Git SHA to produce the right tags and labels without typing them by hand."
+  - q:
+      fr: "Pourquoi scanner l'image (Trivy) dans le pipeline avant de déployer ?"
+      en: "Why scan the image (Trivy) in the pipeline before deploying?"
+    options:
+      fr:
+        - "Pour faire échouer le build si des failles HIGH/CRITICAL sont présentes"
+        - "Pour réduire la taille de l'image"
+        - "Pour générer la documentation"
+        - "Pour accélérer le téléchargement"
+      en:
+        - "To fail the build if HIGH/CRITICAL flaws are present"
+        - "To reduce the image size"
+        - "To generate documentation"
+        - "To speed up the pull"
+    answer: 0
+    why:
+      fr: "Un scan avec `exit-code: 1` sur HIGH/CRITICAL bloque le pipeline : une image vulnérable n'atteint jamais la production."
+      en: "A scan with `exit-code: 1` on HIGH/CRITICAL blocks the pipeline: a vulnerable image never reaches production."

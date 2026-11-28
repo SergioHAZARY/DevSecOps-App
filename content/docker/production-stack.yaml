@@ -1,0 +1,517 @@
+description:
+  fr: "Assembler une stack Docker Compose prête pour la production : reverse proxy TLS, application durcie, PostgreSQL, réseaux isolés, secrets et limites de ressources."
+  en: "Assemble a production-ready Docker Compose stack: TLS reverse proxy, hardened application, PostgreSQL, isolated networks, secrets and resource limits."
+duration: 40
+
+intro:
+  fr: |
+    Vous avez appris Docker Compose pour le développement. Passer en production change les priorités :
+    il ne s'agit plus seulement que « ça démarre », mais que la stack soit chiffrée, isolée, limitée en
+    ressources, résistante aux pannes et difficile à compromettre. Ce sont les quelques directives qui
+    séparent un `compose.yaml` de démo d'une stack qu'on laisse tourner sur Internet.
+
+    Imaginez la différence entre une maquette d'avion et un avion certifié : mêmes formes, mais le second a
+    des redondances, des limites, des alarmes et un fuselage blindé. Nous allons « certifier » notre stack.
+
+    Vous allez construire une stack complète : un **reverse proxy** qui termine le TLS (HTTPS automatique),
+    l'application, une base **PostgreSQL** sur un réseau interne invisible depuis l'extérieur, des mots de
+    passe en **secrets**, et pour chaque conteneur les protections `read_only`, `cap_drop`,
+    `no-new-privileges`, des **healthchecks**, un redémarrage automatique, des **limites de ressources** et
+    une **rotation des journaux**.
+  en: |
+    You learned Docker Compose for development. Moving to production shifts the priorities: it is no longer
+    just that "it starts", but that the stack is encrypted, isolated, resource-limited, failure-resistant
+    and hard to compromise. These are the few directives that separate a demo `compose.yaml` from a stack
+    you leave running on the Internet.
+
+    Picture the difference between a model aircraft and a certified one: same shapes, but the second has
+    redundancy, limits, alarms and an armoured fuselage. We are going to "certify" our stack.
+
+    You will build a complete stack: a **reverse proxy** that terminates TLS (automatic HTTPS), the
+    application, a **PostgreSQL** database on an internal network invisible from outside, passwords as
+    **secrets**, and for each container the protections `read_only`, `cap_drop`, `no-new-privileges`,
+    **healthchecks**, automatic restart, **resource limits** and **log rotation**.
+
+sections:
+  - heading:
+      fr: "Reverse proxy et isolation réseau"
+      en: "Reverse proxy and network isolation"
+    body:
+      fr: |
+        En production, on n'expose jamais l'application directement. Un **reverse proxy** (Caddy, Traefik ou
+        NGINX) se place devant : il termine le **TLS** (déchiffre le HTTPS), ajoute des en-têtes de
+        sécurité, et répartit vers les services internes. Caddy obtient et renouvelle automatiquement les
+        certificats Let's Encrypt, ce qui simplifie énormément le HTTPS.
+
+        L'**isolation réseau** applique le moindre privilège : on sépare un réseau `edge` (public, entre le
+        proxy et l'application) d'un réseau `internal` marqué `internal: true` (sans route vers l'extérieur,
+        entre l'application et la base).
+
+        | Service | Réseaux | Port publié |
+        |---|---|---|
+        | `proxy` | `edge` | 80, 443 |
+        | `app` | `edge`, `internal` | aucun |
+        | `db` | `internal` | aucun |
+
+        Seul le proxy publie des ports. La base de données n'a **aucun** `ports:` et vit sur un réseau
+        interne : même compromis, un conteneur du réseau `edge` ne peut pas l'atteindre.
+      en: |
+        In production you never expose the application directly. A **reverse proxy** (Caddy, Traefik or
+        NGINX) sits in front: it terminates **TLS** (decrypts HTTPS), adds security headers, and routes to
+        the internal services. Caddy automatically obtains and renews Let's Encrypt certificates, which
+        greatly simplifies HTTPS.
+
+        **Network isolation** applies least privilege: separate an `edge` network (public, between the proxy
+        and the app) from an `internal` network marked `internal: true` (no route outside, between the app
+        and the database).
+
+        | Service | Networks | Published port |
+        |---|---|---|
+        | `proxy` | `edge` | 80, 443 |
+        | `app` | `edge`, `internal` | none |
+        | `db` | `internal` | none |
+
+        Only the proxy publishes ports. The database has **no** `ports:` and lives on an internal network:
+        even if compromised, a container on the `edge` network cannot reach it.
+  - heading:
+      fr: "Durcir chaque conteneur"
+      en: "Hardening each container"
+    body:
+      fr: |
+        Par défaut, un conteneur tourne avec trop de droits. Quelques directives réduisent fortement ce
+        qu'un attaquant peut faire s'il prend le contrôle d'un processus :
+
+        | Directive | Effet | Pourquoi |
+        |---|---|---|
+        | `read_only: true` | Système de fichiers en lecture seule | Empêche d'écrire/déposer un malware |
+        | `tmpfs: [/tmp]` | Dossiers inscriptibles en RAM | Rend `read_only` praticable |
+        | `cap_drop: [ALL]` | Retire toutes les capabilities Linux | Moindre privilège noyau |
+        | `security_opt: [no-new-privileges:true]` | Interdit l'escalade via setuid | Bloque `sudo`/setuid |
+        | `user: "10001:10001"` | Processus non-root | Pas de root dans le conteneur |
+
+        Le principe est toujours le même : donner à chaque conteneur **le strict minimum** pour fonctionner.
+        `read_only` + `tmpfs` est le duo clé : le code et la configuration ne sont pas modifiables, seuls
+        quelques dossiers temporaires (en mémoire) le sont.
+      en: |
+        By default a container runs with too many rights. A few directives sharply reduce what an attacker
+        can do if they take over a process:
+
+        | Directive | Effect | Why |
+        |---|---|---|
+        | `read_only: true` | Read-only filesystem | Prevents writing/dropping malware |
+        | `tmpfs: [/tmp]` | Writable dirs in RAM | Makes `read_only` practical |
+        | `cap_drop: [ALL]` | Removes all Linux capabilities | Kernel least privilege |
+        | `security_opt: [no-new-privileges:true]` | Blocks setuid escalation | Stops `sudo`/setuid |
+        | `user: "10001:10001"` | Non-root process | No root inside the container |
+
+        The principle is always the same: give each container **the bare minimum** to function. `read_only`
+        + `tmpfs` is the key pair: code and configuration cannot be modified, only a few temporary (in
+        memory) folders can.
+  - heading:
+      fr: "Résilience : healthchecks, limites, journaux"
+      en: "Resilience: healthchecks, limits, logs"
+    body:
+      fr: |
+        Une stack de production doit survivre aux pannes et aux pics de charge.
+
+        - **`healthcheck`** : Docker teste régulièrement si le service répond ; combiné à
+          `depends_on: condition: service_healthy`, il garantit un démarrage ordonné.
+        - **`restart: unless-stopped`** : un conteneur qui plante redémarre tout seul.
+        - **`deploy.resources.limits`** : on plafonne CPU et mémoire pour qu'un service emballé (ou une
+          attaque par déni de service) ne consomme pas toute la machine et n'entraîne pas les autres.
+        - **`logging` avec `max-size` et `max-file`** : sans rotation, les journaux JSON de Docker peuvent
+          remplir le disque et faire tomber l'hôte. On les plafonne (par ex. 10 Mo × 3 fichiers).
+
+        Ces réglages ne changent rien au fonctionnement « heureux » de l'application, mais ils déterminent
+        son comportement le jour où quelque chose tourne mal — c'est-à-dire le jour qui compte.
+      en: |
+        A production stack must survive failures and load spikes.
+
+        - **`healthcheck`**: Docker regularly tests whether the service answers; combined with
+          `depends_on: condition: service_healthy`, it guarantees an ordered start-up.
+        - **`restart: unless-stopped`**: a crashed container restarts on its own.
+        - **`deploy.resources.limits`**: cap CPU and memory so a runaway service (or a denial-of-service
+          attack) cannot consume the whole machine and drag the others down.
+        - **`logging` with `max-size` and `max-file`**: without rotation, Docker's JSON logs can fill the
+          disk and take the host down. Cap them (e.g. 10 MB × 3 files).
+
+        These settings change nothing about the application's "happy path", but they determine its behaviour
+        the day something goes wrong — which is the day that counts.
+
+examples:
+  - title:
+      fr: "VULNÉRABLE : une stack de démo exposée telle quelle"
+      en: "VULNERABLE: a demo stack exposed as-is"
+    file: compose.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      services:
+        app:
+          image: myapp:latest        # moving tag, unknown version
+          ports:
+            - "80:8000"              # plain HTTP, no TLS, bound to 0.0.0.0
+          environment:
+            DB_PASSWORD: Secret123!  # secret in the file, committed to Git
+          # runs as root, writable FS, all capabilities, no limits, no restart
+
+        db:
+          image: postgres
+          ports:
+            - "5432:5432"            # database exposed to the whole network
+          environment:
+            POSTGRES_PASSWORD: Secret123!
+          # no volume: data lost on recreate; no healthcheck; no log rotation
+    note:
+      fr: "HTTP en clair, secret commité, base exposée, conteneurs root tout-puissants, aucune limite ni rotation de journaux : tout ce qu'il ne faut pas faire. La version suivante corrige chaque point."
+      en: "Plain HTTP, committed secret, exposed database, all-powerful root containers, no limits or log rotation: everything you must not do. The next version fixes each point."
+
+  - title:
+      fr: "SÉCURISÉ : proxy TLS et application durcie"
+      en: "SECURE: TLS proxy and hardened application"
+    file: compose.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      name: prod
+
+      services:
+        proxy:
+          image: caddy:2.8-alpine
+          ports:
+            - "80:80"
+            - "443:443" # Caddy fetches and renews Let's Encrypt certs automatically
+          volumes:
+            - ./Caddyfile:/etc/caddy/Caddyfile:ro
+            - caddy_data:/data   # persisted certificates
+          networks:
+            - edge
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m" # rotate logs: never fill the host disk
+              max-file: "3"
+
+        app:
+          image: ghcr.io/acme/myapp:1.4.2 # pinned version, never latest
+          environment:
+            DB_HOST: db
+            DB_USER: app
+            DB_NAME: app
+            DB_PASSWORD_FILE: /run/secrets/db_password
+          secrets:
+            - db_password
+          networks:
+            - edge      # reachable by the proxy
+            - internal  # can reach the database
+          user: "10001:10001"       # non-root process
+          read_only: true           # immutable root filesystem
+          tmpfs:
+            - /tmp                   # only /tmp is writable, in RAM
+          cap_drop:
+            - ALL                    # drop every Linux capability
+          security_opt:
+            - no-new-privileges:true # block setuid privilege escalation
+          healthcheck:
+            test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+            interval: 10s
+            timeout: 3s
+            retries: 3
+            start_period: 15s
+          depends_on:
+            db:
+              condition: service_healthy
+          deploy:
+            resources:
+              limits:
+                cpus: "1.0"
+                memory: 512M
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+    note:
+      fr: "Le proxy publie les ports et gère le TLS ; l'application n'expose rien et cumule les protections : non-root, FS en lecture seule, zéro capability, pas d'escalade, limites CPU/RAM et rotation des journaux."
+      en: "The proxy publishes the ports and handles TLS; the app exposes nothing and stacks protections: non-root, read-only FS, zero capabilities, no escalation, CPU/RAM limits and log rotation."
+
+  - title:
+      fr: "SÉCURISÉ : PostgreSQL isolé, réseaux et secrets"
+      en: "SECURE: isolated PostgreSQL, networks and secrets"
+    file: compose.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # ... continued from the same compose.yaml ...
+        db:
+          image: postgres:17-alpine
+          environment:
+            POSTGRES_USER: app
+            POSTGRES_DB: app
+            POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+          secrets:
+            - db_password
+          volumes:
+            - pgdata:/var/lib/postgresql/data # data survives recreation
+          networks:
+            - internal # NO ports: unreachable from outside the internal network
+          security_opt:
+            - no-new-privileges:true
+          healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U app -d app"]
+            interval: 5s
+            timeout: 3s
+            retries: 10
+            start_period: 10s
+          deploy:
+            resources:
+              limits:
+                memory: 1G
+          restart: unless-stopped
+
+      networks:
+        edge:       # public side, between proxy and app
+        internal:
+          internal: true # no route to the outside world at all
+
+      volumes:
+        pgdata:
+        caddy_data:
+
+      secrets:
+        db_password:
+          file: ./secrets/db_password.txt # in .gitignore, generated not typed
+    note:
+      fr: "La base n'a aucun `ports:` et vit sur le réseau `internal: true` : aucune route vers l'extérieur. Le mot de passe est un secret-fichier monté dans `/run/secrets`, jamais une variable d'environnement."
+      en: "The database has no `ports:` and lives on the `internal: true` network: no route to the outside. The password is a file-based secret mounted in `/run/secrets`, never an environment variable."
+
+  - title:
+      fr: "Le Caddyfile : TLS automatique et en-têtes de sécurité"
+      en: "The Caddyfile: automatic TLS and security headers"
+    file: Caddyfile
+    lang: text
+    kind: secure
+    code: |
+      # Caddy obtains a Let's Encrypt certificate for this domain automatically
+      app.example.com {
+          # Forward to the internal app service by its Compose name
+          reverse_proxy app:8000
+
+          # Security headers applied to every response
+          header {
+              Strict-Transport-Security "max-age=31536000; includeSubDomains"
+              X-Content-Type-Options "nosniff"
+              X-Frame-Options "DENY"
+              Referrer-Policy "no-referrer"
+              -Server # remove the Server header to leak less info
+          }
+
+          # Structured access logs, useful for a SIEM
+          log {
+              output stdout
+              format json
+          }
+      }
+    output: |
+      # Start and verify the whole stack:
+      #   docker compose config --quiet
+      #   docker compose up -d --wait
+      #   curl -I https://app.example.com
+      # HTTP/2 200
+      # strict-transport-security: max-age=31536000; includeSubDomains
+    note:
+      fr: "Caddy obtient et renouvelle le certificat TLS sans intervention, force HTTPS et ajoute les en-têtes de sécurité (HSTS, anti-clickjacking). L'application ne voit jamais le trafic en clair."
+      en: "Caddy obtains and renews the TLS certificate with no intervention, forces HTTPS and adds the security headers (HSTS, anti-clickjacking). The application never sees clear-text traffic."
+
+mistake:
+  fr: |
+    **Croire qu'une stack qui tourne en développement est prête pour la production.**
+
+    Un `compose.yaml` de démo démarre parfaitement et donne une fausse confiance : il expose la base au
+    réseau, sert du HTTP en clair, met les secrets dans le fichier, fait tourner tout en root avec un
+    système de fichiers inscriptible, et n'a ni limites de ressources ni rotation de journaux. Le jour d'un
+    pic de charge, les journaux remplissent le disque ; le jour d'une compromission, l'attaquant est root
+    dans un conteneur qui atteint la base. La production exige l'ajout délibéré de chaque protection :
+    proxy TLS, réseaux internes, secrets, `read_only`, `cap_drop`, `no-new-privileges`, healthchecks,
+    `restart`, limites et rotation. Ces lignes ne servent à rien les jours normaux, et à tout les autres.
+  en: |
+    **Believing a stack that runs in development is ready for production.**
+
+    A demo `compose.yaml` starts perfectly and gives false confidence: it exposes the database to the
+    network, serves plain HTTP, puts secrets in the file, runs everything as root with a writable
+    filesystem, and has no resource limits or log rotation. On a load spike the logs fill the disk; on a
+    compromise the attacker is root in a container that can reach the database. Production requires
+    deliberately adding each protection: TLS proxy, internal networks, secrets, `read_only`, `cap_drop`,
+    `no-new-privileges`, healthchecks, `restart`, limits and rotation. These lines do nothing on normal
+    days, and everything on the others.
+
+bestPractice:
+  fr: |
+    - **Reverse proxy en frontal** (Caddy/Traefik/NGINX) pour le TLS ; seul le proxy publie des ports.
+    - **Réseau `internal: true`** pour la base ; aucun `ports:` sur les services internes.
+    - **Secrets-fichiers** (`/run/secrets`) pour les mots de passe, jamais de variable d'environnement.
+    - **Durcir chaque conteneur** : `user` non-root, `read_only` + `tmpfs`, `cap_drop: [ALL]`, `no-new-privileges`.
+    - **`healthcheck` + `depends_on: service_healthy`** et `restart: unless-stopped`.
+    - **`deploy.resources.limits`** (CPU/mémoire) pour contenir un service emballé ou un déni de service.
+    - **`logging` avec `max-size`/`max-file`** : rotation obligatoire pour ne pas remplir le disque.
+    - **Images épinglées** (version + digest), jamais `latest`.
+  en: |
+    - **Front reverse proxy** (Caddy/Traefik/NGINX) for TLS; only the proxy publishes ports.
+    - **`internal: true` network** for the database; no `ports:` on internal services.
+    - **File-based secrets** (`/run/secrets`) for passwords, never an environment variable.
+    - **Harden each container**: non-root `user`, `read_only` + `tmpfs`, `cap_drop: [ALL]`, `no-new-privileges`.
+    - **`healthcheck` + `depends_on: service_healthy`** and `restart: unless-stopped`.
+    - **`deploy.resources.limits`** (CPU/memory) to contain a runaway service or a denial of service.
+    - **`logging` with `max-size`/`max-file`**: mandatory rotation so the disk never fills.
+    - **Pinned images** (version + digest), never `latest`.
+
+exercise:
+  statement:
+    fr: |
+      On vous donne ce service `api` encore non durci :
+
+      ```yaml
+      api:
+        image: ghcr.io/acme/api:2.0.0
+        networks: [internal]
+      ```
+
+      Ajoutez-y les directives de durcissement vues dans la leçon : exécution en utilisateur non-root
+      (`10001:10001`), système de fichiers en lecture seule avec `/tmp` inscriptible en RAM, suppression de
+      toutes les capabilities, interdiction de l'escalade de privilèges, une limite mémoire de 256 Mo, un
+      redémarrage automatique, et une rotation des journaux (10 Mo × 3 fichiers).
+    en: |
+      You are given this still-unhardened `api` service:
+
+      ```yaml
+      api:
+        image: ghcr.io/acme/api:2.0.0
+        networks: [internal]
+      ```
+
+      Add the hardening directives from the lesson: run as a non-root user (`10001:10001`), read-only
+      filesystem with a writable `/tmp` in RAM, drop all capabilities, forbid privilege escalation, a 256 MB
+      memory limit, automatic restart, and log rotation (10 MB × 3 files).
+  solution:
+    file: compose.yaml
+    lang: yaml
+    code: |
+      api:
+        image: ghcr.io/acme/api:2.0.0
+        networks:
+          - internal
+        user: "10001:10001"         # non-root
+        read_only: true             # immutable root filesystem
+        tmpfs:
+          - /tmp                     # only writable path, in RAM
+        cap_drop:
+          - ALL                      # remove every Linux capability
+        security_opt:
+          - no-new-privileges:true   # block setuid privilege escalation
+        deploy:
+          resources:
+            limits:
+              memory: 256M           # contain runaway memory use
+        restart: unless-stopped      # self-heal on crash
+        logging:
+          driver: json-file
+          options:
+            max-size: "10m"          # rotate logs, never fill the disk
+            max-file: "3"
+    note:
+      fr: "Chaque directive applique le moindre privilège : non-root, FS immuable sauf `/tmp`, zéro capability, pas d'escalade, mémoire plafonnée, auto-réparation et journaux bornés."
+      en: "Each directive applies least privilege: non-root, immutable FS except `/tmp`, zero capabilities, no escalation, capped memory, self-healing and bounded logs."
+
+quiz:
+  - q:
+      fr: "Pourquoi placer un reverse proxy devant l'application en production ?"
+      en: "Why put a reverse proxy in front of the application in production?"
+    options:
+      fr:
+        - "Pour terminer le TLS et éviter d'exposer l'application directement"
+        - "Pour accélérer la compilation de l'image"
+        - "Pour supprimer la base de données"
+        - "Pour désactiver les healthchecks"
+      en:
+        - "To terminate TLS and avoid exposing the application directly"
+        - "To speed up image compilation"
+        - "To delete the database"
+        - "To disable healthchecks"
+    answer: 0
+    why:
+      fr: "Le proxy termine le HTTPS, ajoute des en-têtes de sécurité et masque les services internes : seul lui publie des ports."
+      en: "The proxy terminates HTTPS, adds security headers and hides the internal services: only it publishes ports."
+  - q:
+      fr: "Comment rendre une base de données inaccessible depuis l'extérieur de la stack ?"
+      en: "How do you make a database unreachable from outside the stack?"
+    options:
+      fr:
+        - "En utilisant le tag `latest`"
+        - "En la mettant sur un réseau `internal: true` et sans aucun `ports:`"
+        - "En augmentant sa limite mémoire"
+        - "En activant `read_only`"
+      en:
+        - "By using the `latest` tag"
+        - "By putting it on an `internal: true` network with no `ports:`"
+        - "By raising its memory limit"
+        - "By enabling `read_only`"
+    answer: 1
+    why:
+      fr: "Sans `ports:` publié et sur un réseau `internal: true`, la base n'a aucune route vers l'extérieur : seuls les services du même réseau interne l'atteignent."
+      en: "With no published `ports:` and on an `internal: true` network, the database has no route outside: only services on the same internal network reach it."
+  - q:
+      fr: "Que fait `read_only: true` combiné à `tmpfs: [/tmp]` ?"
+      en: "What does `read_only: true` combined with `tmpfs: [/tmp]` do?"
+    options:
+      fr:
+        - "Cela chiffre le système de fichiers"
+        - "Cela supprime les journaux"
+        - "Cela rend le système de fichiers immuable sauf `/tmp` (en RAM)"
+        - "Cela donne les droits root"
+      en:
+        - "It encrypts the filesystem"
+        - "It deletes the logs"
+        - "It makes the filesystem immutable except `/tmp` (in RAM)"
+        - "It grants root rights"
+    answer: 2
+    why:
+      fr: "`read_only` empêche toute écriture sur le système de fichiers ; `tmpfs` rend quelques dossiers temporaires inscriptibles en mémoire, ce qui rend le conteneur fonctionnel."
+      en: "`read_only` blocks any write to the filesystem; `tmpfs` makes a few temporary folders writable in memory, keeping the container functional."
+  - q:
+      fr: "À quoi sert `logging` avec `max-size` et `max-file` ?"
+      en: "What is `logging` with `max-size` and `max-file` for?"
+    options:
+      fr:
+        - "À chiffrer les journaux"
+        - "À faire tourner les journaux pour ne pas remplir le disque de l'hôte"
+        - "À désactiver complètement les journaux"
+        - "À envoyer les journaux par e-mail"
+      en:
+        - "To encrypt the logs"
+        - "To rotate the logs so they do not fill the host disk"
+        - "To disable logs entirely"
+        - "To email the logs"
+    answer: 1
+    why:
+      fr: "Sans rotation, les journaux JSON de Docker peuvent saturer le disque et faire tomber l'hôte ; `max-size`/`max-file` bornent leur taille totale."
+      en: "Without rotation, Docker's JSON logs can saturate the disk and take the host down; `max-size`/`max-file` bound their total size."
+  - q:
+      fr: "Pourquoi définir `deploy.resources.limits` sur un conteneur de production ?"
+      en: "Why set `deploy.resources.limits` on a production container?"
+    options:
+      fr:
+        - "Pour signer l'image"
+        - "Pour ouvrir un port supplémentaire"
+        - "Pour forcer l'usage de `latest`"
+        - "Pour qu'un service emballé ou un déni de service ne consomme pas toute la machine"
+      en:
+        - "To sign the image"
+        - "To open an extra port"
+        - "To force the use of `latest`"
+        - "So a runaway service or denial of service cannot consume the whole machine"
+    answer: 3
+    why:
+      fr: "Les limites CPU/mémoire isolent les services : un conteneur emballé est contenu et n'entraîne pas la chute des autres ni de l'hôte."
+      en: "CPU/memory limits isolate services: a runaway container is contained and does not drag down the others or the host."

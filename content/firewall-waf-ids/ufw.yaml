@@ -1,0 +1,302 @@
+description:
+  fr: "Configurer un pare-feu Linux lisible avec UFW : refus par défaut, limitation SSH, profils d'application et journalisation."
+  en: "Set up a readable Linux firewall with UFW: default deny, SSH rate-limiting, application profiles and logging."
+duration: 18
+
+intro:
+  fr: |
+    **UFW** signifie *Uncomplicated Firewall* — « pare-feu sans complications ». C'est une surcouche à iptables/nftables
+    livrée par défaut sur Ubuntu et Debian. Là où iptables demande dix lignes cryptiques, UFW en demande une, lisible :
+    `ufw allow 443/tcp`.
+
+    L'analogie : iptables, c'est parler au moteur de la voiture directement ; UFW, c'est le volant et les pédales.
+    Le moteur est le même (Netfilter), mais l'interface est pensée pour un humain. C'est l'outil idéal pour un
+    serveur unique ou un homelab, quand on n'a pas besoin de règles exotiques.
+
+    Dans cette leçon, vous allez comparer un serveur sans pare-feu à un serveur protégé par UFW, poser une
+    politique de **refus par défaut**, limiter SSH contre la force brute, utiliser des **profils d'application**
+    et activer la **journalisation** pour voir qui frappe à la porte.
+  en: |
+    **UFW** stands for *Uncomplicated Firewall*. It is a front-end to iptables/nftables shipped by default on
+    Ubuntu and Debian. Where iptables wants ten cryptic lines, UFW wants one readable line: `ufw allow 443/tcp`.
+
+    The analogy: iptables is talking to the car engine directly; UFW is the steering wheel and pedals. The engine
+    is the same (Netfilter), but the interface is built for a human. It is the ideal tool for a single server or
+    a homelab, when you do not need exotic rules.
+
+    In this lesson you will compare a server with no firewall to one protected by UFW, set a **default deny**
+    policy, rate-limit SSH against brute force, use **application profiles**, and turn on **logging** to see who
+    is knocking at the door.
+
+sections:
+  - heading:
+      fr: "allow, deny, reject, limit"
+      en: "allow, deny, reject, limit"
+    body:
+      fr: |
+        UFW propose quatre actions par règle, à choisir selon l'intention :
+
+        | Action | Effet | Quand l'utiliser |
+        |---|---|---|
+        | `allow` | Laisse passer | Un service public (HTTPS) |
+        | `deny` | Jette en silence (DROP) | Bloquer une IP sans se signaler |
+        | `reject` | Refuse avec un message (RST/ICMP) | Réseau interne de confiance |
+        | `limit` | Autorise mais bride le débit de nouvelles connexions | **SSH**, contre la force brute |
+
+        La base d'un serveur sûr se pose en deux commandes : `ufw default deny incoming` (personne n'entre sauf
+        autorisation) et `ufw default allow outgoing` (la machine peut sortir pour ses mises à jour). Ensuite on
+        n'ouvre **que** ce qui est nécessaire.
+      en: |
+        UFW offers four actions per rule, chosen by intent:
+
+        | Action | Effect | When to use it |
+        |---|---|---|
+        | `allow` | Let through | A public service (HTTPS) |
+        | `deny` | Silently drop (DROP) | Block an IP without announcing yourself |
+        | `reject` | Refuse with a message (RST/ICMP) | A trusted internal network |
+        | `limit` | Allow but throttle new connections | **SSH**, against brute force |
+
+        A safe server's baseline is two commands: `ufw default deny incoming` (nobody gets in without permission)
+        and `ufw default allow outgoing` (the machine can reach out for its updates). Then you open **only** what
+        is needed.
+  - heading:
+      fr: "Profils d'application et ordre des règles"
+      en: "Application profiles and rule order"
+    body:
+      fr: |
+        Plutôt que de retenir les numéros de port, UFW lit des **profils d'application** dans
+        `/etc/ufw/applications.d/`. Les paquets installent souvent le leur : `ufw allow 'Nginx Full'` ouvre 80 et
+        443 d'un coup, `ufw allow OpenSSH` ouvre 22. `ufw app list` affiche les profils disponibles.
+
+        Attention à l'**ordre** : UFW évalue les règles de haut en bas et s'arrête à la première qui correspond.
+        Si vous placez `ufw deny from 203.0.113.10` *après* `ufw allow 443`, l'IP malveillante passera quand même
+        sur le port 443. Insérez les règles de blocage ciblées **en tête** avec `ufw insert 1 deny from <ip>`.
+      en: |
+        Instead of memorising port numbers, UFW reads **application profiles** from `/etc/ufw/applications.d/`.
+        Packages often install their own: `ufw allow 'Nginx Full'` opens 80 and 443 at once, `ufw allow OpenSSH`
+        opens 22. `ufw app list` shows the available profiles.
+
+        Mind the **order**: UFW evaluates rules top to bottom and stops at the first match. If you place
+        `ufw deny from 203.0.113.10` *after* `ufw allow 443`, the malicious IP will still get through on port 443.
+        Insert targeted block rules **at the top** with `ufw insert 1 deny from <ip>`.
+
+examples:
+  - title:
+      fr: "Dangereux : pare-feu désactivé ou tout ouvert"
+      en: "Dangerous: firewall disabled or everything open"
+    file: open-ufw.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # ANTI-PATTERN - what you find on too many quick-start tutorials.
+
+      # The firewall is simply off: every listening port is exposed.
+      ufw disable
+
+      # Or, just as bad, it is "on" but allows everything inbound:
+      ufw default allow incoming
+      ufw allow from any to any           # opens ALL ports to the world
+      ufw enable
+    output: |
+      Firewall stopped and disabled on system startup
+      # nmap from the outside now sees everything:
+      # 22/tcp    open  ssh
+      # 3306/tcp  open  mysql     <-- database exposed to the Internet!
+      # 6379/tcp  open  redis     <-- no password by default
+    note:
+      fr: "Un pare-feu désactivé ou en `allow incoming` laisse apparaître des services jamais destinés à Internet (MySQL, Redis). Redis sans mot de passe exposé publiquement est l'une des causes de compromission les plus fréquentes."
+      en: "A disabled firewall, or one in `allow incoming`, exposes services never meant for the Internet (MySQL, Redis). A passwordless Redis exposed publicly is one of the most common causes of compromise."
+
+  - title:
+      fr: "Sécurisé : refus par défaut + SSH limité"
+      en: "Secure: default deny + rate-limited SSH"
+    file: setup-ufw.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. Baseline: refuse everything inbound, allow outbound.
+      ufw default deny incoming
+      ufw default allow outgoing
+
+      # 2. SSH with `limit`, NOT `allow`: UFW drops a source IP that opens
+      #    6+ connections in 30 seconds, blunting brute-force attacks.
+      ufw limit OpenSSH
+
+      # 3. Public web traffic via the application profile (opens 80 + 443).
+      ufw allow 'Nginx Full'
+
+      # 4. Expose the database ONLY to the private app subnet, never the world.
+      ufw allow from 10.0.0.0/24 to any port 5432 proto tcp
+
+      # 5. Turn on logging so we can see knocks and blocks.
+      ufw logging on
+
+      # 6. Enable the firewall (answers "y" non-interactively).
+      ufw --force enable
+    output: |
+      Rules updated
+      Firewall is active and enabled on system startup
+    note:
+      fr: "`ufw limit OpenSSH` est la différence clé : il autorise SSH mais bloque les IP trop insistantes. La base de données n'est ouverte qu'au sous-réseau `10.0.0.0/24`, jamais à Internet."
+      en: "`ufw limit OpenSSH` is the key difference: it allows SSH but blocks IPs that hammer it. The database is open only to the `10.0.0.0/24` subnet, never to the Internet."
+
+  - title:
+      fr: "Vérifier et auditer : status verbose"
+      en: "Verify and audit: status verbose"
+    file: audit-ufw.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Always review the ACTIVE ruleset after any change.
+
+      # Numbered rules: needed to delete a precise rule with `ufw delete <n>`.
+      ufw status numbered
+
+      # Verbose: shows default policies, logging level and profiles in use.
+      ufw status verbose
+
+      # List the application profiles available on this host.
+      ufw app list
+
+      # Block a single abusive IP at the TOP of the list (evaluated first).
+      ufw insert 1 deny from 203.0.113.10
+    output: |
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), disabled (routed)
+
+      To                         Action      From
+      --                         ------      ----
+      [ 1] OpenSSH               LIMIT IN    Anywhere
+      [ 2] Nginx Full            ALLOW IN    Anywhere
+      [ 3] 5432/tcp              ALLOW IN    10.0.0.0/24
+    note:
+      fr: "`ufw status verbose` est votre tableau de bord : il confirme que la politique est bien `deny (incoming)` et que SSH est en `LIMIT`. `ufw status numbered` donne les indices pour supprimer une règle précise."
+      en: "`ufw status verbose` is your dashboard: it confirms the policy is `deny (incoming)` and that SSH is in `LIMIT`. `ufw status numbered` gives the indices to delete a specific rule."
+
+mistake:
+  fr: |
+    **Activer UFW sans autoriser SSH d'abord.** Sur un serveur distant, taper `ufw enable` alors que la politique
+    est `deny incoming` et qu'aucune règle SSH n'existe coupe instantanément votre session — et vous ne pourrez
+    pas vous reconnecter. UFW affiche d'ailleurs l'avertissement *« Command may disrupt existing ssh connections »*.
+    Ajoutez **toujours** `ufw limit OpenSSH` (ou `ufw allow 22/tcp`) **avant** `ufw enable`.
+  en: |
+    **Enabling UFW without allowing SSH first.** On a remote server, running `ufw enable` while the policy is
+    `deny incoming` and no SSH rule exists instantly cuts your session — and you will not be able to reconnect.
+    UFW even prints the warning *"Command may disrupt existing ssh connections"*. **Always** add
+    `ufw limit OpenSSH` (or `ufw allow 22/tcp`) **before** `ufw enable`.
+
+bestPractice:
+  fr: |
+    - **Posez la base d'abord** : `default deny incoming` + `default allow outgoing`, puis ouvrez au cas par cas.
+    - **Utilisez `limit` pour SSH**, pas `allow` : il freine la force brute gratuitement.
+    - **Restreignez par source** : `allow from 10.0.0.0/24 to any port 5432` plutôt que d'ouvrir à `any`.
+    - **Activez la journalisation** (`ufw logging on`) et surveillez `/var/log/ufw.log`.
+    - **Relisez `ufw status verbose`** après chaque changement : une règle mal ordonnée est une faille.
+  en: |
+    - **Set the baseline first**: `default deny incoming` + `default allow outgoing`, then open case by case.
+    - **Use `limit` for SSH**, not `allow`: it slows brute force for free.
+    - **Restrict by source**: `allow from 10.0.0.0/24 to any port 5432` rather than opening to `any`.
+    - **Turn on logging** (`ufw logging on`) and watch `/var/log/ufw.log`.
+    - **Re-read `ufw status verbose`** after every change: a mis-ordered rule is a hole.
+
+exercise:
+  statement:
+    fr: |
+      Vous déployez un serveur web Nginx accessible au public. Vous devez :
+      1. refuser tout le trafic entrant par défaut, autoriser le sortant ;
+      2. autoriser SSH en mode **limité** (anti-force-brute) ;
+      3. ouvrir HTTP et HTTPS via le profil applicatif ;
+      4. activer la journalisation puis le pare-feu.
+
+      Écrivez la suite de commandes UFW.
+    en: |
+      You are deploying a public-facing Nginx web server. You must:
+      1. deny all incoming traffic by default, allow outgoing;
+      2. allow SSH in **limited** mode (anti-brute-force);
+      3. open HTTP and HTTPS via the application profile;
+      4. turn on logging, then enable the firewall.
+
+      Write the sequence of UFW commands.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. Deny-by-default baseline.
+      ufw default deny incoming
+      ufw default allow outgoing
+
+      # 2. SSH rate-limited BEFORE enabling, so we keep access.
+      ufw limit OpenSSH
+
+      # 3. HTTP + HTTPS in one profile.
+      ufw allow 'Nginx Full'
+
+      # 4. Logging, then enable non-interactively.
+      ufw logging on
+      ufw --force enable
+
+      ufw status verbose
+    note:
+      fr: "`ufw limit OpenSSH` est posé avant `enable`, ce qui évite de se verrouiller dehors. `ufw status verbose` confirme la configuration finale."
+      en: "`ufw limit OpenSSH` is set before `enable`, which avoids locking yourself out. `ufw status verbose` confirms the final configuration."
+
+quiz:
+  - q:
+      fr: "Que fait `ufw default deny incoming` ?"
+      en: "What does `ufw default deny incoming` do?"
+    options:
+      fr: ["Il bloque tout le trafic sortant", "Il refuse tout le trafic entrant non explicitement autorisé", "Il désactive le pare-feu", "Il ouvre tous les ports"]
+      en: ["It blocks all outgoing traffic", "It refuses all incoming traffic not explicitly allowed", "It disables the firewall", "It opens every port"]
+    answer: 1
+    why:
+      fr: "C'est la politique *default deny* : tout paquet entrant sans règle d'autorisation est jeté, ce qui est la base d'un serveur sûr."
+      en: "This is the *default deny* policy: any incoming packet without an allow rule is dropped, which is the foundation of a safe server."
+  - q:
+      fr: "Pourquoi utiliser `ufw limit OpenSSH` plutôt que `ufw allow OpenSSH` ?"
+      en: "Why use `ufw limit OpenSSH` rather than `ufw allow OpenSSH`?"
+    options:
+      fr: ["Pour chiffrer SSH", "Pour ouvrir un port différent", "Pour bloquer les IP qui multiplient les tentatives de connexion", "Pour désactiver les mots de passe"]
+      en: ["To encrypt SSH", "To open a different port", "To block IPs that pile up connection attempts", "To disable passwords"]
+    answer: 2
+    why:
+      fr: "`limit` autorise SSH mais bloque une IP qui ouvre trop de connexions en peu de temps, ce qui ralentit fortement la force brute."
+      en: "`limit` allows SSH but blocks an IP opening too many connections in a short time, strongly slowing brute force."
+  - q:
+      fr: "Quel risque court-on en activant UFW avant d'autoriser SSH sur un serveur distant ?"
+      en: "What risk comes from enabling UFW before allowing SSH on a remote server?"
+    options:
+      fr: ["Se verrouiller dehors et perdre l'accès", "Ralentir le serveur", "Effacer les logs", "Désactiver IPv6"]
+      en: ["Locking yourself out and losing access", "Slowing the server down", "Erasing the logs", "Disabling IPv6"]
+    answer: 0
+    why:
+      fr: "Avec `deny incoming` actif et aucune règle SSH, la session en cours est coupée et la reconnexion est impossible : il faut autoriser SSH avant `ufw enable`."
+      en: "With `deny incoming` active and no SSH rule, the current session is cut and reconnection is impossible: you must allow SSH before `ufw enable`."
+  - q:
+      fr: "Comment ouvrir un port uniquement pour un sous-réseau de confiance ?"
+      en: "How do you open a port only for a trusted subnet?"
+    options:
+      fr: ["ufw allow 5432", "ufw default allow incoming", "ufw disable", "ufw allow from 10.0.0.0/24 to any port 5432"]
+      en: ["ufw allow 5432", "ufw default allow incoming", "ufw disable", "ufw allow from 10.0.0.0/24 to any port 5432"]
+    answer: 3
+    why:
+      fr: "La clause `from <sous-réseau>` restreint l'ouverture à une source précise, évitant d'exposer la base de données à tout Internet."
+      en: "The `from <subnet>` clause restricts the opening to a specific source, avoiding exposing the database to the whole Internet."
+  - q:
+      fr: "Quelle commande montre les politiques par défaut, le niveau de log et les profils actifs ?"
+      en: "Which command shows the default policies, logging level and active profiles?"
+    options:
+      fr: ["ufw status verbose", "ufw reset", "ufw disable", "ufw reload"]
+      en: ["ufw status verbose", "ufw reset", "ufw disable", "ufw reload"]
+    answer: 0
+    why:
+      fr: "`ufw status verbose` affiche un tableau de bord complet : politiques `deny/allow`, journalisation et règles en vigueur. `reset` efface tout, `disable` arrête le pare-feu."
+      en: "`ufw status verbose` shows a full dashboard: `deny/allow` policies, logging and the rules in force. `reset` wipes everything, `disable` stops the firewall."

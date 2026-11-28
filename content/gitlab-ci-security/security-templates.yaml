@@ -1,0 +1,453 @@
+description:
+  fr: "Utiliser les templates de sécurité intégrés de GitLab : include des SAST, Secret-Detection, Dependency-Scanning, Container-Scanning et DAST, et savoir quel niveau d'édition affiche les résultats."
+  en: "Use GitLab's built-in security templates: include SAST, Secret-Detection, Dependency-Scanning, Container-Scanning and DAST, and know which tier shows the results."
+duration: 25
+
+intro:
+  fr: |
+    Dans le cours GitHub Actions, il fallait assembler chaque scanner à la main. GitLab propose une approche
+    différente : des **templates de sécurité** prêts à l'emploi. Une seule ligne `include` ajoute un scanner
+    complet au pipeline, configuré selon les bonnes pratiques, sans écrire le job vous-même.
+
+    Imaginez des modules préfabriqués pour une maison : au lieu de monter chaque mur brique par brique, vous
+    emboîtez un module « cuisine » déjà équipé. Les templates de sécurité de GitLab sont ces modules :
+    « analyse statique », « détection de secrets », « scan de dépendances », chacun en une ligne.
+
+    Dans cette leçon, vous allez inclure les cinq grands templates : **SAST**, **Secret-Detection**,
+    **Dependency-Scanning**, **Container-Scanning** et **DAST**. Vous apprendrez aussi un point essentiel et
+    souvent mal compris : **quel niveau d'abonnement** GitLab affiche réellement les résultats. Car les scans
+    tournent dans toutes les éditions, mais l'affichage enrichi (comparaison sur la *merge request*, tableau
+    de bord de vulnérabilités) est réservé aux éditions payantes — il faut le savoir pour ne pas croire à tort
+    que « rien ne marche ».
+  en: |
+    In the GitHub Actions course, you had to assemble each scanner by hand. GitLab takes a different
+    approach: ready-made **security templates**. A single `include` line adds a complete scanner to the
+    pipeline, configured to good practices, without writing the job yourself.
+
+    Picture prefabricated modules for a house: instead of building each wall brick by brick, you slot in a
+    fully equipped "kitchen" module. GitLab's security templates are those modules: "static analysis",
+    "secret detection", "dependency scanning", each in one line.
+
+    In this lesson you will include the five major templates: **SAST**, **Secret-Detection**,
+    **Dependency-Scanning**, **Container-Scanning** and **DAST**. You will also learn an essential and often
+    misunderstood point: **which subscription tier** GitLab actually shows the results in. Because the scans
+    run on every edition, but the enriched display (comparison on the *merge request*, vulnerability
+    dashboard) is reserved for paid editions — you must know this to avoid wrongly thinking "nothing works".
+
+sections:
+  - heading:
+      fr: "include : ajouter un scanner en une ligne"
+      en: "include: adding a scanner in one line"
+    body:
+      fr: |
+        La clé **`include`** importe un fichier de configuration dans votre pipeline. GitLab fournit des
+        templates officiels, référencés par `template:`. Chacun définit un job de scan complet.
+
+        ```yaml
+        include:
+          - template: Jobs/SAST.gitlab-ci.yml
+          - template: Jobs/Secret-Detection.gitlab-ci.yml
+          - template: Jobs/Dependency-Scanning.gitlab-ci.yml
+        ```
+
+        | Template | Ce qu'il scanne | Équivalent GitHub |
+        |---|---|---|
+        | `Jobs/SAST.gitlab-ci.yml` | Votre code source | CodeQL / Semgrep |
+        | `Jobs/Secret-Detection.gitlab-ci.yml` | Les secrets commités | Gitleaks |
+        | `Jobs/Dependency-Scanning.gitlab-ci.yml` | Les dépendances (CVE) | Trivy fs / dependency-review |
+        | `Jobs/Container-Scanning.gitlab-ci.yml` | L'image de conteneur | Trivy image |
+        | `Jobs/DAST.gitlab-ci.yml` | L'application en marche | ZAP |
+
+        Le template **SAST** est particulièrement pratique : il **détecte automatiquement** les langages de
+        votre dépôt et choisit les bons analyseurs (Semgrep pour beaucoup de langages, et d'autres outils
+        spécialisés). Vous n'écrivez aucun job. Les templates définissent leur propre `stage` (souvent
+        `test`) ; vous pouvez le surcharger si votre pipeline a une structure différente.
+      en: |
+        The **`include`** key imports a configuration file into your pipeline. GitLab provides official
+        templates, referenced by `template:`. Each defines a complete scan job.
+
+        ```yaml
+        include:
+          - template: Jobs/SAST.gitlab-ci.yml
+          - template: Jobs/Secret-Detection.gitlab-ci.yml
+          - template: Jobs/Dependency-Scanning.gitlab-ci.yml
+        ```
+
+        | Template | What it scans | GitHub equivalent |
+        |---|---|---|
+        | `Jobs/SAST.gitlab-ci.yml` | Your source code | CodeQL / Semgrep |
+        | `Jobs/Secret-Detection.gitlab-ci.yml` | Committed secrets | Gitleaks |
+        | `Jobs/Dependency-Scanning.gitlab-ci.yml` | Dependencies (CVEs) | Trivy fs / dependency-review |
+        | `Jobs/Container-Scanning.gitlab-ci.yml` | The container image | Trivy image |
+        | `Jobs/DAST.gitlab-ci.yml` | The running application | ZAP |
+
+        The **SAST** template is particularly handy: it **automatically detects** your repo's languages and
+        picks the right analysers (Semgrep for many languages, and other specialised tools). You write no
+        job. The templates define their own `stage` (often `test`); you can override it if your pipeline has
+        a different structure.
+  - heading:
+      fr: "Les rapports : artifacts.reports et l'affichage"
+      en: "Reports: artifacts.reports and the display"
+    body:
+      fr: |
+        Chaque template produit un **rapport** dans un format standard GitLab, déclaré via
+        `artifacts.reports`. Par exemple, le SAST écrit un fichier `gl-sast-report.json` exposé comme
+        `artifacts.reports.sast`. GitLab sait lire ces rapports et, selon l'édition, les afficher de façon
+        enrichie.
+
+        C'est le point le plus important à comprendre, et la source d'innombrables confusions :
+
+        | Fonctionnalité | Édition requise |
+        |---|---|
+        | Le scan **s'exécute**, le rapport est produit en artifact | **Toutes** (Free incluse) |
+        | Widget de comparaison **dans la merge request** (nouvelles vs anciennes) | Ultimate |
+        | **Security Dashboard** (tableau de bord des vulnérabilités) | Ultimate |
+        | **Vulnerability Management** (gérer, ignorer, suivre) | Ultimate |
+
+        Autrement dit : en **Free**, les templates tournent et produisent des rapports téléchargeables, mais
+        vous ne verrez **pas** le joli widget de sécurité sur la merge request. En **Ultimate**, GitLab
+        compare automatiquement les vulnérabilités de la branche face à la cible et les affiche dans la MR.
+
+        Conséquence pratique : en Free, pour faire **échouer** le pipeline sur une faille, on s'appuie sur le
+        **code de retour** du scanner (comme en GitHub Actions) plutôt que sur un seuil géré par l'interface.
+        Il ne faut pas conclure « ça ne marche pas » parce que le widget n'apparaît pas : le scan, lui,
+        fonctionne bien.
+      en: |
+        Each template produces a **report** in a standard GitLab format, declared via `artifacts.reports`.
+        For example, SAST writes a `gl-sast-report.json` file exposed as `artifacts.reports.sast`. GitLab
+        can read these reports and, depending on the edition, display them in an enriched way.
+
+        This is the most important point to grasp, and the source of countless confusions:
+
+        | Feature | Required edition |
+        |---|---|
+        | The scan **runs**, the report is produced as an artifact | **All** (Free included) |
+        | Comparison widget **in the merge request** (new vs old) | Ultimate |
+        | **Security Dashboard** (vulnerability dashboard) | Ultimate |
+        | **Vulnerability Management** (manage, dismiss, track) | Ultimate |
+
+        In other words: on **Free**, the templates run and produce downloadable reports, but you will
+        **not** see the nice security widget on the merge request. On **Ultimate**, GitLab automatically
+        compares the branch's vulnerabilities against the target and shows them in the MR.
+
+        Practical consequence: on Free, to **fail** the pipeline on a flaw, you rely on the scanner's
+        **exit code** (as in GitHub Actions) rather than on a threshold managed by the interface. Do not
+        conclude "it does not work" because the widget is missing: the scan itself works fine.
+  - heading:
+      fr: "Configurer et restreindre les templates"
+      en: "Configuring and restricting the templates"
+    body:
+      fr: |
+        Un template ne s'utilise pas forcément tel quel. Deux besoins reviennent souvent.
+
+        **Configurer** : les templates lisent des variables pour ajuster leur comportement. Par exemple,
+        `SAST_EXCLUDED_PATHS` pour ignorer des dossiers de tests, ou `SECURE_LOG_LEVEL` pour le détail des
+        logs. On déclare ces variables dans `variables:`.
+
+        ```yaml
+        include:
+          - template: Jobs/SAST.gitlab-ci.yml
+
+        variables:
+          SAST_EXCLUDED_PATHS: "spec, test, tests, tmp"
+        ```
+
+        **Restreindre quand ça tourne** : les templates définissent leurs propres `rules`. Certains (DAST,
+        Container-Scanning) sont lourds et n'ont pas à tourner sur chaque commit de branche de fonctionnalité.
+        On peut surcharger un job de template en redéclarant son nom pour affiner ses `rules` — par exemple
+        ne lancer le DAST que sur la branche par défaut ou sur un *schedule*.
+
+        Enfin, **épinglez** toujours une version de GitLab stable et testez après chaque mise à niveau : les
+        templates évoluent, un scanner peut changer de comportement ou de seuil d'une version à l'autre. Les
+        templates officiels sont maintenus par GitLab, mais votre pipeline doit rester reproductible.
+      en: |
+        A template is not necessarily used as-is. Two needs come up often.
+
+        **Configure**: the templates read variables to adjust their behaviour. For example,
+        `SAST_EXCLUDED_PATHS` to ignore test folders, or `SECURE_LOG_LEVEL` for log verbosity. You declare
+        these variables in `variables:`.
+
+        ```yaml
+        include:
+          - template: Jobs/SAST.gitlab-ci.yml
+
+        variables:
+          SAST_EXCLUDED_PATHS: "spec, test, tests, tmp"
+        ```
+
+        **Restrict when it runs**: the templates define their own `rules`. Some (DAST, Container-Scanning)
+        are heavy and need not run on every feature-branch commit. You can override a template job by
+        redeclaring its name to refine its `rules` — for example running DAST only on the default branch or
+        on a *schedule*.
+
+        Finally, always **pin** a stable GitLab version and test after each upgrade: the templates evolve, a
+        scanner can change behaviour or threshold from one version to the next. The official templates are
+        maintained by GitLab, but your pipeline must stay reproducible.
+
+examples:
+  - title:
+      fr: "Inclure les cinq templates de sécurité"
+      en: "Including the five security templates"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      stages:
+        - test
+        - build
+        - dast
+
+      include:
+        # Each line adds a complete, ready-made scan job
+        - template: Jobs/SAST.gitlab-ci.yml                  # your source code
+        - template: Jobs/Secret-Detection.gitlab-ci.yml      # committed secrets
+        - template: Jobs/Dependency-Scanning.gitlab-ci.yml   # dependencies (CVEs)
+        - template: Jobs/Container-Scanning.gitlab-ci.yml    # the container image
+        - template: Jobs/DAST.gitlab-ci.yml                  # the running app
+
+      variables:
+        # DAST needs to know which URL to scan (your own test deployment)
+        DAST_WEBSITE: "https://staging.example.com"
+    note:
+      fr: "Cinq scanners ajoutés en cinq lignes. Le SAST détecte automatiquement les langages du dépôt. Chaque template produit un rapport `artifacts.reports`. Rappel : les scans tournent dans toutes les éditions ; le widget de comparaison sur la merge request est réservé à Ultimate."
+      en: "Five scanners added in five lines. SAST automatically detects the repo's languages. Each template produces an `artifacts.reports` report. Reminder: the scans run on every edition; the comparison widget on the merge request is reserved for Ultimate."
+
+  - title:
+      fr: "Configurer un template avec des variables"
+      en: "Configuring a template with variables"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      include:
+        - template: Jobs/SAST.gitlab-ci.yml
+        - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+      variables:
+        # Do not waste time scanning test and vendored folders
+        SAST_EXCLUDED_PATHS: "spec, test, tests, tmp, vendor"
+        # Scan the full history for secrets, not just the last commit
+        SECRET_DETECTION_HISTORIC_SCAN: "true"
+    note:
+      fr: "Les templates lisent des variables pour s'adapter. `SAST_EXCLUDED_PATHS` évite d'analyser les dossiers de tests. `SECRET_DETECTION_HISTORIC_SCAN: \"true\"` fait scanner tout l'historique Git (l'équivalent de `fetch-depth: 0`), pour attraper un secret ajouté puis retiré."
+      en: "Templates read variables to adapt. `SAST_EXCLUDED_PATHS` avoids analysing test folders. `SECRET_DETECTION_HISTORIC_SCAN: \"true\"` scans the whole Git history (the equivalent of `fetch-depth: 0`), to catch a secret added then removed."
+
+  - title:
+      fr: "Restreindre un template lourd (DAST) à la branche par défaut"
+      en: "Restricting a heavy template (DAST) to the default branch"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      include:
+        - template: Jobs/DAST.gitlab-ci.yml
+
+      variables:
+        DAST_WEBSITE: "https://staging.example.com"
+
+      # Override the template's "dast" job to refine WHEN it runs.
+      # DAST is slow: run it on the default branch and on schedules only,
+      # not on every feature-branch commit.
+      dast:
+        rules:
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+          - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    note:
+      fr: "En redéclarant le job `dast` (même nom que dans le template), on **surcharge** ses `rules` sans réécrire le job entier. Le DAST, coûteux, ne tourne plus que sur la branche par défaut et les exécutions planifiées. Le reste de la configuration du template est conservé."
+      en: "By redeclaring the `dast` job (same name as in the template), you **override** its `rules` without rewriting the whole job. DAST, being costly, now runs only on the default branch and scheduled runs. The rest of the template's configuration is kept."
+
+  - title:
+      fr: "Faire échouer le pipeline en Free : s'appuyer sur le code de retour"
+      en: "Failing the pipeline on Free: relying on the exit code"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      stages: [test]
+
+      # On Free, the merge-request widget and thresholds are not available.
+      # This extra job fails the pipeline on dependency CVEs using Trivy's
+      # exit code, exactly as in the GitHub Actions course.
+      dependency-gate:
+        stage: test
+        image:
+          name: aquasec/trivy:0.57.0
+          entrypoint: [""]
+        script:
+          - trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+    note:
+      fr: "En édition Free, l'interface ne bloque pas selon un seuil. On ajoute donc un job qui, via `--exit-code 1`, fait échouer le pipeline sur les CVE HIGH/CRITICAL. C'est le même principe que dans GitHub Actions : le code de retour du scanner est la barrière réelle."
+      en: "On the Free edition, the interface does not block on a threshold. So you add a job that, via `--exit-code 1`, fails the pipeline on HIGH/CRITICAL CVEs. Same principle as in GitHub Actions: the scanner's exit code is the real barrier."
+
+mistake:
+  fr: |
+    **Croire que « rien ne marche » parce que le widget de sécurité n'apparaît pas sur la merge request.**
+
+    C'est la confusion numéro un avec les templates GitLab. Les scans **s'exécutent dans toutes les
+    éditions** et produisent bien des rapports (téléchargeables en artifacts). Mais l'affichage enrichi — le
+    widget de comparaison sur la MR, le Security Dashboard, la gestion des vulnérabilités — est réservé à
+    l'édition **Ultimate**. En Free, pour bloquer une faille, on s'appuie sur le **code de retour** du
+    scanner, pas sur un seuil géré par l'interface. Le scan fonctionne : seule la présentation diffère.
+  en: |
+    **Believing "nothing works" because the security widget does not appear on the merge request.**
+
+    This is the number-one confusion with GitLab templates. The scans **run on every edition** and do
+    produce reports (downloadable as artifacts). But the enriched display — the comparison widget on the MR,
+    the Security Dashboard, vulnerability management — is reserved for the **Ultimate** edition. On Free, to
+    block a flaw you rely on the scanner's **exit code**, not on a threshold managed by the interface. The
+    scan works: only the presentation differs.
+
+bestPractice:
+  fr: |
+    - **Ajoutez les scanners via `include: template:`** plutôt que de réécrire les jobs à la main.
+    - **Sachez quel niveau affiche quoi** : les scans tournent partout, le widget MR et le dashboard sont Ultimate.
+    - **En Free, bloquez via le code de retour** d'un job de garde (comme Trivy `--exit-code 1`).
+    - **Configurez les templates par variables** (`SAST_EXCLUDED_PATHS`, scan historique des secrets).
+    - **Restreignez les templates lourds** (DAST, Container-Scanning) à `main` et aux `schedule`.
+    - **Épinglez une version de GitLab** et retestez après chaque mise à niveau.
+  en: |
+    - **Add scanners via `include: template:`** rather than rewriting the jobs by hand.
+    - **Know which tier shows what**: scans run everywhere, the MR widget and dashboard are Ultimate.
+    - **On Free, block via the exit code** of a gate job (like Trivy `--exit-code 1`).
+    - **Configure templates with variables** (`SAST_EXCLUDED_PATHS`, historic secret scan).
+    - **Restrict heavy templates** (DAST, Container-Scanning) to `main` and `schedule`.
+    - **Pin a GitLab version** and re-test after each upgrade.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe travaille sur une instance GitLab **Free**. Vous voulez :
+
+      1. inclure les templates **SAST** et **Dependency-Scanning** ;
+      2. exclure les dossiers `tests` et `vendor` de l'analyse SAST ;
+      3. comme le widget de merge request n'existe pas en Free, ajouter un job qui **fait échouer** le
+         pipeline sur les CVE de dépendances de gravité HIGH ou CRITICAL.
+
+      Écrivez le `.gitlab-ci.yml` correspondant et expliquez en une phrase pourquoi l'étape 3 est nécessaire
+      ici.
+    en: |
+      Your team works on a **Free** GitLab instance. You want to:
+
+      1. include the **SAST** and **Dependency-Scanning** templates;
+      2. exclude the `tests` and `vendor` folders from SAST analysis;
+      3. since the merge-request widget does not exist on Free, add a job that **fails** the pipeline on
+         HIGH or CRITICAL dependency CVEs.
+
+      Write the matching `.gitlab-ci.yml` and explain in one sentence why step 3 is necessary here.
+  solution:
+    file: .gitlab-ci.yml
+    lang: yaml
+    code: |
+      stages: [test]
+
+      include:
+        - template: Jobs/SAST.gitlab-ci.yml
+        - template: Jobs/Dependency-Scanning.gitlab-ci.yml
+
+      variables:
+        SAST_EXCLUDED_PATHS: "tests, vendor"
+
+      # On Free there is no MR widget / threshold, so the enriched display will
+      # not block anything. This gate job uses the scanner exit code instead.
+      dependency-gate:
+        stage: test
+        image:
+          name: aquasec/trivy:0.57.0
+          entrypoint: [""]
+        script:
+          - trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+    note:
+      fr: "Étape 3 nécessaire car, en Free, l'interface n'offre pas de seuil bloquant : sans ce job de garde, les templates produiraient des rapports mais le pipeline resterait vert malgré des CVE critiques. `--exit-code 1` rétablit la barrière via le code de retour."
+      en: "Step 3 is necessary because, on Free, the interface offers no blocking threshold: without this gate job, the templates would produce reports but the pipeline would stay green despite critical CVEs. `--exit-code 1` restores the barrier via the exit code."
+
+quiz:
+  - q:
+      fr: "Comment ajoute-t-on un scanner de sécurité officiel à un pipeline GitLab ?"
+      en: "How do you add an official security scanner to a GitLab pipeline?"
+    options:
+      fr:
+        - "Avec `include: - template: Jobs/SAST.gitlab-ci.yml`"
+        - "En installant une extension de navigateur"
+        - "En écrivant à chaque fois le job complet à la main"
+        - "Avec la clé `security: true`"
+      en:
+        - "With `include: - template: Jobs/SAST.gitlab-ci.yml`"
+        - "By installing a browser extension"
+        - "By writing the full job by hand every time"
+        - "With a `security: true` key"
+    answer: 0
+    why:
+      fr: "`include: template:` importe un template officiel qui définit tout le job de scan ; une seule ligne suffit par scanner."
+      en: "`include: template:` imports an official template that defines the whole scan job; one line is enough per scanner."
+  - q:
+      fr: "Dans quelle édition les scans de template s'exécutent-ils réellement ?"
+      en: "In which edition do the template scans actually run?"
+    options:
+      fr:
+        - "Uniquement Ultimate"
+        - "Uniquement Premium et Ultimate"
+        - "Toutes les éditions, y compris Free"
+        - "Aucune sans licence spéciale"
+      en:
+        - "Ultimate only"
+        - "Premium and Ultimate only"
+        - "All editions, including Free"
+        - "None without a special licence"
+    answer: 2
+    why:
+      fr: "Les scans tournent dans toutes les éditions et produisent des rapports ; c'est l'affichage enrichi (widget MR, dashboard) qui est réservé à Ultimate."
+      en: "The scans run on every edition and produce reports; it is the enriched display (MR widget, dashboard) that is reserved for Ultimate."
+  - q:
+      fr: "Quelle fonctionnalité nécessite l'édition Ultimate ?"
+      en: "Which feature requires the Ultimate edition?"
+    options:
+      fr:
+        - "L'exécution du job de scan"
+        - "La production du rapport en artifact"
+        - "La clé `include`"
+        - "Le widget de comparaison des vulnérabilités sur la merge request"
+      en:
+        - "Running the scan job"
+        - "Producing the report as an artifact"
+        - "The `include` key"
+        - "The vulnerability comparison widget on the merge request"
+    answer: 3
+    why:
+      fr: "Le widget de comparaison sur la MR, le Security Dashboard et la gestion des vulnérabilités sont des fonctionnalités Ultimate ; le scan lui-même tourne partout."
+      en: "The MR comparison widget, the Security Dashboard and vulnerability management are Ultimate features; the scan itself runs everywhere."
+  - q:
+      fr: "Sur une instance Free, comment faire échouer le pipeline sur une CVE critique ?"
+      en: "On a Free instance, how do you fail the pipeline on a critical CVE?"
+    options:
+      fr:
+        - "En s'appuyant sur le code de retour d'un scanner (ex. Trivy `--exit-code 1`)"
+        - "En activant le widget de merge request"
+        - "En passant le projet en privé"
+        - "C'est impossible sans Ultimate"
+      en:
+        - "By relying on a scanner's exit code (e.g. Trivy `--exit-code 1`)"
+        - "By enabling the merge-request widget"
+        - "By making the project private"
+        - "It is impossible without Ultimate"
+    answer: 0
+    why:
+      fr: "En Free, pas de seuil géré par l'interface : on utilise le code de retour du scanner comme barrière, exactement comme en GitHub Actions."
+      en: "On Free, there is no interface-managed threshold: you use the scanner's exit code as the barrier, exactly as in GitHub Actions."
+  - q:
+      fr: "À quoi sert la variable `SAST_EXCLUDED_PATHS` ?"
+      en: "What is the `SAST_EXCLUDED_PATHS` variable for?"
+    options:
+      fr:
+        - "À chiffrer le rapport SAST"
+        - "À exclure certains dossiers de l'analyse SAST"
+        - "À choisir l'édition GitLab"
+        - "À publier l'image de conteneur"
+      en:
+        - "To encrypt the SAST report"
+        - "To exclude certain folders from SAST analysis"
+        - "To choose the GitLab edition"
+        - "To publish the container image"
+    answer: 1
+    why:
+      fr: "Les templates lisent des variables de configuration ; `SAST_EXCLUDED_PATHS` indique les dossiers (tests, vendor...) à ne pas analyser."
+      en: "Templates read configuration variables; `SAST_EXCLUDED_PATHS` lists the folders (tests, vendor...) to skip during analysis."

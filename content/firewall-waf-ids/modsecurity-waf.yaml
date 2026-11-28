@@ -1,0 +1,304 @@
+description:
+  fr: "Déployer un pare-feu applicatif web (WAF) avec ModSecurity et l'OWASP CRS : mode détection vs blocage, niveaux de paranoïa et réglage des faux positifs."
+  en: "Deploy a web application firewall (WAF) with ModSecurity and the OWASP CRS: detection vs blocking mode, paranoia levels and false-positive tuning."
+duration: 25
+
+intro:
+  fr: |
+    Un pare-feu réseau regarde les **ports** ; un **WAF** (*Web Application Firewall*) regarde le **contenu** des
+    requêtes HTTP. Il se place devant votre application et inspecte chaque URL, chaque paramètre, chaque en-tête
+    à la recherche d'attaques web : injection SQL, XSS, traversée de chemin, etc.
+
+    L'analogie : le pare-feu réseau est le portail de l'immeuble (il filtre qui entre) ; le WAF est l'agent qui
+    fouille les sacs à l'entrée d'un musée (il filtre ce qu'on apporte). **ModSecurity** est le moteur WAF open
+    source le plus répandu, et l'**OWASP Core Rule Set (CRS)** est son jeu de règles de référence : des centaines
+    de règles maintenues par la communauté qui détectent les attaques du Top 10 OWASP.
+
+    Dans cette leçon, vous allez lancer ModSecurity + CRS devant Nginx avec l'image officielle
+    `owasp/modsecurity-crs`, comprendre la différence cruciale entre le mode `DetectionOnly` et le mode `On`,
+    régler le **niveau de paranoïa**, écrire une règle `SecRule` sur mesure et neutraliser un faux positif.
+  en: |
+    A network firewall looks at **ports**; a **WAF** (*Web Application Firewall*) looks at the **content** of
+    HTTP requests. It sits in front of your application and inspects every URL, parameter and header looking for
+    web attacks: SQL injection, XSS, path traversal and more.
+
+    The analogy: the network firewall is the building gate (it filters who enters); the WAF is the guard searching
+    bags at a museum entrance (it filters what you bring in). **ModSecurity** is the most widely used open-source
+    WAF engine, and the **OWASP Core Rule Set (CRS)** is its reference rule set: hundreds of community-maintained
+    rules that detect OWASP Top 10 attacks.
+
+    In this lesson you will run ModSecurity + CRS in front of Nginx with the official `owasp/modsecurity-crs`
+    image, understand the crucial difference between `DetectionOnly` and `On` mode, tune the **paranoia level**,
+    write a custom `SecRule`, and neutralise a false positive.
+
+sections:
+  - heading:
+      fr: "DetectionOnly vs On : regarder avant de bloquer"
+      en: "DetectionOnly vs On: watch before you block"
+    body:
+      fr: |
+        Un WAF mal réglé peut bloquer des utilisateurs légitimes (faux positifs). La règle d'or : on **observe
+        d'abord**, on **bloque ensuite**. ModSecurity propose deux modes via la directive `SecRuleEngine` :
+
+        | Mode | Comportement | Usage |
+        |---|---|---|
+        | `DetectionOnly` | Détecte et **journalise**, ne bloque rien | Mise en route, réglage |
+        | `On` | Détecte, journalise **et bloque** | Production, après réglage |
+        | `Off` | Désactivé | Jamais en prod |
+
+        La démarche professionnelle : déployer en `DetectionOnly` pendant quelques jours, lire les logs d'audit
+        pour repérer les faux positifs, écrire des exclusions, **puis** passer en `On`. Basculer directement en
+        blocage sur une application réelle casse presque toujours quelque chose.
+      en: |
+        A badly tuned WAF can block legitimate users (false positives). The golden rule: **observe first**,
+        **block later**. ModSecurity offers two modes via the `SecRuleEngine` directive:
+
+        | Mode | Behaviour | Use |
+        |---|---|---|
+        | `DetectionOnly` | Detects and **logs**, blocks nothing | Roll-out, tuning |
+        | `On` | Detects, logs **and blocks** | Production, after tuning |
+        | `Off` | Disabled | Never in prod |
+
+        The professional approach: deploy in `DetectionOnly` for a few days, read the audit logs to spot false
+        positives, write exclusions, **then** switch to `On`. Jumping straight to blocking on a real application
+        almost always breaks something.
+  - heading:
+      fr: "Niveau de paranoïa et seuil d'anomalie"
+      en: "Paranoia level and anomaly threshold"
+    body:
+      fr: |
+        Le CRS fonctionne en **scoring** : chaque règle qui matche ajoute des points d'anomalie à la requête.
+        Quand le total dépasse un **seuil** (`inbound_anomaly_score_threshold`, par défaut 5), la requête est
+        bloquée. Cela évite de bannir sur un seul match douteux.
+
+        Le **niveau de paranoïa** (PL1 à PL4) règle l'agressivité :
+
+        - **PL1** (défaut) : règles solides, peu de faux positifs — recommandé pour commencer.
+        - **PL2** : plus strict, quelques faux positifs à régler.
+        - **PL3 / PL4** : très agressif, réservé aux applications sensibles (banque) avec une équipe dédiée au
+          réglage.
+
+        On monte progressivement : PL1 réglé et stable, puis PL2 si le niveau de risque le justifie. Monter à PL4
+        « pour être tranquille » sans régler les exclusions rend le site inutilisable.
+      en: |
+        The CRS works by **scoring**: each matching rule adds anomaly points to the request. When the total
+        crosses a **threshold** (`inbound_anomaly_score_threshold`, default 5), the request is blocked. This
+        avoids banning on a single dubious match.
+
+        The **paranoia level** (PL1 to PL4) sets the aggressiveness:
+
+        - **PL1** (default): solid rules, few false positives — recommended to start.
+        - **PL2**: stricter, a few false positives to tune.
+        - **PL3 / PL4**: very aggressive, reserved for sensitive apps (banking) with a team dedicated to tuning.
+
+        You raise it gradually: PL1 tuned and stable, then PL2 if the risk justifies it. Jumping to PL4 "to be
+        safe" without tuning exclusions makes the site unusable.
+
+examples:
+  - title:
+      fr: "Dangereux : Nginx sans WAF, injection qui passe"
+      en: "Dangerous: Nginx with no WAF, injection gets through"
+    file: nginx.conf
+    lang: nginx
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - a reverse proxy that forwards EVERYTHING blindly.
+      server {
+          listen 80;
+          server_name app.example.com;
+
+          location / {
+              # No inspection: a request like
+              #   /products?id=1' OR '1'='1
+              # or  /search?q=<script>alert(1)</script>
+              # is forwarded straight to the backend.
+              proxy_pass http://backend:8080;
+          }
+      }
+    output: |
+      # curl "http://app.example.com/products?id=1'+OR+'1'='1"
+      HTTP/1.1 200 OK        <-- the SQL injection payload reached the app
+    note:
+      fr: "Sans WAF, la couche HTTP n'inspecte rien : une charge d'injection SQL ou de XSS est transmise telle quelle au backend. Si l'application a la moindre faille, elle est directement exploitable depuis Internet."
+      en: "Without a WAF, the HTTP layer inspects nothing: a SQL injection or XSS payload is forwarded as-is to the backend. If the application has any flaw, it is directly exploitable from the Internet."
+
+  - title:
+      fr: "Sécurisé : ModSecurity + CRS via Docker Compose"
+      en: "Secure: ModSecurity + CRS via Docker Compose"
+    file: docker-compose.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Official OWASP CRS image: Nginx + ModSecurity + Core Rule Set.
+      services:
+        waf:
+          image: owasp/modsecurity-crs:nginx
+          ports:
+            - "80:8080"
+          environment:
+            # Where to forward clean traffic.
+            BACKEND: "http://backend:8080"
+            # Start in blocking mode ONLY after tuning; see note below.
+            MODSEC_RULE_ENGINE: "On"
+            # CRS scoring: block when anomaly score >= 5.
+            ANOMALY_INBOUND: "5"
+            ANOMALY_OUTBOUND: "4"
+            # Paranoia level 1 = solid rules, few false positives.
+            PARANOIA: "1"
+            # Keep a full audit log of what is blocked and why.
+            MODSEC_AUDIT_ENGINE: "RelevantOnly"
+          depends_on:
+            - backend
+
+        backend:
+          image: kennethreitz/httpbin   # a harmless demo backend
+          expose:
+            - "8080"
+    output: |
+      # curl "http://localhost/products?id=1'+OR+'1'='1"
+      HTTP/1.1 403 Forbidden
+      # The CRS SQLi rules (942xxx) pushed the score over the threshold.
+    note:
+      fr: "L'image `owasp/modsecurity-crs` embarque Nginx, ModSecurity et le CRS prêts à l'emploi. `MODSEC_RULE_ENGINE: On` bloque réellement ; `PARANOIA: 1` limite les faux positifs. Démarrez plutôt en `DetectionOnly` le temps de régler, puis passez à `On`."
+      en: "The `owasp/modsecurity-crs` image bundles Nginx, ModSecurity and the CRS ready to use. `MODSEC_RULE_ENGINE: On` actually blocks; `PARANOIA: 1` limits false positives. Prefer starting in `DetectionOnly` while tuning, then switch to `On`."
+
+  - title:
+      fr: "Règle sur mesure et neutralisation d'un faux positif"
+      en: "Custom rule and neutralising a false positive"
+    file: custom-rules.conf
+    lang: apache
+    kind: secure
+    code: |
+      # Loaded AFTER the CRS so it can override it.
+
+      # 1. Custom rule: block requests trying to read /etc/passwd
+      #    (path traversal / local file inclusion). Unique sid >= 10000000.
+      SecRule REQUEST_URI "@contains /etc/passwd" \
+          "id:10000100,phase:1,deny,status:403,log,\
+          msg:'Attempt to read /etc/passwd',severity:'CRITICAL'"
+
+      # 2. Block a bad user-agent used by a known scanner.
+      SecRule REQUEST_HEADERS:User-Agent "@pm nikto sqlmap nmap" \
+          "id:10000101,phase:1,deny,status:403,log,\
+          msg:'Known attack tool user-agent'"
+
+      # 3. FALSE POSITIVE FIX: the /api/graphql endpoint legitimately
+      #    sends content that rule 942100 (SQLi) flags. Disable that one
+      #    rule for that one path only - never disable it globally.
+      SecRule REQUEST_URI "@beginsWith /api/graphql" \
+          "id:10000102,phase:1,pass,nolog,\
+          ctl:ruleRemoveById=942100"
+    output: |
+      # Audit log (/var/log/modsec_audit.log) for a blocked request:
+      ModSecurity: Access denied with code 403 (phase 1).
+      Matched "Operator Contains" ... [id "10000100"]
+      [msg "Attempt to read /etc/passwd"] [severity "CRITICAL"]
+    note:
+      fr: "Chaque `SecRule` a un `id` unique (>= 10000000 pour vos règles). Pour un faux positif, on désactive **une seule règle sur un seul chemin** avec `ctl:ruleRemoveById`, jamais la règle en entier : sinon on rouvre la faille partout."
+      en: "Every `SecRule` has a unique `id` (>= 10000000 for your own rules). For a false positive, disable **one rule on one path** with `ctl:ruleRemoveById`, never the whole rule: otherwise you reopen the hole everywhere."
+
+mistake:
+  fr: |
+    **Passer en mode blocage sans phase d'observation.** Déployer `SecRuleEngine On` directement en production,
+    c'est garantir des faux positifs : une recherche contenant `' or `, un champ commentaire avec du HTML, un
+    endpoint GraphQL — et des utilisateurs légitimes reçoivent des `403`. Pire réaction encore : désactiver des
+    règles entières ou baisser à PL0 « parce que ça bloque trop ». La bonne démarche : `DetectionOnly`, lecture
+    des logs d'audit, exclusions **ciblées** par chemin, puis `On`.
+  en: |
+    **Switching to blocking mode without an observation phase.** Deploying `SecRuleEngine On` straight to
+    production guarantees false positives: a search containing `' or `, a comment field with HTML, a GraphQL
+    endpoint — and legitimate users get `403`s. An even worse reaction: disabling whole rules or dropping to PL0
+    "because it blocks too much". The right approach: `DetectionOnly`, read the audit logs, write **targeted**
+    per-path exclusions, then `On`.
+
+bestPractice:
+  fr: |
+    - **Commencez en `DetectionOnly`**, réglez, puis passez en `On`. Jamais l'inverse.
+    - **Restez en paranoïa 1** au départ ; montez seulement si le risque et l'équipe le justifient.
+    - **Réglez les faux positifs finement** : `ctl:ruleRemoveById` par chemin, pas de désactivation globale.
+    - **Gardez les logs d'audit** (`SecAuditEngine RelevantOnly`) et surveillez-les : ils prouvent les attaques.
+    - **Le WAF ne remplace pas le code sûr** : requêtes paramétrées et validation restent obligatoires. Défense en profondeur.
+  en: |
+    - **Start in `DetectionOnly`**, tune, then switch to `On`. Never the reverse.
+    - **Stay at paranoia 1** initially; raise it only if risk and team justify it.
+    - **Tune false positives narrowly**: `ctl:ruleRemoveById` per path, no global disabling.
+    - **Keep audit logs** (`SecAuditEngine RelevantOnly`) and watch them: they evidence attacks.
+    - **The WAF does not replace secure code**: parameterized queries and validation remain mandatory. Defense in depth.
+
+exercise:
+  statement:
+    fr: |
+      Votre endpoint `/api/upload` reçoit légitimement des contenus JSON que la règle CRS `932100` (détection
+      de commandes shell) déclenche à tort, provoquant des `403` sur des requêtes valides.
+
+      Écrivez une règle ModSecurity personnalisée qui désactive **uniquement** la règle `932100` **uniquement**
+      pour les requêtes commençant par `/api/upload`, sans toucher au reste du site.
+    en: |
+      Your `/api/upload` endpoint legitimately receives JSON content that the CRS rule `932100` (shell command
+      detection) flags by mistake, causing `403`s on valid requests.
+
+      Write a custom ModSecurity rule that disables **only** rule `932100` **only** for requests starting with
+      `/api/upload`, without affecting the rest of the site.
+  solution:
+    file: fix-fp.conf
+    lang: apache
+    code: |
+      # Loaded after the CRS. Scope the exclusion to the one path.
+      SecRule REQUEST_URI "@beginsWith /api/upload" \
+          "id:10000200,phase:1,pass,nolog,\
+          ctl:ruleRemoveById=932100"
+    note:
+      fr: "`ctl:ruleRemoveById=932100` désactive la règle problématique, mais seulement quand l'URI commence par `/api/upload`. Partout ailleurs, la règle 932100 reste active : la protection globale n'est pas affaiblie."
+      en: "`ctl:ruleRemoveById=932100` disables the problematic rule, but only when the URI begins with `/api/upload`. Everywhere else, rule 932100 stays active: global protection is not weakened."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre un pare-feu réseau et un WAF ?"
+      en: "What is the difference between a network firewall and a WAF?"
+    options:
+      fr: ["Le WAF inspecte le contenu HTTP, le pare-feu filtre les ports", "Ils font exactement la même chose", "Le WAF chiffre le trafic", "Le pare-feu analyse le SQL"]
+      en: ["The WAF inspects HTTP content, the firewall filters ports", "They do exactly the same thing", "The WAF encrypts traffic", "The firewall analyses SQL"]
+    answer: 0
+    why:
+      fr: "Un WAF travaille au niveau applicatif (couche 7) et inspecte URL, paramètres et en-têtes, là où un pare-feu réseau décide surtout quels ports sont ouverts."
+      en: "A WAF works at the application layer (layer 7) and inspects URLs, parameters and headers, whereas a network firewall mostly decides which ports are open."
+  - q:
+      fr: "Pourquoi déployer d'abord ModSecurity en mode `DetectionOnly` ?"
+      en: "Why first deploy ModSecurity in `DetectionOnly` mode?"
+    options:
+      fr: ["Pour chiffrer les requêtes", "Pour repérer les faux positifs avant de bloquer", "Parce que `On` est payant", "Pour désactiver les logs"]
+      en: ["To encrypt requests", "To spot false positives before blocking", "Because `On` is paid", "To disable logging"]
+    answer: 1
+    why:
+      fr: "`DetectionOnly` journalise sans bloquer : on identifie les requêtes légitimes faussement détectées, on écrit les exclusions, puis on passe en `On` en toute sécurité."
+      en: "`DetectionOnly` logs without blocking: you identify legitimate requests falsely flagged, write exclusions, then switch to `On` safely."
+  - q:
+      fr: "Comment le CRS décide-t-il de bloquer une requête ?"
+      en: "How does the CRS decide to block a request?"
+    options:
+      fr: ["Dès qu'une seule règle matche", "Au hasard", "Quand le score d'anomalie cumulé dépasse un seuil", "Seulement la nuit"]
+      en: ["As soon as a single rule matches", "At random", "When the cumulative anomaly score crosses a threshold", "Only at night"]
+    answer: 2
+    why:
+      fr: "Le CRS additionne les points de chaque règle déclenchée ; le blocage survient quand le total dépasse `inbound_anomaly_score_threshold`, ce qui réduit les faux positifs."
+      en: "The CRS sums the points of each triggered rule; blocking happens when the total exceeds `inbound_anomaly_score_threshold`, which reduces false positives."
+  - q:
+      fr: "Quelle est la bonne façon de corriger un faux positif sur un seul endpoint ?"
+      en: "What is the right way to fix a false positive on a single endpoint?"
+    options:
+      fr: ["Passer tout le WAF en `Off`", "Baisser la paranoïa à 0 partout", "Supprimer le CRS", "Désactiver la règle fautive uniquement pour ce chemin avec ctl:ruleRemoveById"]
+      en: ["Turn the whole WAF `Off`", "Drop paranoia to 0 everywhere", "Remove the CRS", "Disable the offending rule only for that path with ctl:ruleRemoveById"]
+    answer: 3
+    why:
+      fr: "`ctl:ruleRemoveById` limité à un chemin conserve la protection ailleurs. Désactiver globalement ou baisser la paranoïa rouvrirait la faille sur tout le site."
+      en: "`ctl:ruleRemoveById` scoped to one path keeps protection elsewhere. Disabling globally or lowering paranoia would reopen the hole across the whole site."
+  - q:
+      fr: "Que signifie le niveau de paranoïa (PL) du CRS ?"
+      en: "What does the CRS paranoia level (PL) mean?"
+    options:
+      fr: ["L'agressivité du jeu de règles, PL1 étant le plus sûr pour débuter", "La vitesse du serveur", "Le nombre de ports ouverts", "La version de Nginx"]
+      en: ["The aggressiveness of the rule set, PL1 being the safest to start", "The server speed", "The number of open ports", "The Nginx version"]
+    answer: 0
+    why:
+      fr: "Plus le PL est élevé (PL1→PL4), plus les règles sont strictes et plus il y a de faux positifs à régler ; on commence à PL1 et on monte progressivement."
+      en: "The higher the PL (PL1→PL4), the stricter the rules and the more false positives to tune; you start at PL1 and raise it gradually."

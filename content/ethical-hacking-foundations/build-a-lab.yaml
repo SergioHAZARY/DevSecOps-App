@@ -1,0 +1,350 @@
+description:
+  fr: "Monter un laboratoire de hacking isolé : machines virtuelles, réseau host-only, snapshots et une cible vulnérable en Docker."
+  en: "Build an isolated hacking lab: virtual machines, a host-only network, snapshots and a vulnerable target in Docker."
+duration: 25
+
+intro:
+  fr: |
+    Pour s'entraîner au hacking **légalement**, il faut un terrain à soi : un **laboratoire** isolé où l'on
+    attaque des cibles qu'on possède, sans jamais toucher Internet ni le réseau de la maison. C'est l'équivalent
+    d'un stand de tir fermé : on peut y faire du bruit sans danger pour les voisins.
+
+    Un lab repose sur trois idées simples : des **machines virtuelles** (des ordinateurs simulés dans votre
+    ordinateur), un **réseau isolé** (host-only) qui ne communique pas avec l'extérieur, et des **snapshots**
+    (photos de l'état d'une VM) pour tout remettre en ordre après avoir cassé une cible.
+
+    Dans cette leçon, vous allez créer ce lab : une VM attaquante (Kali Linux), une cible volontairement
+    vulnérable (Metasploitable 2 ou OWASP Juice Shop en Docker), reliées par un réseau host-only. Règle absolue :
+    la cible vulnérable ne doit **jamais** être exposée sur votre réseau domestique ni sur Internet, car
+    n'importe qui pourrait la compromettre. On ne s'entraîne que sur **ses propres** VM de lab.
+  en: |
+    To practise hacking **legally**, you need your own ground: an isolated **lab** where you attack targets you
+    own, never touching the internet or the home network. It is the equivalent of a closed shooting range: you
+    can make noise there without endangering the neighbours.
+
+    A lab rests on three simple ideas: **virtual machines** (computers simulated inside your computer), an
+    **isolated network** (host-only) that does not talk to the outside, and **snapshots** (photos of a VM's
+    state) to put everything back in order after breaking a target.
+
+    In this lesson you will build that lab: an attacker VM (Kali Linux), a deliberately vulnerable target
+    (Metasploitable 2 or OWASP Juice Shop in Docker), joined by a host-only network. Absolute rule: the
+    vulnerable target must **never** be exposed on your home network or the internet, because anyone could
+    compromise it. You only practise on **your own** lab VMs.
+
+sections:
+  - heading:
+      fr: "Pourquoi un réseau isolé (host-only)"
+      en: "Why an isolated (host-only) network"
+    body:
+      fr: |
+        Une cible « volontairement vulnérable » comme Metasploitable 2 est, par conception, une passoire :
+        des services obsolètes, des mots de passe faibles, des failles connues. L'exposer sur Internet revient
+        à poser un coffre ouvert dans la rue. C'est pourquoi on l'enferme dans un **réseau host-only**.
+
+        | Type de réseau | Accès Internet | Accès à vos autres machines | Usage |
+        |---|---|---|---|
+        | NAT | Oui (sortant) | Non | VM qui a besoin de télécharger |
+        | Bridged (pont) | Oui | Oui (réseau local réel) | À éviter pour une cible vulnérable |
+        | Host-only | Non | Seulement les VM du même réseau host-only | Lab d'attaque isolé |
+
+        En host-only, l'attaquant (Kali) et la cible se voient entre eux, mais la cible n'est joignable ni
+        depuis Internet, ni depuis votre PC personnel, ni depuis la box de la maison. C'est la configuration
+        **sûre** pour s'entraîner.
+      en: |
+        A "deliberately vulnerable" target like Metasploitable 2 is, by design, a sieve: outdated services,
+        weak passwords, known flaws. Exposing it on the internet is like leaving an open safe in the street.
+        That is why you lock it inside a **host-only network**.
+
+        | Network type | Internet access | Access to your other machines | Use |
+        |---|---|---|---|
+        | NAT | Yes (outbound) | No | A VM that needs to download |
+        | Bridged | Yes | Yes (real LAN) | Avoid for a vulnerable target |
+        | Host-only | No | Only VMs on the same host-only network | Isolated attack lab |
+
+        In host-only mode, the attacker (Kali) and the target see each other, but the target is reachable
+        neither from the internet, nor from your personal PC, nor from the home router. This is the **safe**
+        configuration for practice.
+  - heading:
+      fr: "Snapshots : casser puis réparer en un clic"
+      en: "Snapshots: break then repair in one click"
+    body:
+      fr: |
+        Un **snapshot** enregistre l'état complet d'une VM (disque + mémoire) à un instant donné. Quand vous
+        exploitez une cible, vous la modifiez, parfois vous la cassez. Le snapshot permet de **revenir en
+        arrière** instantanément, comme un bouton « annuler » géant.
+
+        La bonne pratique : prendre un snapshot **propre** juste après l'installation, avant toute attaque.
+        Après une session, on restaure ce snapshot et la cible est de nouveau comme neuve, prête pour le test
+        suivant. On peut aussi empiler des snapshots pour sauvegarder des étapes intermédiaires (« juste après
+        avoir obtenu un shell »).
+
+        Les snapshots servent aussi côté attaquant : si vous cassez votre Kali en bricolant une configuration,
+        un retour en arrière vous évite de tout réinstaller.
+      en: |
+        A **snapshot** records the complete state of a VM (disk + memory) at a given instant. When you exploit a
+        target, you modify it, sometimes you break it. The snapshot lets you **roll back** instantly, like a
+        giant "undo" button.
+
+        Best practice: take a **clean** snapshot right after installation, before any attack. After a session,
+        restore that snapshot and the target is as good as new, ready for the next test. You can also stack
+        snapshots to save intermediate steps ("just after getting a shell").
+
+        Snapshots also help on the attacker side: if you break your Kali while tinkering with a configuration, a
+        rollback saves you from reinstalling everything.
+  - heading:
+      fr: "Cibles vulnérables prêtes à l'emploi"
+      en: "Ready-made vulnerable targets"
+    body:
+      fr: |
+        Vous n'avez pas besoin de fabriquer une cible : il en existe des officielles, conçues pour
+        l'entraînement :
+
+        - **Metasploitable 2 / 3** : une machine Linux entière, truffée de services vulnérables.
+        - **OWASP Juice Shop** : une application web moderne volontairement faillible, idéale pour le web.
+        - **DVWA** (Damn Vulnerable Web Application) : classique pour SQLi, XSS, upload.
+        - **VulnHub / HackTheBox / TryHackMe** : des cibles et des parcours guidés, légaux par construction.
+
+        Les deux dernières (HTB, THM) sont des plateformes en ligne où l'entraînement est **explicitement
+        autorisé** : vous attaquez des machines mises à disposition pour ça. Pour un lab local, Juice Shop et
+        DVWA en Docker démarrent en une commande, ce qui en fait le point de départ le plus simple.
+      en: |
+        You do not need to build a target: official ones exist, designed for practice:
+
+        - **Metasploitable 2 / 3**: a whole Linux machine, riddled with vulnerable services.
+        - **OWASP Juice Shop**: a modern, deliberately flawed web application, ideal for the web.
+        - **DVWA** (Damn Vulnerable Web Application): a classic for SQLi, XSS, upload.
+        - **VulnHub / HackTheBox / TryHackMe**: targets and guided paths, legal by construction.
+
+        The last two (HTB, THM) are online platforms where practice is **explicitly authorised**: you attack
+        machines provided for exactly that. For a local lab, Juice Shop and DVWA in Docker start with one
+        command, which makes them the simplest starting point.
+
+examples:
+  - title:
+      fr: "Démarrer OWASP Juice Shop en Docker (cible web locale)"
+      en: "Start OWASP Juice Shop in Docker (local web target)"
+    file: juiceshop.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Pull and run the official OWASP Juice Shop image.
+      # -p 127.0.0.1:3000:3000 binds ONLY to localhost, so the vulnerable app
+      # is NOT reachable from your home network - only from this machine.
+      docker run --rm -d \
+        --name juice-shop \
+        -p 127.0.0.1:3000:3000 \
+        bkimminich/juice-shop
+
+      # Check it is running, then open http://127.0.0.1:3000 in your browser.
+      docker ps --filter name=juice-shop
+    output: |
+      a1b2c3d4e5f6   bkimminich/juice-shop   "/nodejs/bin/node ..."   Up 3 seconds   127.0.0.1:3000->3000/tcp   juice-shop
+    note:
+      fr: "Le point crucial est `127.0.0.1:3000:3000` : la cible n'écoute que sur localhost. Sans le `127.0.0.1`, Docker l'exposerait sur tout le réseau, ce qui est dangereux pour une appli vulnérable."
+      en: "The crucial part is `127.0.0.1:3000:3000`: the target listens only on localhost. Without the `127.0.0.1`, Docker would expose it on the whole network, which is dangerous for a vulnerable app."
+  - title:
+      fr: "Vérifier qu'une cible est bien isolée du réseau"
+      en: "Checking a target is properly isolated from the network"
+    file: verify_isolation.sh
+    lang: bash
+    kind: secure
+    code: |
+      # From the TARGET VM: it must NOT be able to reach the internet.
+      # A host-only lab means these should fail (no route / no DNS).
+      ping -c 2 8.8.8.8          # expect: 100% packet loss / network unreachable
+      curl -m 5 https://example.com   # expect: timeout or "Could not resolve host"
+
+      # From the ATTACKER VM (Kali), the target IP must be reachable:
+      ping -c 2 192.0.2.20       # expect: replies, both VMs on host-only net
+    output: |
+      PING 8.8.8.8 (8.8.8.8): 56 data bytes
+      --- 8.8.8.8 ping statistics ---
+      2 packets transmitted, 0 packets received, 100% packet loss
+
+      PING 192.0.2.20 (192.0.2.20): 56 data bytes
+      64 bytes from 192.0.2.20: icmp_seq=0 ttl=64 time=0.42 ms
+    note:
+      fr: "Testez l'isolement **avant** d'installer la cible vulnérable. Si la cible atteint Internet, le réseau n'est pas en host-only : corrigez-le avant d'aller plus loin."
+      en: "Test isolation **before** installing the vulnerable target. If the target reaches the internet, the network is not host-only: fix it before going further."
+  - title:
+      fr: "Composer un lab reproductible avec docker-compose"
+      en: "Composing a reproducible lab with docker-compose"
+    file: docker-compose.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # A reproducible lab: two vulnerable web targets on an internal-only network.
+      services:
+        juice-shop:
+          image: bkimminich/juice-shop
+          # Bind to localhost only - never 0.0.0.0 for a vulnerable app
+          ports:
+            - "127.0.0.1:3000:3000"
+          networks:
+            - lab
+
+        dvwa:
+          image: vulnerables/web-dvwa
+          ports:
+            - "127.0.0.1:8080:80"
+          networks:
+            - lab
+
+      networks:
+        lab:
+          # internal: true => no gateway, containers cannot reach the internet
+          internal: true
+    note:
+      fr: "`internal: true` prive le réseau Docker de passerelle : les cibles ne peuvent pas atteindre Internet, même compromises. C'est l'équivalent Docker du réseau host-only."
+      en: "`internal: true` strips the Docker network of a gateway: the targets cannot reach the internet, even if compromised. It is the Docker equivalent of a host-only network."
+
+mistake:
+  fr: |
+    **Exposer la cible vulnérable sur le réseau de la maison (mode bridged, ou `-p 0.0.0.0:...`).** Une machine
+    comme Metasploitable est une invitation ouverte : en quelques minutes, un bot d'Internet ou un autre
+    appareil de votre réseau peut la compromettre et s'en servir comme tremplin vers vos vrais appareils. Une
+    cible d'entraînement doit **toujours** rester en host-only ou liée à `127.0.0.1`, jamais joignable depuis
+    l'extérieur.
+  en: |
+    **Exposing the vulnerable target on the home network (bridged mode, or `-p 0.0.0.0:...`).** A machine like
+    Metasploitable is an open invitation: within minutes an internet bot or another device on your network can
+    compromise it and use it as a springboard to your real devices. A practice target must **always** stay
+    host-only or bound to `127.0.0.1`, never reachable from outside.
+
+bestPractice:
+  fr: |
+    - **Réseau host-only** (ou Docker `internal: true`) pour toute cible vulnérable : jamais d'accès Internet.
+    - **Snapshot propre** juste après l'installation, pour tout restaurer après une attaque destructrice.
+    - **Lier les ports à `127.0.0.1`**, jamais à `0.0.0.0`, quand vous publiez un conteneur de lab.
+    - **Une VM attaquante dédiée** (Kali) séparée de votre système de travail quotidien.
+    - **Testez l'isolement** (pas de ping vers Internet depuis la cible) avant de commencer à attaquer.
+  en: |
+    - **Host-only network** (or Docker `internal: true`) for any vulnerable target: never any internet access.
+    - **Clean snapshot** right after install, to restore everything after a destructive attack.
+    - **Bind ports to `127.0.0.1`**, never to `0.0.0.0`, when you publish a lab container.
+    - **A dedicated attacker VM** (Kali) kept separate from your day-to-day working system.
+    - **Test the isolation** (no ping to the internet from the target) before you start attacking.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez ajouter DVWA à votre lab local **sans** qu'elle soit accessible depuis le réseau de la maison.
+      Écrivez la commande `docker run` qui :
+
+      1. lance l'image `vulnerables/web-dvwa`,
+      2. publie le port 80 du conteneur uniquement sur `localhost`, port 8081,
+      3. nomme le conteneur `dvwa`.
+    en: |
+      You want to add DVWA to your local lab **without** making it reachable from the home network. Write the
+      `docker run` command that:
+
+      1. runs the `vulnerables/web-dvwa` image,
+      2. publishes the container's port 80 only on `localhost`, port 8081,
+      3. names the container `dvwa`.
+  solution:
+    file: run_dvwa.sh
+    lang: bash
+    code: |
+      # Bind to 127.0.0.1 so DVWA is reachable only from this machine.
+      docker run --rm -d \
+        --name dvwa \
+        -p 127.0.0.1:8081:80 \
+        vulnerables/web-dvwa
+
+      # Open http://127.0.0.1:8081 locally. From another device on the LAN,
+      # the app is unreachable - exactly what we want for a vulnerable target.
+    note:
+      fr: "Le préfixe `127.0.0.1:` dans la publication de port est la clé : il limite l'écoute à la machine locale et protège le reste du réseau."
+      en: "The `127.0.0.1:` prefix in the port publication is the key: it limits listening to the local machine and protects the rest of the network."
+
+quiz:
+  - q:
+      fr: "Pourquoi une cible vulnérable ne doit-elle jamais être en mode bridged ?"
+      en: "Why must a vulnerable target never be in bridged mode?"
+    options:
+      fr:
+        - "Parce que le mode bridged est payant"
+        - "Parce qu'elle deviendrait accessible depuis le réseau local et Internet"
+        - "Parce que bridged est plus lent"
+        - "Parce que bridged empêche les snapshots"
+      en:
+        - "Because bridged mode is paid"
+        - "Because it would become reachable from the LAN and the internet"
+        - "Because bridged is slower"
+        - "Because bridged prevents snapshots"
+    answer: 1
+    why:
+      fr: "En bridged, la cible est sur le vrai réseau local : n'importe quel appareil ou bot pourrait la compromettre et s'en servir contre vous."
+      en: "In bridged mode the target sits on the real LAN: any device or bot could compromise it and use it against you."
+  - q:
+      fr: "À quoi sert un snapshot de VM dans un lab ?"
+      en: "What is a VM snapshot for in a lab?"
+    options:
+      fr:
+        - "À accélérer la machine"
+        - "À revenir à un état propre après avoir cassé la cible"
+        - "À connecter la VM à Internet"
+        - "À chiffrer le disque"
+      en:
+        - "To speed up the machine"
+        - "To return to a clean state after breaking the target"
+        - "To connect the VM to the internet"
+        - "To encrypt the disk"
+    answer: 1
+    why:
+      fr: "Le snapshot enregistre un état complet ; le restaurer annule toutes les modifications faites pendant une attaque."
+      en: "A snapshot records a complete state; restoring it undoes every change made during an attack."
+  - q:
+      fr: "Dans `docker run -p 127.0.0.1:3000:3000`, que fait le préfixe `127.0.0.1` ?"
+      en: "In `docker run -p 127.0.0.1:3000:3000`, what does the `127.0.0.1` prefix do?"
+    options:
+      fr:
+        - "Il limite l'écoute du service à la machine locale"
+        - "Il expose le service sur Internet"
+        - "Il désactive le pare-feu"
+        - "Il double le port"
+      en:
+        - "It limits the service to listen only on the local machine"
+        - "It exposes the service on the internet"
+        - "It disables the firewall"
+        - "It doubles the port"
+    answer: 0
+    why:
+      fr: "Lier à 127.0.0.1 restreint l'accès à localhost ; sans ce préfixe, Docker écouterait sur toutes les interfaces (0.0.0.0)."
+      en: "Binding to 127.0.0.1 restricts access to localhost; without the prefix, Docker would listen on all interfaces (0.0.0.0)."
+  - q:
+      fr: "Que garantit l'option `internal: true` d'un réseau Docker ?"
+      en: "What does a Docker network's `internal: true` option guarantee?"
+    options:
+      fr:
+        - "Un chiffrement du trafic"
+        - "Une vitesse accrue"
+        - "L'absence de passerelle, donc pas d'accès Internet pour les conteneurs"
+        - "Un accès SSH automatique"
+      en:
+        - "Traffic encryption"
+        - "Higher speed"
+        - "No gateway, so no internet access for the containers"
+        - "Automatic SSH access"
+    answer: 2
+    why:
+      fr: "Un réseau `internal` n'a pas de passerelle : les conteneurs communiquent entre eux mais ne joignent pas Internet, comme un host-only."
+      en: "An `internal` network has no gateway: containers talk to each other but cannot reach the internet, like host-only."
+  - q:
+      fr: "Laquelle de ces cibles est conçue pour l'entraînement au hacking ?"
+      en: "Which of these targets is designed for hacking practice?"
+    options:
+      fr:
+        - "OWASP Juice Shop"
+        - "Le site web de votre employeur"
+        - "Un routeur domestique du voisinage"
+        - "Un serveur DNS public"
+      en:
+        - "OWASP Juice Shop"
+        - "Your employer's website"
+        - "A neighbour's home router"
+        - "A public DNS server"
+    answer: 0
+    why:
+      fr: "Juice Shop est une application volontairement vulnérable, publiée pour s'entraîner légalement. Les autres exigent une autorisation."
+      en: "Juice Shop is a deliberately vulnerable application, published for legal practice. The others require authorisation."

@@ -1,0 +1,485 @@
+description:
+  fr: "Scanner un serveur web avec Nikto et Nuclei : options réelles, templates par sévérité, un template YAML personnalisé, et le rappel légal de ne tester que ses propres cibles."
+  en: "Scan a web server with Nikto and Nuclei: real options, templates by severity, a custom YAML template, and the legal reminder to only test your own targets."
+duration: 25
+
+intro:
+  fr: |
+    ZAP excelle à explorer une application et à tester ses paramètres. **Nikto** et **Nuclei** jouent un rôle
+    complémentaire : ils cherchent des **problèmes connus** — fichiers oubliés, versions obsolètes,
+    mauvaises configurations, CVE publiques — en envoyant une longue liste de requêtes ciblées.
+
+    L'analogie : ZAP est l'inspecteur qui essaie toutes les poignées et teste chaque serrure ; Nikto et
+    Nuclei sont l'inspecteur qui coche une **liste de contrôle** connue (« le panneau électrique est-il
+    verrouillé ? l'extincteur est-il à jour ? »). Nikto est un classique historique, ciblé serveur web ;
+    Nuclei est moderne, piloté par des milliers de **templates** YAML communautaires, très rapide et très
+    extensible.
+
+    Avant tout : **un scan est une intrusion**. Ne lancez Nikto ou Nuclei que contre des systèmes qui vous
+    appartiennent ou pour lesquels vous avez une **autorisation écrite**. Pour apprendre, utilisez un
+    laboratoire local comme **OWASP Juice Shop** ou **DVWA** dans un conteneur. Dans cette leçon vous allez
+    lancer les deux outils via Docker, filtrer par sévérité, écrire un template Nuclei maison et intégrer
+    tout cela proprement.
+  en: |
+    ZAP excels at spidering an application and testing its parameters. **Nikto** and **Nuclei** play a
+    complementary role: they look for **known issues** — forgotten files, obsolete versions,
+    misconfigurations, public CVEs — by sending a long list of targeted requests.
+
+    The analogy: ZAP is the inspector who tries every handle and tests each lock; Nikto and Nuclei are the
+    inspector who ticks a known **checklist** ("is the electrical panel locked? is the fire extinguisher in
+    date?"). Nikto is a historic classic, focused on the web server; Nuclei is modern, driven by thousands of
+    community YAML **templates**, very fast and very extensible.
+
+    First of all: **a scan is an intrusion**. Only run Nikto or Nuclei against systems you own or for which
+    you have **written authorisation**. To learn, use a local lab such as **OWASP Juice Shop** or **DVWA** in
+    a container. In this lesson you will run both tools via Docker, filter by severity, write a custom Nuclei
+    template and integrate it all cleanly.
+
+sections:
+  - heading:
+      fr: "Le rappel légal et le laboratoire"
+      en: "The legal reminder and the lab"
+    body:
+      fr: |
+        Scanner un système que vous ne possédez pas, sans autorisation, est **illégal** dans la plupart des
+        pays (en France, articles 323-1 et suivants du Code pénal), même « juste pour voir ». Un scan envoie
+        des requêtes d'attaque réelles : il peut déclencher des alertes, saturer un service, voire le faire
+        tomber. La règle est simple et non négociable : **on ne scanne que ses propres cibles ou avec un
+        accord écrit**.
+
+        Pour s'entraîner, on monte un laboratoire local jetable :
+
+        ```bash
+        # OWASP Juice Shop: a deliberately vulnerable web app, for learning only
+        docker run --rm -d --name juice -p 3000:3000 bkimminich/juice-shop
+        # DVWA: another classic training target
+        docker run --rm -d --name dvwa -p 8080:80 vulnerables/web-dvwa
+        ```
+
+        Ces cibles sont conçues pour être attaquées, sur votre machine, sans impact sur autrui. `scanme.nmap.org`
+        est également autorisé pour l'entraînement au scan de ports. Tout le reste exige une autorisation.
+      en: |
+        Scanning a system you do not own, without authorisation, is **illegal** in most countries, even "just
+        to look". A scan sends real attack requests: it can trigger alerts, overload a service, even bring it
+        down. The rule is simple and non-negotiable: **you only scan your own targets or with written
+        consent**.
+
+        To practise, you spin up a throwaway local lab:
+
+        ```bash
+        # OWASP Juice Shop: a deliberately vulnerable web app, for learning only
+        docker run --rm -d --name juice -p 3000:3000 bkimminich/juice-shop
+        # DVWA: another classic training target
+        docker run --rm -d --name dvwa -p 8080:80 vulnerables/web-dvwa
+        ```
+
+        These targets are designed to be attacked, on your machine, with no impact on others. `scanme.nmap.org`
+        is also allowed for port-scanning practice. Everything else requires authorisation.
+  - heading:
+      fr: "Nikto : le scanner de serveur web"
+      en: "Nikto: the web server scanner"
+    body:
+      fr: |
+        **Nikto** teste un serveur web contre une base de milliers de vérifications : fichiers et répertoires
+        à risque (`/admin`, `/.git`, sauvegardes), versions logicielles connues comme vulnérables, en-têtes
+        de sécurité manquants, options HTTP dangereuses (`TRACE`, `PUT`). Il est rapide à lancer mais
+        **bruyant** (non furtif) : il n'est pas fait pour passer inaperçu.
+
+        | Option | Rôle |
+        |---|---|
+        | `-h <host>` | Cible à scanner (hôte ou URL) |
+        | `-p <port>` | Port (par défaut 80) |
+        | `-ssl` | Forcer HTTPS |
+        | `-o <file>` | Fichier de sortie |
+        | `-Format <fmt>` | Format : `htm`, `csv`, `json`, `xml` |
+        | `-Tuning <n>` | Limiter les familles de tests (ex. `-Tuning 1` = fichiers intéressants) |
+        | `-maxtime <s>` | Durée maximale du scan |
+
+        Le `-Tuning` est utile pour cibler : `-Tuning 9` teste l'injection SQL, `-Tuning x` exclut une
+        catégorie. On exécute Nikto via Docker sans l'installer, par exemple avec l'image
+        `ghcr.io/sullo/nikto`. Son principal défaut est un taux de faux positifs non négligeable : chaque
+        résultat se vérifie à la main.
+      en: |
+        **Nikto** tests a web server against a database of thousands of checks: risky files and directories
+        (`/admin`, `/.git`, backups), software versions known to be vulnerable, missing security headers,
+        dangerous HTTP methods (`TRACE`, `PUT`). It is quick to launch but **noisy** (not stealthy): it is not
+        meant to go unnoticed.
+
+        | Option | Role |
+        |---|---|
+        | `-h <host>` | Target to scan (host or URL) |
+        | `-p <port>` | Port (default 80) |
+        | `-ssl` | Force HTTPS |
+        | `-o <file>` | Output file |
+        | `-Format <fmt>` | Format: `htm`, `csv`, `json`, `xml` |
+        | `-Tuning <n>` | Limit the test families (e.g. `-Tuning 1` = interesting files) |
+        | `-maxtime <s>` | Maximum scan duration |
+
+        `-Tuning` is handy for focusing: `-Tuning 9` tests SQL injection, `-Tuning x` excludes a category. You
+        run Nikto via Docker without installing it, for example with the `ghcr.io/sullo/nikto` image. Its main
+        drawback is a non-negligible false-positive rate: every result must be verified by hand.
+  - heading:
+      fr: "Nuclei : des milliers de templates"
+      en: "Nuclei: thousands of templates"
+    body:
+      fr: |
+        **Nuclei** (de ProjectDiscovery) fonctionne par **templates** YAML : chaque template décrit une
+        requête à envoyer et comment reconnaître une réponse révélant un problème (CVE précise, panneau
+        d'administration exposé, fuite de configuration). La communauté en maintient des milliers, mis à jour
+        en continu, ce qui rend Nuclei excellent pour détecter des vulnérabilités **connues** très vite.
+
+        | Option | Rôle |
+        |---|---|
+        | `-u <url>` | Cible unique (`-l <file>` pour une liste) |
+        | `-t <path>` | Templates à utiliser |
+        | `-severity <niv>` | Filtrer : `critical,high` |
+        | `-tags <tags>` | Filtrer par étiquette (`cve`, `exposure`, `misconfig`) |
+        | `-json-export <f>` | Rapport JSON |
+        | `-rl <n>` | Limite de débit (requêtes/seconde) |
+
+        On met d'abord les templates à jour (`nuclei -update-templates`), puis on filtre par **sévérité**
+        pour ne pas se noyer : commencer par `-severity critical,high` donne les résultats les plus
+        actionnables. Un point de prudence : certains templates envoient des charges actives ; sur une cible
+        fragile, on limite le débit avec `-rl`. L'image Docker officielle est
+        `projectdiscovery/nuclei`.
+      en: |
+        **Nuclei** (by ProjectDiscovery) works with YAML **templates**: each template describes a request to
+        send and how to recognise a response that reveals a problem (a specific CVE, an exposed admin panel, a
+        config leak). The community maintains thousands of them, continuously updated, which makes Nuclei
+        excellent at detecting **known** vulnerabilities very fast.
+
+        | Option | Role |
+        |---|---|
+        | `-u <url>` | Single target (`-l <file>` for a list) |
+        | `-t <path>` | Templates to use |
+        | `-severity <lvl>` | Filter: `critical,high` |
+        | `-tags <tags>` | Filter by tag (`cve`, `exposure`, `misconfig`) |
+        | `-json-export <f>` | JSON report |
+        | `-rl <n>` | Rate limit (requests/second) |
+
+        First update the templates (`nuclei -update-templates`), then filter by **severity** to avoid
+        drowning: starting with `-severity critical,high` gives the most actionable results. A word of
+        caution: some templates send active payloads; on a fragile target, limit the rate with `-rl`. The
+        official Docker image is `projectdiscovery/nuclei`.
+
+examples:
+  - title:
+      fr: "Lancer Nikto contre le laboratoire"
+      en: "Running Nikto against the lab"
+    file: nikto.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # LEGAL: only your own lab. Start the deliberately vulnerable target first.
+      docker run --rm -d --name juice -p 3000:3000 bkimminich/juice-shop
+
+      # Scan it with Nikto via Docker; write a JSON report to the mounted folder.
+      # --network host lets the container reach localhost:3000.
+      docker run --rm --network host -v "$(pwd):/out" ghcr.io/sullo/nikto \
+        -h http://localhost:3000 \
+        -Tuning 123b \
+        -maxtime 120 \
+        -Format json -o /out/nikto.json
+    output: |
+      - Nikto v2.5.0
+      + Target IP:        127.0.0.1
+      + Target Port:      3000
+      + Server: No banner retrieved
+      + /: The X-Frame-Options header is not present.
+      + /: The X-Content-Type-Options header is not set.
+      + /ftp/: Directory indexing found.
+      + /#wp-config.php#: Possible backup/config file found.
+      + 7 host(s) tested, report written to /out/nikto.json
+    note:
+      fr: "`-Tuning 123b` limite aux fichiers intéressants, à la configuration et aux en-têtes ; `-maxtime 120` borne le scan à deux minutes. Nikto signale ici des en-têtes manquants et un répertoire `/ftp` indexable. Chaque ligne est à vérifier : Nikto produit des faux positifs."
+      en: "`-Tuning 123b` limits to interesting files, configuration and headers; `-maxtime 120` caps the scan at two minutes. Nikto here flags missing headers and an indexable `/ftp` directory. Every line must be verified: Nikto produces false positives."
+
+  - title:
+      fr: "Nuclei filtré par sévérité"
+      en: "Nuclei filtered by severity"
+    file: nuclei.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Keep the community templates up to date (done inside the official image)
+      docker run --rm projectdiscovery/nuclei -update-templates
+
+      # Scan the lab, keep only critical/high findings, export JSON.
+      # -rl 50 limits the rate to 50 req/s so a fragile target is not overwhelmed.
+      docker run --rm --network host -v "$(pwd):/out" projectdiscovery/nuclei \
+        -u http://localhost:3000 \
+        -severity critical,high \
+        -tags cve,exposure,misconfig \
+        -rl 50 \
+        -json-export /out/nuclei.json
+    output: |
+      [INF] Current nuclei-templates version: v10.2.1
+      [INF] Templates loaded for scan: 2184 (after severity/tags filter)
+      [INF] Targets loaded for scan: 1
+      [git-config] [http] [medium] http://localhost:3000/.git/config
+      [exposed-ftp] [http] [high] http://localhost:3000/ftp/
+      [INF] Scan completed in 38s. 2 results written to /out/nuclei.json
+    note:
+      fr: "Le filtre `-severity critical,high` et les `-tags` réduisent 10 000 templates à ceux qui comptent, pour un scan rapide et actionnable. `-rl 50` protège une cible fragile. Le JSON exporté s'intègre ensuite en CI ou dans un agrégateur comme DefectDojo."
+      en: "The `-severity critical,high` filter and the `-tags` cut 10,000 templates down to the ones that matter, for a fast, actionable scan. `-rl 50` protects a fragile target. The exported JSON then integrates into CI or into an aggregator like DefectDojo."
+
+  - title:
+      fr: "Un template Nuclei personnalisé"
+      en: "A custom Nuclei template"
+    file: exposed-env.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      id: exposed-dotenv-file
+      info:
+        name: Exposed .env configuration file
+        author: appsec-team
+        severity: high
+        description: A publicly reachable .env file usually leaks secrets.
+        tags: exposure,misconfig
+
+      http:
+        - method: GET
+          path:
+            # {{BaseURL}} is replaced by the target at run time
+            - "{{BaseURL}}/.env"
+          matchers-condition: and
+          matchers:
+            # Only a 200 response...
+            - type: status
+              status:
+                - 200
+            # ...that actually looks like a .env (contains KEY=value lines)
+            - type: regex
+              part: body
+              regex:
+                - "(?m)^[A-Z0-9_]+="
+            # ...and is not an HTML error page served with 200
+            - type: word
+              part: header
+              words:
+                - "text/html"
+              negative: true
+    output: |
+      $ nuclei -u http://localhost:3000 -t exposed-env.yaml
+      [exposed-dotenv-file] [http] [high] http://localhost:3000/.env
+      [INF] 1 result found
+    note:
+      fr: "Un template décrit la requête (`GET /.env`) et les conditions de détection combinées par `and` : statut 200, un corps qui ressemble à un `.env`, et un `Content-Type` qui n'est pas du HTML (pour éviter une page d'erreur renvoyée en 200). Le `negative: true` élimine ce faux positif courant."
+      en: "A template describes the request (`GET /.env`) and the detection conditions combined with `and`: status 200, a body that looks like a `.env`, and a `Content-Type` that is not HTML (to avoid an error page returned with 200). The `negative: true` eliminates that common false positive."
+
+  - title:
+      fr: "Intégrer Nuclei en CI avec un seuil qui bloque"
+      en: "Integrating Nuclei in CI with a blocking threshold"
+    file: nuclei-gate.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      TARGET="http://localhost:3000"
+
+      # Run Nuclei on the ephemeral test target, export JSON.
+      docker run --rm --network host -v "$(pwd):/out" projectdiscovery/nuclei \
+        -u "$TARGET" -severity critical,high -rl 50 \
+        -json-export /out/nuclei.json || true   # scan always writes the report
+
+      # Fail the pipeline if any CRITICAL or HIGH finding exists.
+      HIGH=$(jq '[.[] | select(.info.severity=="critical" or .info.severity=="high")] | length' \
+               nuclei.json 2>/dev/null || echo 0)
+      echo "critical/high findings: $HIGH"
+      if [ "$HIGH" -gt 0 ]; then
+        echo "DAST gate failed: fix the findings above."
+        exit 1
+      fi
+    output: |
+      critical/high findings: 1
+      DAST gate failed: fix the findings above.
+      # exit code 1 -> the CI job fails
+    note:
+      fr: "Le scan écrit toujours son rapport (`|| true` évite que l'absence de réseau fasse échouer le script avant l'analyse), puis `jq` compte les alertes `critical`/`high`. Le seuil est explicite : une seule alerte à ce niveau fait échouer le job. On garde ainsi la décision de blocage côté pipeline, pas côté outil."
+      en: "The scan always writes its report (`|| true` prevents a network hiccup from failing the script before analysis), then `jq` counts the `critical`/`high` alerts. The threshold is explicit: a single alert at that level fails the job. The blocking decision stays on the pipeline side, not the tool side."
+
+mistake:
+  fr: |
+    **Lancer Nuclei avec tous les templates et toutes les sévérités contre une cible de production fragile.**
+
+    Charger 10 000 templates sans filtre produit un scan long, bruyant, et dont les centaines de résultats
+    *info*/*low* noient les vraies alertes. Pire, certains templates envoient des charges actives qui
+    peuvent perturber un service en production, voire le faire tomber. On filtre par `-severity critical,high`
+    au départ, on limite le débit avec `-rl`, et on ne scanne une production qu'avec autorisation, de
+    préférence hors des heures de pointe. Et bien sûr, on ne scanne jamais une cible qui ne nous appartient
+    pas.
+  en: |
+    **Running Nuclei with all templates and all severities against a fragile production target.**
+
+    Loading 10,000 templates with no filter produces a long, noisy scan whose hundreds of *info*/*low*
+    results drown the real alerts. Worse, some templates send active payloads that can disrupt a production
+    service, even bring it down. Filter by `-severity critical,high` to start, limit the rate with `-rl`, and
+    only scan production with authorisation, ideally outside peak hours. And of course, never scan a target
+    you do not own.
+
+bestPractice:
+  fr: |
+    - **Autorisation d'abord** : ne scannez que vos cibles ou avec un accord écrit ; apprenez sur un lab local.
+    - **Filtrez par sévérité** (`-severity critical,high`) pour des résultats actionnables.
+    - **Mettez les templates à jour** (`-update-templates`) avant chaque campagne.
+    - **Limitez le débit** (`-rl`) sur une cible fragile ou de production.
+    - **Vérifiez les résultats de Nikto** : son taux de faux positifs impose une revue humaine.
+    - **Écrivez des templates maison** pour vos expositions spécifiques, avec des matchers précis.
+    - **Produisez du JSON** et faites échouer la CI sur un seuil explicite.
+  en: |
+    - **Authorisation first**: only scan your targets or with written consent; learn on a local lab.
+    - **Filter by severity** (`-severity critical,high`) for actionable results.
+    - **Update templates** (`-update-templates`) before each campaign.
+    - **Limit the rate** (`-rl`) on a fragile or production target.
+    - **Verify Nikto's results**: its false-positive rate demands a human review.
+    - **Write custom templates** for your specific exposures, with precise matchers.
+    - **Produce JSON** and fail CI on an explicit threshold.
+
+exercise:
+  statement:
+    fr: |
+      Vous devez vérifier qu'aucun serveur de votre laboratoire n'expose un fichier de sauvegarde
+      `backup.zip` à la racine, car cela fuiterait du code et des secrets.
+
+      1. Rappelez la condition légale avant de lancer le scan.
+      2. Écrivez un template Nuclei (`exposed-backup.yaml`) qui envoie `GET /backup.zip` et ne lève une
+         alerte `high` que si la réponse a le statut `200` **et** un `Content-Type` de type archive
+         (`application/zip`).
+      3. Donnez la commande Docker qui lance ce template sur `http://localhost:3000`.
+    en: |
+      You must check that no server in your lab exposes a `backup.zip` backup file at the root, because that
+      would leak code and secrets.
+
+      1. Recall the legal condition before launching the scan.
+      2. Write a Nuclei template (`exposed-backup.yaml`) that sends `GET /backup.zip` and only raises a
+         `high` alert if the response has status `200` **and** an archive `Content-Type`
+         (`application/zip`).
+      3. Give the Docker command that runs this template against `http://localhost:3000`.
+  solution:
+    file: exposed-backup.yaml
+    lang: yaml
+    code: |
+      # 1. LEGAL: this target must be your own lab or you must have written authorisation.
+      # 2. The template:
+      id: exposed-backup-archive
+      info:
+        name: Exposed backup.zip archive at web root
+        author: appsec-team
+        severity: high
+        tags: exposure,misconfig
+
+      http:
+        - method: GET
+          path:
+            - "{{BaseURL}}/backup.zip"
+          matchers-condition: and
+          matchers:
+            - type: status
+              status:
+                - 200
+            # Confirm it is really an archive, not an HTML "not found" page served with 200
+            - type: word
+              part: header
+              words:
+                - "application/zip"
+      # 3. Run it:
+      #   docker run --rm --network host projectdiscovery/nuclei \
+      #     -u http://localhost:3000 -t exposed-backup.yaml
+    note:
+      fr: "Le `matchers-condition: and` exige les deux conditions ensemble : un statut 200 seul ne suffit pas, car un serveur peut renvoyer une page d'erreur en 200. Vérifier le `Content-Type: application/zip` confirme qu'il s'agit bien d'une archive téléchargeable, et réduit les faux positifs."
+      en: "The `matchers-condition: and` requires both conditions together: a 200 status alone is not enough, because a server may return an error page with 200. Checking the `Content-Type: application/zip` confirms it really is a downloadable archive, and cuts false positives."
+
+quiz:
+  - q:
+      fr: "Quelle est la condition indispensable avant de lancer Nikto ou Nuclei sur une cible ?"
+      en: "What is the essential condition before running Nikto or Nuclei on a target?"
+    options:
+      fr:
+        - "Avoir une connexion rapide"
+        - "Posséder la cible ou disposer d'une autorisation écrite"
+        - "Utiliser la dernière version de Docker"
+        - "Scanner uniquement la nuit"
+      en:
+        - "Having a fast connection"
+        - "Owning the target or holding written authorisation"
+        - "Using the latest Docker version"
+        - "Scanning only at night"
+    answer: 1
+    why:
+      fr: "Un scan envoie des requêtes d'attaque réelles et peut être illégal sans autorisation. On ne scanne que ses propres systèmes ou avec un accord écrit ; pour apprendre, on utilise un lab local (Juice Shop, DVWA)."
+      en: "A scan sends real attack requests and can be illegal without authorisation. You only scan your own systems or with written consent; to learn, use a local lab (Juice Shop, DVWA)."
+  - q:
+      fr: "Comment Nuclei décide-t-il quoi tester ?"
+      en: "How does Nuclei decide what to test?"
+    options:
+      fr:
+        - "Il devine au hasard"
+        - "Il lit des templates YAML qui décrivent la requête et la détection"
+        - "Il exécute le code source de la cible"
+        - "Il interroge une base SQL"
+      en:
+        - "It guesses at random"
+        - "It reads YAML templates that describe the request and the detection"
+        - "It runs the target's source code"
+        - "It queries a SQL database"
+    answer: 1
+    why:
+      fr: "Chaque template Nuclei décrit une requête à envoyer et des matchers qui reconnaissent une réponse révélant un problème. La communauté en maintient des milliers, mis à jour en continu."
+      en: "Each Nuclei template describes a request to send and matchers that recognise a response revealing a problem. The community maintains thousands of them, continuously updated."
+  - q:
+      fr: "Pourquoi commencer un scan Nuclei avec `-severity critical,high` ?"
+      en: "Why start a Nuclei scan with `-severity critical,high`?"
+    options:
+      fr:
+        - "Parce que les autres sévérités sont fausses"
+        - "Pour rendre le scan plus lent"
+        - "Pour obtenir les résultats les plus actionnables sans se noyer dans le bruit"
+        - "Parce que Nuclei l'exige"
+      en:
+        - "Because the other severities are fake"
+        - "To make the scan slower"
+        - "To get the most actionable results without drowning in noise"
+        - "Because Nuclei requires it"
+    answer: 2
+    why:
+      fr: "Sans filtre, Nuclei charge des milliers de templates et des centaines de résultats *info*/*low* masquent les vrais problèmes. Filtrer par sévérité donne un scan rapide et prioritaire."
+      en: "Without a filter, Nuclei loads thousands of templates and hundreds of *info*/*low* results hide the real problems. Filtering by severity gives a fast, prioritised scan."
+  - q:
+      fr: "Quel est le principal défaut de Nikto à garder en tête ?"
+      en: "What is Nikto's main drawback to keep in mind?"
+    options:
+      fr:
+        - "Il ne fonctionne que sous Windows"
+        - "Il produit des faux positifs qui exigent une vérification humaine"
+        - "Il ne teste que les ports fermés"
+        - "Il chiffre la cible"
+      en:
+        - "It only works on Windows"
+        - "It produces false positives that require human verification"
+        - "It only tests closed ports"
+        - "It encrypts the target"
+    answer: 1
+    why:
+      fr: "Nikto est rapide et exhaustif mais bruyant et sujet aux faux positifs. Chaque résultat doit être vérifié avant d'être considéré comme une vraie faille."
+      en: "Nikto is fast and thorough but noisy and prone to false positives. Every result must be verified before being treated as a real flaw."
+  - q:
+      fr: "Dans un template Nuclei, à quoi sert `matchers-condition: and` ?"
+      en: "In a Nuclei template, what is `matchers-condition: and` for?"
+    options:
+      fr:
+        - "À lancer deux scans"
+        - "À ignorer le statut HTTP"
+        - "À accélérer la mise à jour des templates"
+        - "À exiger que tous les matchers soient vrais pour lever l'alerte, réduisant les faux positifs"
+      en:
+        - "To launch two scans"
+        - "To ignore the HTTP status"
+        - "To speed up template updates"
+        - "To require all matchers to be true before alerting, reducing false positives"
+    answer: 3
+    why:
+      fr: "`and` combine les matchers : l'alerte n'apparaît que si toutes les conditions sont réunies (par exemple statut 200 ET bon Content-Type). Cela évite de signaler une page d'erreur renvoyée en 200."
+      en: "`and` combines the matchers: the alert only appears if all conditions hold (for example status 200 AND the right Content-Type). This avoids flagging an error page returned with 200."

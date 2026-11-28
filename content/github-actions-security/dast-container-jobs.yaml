@@ -1,0 +1,501 @@
+description:
+  fr: "Ajouter le DAST et le scan de conteneurs au workflow : démarrer l'app et lancer ZAP baseline, puis construire l'image et la scanner avec trivy-action (exit-code + severity)."
+  en: "Add DAST and container scanning to the workflow: start the app and run ZAP baseline, then build the image and scan it with trivy-action (exit-code + severity)."
+duration: 25
+
+intro:
+  fr: |
+    Le SAST et le SCA lisent le code et ses dépendances **au repos**. Mais certaines failles n'apparaissent
+    que lorsque l'application **tourne** : un en-tête de sécurité manquant, un cookie mal configuré, une
+    page d'erreur bavarde. Pour les trouver, il faut tester l'application **en marche** : c'est le **DAST**
+    (*Dynamic Application Security Testing*). Et puisque l'application est livrée dans une **image de
+    conteneur**, il faut aussi scanner cette image.
+
+    Imaginez une voiture : le SAST, c'est inspecter les plans et les pièces ; le DAST, c'est l'essai sur
+    piste, moteur allumé. Le scan d'image, lui, vérifie que le garage (le conteneur) qui transporte la
+    voiture ne contient pas lui-même de pièces défectueuses connues.
+
+    Dans cette leçon, vous ajoutez deux jobs à votre pipeline. Le premier **démarre l'application** puis
+    lance **ZAP** en mode baseline (`zaproxy/action-baseline`) contre elle. Le second **construit l'image
+    Docker** et la scanne avec **`aquasecurity/trivy-action`**, en réglant `severity` et `exit-code` pour
+    que le build échoue sur les vulnérabilités qui comptent.
+  en: |
+    SAST and SCA read the code and its dependencies **at rest**. But some flaws appear only when the
+    application **runs**: a missing security header, a misconfigured cookie, a chatty error page. To find
+    them, you must test the application **in motion**: this is **DAST** (*Dynamic Application Security
+    Testing*). And since the application ships as a **container image**, you must scan that image too.
+
+    Picture a car: SAST is inspecting the blueprints and parts; DAST is the test drive, engine running.
+    Image scanning checks that the garage (the container) carrying the car does not itself contain known
+    faulty parts.
+
+    In this lesson you add two jobs to your pipeline. The first **starts the application** then runs **ZAP**
+    in baseline mode (`zaproxy/action-baseline`) against it. The second **builds the Docker image** and
+    scans it with **`aquasecurity/trivy-action`**, tuning `severity` and `exit-code` so the build fails on
+    the vulnerabilities that matter.
+
+sections:
+  - heading:
+      fr: "DAST : tester l'application en marche"
+      en: "DAST: testing the running application"
+    body:
+      fr: |
+        Le **DAST** attaque l'application **depuis l'extérieur**, comme le ferait un navigateur ou un
+        attaquant, sans connaître le code source (test « boîte noire »). Il complète le SAST : là où le SAST
+        voit le code mais pas la configuration réelle, le DAST voit le comportement réel mais pas le code.
+
+        | | SAST | DAST |
+        |---|---|---|
+        | Vue | Code source (boîte blanche) | Application en marche (boîte noire) |
+        | Moment | Sans exécuter | Pendant l'exécution |
+        | Trouve | Injections, secrets en dur | En-têtes manquants, mauvaise config, cookies faibles |
+        | Rate | La config d'exécution | La logique interne du code |
+
+        En CI, le DAST impose une contrainte : il faut une **cible vivante**. Le job doit donc d'abord
+        **démarrer l'application** (souvent dans un conteneur, en arrière-plan), **attendre qu'elle
+        réponde**, puis lancer le scanner contre son URL (`http://localhost:PORT`).
+
+        On utilise le scan **baseline** de ZAP (passif, 1-2 minutes, aucune attaque réelle), adapté à une
+        exécution à chaque PR. Le scan actif, plus agressif et plus long, est réservé à des exécutions
+        planifiées contre un environnement dédié. **Rappel important** : ne scannez que des cibles que vous
+        êtes autorisé à tester — ici, votre propre application démarrée dans le job.
+      en: |
+        **DAST** attacks the application **from the outside**, like a browser or an attacker would, without
+        knowing the source code ("black box" testing). It complements SAST: where SAST sees the code but not
+        the real configuration, DAST sees the real behaviour but not the code.
+
+        | | SAST | DAST |
+        |---|---|---|
+        | View | Source code (white box) | Running app (black box) |
+        | When | Without running | During execution |
+        | Finds | Injections, hard-coded secrets | Missing headers, misconfig, weak cookies |
+        | Misses | The runtime config | The code's internal logic |
+
+        In CI, DAST imposes a constraint: you need a **live target**. The job must therefore first **start
+        the application** (often in a container, in the background), **wait for it to respond**, then run
+        the scanner against its URL (`http://localhost:PORT`).
+
+        You use ZAP's **baseline** scan (passive, 1-2 minutes, no real attack), suited to running on every
+        PR. The active scan, more aggressive and longer, is reserved for scheduled runs against a dedicated
+        environment. **Important reminder**: only scan targets you are authorised to test — here, your own
+        application started inside the job.
+  - heading:
+      fr: "Lancer ZAP baseline dans un job"
+      en: "Running ZAP baseline in a job"
+    body:
+      fr: |
+        L'action **`zaproxy/action-baseline`** encapsule le scan baseline. Le job suit trois temps :
+
+        1. **Démarrer la cible.** On construit et lance l'application en arrière-plan, par exemple avec
+           `docker run -d -p 8080:8080`, puis on **attend** qu'elle réponde (une boucle `curl` jusqu'à ce
+           que le port accepte les connexions).
+        2. **Scanner.** `zaproxy/action-baseline` reçoit l'URL cible et explore l'application pendant une
+           minute en scan passif.
+        3. **Décider.** L'action échoue si des alertes dépassent le seuil configuré. On peut fournir un
+           fichier de règles (`rules_file_name`) pour choisir quelles alertes bloquent.
+
+        ```yaml
+        - name: ZAP baseline scan
+          uses: zaproxy/action-baseline@v0.12.0
+          with:
+            target: http://localhost:8080
+            rules_file_name: .zap/rules.tsv   # IGNORE/WARN/FAIL per rule
+        ```
+
+        L'action publie un rapport et peut ouvrir une *issue* GitHub avec les résultats. Le point délicat
+        est l'**attente** : lancer le scan avant que l'app soit prête donne un rapport vide (« 0 URLs »).
+        D'où la boucle d'attente avant l'étape de scan.
+      en: |
+        The **`zaproxy/action-baseline`** action wraps the baseline scan. The job has three stages:
+
+        1. **Start the target.** You build and run the application in the background, for example with
+           `docker run -d -p 8080:8080`, then **wait** for it to respond (a `curl` loop until the port
+           accepts connections).
+        2. **Scan.** `zaproxy/action-baseline` receives the target URL and spiders the application for one
+           minute in passive scan.
+        3. **Decide.** The action fails if alerts exceed the configured threshold. You can supply a rules
+           file (`rules_file_name`) to choose which alerts block.
+
+        ```yaml
+        - name: ZAP baseline scan
+          uses: zaproxy/action-baseline@v0.12.0
+          with:
+            target: http://localhost:8080
+            rules_file_name: .zap/rules.tsv   # IGNORE/WARN/FAIL per rule
+        ```
+
+        The action publishes a report and can open a GitHub *issue* with the results. The tricky point is
+        the **wait**: starting the scan before the app is ready gives an empty report ("0 URLs"). Hence the
+        wait loop before the scan step.
+  - heading:
+      fr: "Scanner l'image de conteneur avec Trivy"
+      en: "Scanning the container image with Trivy"
+    body:
+      fr: |
+        Votre application est livrée dans une image Docker. Cette image empile une image de base (souvent
+        un OS complet) et vos dépendances : elle peut contenir des **paquets système vulnérables** sans
+        aucun rapport avec votre code. Il faut donc scanner **l'image construite**, pas seulement les
+        sources.
+
+        On enchaîne deux étapes dans le même job :
+
+        1. **Construire l'image** avec `docker/build-push-action` (ou un simple `docker build`), sans la
+           pousser (`push: false`), juste pour la scanner.
+        2. **Scanner l'image** avec `aquasecurity/trivy-action` en mode **`image`** (et non `fs`), en
+           pointant le tag local.
+
+        Les deux réglages de sécurité restent les mêmes qu'au mode filesystem :
+
+        - **`severity: HIGH,CRITICAL`** pour un signal actionnable.
+        - **`exit-code: '1'`** pour **faire échouer** le build.
+
+        ```yaml
+        - uses: aquasecurity/trivy-action@0.28.0
+          with:
+            scan-type: image
+            image-ref: my-app:${{ github.sha }}
+            severity: HIGH,CRITICAL
+            exit-code: "1"
+        ```
+
+        Un réflexe utile : taguer l'image avec `${{ github.sha }}` (l'empreinte du commit) pour qu'image
+        scannée et code correspondent exactement. Pour réduire le nombre de vulnérabilités à la source, on
+        préfère des **images de base minimales** (`-slim`, `alpine`, ou `distroless`) — sujet approfondi au
+        module Docker.
+      en: |
+        Your application ships in a Docker image. This image stacks a base image (often a full OS) and your
+        dependencies: it can contain **vulnerable system packages** unrelated to your code. You must
+        therefore scan the **built image**, not just the sources.
+
+        You chain two steps in the same job:
+
+        1. **Build the image** with `docker/build-push-action` (or a plain `docker build`), without pushing
+           it (`push: false`), just to scan it.
+        2. **Scan the image** with `aquasecurity/trivy-action` in **`image`** mode (not `fs`), pointing to
+           the local tag.
+
+        The two security settings are the same as in filesystem mode:
+
+        - **`severity: HIGH,CRITICAL`** for an actionable signal.
+        - **`exit-code: '1'`** to **fail** the build.
+
+        ```yaml
+        - uses: aquasecurity/trivy-action@0.28.0
+          with:
+            scan-type: image
+            image-ref: my-app:${{ github.sha }}
+            severity: HIGH,CRITICAL
+            exit-code: "1"
+        ```
+
+        A useful habit: tag the image with `${{ github.sha }}` (the commit hash) so the scanned image and
+        the code match exactly. To reduce the number of vulnerabilities at the source, prefer **minimal base
+        images** (`-slim`, `alpine`, or `distroless`) — a topic explored in the Docker module.
+
+examples:
+  - title:
+      fr: "DAST : démarrer l'app puis lancer ZAP baseline"
+      en: "DAST: start the app then run ZAP baseline"
+    file: .github/workflows/dast.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: dast
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        zap:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Build and start the app in the background
+              run: |
+                docker build -t my-app:test .
+                docker run -d -p 8080:8080 --name app my-app:test
+            - name: Wait until the app answers before scanning
+              run: |
+                # Poll for up to ~30s; an empty scan happens if ZAP starts too early
+                for i in $(seq 1 30); do
+                  if curl -sf http://localhost:8080/health; then exit 0; fi
+                  sleep 1
+                done
+                echo "App did not become ready" && exit 1
+            - name: ZAP baseline scan (passive, no real attack)
+              uses: zaproxy/action-baseline@v0.12.0
+              with:
+                target: http://localhost:8080
+    note:
+      fr: "L'étape d'attente est capitale : sans elle, ZAP démarre avant l'application et renvoie « 0 URLs ». Le scan baseline est passif (aucune attaque réelle), donc adapté à chaque PR. On ne scanne ici que sa propre application, démarrée dans le job."
+      en: "The wait step is capital: without it, ZAP starts before the application and returns \"0 URLs\". The baseline scan is passive (no real attack), so suited to every PR. Here you only scan your own application, started inside the job."
+
+  - title:
+      fr: "Construire l'image et la scanner avec Trivy"
+      en: "Building the image and scanning it with Trivy"
+    file: .github/workflows/image-scan.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: image-scan
+      on: [pull_request]
+
+      permissions:
+        contents: read
+        security-events: write   # to upload the SARIF report
+
+      jobs:
+        build-and-scan:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Build the image (do not push, just scan it)
+              uses: docker/build-push-action@v6
+              with:
+                context: .
+                push: false
+                load: true                      # make the image available locally
+                tags: my-app:${{ github.sha }}  # tie the image to the exact commit
+            - name: Scan the built image with Trivy
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: image
+                image-ref: my-app:${{ github.sha }}
+                severity: HIGH,CRITICAL
+                exit-code: "1"                  # fail on HIGH/CRITICAL
+                format: sarif
+                output: trivy-image.sarif
+            - name: Upload results
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: trivy-image.sarif
+    note:
+      fr: "On construit l'image sans la pousser (`push: false`, `load: true` pour l'avoir en local), puis on la scanne en mode `image`. Taguer avec `${{ github.sha }}` garantit que l'image scannée correspond au commit. `exit-code: \"1\"` bloque le build sur les failles HIGH/CRITICAL."
+      en: "You build the image without pushing it (`push: false`, `load: true` to have it locally), then scan it in `image` mode. Tagging with `${{ github.sha }}` guarantees the scanned image matches the commit. `exit-code: \"1\"` blocks the build on HIGH/CRITICAL flaws."
+
+  - title:
+      fr: "Vulnérable : scan d'image sans exit-code"
+      en: "Vulnerable: image scan without exit-code"
+    file: .github/workflows/image-scan-bad.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      name: image-scan
+      on: [pull_request]
+
+      jobs:
+        scan:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - run: docker build -t my-app:test .
+            - name: Scan (but never block anything)
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: image
+                image-ref: my-app:test
+                # No exit-code: Trivy prints findings but returns 0.
+                # No severity filter: critical flaws drown in low-level noise.
+    note:
+      fr: "Ce job « scanne » mais ne protège rien : sans `exit-code`, Trivy renvoie 0 et le job reste vert même avec des failles critiques. Sans filtre `severity`, les alertes importantes se noient dans le bruit. Résultat : un badge vert trompeur."
+      en: "This job \"scans\" but protects nothing: without `exit-code`, Trivy returns 0 and the job stays green even with critical flaws. Without a `severity` filter, important alerts drown in noise. The result: a misleading green badge."
+
+  - title:
+      fr: "Un fichier de règles ZAP pour choisir ce qui bloque"
+      en: "A ZAP rules file to choose what blocks"
+    file: .zap/rules.tsv
+    lang: text
+    kind: secure
+    code: |
+      # ZAP baseline rules: columns separated by a TAB -> id, action, (name)
+      # Blocking: these missing protections fail the pipeline
+      10038	FAIL	(Content Security Policy (CSP) Header Not Set)
+      10020	FAIL	(Missing Anti-clickjacking Header)
+      10021	FAIL	(X-Content-Type-Options Header Missing)
+      # Visible but not blocking yet
+      10035	WARN	(Strict-Transport-Security Header Not Set)
+      # Ignored, with the reason: build timestamps, reviewed, not sensitive
+      10096	IGNORE	(Timestamp Disclosure - Unix)
+    note:
+      fr: "Comme au cours DAST, ce fichier TSV (tabulations réelles) décide quelles alertes bloquent (`FAIL`), avertissent (`WARN`) ou sont ignorées (`IGNORE`). On le passe à l'action via `rules_file_name`. Chaque `IGNORE` est justifié par un commentaire."
+      en: "As in the DAST course, this TSV file (real tabs) decides which alerts block (`FAIL`), warn (`WARN`) or are ignored (`IGNORE`). You pass it to the action via `rules_file_name`. Each `IGNORE` is justified with a comment."
+
+mistake:
+  fr: |
+    **Lancer le scan DAST avant que l'application soit prête, ou scanner l'image sans `exit-code`.**
+
+    Côté DAST, démarrer ZAP alors que l'application n'écoute pas encore produit un rapport vide (« 0 URLs »)
+    qui donne une fausse impression de sécurité : il faut **attendre** que la cible réponde (boucle `curl`)
+    avant de scanner. Côté image, oublier `exit-code: 1` laisse Trivy afficher les vulnérabilités tout en
+    renvoyant 0 : le job reste vert et rien n'est corrigé. Dans les deux cas, le scan tourne mais ne
+    protège pas.
+  en: |
+    **Starting the DAST scan before the app is ready, or scanning the image without `exit-code`.**
+
+    On the DAST side, starting ZAP while the application is not listening yet produces an empty report
+    ("0 URLs") that gives a false sense of security: you must **wait** for the target to respond (a `curl`
+    loop) before scanning. On the image side, forgetting `exit-code: 1` lets Trivy print the vulnerabilities
+    while returning 0: the job stays green and nothing is fixed. In both cases the scan runs but does not
+    protect.
+
+bestPractice:
+  fr: |
+    - **Attendez que la cible réponde** (boucle `curl` sur un endpoint de santé) avant de lancer le DAST.
+    - **Utilisez le scan baseline** (passif) sur les PR ; réservez le scan actif à des exécutions planifiées.
+    - **Pilotez les alertes ZAP** avec un fichier de règles versionné (`FAIL`/`WARN`/`IGNORE` justifiés).
+    - **Scannez l'image construite**, pas seulement les sources : elle peut porter des paquets OS vulnérables.
+    - **Mettez `severity: HIGH,CRITICAL` et `exit-code: 1`** sur Trivy pour un vrai blocage actionnable.
+    - **Taguez l'image avec `${{ github.sha }}`** pour relier exactement image scannée et commit.
+    - **Ne scannez que des cibles autorisées** : ici votre propre application démarrée dans le job.
+  en: |
+    - **Wait for the target to respond** (a `curl` loop on a health endpoint) before launching DAST.
+    - **Use the baseline scan** (passive) on PRs; reserve the active scan for scheduled runs.
+    - **Drive ZAP alerts** with a versioned rules file (`FAIL`/`WARN`/`IGNORE`, each justified).
+    - **Scan the built image**, not only the sources: it can carry vulnerable OS packages.
+    - **Set `severity: HIGH,CRITICAL` and `exit-code: 1`** on Trivy for real, actionable blocking.
+    - **Tag the image with `${{ github.sha }}`** to tie the scanned image exactly to the commit.
+    - **Only scan authorised targets**: here your own application started inside the job.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un job `build-and-scan` qui :
+
+      1. construit l'image Docker du dépôt **sans la pousser**, taguée avec l'empreinte du commit
+         (`${{ github.sha }}`) ;
+      2. la scanne avec `aquasecurity/trivy-action` en mode **image** ;
+      3. ne remonte que les gravités **HIGH** et **CRITICAL** et **fait échouer** le build si l'une est
+         trouvée.
+    en: |
+      Write a `build-and-scan` job that:
+
+      1. builds the repo's Docker image **without pushing it**, tagged with the commit hash
+         (`${{ github.sha }}`);
+      2. scans it with `aquasecurity/trivy-action` in **image** mode;
+      3. reports only **HIGH** and **CRITICAL** severities and **fails** the build if one is found.
+  solution:
+    file: build-and-scan.yml
+    lang: yaml
+    code: |
+      name: image-scan
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        build-and-scan:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Build the image locally (no push)
+              uses: docker/build-push-action@v6
+              with:
+                context: .
+                push: false
+                load: true
+                tags: my-app:${{ github.sha }}
+            - name: Scan the image, fail on HIGH/CRITICAL
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: image
+                image-ref: my-app:${{ github.sha }}
+                severity: HIGH,CRITICAL
+                exit-code: "1"
+    note:
+      fr: "`push: false` + `load: true` construit l'image en local pour la scanner sans la publier. Le tag `${{ github.sha }}` relie l'image au commit. `exit-code: \"1\"` avec `severity: HIGH,CRITICAL` bloque le build uniquement sur les failles qui comptent."
+      en: "`push: false` + `load: true` builds the image locally to scan it without publishing. The `${{ github.sha }}` tag ties the image to the commit. `exit-code: \"1\"` with `severity: HIGH,CRITICAL` blocks the build only on the flaws that matter."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que le DAST ?"
+      en: "What is DAST?"
+    options:
+      fr:
+        - "L'analyse du code source sans l'exécuter"
+        - "Le test de l'application en cours d'exécution, depuis l'extérieur"
+        - "Le scan des dépendances tierces"
+        - "La signature des images de conteneur"
+      en:
+        - "Analysing the source code without running it"
+        - "Testing the running application, from the outside"
+        - "Scanning third-party dependencies"
+        - "Signing container images"
+    answer: 1
+    why:
+      fr: "Le DAST teste l'application en marche, en boîte noire. Lire le code sans l'exécuter, c'est le SAST."
+      en: "DAST tests the running application, black-box. Reading the code without running it is SAST."
+  - q:
+      fr: "Pourquoi attendre avant de lancer le scan ZAP contre l'application ?"
+      en: "Why wait before launching the ZAP scan against the application?"
+    options:
+      fr:
+        - "Pour laisser Trivy finir d'abord"
+        - "Pour réduire la facture GitHub"
+        - "Parce que si l'app n'est pas prête, le scan renvoie un rapport vide"
+        - "Pour chiffrer le rapport"
+      en:
+        - "To let Trivy finish first"
+        - "To reduce the GitHub bill"
+        - "Because if the app is not ready, the scan returns an empty report"
+        - "To encrypt the report"
+    answer: 2
+    why:
+      fr: "Lancer ZAP avant que la cible réponde donne « 0 URLs » : une boucle d'attente garantit que l'application écoute avant le scan."
+      en: "Launching ZAP before the target responds gives \"0 URLs\": a wait loop ensures the app is listening before the scan."
+  - q:
+      fr: "En quel mode Trivy scanne-t-il une image de conteneur construite ?"
+      en: "In which mode does Trivy scan a built container image?"
+    options:
+      fr:
+        - "`scan-type: image`"
+        - "`scan-type: fs`"
+        - "`scan-type: repo`"
+        - "`scan-type: config`"
+      en:
+        - "`scan-type: image`"
+        - "`scan-type: fs`"
+        - "`scan-type: repo`"
+        - "`scan-type: config`"
+    answer: 0
+    why:
+      fr: "`scan-type: image` cible une image ; `fs` scanne un dossier de fichiers (dépendances, sources)."
+      en: "`scan-type: image` targets an image; `fs` scans a folder of files (dependencies, sources)."
+  - q:
+      fr: "Pourquoi scanner l'image construite et pas seulement les sources ?"
+      en: "Why scan the built image and not only the sources?"
+    options:
+      fr:
+        - "Parce que c'est plus rapide"
+        - "Parce que l'image peut contenir des paquets système vulnérables absents des sources"
+        - "Parce que les sources ne contiennent jamais de failles"
+        - "Parce que Trivy ne sait pas lire les sources"
+      en:
+        - "Because it is faster"
+        - "Because the image can contain vulnerable system packages absent from the sources"
+        - "Because sources never contain flaws"
+        - "Because Trivy cannot read sources"
+    answer: 1
+    why:
+      fr: "L'image empile une image de base et un OS : elle peut porter des CVE de paquets système sans rapport avec votre code."
+      en: "The image stacks a base image and an OS: it can carry system-package CVEs unrelated to your code."
+  - q:
+      fr: "Quel réglage fait échouer le build sur une image vulnérable ?"
+      en: "Which setting fails the build on a vulnerable image?"
+    options:
+      fr:
+        - "`format: table`"
+        - "`push: false`"
+        - "`load: true`"
+        - "`exit-code: \"1\"`"
+      en:
+        - "`format: table`"
+        - "`push: false`"
+        - "`load: true`"
+        - "`exit-code: \"1\"`"
+    answer: 3
+    why:
+      fr: "`exit-code: \"1\"` force Trivy à renvoyer un code non nul sur les gravités ciblées ; sans lui, le job reste vert malgré les failles."
+      en: "`exit-code: \"1\"` forces Trivy to return a non-zero code on the targeted severities; without it, the job stays green despite the flaws."

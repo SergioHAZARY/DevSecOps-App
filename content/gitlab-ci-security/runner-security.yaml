@@ -1,0 +1,491 @@
+description:
+  fr: "Sécuriser les runners GitLab : portée partagée/groupe/projet, danger de l'exécuteur Docker privilégié et de docker.sock, build rootless avec Kaniko ou BuildKit, tags et runners protégés."
+  en: "Securing GitLab runners: shared/group/project scope, the danger of the privileged Docker executor and docker.sock, rootless builds with Kaniko or BuildKit, tags and protected runners."
+duration: 25
+
+intro:
+  fr: |
+    Un pipeline ne s'exécute pas tout seul : il tourne sur un **runner**, une machine qui prend en charge
+    les jobs. Ce runner voit votre code, vos secrets, et exécute des commandes. S'il est mal configuré ou
+    partagé sans précaution, il devient le maillon faible : compromettre un runner, c'est compromettre tous
+    les projets qui l'utilisent.
+
+    Imaginez un atelier partagé où plusieurs entreprises viennent fabriquer leurs pièces. Si l'atelier n'a
+    aucune cloison et que tout le monde a la clé du coffre, le premier venu peut voler les plans des autres.
+    Sécuriser les runners, c'est poser ces cloisons : qui peut utiliser quelle machine, avec quels droits.
+
+    Dans cette leçon, vous verrez la **portée** d'un runner (partagé, groupe, projet) et ses implications,
+    le **danger majeur** de l'exécuteur Docker en mode **privilégié** et du montage de **`docker.sock`**,
+    puis les parades modernes pour construire des images **sans privilège** (**Kaniko**, **BuildKit
+    rootless**). Vous terminerez avec les **tags** qui dirigent les jobs vers les bons runners et les
+    **runners protégés** qui réservent une machine aux branches de confiance.
+  en: |
+    A pipeline does not run by itself: it runs on a **runner**, a machine that takes on the jobs. This
+    runner sees your code, your secrets, and executes commands. If it is misconfigured or shared carelessly,
+    it becomes the weak link: compromising a runner means compromising every project that uses it.
+
+    Picture a shared workshop where several companies come to make their parts. If the workshop has no
+    partitions and everyone holds the key to the safe, the first comer can steal the others' blueprints.
+    Securing runners is putting up those partitions: who can use which machine, with which rights.
+
+    In this lesson you will see a runner's **scope** (shared, group, project) and its implications, the
+    **major danger** of the Docker executor in **privileged** mode and of mounting **`docker.sock`**, then
+    the modern defences to build images **without privilege** (**Kaniko**, **BuildKit rootless**). You will
+    finish with **tags** that route jobs to the right runners and **protected runners** that reserve a
+    machine for trusted branches.
+
+sections:
+  - heading:
+      fr: "La portée d'un runner : partagé, groupe, projet"
+      en: "A runner's scope: shared, group, project"
+    body:
+      fr: |
+        Un runner est enregistré à un **niveau** qui détermine quels projets peuvent l'utiliser :
+
+        | Portée | Qui l'utilise | Risque principal |
+        |---|---|---|
+        | **Shared** (instance) | **Tous** les projets de l'instance | Un job malveillant d'un projet voisin peut viser le runner |
+        | **Group** | Les projets d'un groupe | Isolation intermédiaire |
+        | **Project** | Un **seul** projet | La meilleure isolation |
+
+        Le runner **partagé** est pratique mais risqué : plusieurs projets, parfois de confiance inégale,
+        s'exécutent sur la même machine. Si un projet exécute du code non revu (une merge request de fork,
+        par exemple), ce code tourne sur le même runner que des projets sensibles. D'où deux règles : sur un
+        runner partagé, **ne jamais** stocker de secret persistant, et préférer des exécuteurs qui
+        **recréent un environnement propre** à chaque job (exécuteur Docker, chaque job dans un conteneur
+        neuf).
+
+        Pour un projet sensible (production, données clients), un **runner de projet dédié** est bien plus
+        sûr : il n'exécute que les jobs de ce projet, sur une machine isolée. On peut même l'héberger dans un
+        réseau séparé. La règle générale : **plus un pipeline touche à des secrets ou à la production, plus
+        son runner doit être isolé**.
+      en: |
+        A runner is registered at a **level** that determines which projects can use it:
+
+        | Scope | Who uses it | Main risk |
+        |---|---|---|
+        | **Shared** (instance) | **Every** project on the instance | A malicious job from a neighbouring project can target the runner |
+        | **Group** | The projects of a group | Intermediate isolation |
+        | **Project** | A **single** project | The best isolation |
+
+        The **shared** runner is convenient but risky: several projects, sometimes of unequal trust, run on
+        the same machine. If a project runs unreviewed code (a fork merge request, for example), that code
+        runs on the same runner as sensitive projects. Hence two rules: on a shared runner, **never** store
+        a persistent secret, and prefer executors that **recreate a clean environment** for each job (Docker
+        executor, each job in a fresh container).
+
+        For a sensitive project (production, customer data), a **dedicated project runner** is far safer: it
+        only runs that project's jobs, on an isolated machine. You can even host it in a separate network.
+        The general rule: **the more a pipeline touches secrets or production, the more its runner must be
+        isolated**.
+  - heading:
+      fr: "Le danger : Docker privilégié et docker.sock"
+      en: "The danger: privileged Docker and docker.sock"
+    body:
+      fr: |
+        Construire une image Docker **dans** un pipeline pose un problème connu sous le nom de
+        *Docker-in-Docker*. Deux approches dangereuses circulent, et il faut comprendre pourquoi.
+
+        **1. L'exécuteur privilégié (`privileged = true`).** Pour lancer un démon Docker dans le job, on est
+        tenté de passer le conteneur en mode privilégié. Mais `privileged` donne au conteneur un accès
+        **quasi total à l'hôte** : capacités noyau, périphériques, montages. Un job malveillant (ou une
+        dépendance compromise) peut alors **s'évader du conteneur** et prendre le contrôle du runner — et
+        donc de tous les autres jobs qui y passent.
+
+        **2. Le montage de `docker.sock`.** Monter `/var/run/docker.sock` dans le job donne au job le
+        contrôle du **démon Docker de l'hôte**. C'est encore pire : via cette socket, le job peut démarrer
+        un conteneur privilégié, monter le système de fichiers de l'hôte, lire les secrets des autres
+        conteneurs. **Donner accès à `docker.sock`, c'est donner les droits root sur l'hôte.**
+
+        | Méthode | Accès obtenu | Verdict |
+        |---|---|---|
+        | `privileged = true` | Quasi-root sur l'hôte | À éviter |
+        | Montage de `docker.sock` | Contrôle du démon = root hôte | À bannir |
+        | Kaniko / BuildKit rootless | Aucun privilège spécial | **Recommandé** |
+
+        Ces deux méthodes « fonctionnent » et sont encore très répandues, ce qui les rend d'autant plus
+        pièges. La bonne nouvelle : on peut construire des images **sans aucun privilège**.
+      en: |
+        Building a Docker image **inside** a pipeline raises a problem known as *Docker-in-Docker*. Two
+        dangerous approaches circulate, and you must understand why.
+
+        **1. The privileged executor (`privileged = true`).** To run a Docker daemon in the job, one is
+        tempted to put the container in privileged mode. But `privileged` gives the container **near-total
+        access to the host**: kernel capabilities, devices, mounts. A malicious job (or a compromised
+        dependency) can then **escape the container** and take over the runner — and therefore every other
+        job that passes through it.
+
+        **2. Mounting `docker.sock`.** Mounting `/var/run/docker.sock` into the job gives the job control of
+        the **host's Docker daemon**. This is even worse: through this socket, the job can start a privileged
+        container, mount the host's filesystem, read other containers' secrets. **Giving access to
+        `docker.sock` is giving root on the host.**
+
+        | Method | Access gained | Verdict |
+        |---|---|---|
+        | `privileged = true` | Near-root on the host | Avoid |
+        | Mounting `docker.sock` | Daemon control = host root | Ban |
+        | Kaniko / BuildKit rootless | No special privilege | **Recommended** |
+
+        Both methods "work" and are still very common, which makes them all the more of a trap. The good
+        news: you can build images **with no privilege at all**.
+  - heading:
+      fr: "Construire sans privilège : Kaniko, BuildKit rootless"
+      en: "Building without privilege: Kaniko, rootless BuildKit"
+    body:
+      fr: |
+        Des outils construisent une image Docker **sans démon Docker** et **sans mode privilégié**. Ils
+        suppriment la cause racine du danger.
+
+        **Kaniko** (par Google) exécute chaque instruction du Dockerfile dans l'espace utilisateur, sans
+        démon. Il lit le Dockerfile, construit l'image couche par couche et la pousse vers un registre, le
+        tout dans un conteneur **non privilégié**. C'est le choix le plus simple en GitLab CI.
+
+        ```yaml
+        build:
+          image:
+            name: gcr.io/kaniko-project/executor:v1.23.2-debug
+            entrypoint: [""]
+          script:
+            - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile Dockerfile
+              --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+        ```
+
+        **BuildKit rootless** (le moteur moderne de `docker build`) peut aussi tourner **sans root** et sans
+        privilège. `buildah` est une autre alternative rootless.
+
+        Le gain de sécurité est net : plus d'évasion de conteneur possible via le privilège, plus de socket
+        root exposée. Si une dépendance de build est compromise, elle reste **confinée** dans un conteneur
+        sans droits spéciaux.
+
+        Deux protections complètent le tableau :
+
+        - **Les tags** (`tags:` dans le job, étiquettes sur le runner) dirigent un job vers un runner précis.
+          On réserve ainsi les jobs sensibles à un runner durci, et on évite qu'ils atterrissent sur un
+          runner partagé quelconque.
+        - **Les runners protégés** : un runner marqué « protégé » n'exécute que les jobs des **branches et
+          tags protégés**. Couplé aux variables protégées, cela garantit que les secrets de production et le
+          runner de production ne servent qu'au code déjà revu et fusionné.
+      en: |
+        Some tools build a Docker image **without a Docker daemon** and **without privileged mode**. They
+        remove the root cause of the danger.
+
+        **Kaniko** (by Google) runs each Dockerfile instruction in user space, with no daemon. It reads the
+        Dockerfile, builds the image layer by layer and pushes it to a registry, all in an **unprivileged**
+        container. It is the simplest choice in GitLab CI.
+
+        ```yaml
+        build:
+          image:
+            name: gcr.io/kaniko-project/executor:v1.23.2-debug
+            entrypoint: [""]
+          script:
+            - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile Dockerfile
+              --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+        ```
+
+        **Rootless BuildKit** (the modern engine of `docker build`) can also run **without root** and
+        without privilege. `buildah` is another rootless alternative.
+
+        The security gain is clear: no more container escape via privilege, no more exposed root socket. If
+        a build dependency is compromised, it stays **confined** in a container with no special rights.
+
+        Two protections complete the picture:
+
+        - **Tags** (`tags:` in the job, labels on the runner) route a job to a specific runner. You thus
+          reserve sensitive jobs for a hardened runner, and avoid them landing on just any shared runner.
+        - **Protected runners**: a runner marked "protected" only runs jobs from **protected branches and
+          tags**. Combined with protected variables, this guarantees that production secrets and the
+          production runner only serve already-reviewed and merged code.
+
+examples:
+  - title:
+      fr: "Vulnérable : build privilégié et docker.sock"
+      en: "Vulnerable: privileged build and docker.sock"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # DANGER 1: the Docker-in-Docker service needs the runner in privileged
+      # mode (set in the runner config). privileged = near-root on the host.
+      build-dind:
+        image: docker:27
+        services:
+          - docker:27-dind          # requires privileged = true on the runner
+        script:
+          - docker build -t my-app .
+
+      # DANGER 2: mounting the host Docker socket. Any command here controls the
+      # host daemon: it can mount the host FS and read other containers' secrets.
+      build-sock:
+        image: docker:27
+        variables:
+          DOCKER_HOST: "unix:///var/run/docker.sock"   # host socket mounted in
+        script:
+          - docker build -t my-app .
+    note:
+      fr: "Les deux jobs « marchent » mais ouvrent l'hôte. Le mode privilégié (exigé par `dind`) permet une évasion de conteneur ; le montage de `docker.sock` donne le contrôle du démon de l'hôte, donc root. Sur un runner partagé, c'est la porte ouverte à la compromission de tous les projets voisins."
+      en: "Both jobs \"work\" but open up the host. Privileged mode (required by `dind`) allows a container escape; mounting `docker.sock` gives control of the host daemon, hence root. On a shared runner, it is an open door to compromising every neighbouring project."
+
+  - title:
+      fr: "Sécurisé : construire l'image avec Kaniko (sans privilège)"
+      en: "Secure: building the image with Kaniko (no privilege)"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      build:
+        stage: build
+        # Kaniko builds in user space: no daemon, no privileged mode, no socket
+        image:
+          name: gcr.io/kaniko-project/executor:v1.23.2-debug
+          entrypoint: [""]
+        script:
+          - /kaniko/executor
+              --context "$CI_PROJECT_DIR"
+              --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+              --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+        # Route this job to a hardened, dedicated runner
+        tags:
+          - trusted-build
+    note:
+      fr: "Kaniko construit et pousse l'image dans un conteneur **non privilégié** : plus de démon Docker, plus de `docker.sock`, plus d'évasion possible. Le tag `trusted-build` dirige le job vers un runner durci choisi. C'est la méthode recommandée pour tout build d'image en GitLab CI."
+      en: "Kaniko builds and pushes the image in an **unprivileged** container: no Docker daemon, no `docker.sock`, no possible escape. The `trusted-build` tag routes the job to a chosen hardened runner. It is the recommended method for any image build in GitLab CI."
+
+  - title:
+      fr: "Diriger un job vers un runner précis avec des tags"
+      en: "Routing a job to a specific runner with tags"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      stages: [test, deploy]
+
+      # Fast tests can run on any shared runner
+      unit-tests:
+        stage: test
+        image: python:3.12
+        script: [pytest -q]
+        tags:
+          - shared-linux
+
+      # The deploy job must run ONLY on the dedicated, protected production runner
+      deploy:
+        stage: deploy
+        script: [./deploy.sh]
+        tags:
+          - prod-protected     # only the hardened production runner has this tag
+        rules:
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+            when: manual
+    note:
+      fr: "Les `tags` du job doivent correspondre aux étiquettes d'un runner pour qu'il le prenne. Les tests vont sur un runner partagé banal ; le déploiement est envoyé au runner `prod-protected`, une machine dédiée et durcie. On ne laisse jamais un job de production tomber sur un runner partagé quelconque."
+      en: "The job's `tags` must match a runner's labels for it to pick the job. The tests go to a plain shared runner; the deployment is sent to the `prod-protected` runner, a dedicated hardened machine. You never let a production job land on just any shared runner."
+
+  - title:
+      fr: "Configuration d'un runner : exécuteur Docker non privilégié"
+      en: "Runner configuration: unprivileged Docker executor"
+    file: config.toml
+    lang: toml
+    kind: secure
+    code: |
+      # /etc/gitlab-runner/config.toml
+      [[runners]]
+        name = "prod-protected"
+        url = "https://gitlab.example.com"
+        executor = "docker"
+        [runners.docker]
+          image = "alpine:3.20"
+          # Each job runs in a fresh container; NEVER enable privileged mode
+          privileged = false
+          # Do NOT mount the host Docker socket into jobs
+          volumes = ["/cache"]
+          # Drop the ability to gain new privileges inside the container
+          security_opt = ["no-new-privileges:true"]
+    note:
+      fr: "La configuration clé : `privileged = false` (pas d'évasion possible), aucun montage de `docker.sock` dans `volumes`, et `no-new-privileges:true` qui empêche un processus du conteneur d'obtenir de nouveaux droits. Ce runner, enregistré comme **protégé**, ne servira qu'aux branches protégées."
+      en: "The key configuration: `privileged = false` (no escape possible), no `docker.sock` mount in `volumes`, and `no-new-privileges:true` which stops a container process from gaining new rights. This runner, registered as **protected**, will only serve protected branches."
+
+mistake:
+  fr: |
+    **Activer `privileged = true` ou monter `docker.sock` « juste pour construire une image ».**
+
+    C'est le piège le plus dangereux des runners. Les deux méthodes fonctionnent, c'est précisément ce qui
+    les rend répandues — et trompeuses. Le mode privilégié donne un accès quasi-root à l'hôte et permet une
+    évasion de conteneur ; monter `docker.sock` donne le contrôle du démon de l'hôte, soit root. Sur un
+    runner partagé, un seul job compromis peut alors voler les secrets et le code de **tous** les projets
+    voisins. La parade n'est pas de « faire attention » : c'est de construire **sans privilège** avec Kaniko
+    ou BuildKit rootless, ce qui supprime la cause racine.
+  en: |
+    **Enabling `privileged = true` or mounting `docker.sock` "just to build an image".**
+
+    This is the most dangerous runner trap. Both methods work, which is exactly what makes them common — and
+    misleading. Privileged mode gives near-root access to the host and allows a container escape; mounting
+    `docker.sock` gives control of the host daemon, i.e. root. On a shared runner, a single compromised job
+    can then steal the secrets and code of **every** neighbouring project. The defence is not to "be
+    careful": it is to build **without privilege** using Kaniko or rootless BuildKit, which removes the root
+    cause.
+
+bestPractice:
+  fr: |
+    - **Isolez selon la sensibilité** : runner de projet dédié pour la production, partagé pour le reste.
+    - **Ne stockez jamais de secret persistant** sur un runner partagé ; préférez des jobs en conteneur neuf.
+    - **Bannissez `privileged = true` et le montage de `docker.sock`** : ils donnent root sur l'hôte.
+    - **Construisez les images avec Kaniko ou BuildKit rootless**, sans aucun privilège.
+    - **Durcissez le runner** : `no-new-privileges:true`, pas de volumes sensibles, image épinglée.
+    - **Utilisez les tags et les runners protégés** pour que les jobs sensibles n'aillent que sur les bonnes machines.
+  en: |
+    - **Isolate by sensitivity**: a dedicated project runner for production, shared for the rest.
+    - **Never store a persistent secret** on a shared runner; prefer jobs in a fresh container.
+    - **Ban `privileged = true` and mounting `docker.sock`**: they give root on the host.
+    - **Build images with Kaniko or rootless BuildKit**, with no privilege at all.
+    - **Harden the runner**: `no-new-privileges:true`, no sensitive volumes, pinned image.
+    - **Use tags and protected runners** so sensitive jobs only land on the right machines.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue propose ce job pour construire et pousser l'image de l'application :
+
+      ```yaml
+      build:
+        image: docker:27
+        services: [docker:27-dind]   # needs the runner in privileged mode
+        script:
+          - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" .
+          - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+      ```
+
+      1. Expliquez le risque de sécurité principal de cette approche.
+      2. Réécrivez le job pour construire et pousser l'image **sans aucun privilège**, avec Kaniko.
+      3. Ajoutez un `tag` pour que ce job aille sur un runner de build dédié nommé `trusted-build`.
+    en: |
+      A colleague proposes this job to build and push the application image:
+
+      ```yaml
+      build:
+        image: docker:27
+        services: [docker:27-dind]   # needs the runner in privileged mode
+        script:
+          - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" .
+          - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+      ```
+
+      1. Explain the main security risk of this approach.
+      2. Rewrite the job to build and push the image **without any privilege**, using Kaniko.
+      3. Add a `tag` so this job goes to a dedicated build runner named `trusted-build`.
+  solution:
+    file: .gitlab-ci.yml
+    lang: yaml
+    code: |
+      # 1. RISK: docker:dind requires the runner in privileged mode, which gives
+      #    near-root access to the host and allows a container escape. On a shared
+      #    runner, one compromised build can take over neighbouring projects.
+
+      # 2 + 3. Kaniko builds and pushes with no privilege, on a dedicated runner
+      build:
+        stage: build
+        image:
+          name: gcr.io/kaniko-project/executor:v1.23.2-debug
+          entrypoint: [""]
+        script:
+          - /kaniko/executor
+              --context "$CI_PROJECT_DIR"
+              --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+              --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+        tags:
+          - trusted-build
+    note:
+      fr: "Kaniko supprime la cause racine : plus de mode privilégié ni de `docker.sock`, donc plus d'évasion possible. Il gère lui-même l'authentification au registre GitLab via les variables `CI_REGISTRY_*`. Le tag `trusted-build` confine le job à un runner de build dédié et durci."
+      en: "Kaniko removes the root cause: no privileged mode, no `docker.sock`, so no possible escape. It handles authentication to the GitLab registry itself via the `CI_REGISTRY_*` variables. The `trusted-build` tag confines the job to a dedicated, hardened build runner."
+
+quiz:
+  - q:
+      fr: "Quelle portée de runner offre la meilleure isolation ?"
+      en: "Which runner scope offers the best isolation?"
+    options:
+      fr:
+        - "Le runner de projet (dédié à un seul projet)"
+        - "Le runner partagé (toute l'instance)"
+        - "Le runner de groupe"
+        - "Tous offrent la même isolation"
+      en:
+        - "The project runner (dedicated to a single project)"
+        - "The shared runner (the whole instance)"
+        - "The group runner"
+        - "They all offer the same isolation"
+    answer: 0
+    why:
+      fr: "Un runner de projet n'exécute que les jobs de ce projet : aucun projet voisin ne partage la machine, c'est l'isolation maximale."
+      en: "A project runner only runs that project's jobs: no neighbouring project shares the machine, which is maximum isolation."
+  - q:
+      fr: "Pourquoi monter `/var/run/docker.sock` dans un job est-il dangereux ?"
+      en: "Why is mounting `/var/run/docker.sock` into a job dangerous?"
+    options:
+      fr:
+        - "Cela ralentit le build"
+        - "Cela donne au job le contrôle du démon Docker de l'hôte, soit root"
+        - "Cela désactive le cache"
+        - "Cela empêche de pousser l'image"
+      en:
+        - "It slows the build down"
+        - "It gives the job control of the host Docker daemon, i.e. root"
+        - "It disables the cache"
+        - "It prevents pushing the image"
+    answer: 1
+    why:
+      fr: "Via la socket, le job pilote le démon de l'hôte : il peut monter le système de fichiers hôte et lire les secrets des autres conteneurs. C'est équivalent à root sur l'hôte."
+      en: "Through the socket, the job drives the host daemon: it can mount the host filesystem and read other containers' secrets. It is equivalent to root on the host."
+  - q:
+      fr: "Quel outil construit une image Docker sans démon ni mode privilégié ?"
+      en: "Which tool builds a Docker image without a daemon or privileged mode?"
+    options:
+      fr:
+        - "docker:dind"
+        - "Kaniko"
+        - "docker.sock"
+        - "systemd"
+      en:
+        - "docker:dind"
+        - "Kaniko"
+        - "docker.sock"
+        - "systemd"
+    answer: 1
+    why:
+      fr: "Kaniko exécute les instructions du Dockerfile en espace utilisateur, sans démon et sans privilège ; BuildKit rootless et buildah sont d'autres options."
+      en: "Kaniko runs the Dockerfile instructions in user space, with no daemon and no privilege; rootless BuildKit and buildah are other options."
+  - q:
+      fr: "À quoi servent les `tags` d'un job GitLab CI ?"
+      en: "What are a GitLab CI job's `tags` for?"
+    options:
+      fr:
+        - "À chiffrer les artifacts"
+        - "À versionner l'image"
+        - "À diriger le job vers un runner portant les étiquettes correspondantes"
+        - "À masquer les secrets"
+      en:
+        - "To encrypt the artifacts"
+        - "To version the image"
+        - "To route the job to a runner carrying the matching labels"
+        - "To mask the secrets"
+    answer: 2
+    why:
+      fr: "Les `tags` du job doivent correspondre aux étiquettes d'un runner pour qu'il le prenne : on réserve ainsi les jobs sensibles à des runners précis et durcis."
+      en: "The job's `tags` must match a runner's labels for it to pick the job: this reserves sensitive jobs for specific, hardened runners."
+  - q:
+      fr: "Qu'exécute un runner marqué « protégé » ?"
+      en: "What does a runner marked \"protected\" run?"
+    options:
+      fr:
+        - "N'importe quel job de l'instance"
+        - "Uniquement les jobs des branches et tags protégés"
+        - "Uniquement les jobs planifiés"
+        - "Uniquement les jobs de build d'image"
+      en:
+        - "Any job on the instance"
+        - "Only jobs from protected branches and tags"
+        - "Only scheduled jobs"
+        - "Only image-build jobs"
+    answer: 1
+    why:
+      fr: "Un runner protégé ne sert qu'aux branches/tags protégés ; couplé aux variables protégées, il garantit que le runner et les secrets de production ne servent qu'au code revu et fusionné."
+      en: "A protected runner only serves protected branches/tags; combined with protected variables, it guarantees that the production runner and secrets only serve reviewed and merged code."

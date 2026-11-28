@@ -1,0 +1,343 @@
+description:
+  fr: "Écrire un Dockerfile sécurisé : image de base épinglée par digest, utilisateur non-root, secrets de build BuildKit, .dockerignore et HEALTHCHECK."
+  en: "Write a secure Dockerfile: base image pinned by digest, non-root user, BuildKit build secrets, .dockerignore and HEALTHCHECK."
+duration: 25
+
+intro:
+  fr: |
+    Un **Dockerfile** est la recette qui construit une image. Chaque ligne est une décision de sécurité :
+    *quelle image de base ? en quel utilisateur l'application tourne-t-elle ? qu'est-ce qu'on copie dedans ?* Un
+    Dockerfile négligé produit une image qui tourne en root, embarque des secrets et des fichiers inutiles, et se
+    base sur une version d'image qui peut changer sans prévenir.
+
+    L'analogie : construire une image, c'est préparer un colis. On ne met pas ses clés de maison dans le colis
+    (secrets), on ne l'expédie pas ouvert (root), on écrit l'adresse exacte et non « quelque part en ville »
+    (digest épinglé), et on ne fourre pas tout le garage dedans (`.dockerignore`).
+
+    Dans cette leçon, vous allez comparer un Dockerfile vulnérable à sa version durcie, et appliquer cinq
+    principes : **épingler l'image de base par digest**, **créer et utiliser un utilisateur non-root**, **copier
+    avec le bon propriétaire** (`COPY --chown`), **injecter les secrets de build sans les graver dans l'image**
+    (BuildKit `--mount=type=secret`), et ajouter un **`.dockerignore`** et un **`HEALTHCHECK`**.
+  en: |
+    A **Dockerfile** is the recipe that builds an image. Every line is a security decision: *which base image?
+    which user does the app run as? what gets copied in?* A careless Dockerfile produces an image that runs as
+    root, ships secrets and useless files, and relies on an image version that can change without warning.
+
+    The analogy: building an image is like preparing a parcel. You do not put your house keys in the parcel
+    (secrets), you do not ship it open (root), you write the exact address rather than "somewhere in town"
+    (pinned digest), and you do not stuff the whole garage inside (`.dockerignore`).
+
+    In this lesson you will compare a vulnerable Dockerfile to its hardened version, applying five principles:
+    **pin the base image by digest**, **create and use a non-root user**, **copy with the right owner**
+    (`COPY --chown`), **inject build secrets without baking them into the image** (BuildKit
+    `--mount=type=secret`), and add a **`.dockerignore`** and a **`HEALTHCHECK`**.
+
+sections:
+  - heading:
+      fr: "Épingler l'image de base et réduire la surface"
+      en: "Pin the base image and reduce the surface"
+    body:
+      fr: |
+        La première ligne (`FROM`) détermine tout ce qui suit. Trois niveaux de rigueur :
+
+        | Forme | Exemple | Reproductible ? | Sécurité |
+        |---|---|---|---|
+        | Tag mobile | `FROM python:latest` | Non | Faible : le contenu change |
+        | Tag de version | `FROM python:3.12-slim` | Partiellement | Moyenne |
+        | **Digest épinglé** | `FROM python:3.12-slim@sha256:...` | **Oui** | **Forte** |
+
+        Un **digest** (`@sha256:...`) désigne un contenu exact et immuable : la même commande produira toujours
+        exactement la même image de base, ce qui protège contre un tag repoussé avec du code malveillant (attaque
+        de la chaîne d'approvisionnement). On choisit aussi une variante **minimale** (`-slim`, Alpine, ou
+        distroless) : moins de paquets = moins de vulnérabilités et une surface d'attaque réduite.
+      en: |
+        The first line (`FROM`) determines everything that follows. Three levels of rigour:
+
+        | Form | Example | Reproducible? | Security |
+        |---|---|---|---|
+        | Moving tag | `FROM python:latest` | No | Weak: content changes |
+        | Version tag | `FROM python:3.12-slim` | Partly | Medium |
+        | **Pinned digest** | `FROM python:3.12-slim@sha256:...` | **Yes** | **Strong** |
+
+        A **digest** (`@sha256:...`) refers to an exact, immutable content: the same command will always produce
+        exactly the same base image, which protects against a tag re-pushed with malicious code (supply-chain
+        attack). You also pick a **minimal** variant (`-slim`, Alpine, or distroless): fewer packages = fewer
+        vulnerabilities and a reduced attack surface.
+  - heading:
+      fr: "Non-root, secrets de build et .dockerignore"
+      en: "Non-root, build secrets and .dockerignore"
+    body:
+      fr: |
+        Par défaut, un conteneur tourne en **root**. On crée donc un utilisateur dédié et on bascule dessus avec
+        `USER` avant de lancer l'application. On copie les fichiers avec `COPY --chown=app:app` pour qu'ils
+        appartiennent à cet utilisateur, et non à root.
+
+        Pour les **secrets de build** (token privé pour `pip install`, clé de dépôt), l'erreur classique est de
+        les passer en `ARG` ou de les `COPY` : ils restent alors dans une **couche** de l'image, récupérables par
+        `docker history`. La bonne méthode est **BuildKit** `--mount=type=secret` : le secret est monté *pendant*
+        l'étape, puis disparaît, sans jamais être écrit dans une couche.
+
+        Enfin, un fichier **`.dockerignore`** empêche de copier dans l'image des éléments sensibles ou inutiles :
+        `.git`, `.env`, `node_modules`, clés privées. Sans lui, un `COPY . .` peut embarquer vos secrets et
+        gonfler l'image. On ajoute aussi un **`HEALTHCHECK`** pour que l'orchestrateur sache si le conteneur est
+        réellement en bonne santé.
+      en: |
+        By default, a container runs as **root**. So you create a dedicated user and switch to it with `USER`
+        before launching the application. You copy files with `COPY --chown=app:app` so they belong to that user,
+        not root.
+
+        For **build secrets** (a private token for `pip install`, a repository key), the classic mistake is to
+        pass them via `ARG` or to `COPY` them: they then remain in an image **layer**, recoverable with
+        `docker history`. The right method is **BuildKit** `--mount=type=secret`: the secret is mounted *during*
+        the step, then vanishes, never written into a layer.
+
+        Finally, a **`.dockerignore`** file prevents copying sensitive or useless items into the image: `.git`,
+        `.env`, `node_modules`, private keys. Without it, a `COPY . .` can bundle your secrets and bloat the image.
+        You also add a **`HEALTHCHECK`** so the orchestrator knows whether the container is genuinely healthy.
+
+examples:
+  - title:
+      fr: "Dangereux : Dockerfile négligé"
+      en: "Dangerous: a careless Dockerfile"
+    file: Dockerfile
+    lang: dockerfile
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - several security problems in a few lines.
+      FROM python:latest            # moving tag: content can change silently
+
+      WORKDIR /app
+
+      # Copies EVERYTHING, including .git, .env, keys (no .dockerignore).
+      COPY . .
+
+      # Secret baked into a layer: recoverable via `docker history`.
+      ARG PIP_TOKEN
+      RUN pip install --index-url https://$PIP_TOKEN@pypi.example.com/simple -r requirements.txt
+
+      # No USER directive -> the app runs as root (UID 0).
+      CMD ["python", "app.py"]
+    output: |
+      # The token survives in the image layers:
+      #   docker history --no-trunc myimg | grep PIP_TOKEN
+      #   ...ARG PIP_TOKEN=glpat-EXAMPLE-SECRET-TOKEN   <-- leaked!
+      #   docker run myimg id  ->  uid=0(root)          <-- runs as root
+    note:
+      fr: "Quatre fautes : tag `latest` non reproductible, `COPY . .` sans `.dockerignore` (embarque `.git`/`.env`), secret en `ARG` gravé dans une couche, et exécution en root. C'est le Dockerfile typique qu'on trouve en production et qu'un attaquant adore."
+      en: "Four faults: non-reproducible `latest` tag, `COPY . .` with no `.dockerignore` (bundles `.git`/`.env`), secret in `ARG` baked into a layer, and running as root. The typical Dockerfile found in production that an attacker loves."
+
+  - title:
+      fr: "Sécurisé : Dockerfile durci"
+      en: "Secure: a hardened Dockerfile"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # syntax=docker/dockerfile:1.7
+      # Base image pinned by digest: immutable, reproducible, tamper-proof.
+      FROM python:3.12-slim@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+
+      # Create a dedicated non-root user up front.
+      RUN groupadd --gid 10001 app && \
+          useradd --uid 10001 --gid app --no-create-home app
+
+      WORKDIR /app
+
+      # Copy only the dependency manifest first (better layer caching).
+      COPY --chown=app:app requirements.txt .
+
+      # BuildKit secret: the token is mounted ONLY for this step and never
+      # written into any image layer. Build with:
+      #   DOCKER_BUILDKIT=1 docker build --secret id=pip_token,src=token.txt .
+      RUN --mount=type=secret,id=pip_token \
+          pip install --no-cache-dir \
+            --index-url https://$(cat /run/secrets/pip_token)@pypi.example.com/simple \
+            -r requirements.txt
+
+      # Now copy the application code, owned by the app user.
+      COPY --chown=app:app . .
+
+      # Drop to the non-root user BEFORE running the app.
+      USER app
+
+      # Tell the orchestrator how to check real health.
+      HEALTHCHECK --interval=30s --timeout=3s \
+        CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+
+      EXPOSE 8080
+      CMD ["python", "app.py"]
+    output: |
+      # docker history shows no token; the container runs non-root:
+      #   docker run myimg id   ->  uid=10001(app) gid=10001(app)
+      #   docker history myimg  ->  no PIP_TOKEN anywhere
+    note:
+      fr: "Image épinglée par digest, utilisateur `app` non-root, `COPY --chown`, secret monté via BuildKit (absent des couches), `HEALTHCHECK`. Chaque ligne corrige une faute de l'exemple vulnérable. Le `.dockerignore` (exemple suivant) complète le tout."
+      en: "Image pinned by digest, non-root `app` user, `COPY --chown`, secret mounted via BuildKit (absent from layers), `HEALTHCHECK`. Each line fixes a fault from the vulnerable example. The `.dockerignore` (next example) completes it."
+
+  - title:
+      fr: "Le .dockerignore qui bloque les fuites"
+      en: "The .dockerignore that stops leaks"
+    file: .dockerignore
+    lang: text
+    kind: secure
+    code: |
+      # Never copy these into the image (secrets, bloat, git history).
+      .git
+      .gitignore
+      .env
+      .env.*
+      *.pem
+      *.key
+      id_rsa
+      # Local dependency / build artefacts rebuilt inside the image anyway.
+      node_modules
+      __pycache__
+      *.pyc
+      .venv
+      # CI / local tooling with no business being in the image.
+      .github
+      .vscode
+      docker-compose*.yml
+      README.md
+    output: |
+      # With this file, `COPY . .` silently skips .git/.env/*.key:
+      #   docker build -t myimg .
+      #   docker run --rm myimg ls -la /app   ->  no .env, no .git, no keys
+    note:
+      fr: "Le `.dockerignore` est la ceinture de sécurité du `COPY . .` : il exclut `.git`, `.env`, les clés privées et les artefacts locaux. Sans lui, un seul `COPY . .` peut faire fuiter vos secrets dans l'image publiée."
+      en: "The `.dockerignore` is the seatbelt of `COPY . .`: it excludes `.git`, `.env`, private keys and local artefacts. Without it, a single `COPY . .` can leak your secrets into the published image."
+
+mistake:
+  fr: |
+    **Passer un secret de build en `ARG` ou le `COPY` dans l'image.** Tout ce qui entre dans une instruction du
+    Dockerfile reste dans une **couche**, consultable par `docker history` ou en extrayant l'image — même si le
+    fichier est supprimé dans une étape suivante, la couche précédente le contient encore. La seule méthode sûre
+    est BuildKit `--mount=type=secret`, qui monte le secret le temps de l'étape sans l'écrire. Autre faute
+    jumelle : oublier le `.dockerignore`, si bien qu'un `COPY . .` embarque `.git` et `.env` dans l'image.
+  en: |
+    **Passing a build secret via `ARG` or `COPY`ing it into the image.** Anything that enters a Dockerfile
+    instruction stays in a **layer**, viewable with `docker history` or by extracting the image — even if the
+    file is deleted in a later step, the previous layer still contains it. The only safe method is BuildKit
+    `--mount=type=secret`, which mounts the secret for the duration of the step without writing it. A twin fault:
+    forgetting the `.dockerignore`, so a `COPY . .` bundles `.git` and `.env` into the image.
+
+bestPractice:
+  fr: |
+    - **Épinglez l'image de base par digest** (`@sha256:...`) et choisissez une variante minimale (`-slim`, distroless).
+    - **Créez un utilisateur non-root** et basculez dessus avec `USER` avant le `CMD`.
+    - **Copiez avec `COPY --chown`** pour ne pas laisser les fichiers appartenir à root.
+    - **Injectez les secrets avec BuildKit** `--mount=type=secret`, jamais `ARG`/`COPY`/`ENV`.
+    - **Ajoutez un `.dockerignore`** complet et un `HEALTHCHECK` ; ordonnez les `COPY` pour un bon cache de couches.
+  en: |
+    - **Pin the base image by digest** (`@sha256:...`) and pick a minimal variant (`-slim`, distroless).
+    - **Create a non-root user** and switch to it with `USER` before `CMD`.
+    - **Copy with `COPY --chown`** so files do not stay owned by root.
+    - **Inject secrets with BuildKit** `--mount=type=secret`, never `ARG`/`COPY`/`ENV`.
+    - **Add a complete `.dockerignore`** and a `HEALTHCHECK`; order `COPY`s for good layer caching.
+
+exercise:
+  statement:
+    fr: |
+      On vous donne ce Dockerfile Node.js vulnérable :
+
+      ```dockerfile
+      FROM node:latest
+      COPY . .
+      RUN npm install
+      CMD ["node", "server.js"]
+      ```
+
+      Réécrivez-le en appliquant : image épinglée (tag de version au minimum), utilisateur non-root, copie avec
+      le bon propriétaire, et exécution en non-root. Ajoutez la ligne de `.dockerignore` la plus importante à ne
+      pas oublier.
+    en: |
+      You are given this vulnerable Node.js Dockerfile:
+
+      ```dockerfile
+      FROM node:latest
+      COPY . .
+      RUN npm install
+      CMD ["node", "server.js"]
+      ```
+
+      Rewrite it applying: a pinned image (version tag at minimum), a non-root user, copy with the right owner,
+      and running as non-root. Add the single most important `.dockerignore` line not to forget.
+  solution:
+    file: Dockerfile
+    lang: dockerfile
+    code: |
+      # Pinned version tag (ideally add @sha256:... for full immutability).
+      FROM node:22-slim
+
+      # The official node image already ships a non-root `node` user (UID 1000).
+      WORKDIR /app
+
+      # Copy manifests first (layer caching), owned by the node user.
+      COPY --chown=node:node package*.json ./
+      RUN npm ci --omit=dev          # reproducible, prod deps only
+
+      COPY --chown=node:node . .
+
+      # Drop privileges BEFORE running the app.
+      USER node
+
+      CMD ["node", "server.js"]
+
+      # Most important .dockerignore line to add alongside this file:
+      #   .env
+      # (prevents COPY . . from leaking local secrets into the image)
+    note:
+      fr: "On épingle une version (`22-slim`), on réutilise l'utilisateur `node` non-root fourni par l'image officielle, on copie avec `--chown` et on bascule en `USER node`. La ligne `.env` du `.dockerignore` évite la fuite de secrets la plus courante."
+      en: "We pin a version (`22-slim`), reuse the non-root `node` user shipped by the official image, copy with `--chown` and switch to `USER node`. The `.env` line in `.dockerignore` prevents the most common secret leak."
+
+quiz:
+  - q:
+      fr: "Pourquoi épingler l'image de base par digest (`@sha256:...`) ?"
+      en: "Why pin the base image by digest (`@sha256:...`)?"
+    options:
+      fr: ["Pour accélérer le build", "Pour garantir un contenu immuable et reproductible", "Pour réduire les logs", "Pour activer le réseau"]
+      en: ["To speed up the build", "To guarantee immutable, reproducible content", "To reduce logs", "To enable the network"]
+    answer: 1
+    why:
+      fr: "Un digest désigne un contenu exact et figé ; contrairement à un tag mobile, il protège contre un tag repoussé avec du code malveillant."
+      en: "A digest refers to exact, frozen content; unlike a moving tag, it protects against a tag re-pushed with malicious code."
+  - q:
+      fr: "Comment injecter un secret de build sans le laisser dans l'image ?"
+      en: "How do you inject a build secret without leaving it in the image?"
+    options:
+      fr: ["Avec BuildKit `--mount=type=secret`", "Avec `ARG`", "Avec `ENV`", "Avec `COPY`"]
+      en: ["With BuildKit `--mount=type=secret`", "With `ARG`", "With `ENV`", "With `COPY`"]
+    answer: 0
+    why:
+      fr: "BuildKit monte le secret uniquement pendant l'étape, sans l'écrire dans une couche. `ARG`, `ENV` et `COPY` laissent tous le secret récupérable via `docker history`."
+      en: "BuildKit mounts the secret only during the step, without writing it to a layer. `ARG`, `ENV` and `COPY` all leave the secret recoverable via `docker history`."
+  - q:
+      fr: "Que se passe-t-il si un conteneur n'a pas de directive `USER` ?"
+      en: "What happens if a container has no `USER` directive?"
+    options:
+      fr: ["Il ne démarre pas", "Il tourne en root (UID 0) par défaut", "Il est plus lent", "Il n'a pas de réseau"]
+      en: ["It does not start", "It runs as root (UID 0) by default", "It is slower", "It has no network"]
+    answer: 1
+    why:
+      fr: "Sans `USER`, l'application tourne en root dans le conteneur, ce qui augmente fortement l'impact d'une compromission ; on crée un utilisateur dédié et on bascule dessus."
+      en: "Without `USER`, the app runs as root in the container, greatly increasing the impact of a compromise; you create a dedicated user and switch to it."
+  - q:
+      fr: "À quoi sert un fichier `.dockerignore` ?"
+      en: "What is a `.dockerignore` file for?"
+    options:
+      fr: ["À chiffrer l'image", "À signer l'image", "À accélérer le réseau", "À empêcher de copier des fichiers sensibles/inutiles dans l'image"]
+      en: ["To encrypt the image", "To sign the image", "To speed up the network", "To stop copying sensitive/useless files into the image"]
+    answer: 3
+    why:
+      fr: "`.dockerignore` exclut `.git`, `.env`, clés et artefacts locaux d'un `COPY . .`, évitant fuites de secrets et images gonflées."
+      en: "`.dockerignore` excludes `.git`, `.env`, keys and local artefacts from a `COPY . .`, avoiding secret leaks and bloated images."
+  - q:
+      fr: "Pourquoi un secret passé en `ARG` reste-t-il récupérable ?"
+      en: "Why is a secret passed via `ARG` still recoverable?"
+    options:
+      fr: ["Il est stocké dans une couche de l'image, visible avec `docker history`", "Il est envoyé sur Internet", "Il est chiffré mais faible", "Il n'est pas récupérable"]
+      en: ["It is stored in an image layer, visible with `docker history`", "It is sent over the Internet", "It is encrypted but weak", "It is not recoverable"]
+    answer: 0
+    why:
+      fr: "Chaque instruction crée une couche persistante ; un secret en `ARG` y demeure et se lit via `docker history`, même s'il est « supprimé » plus tard."
+      en: "Each instruction creates a persistent layer; a secret in `ARG` remains there and is readable via `docker history`, even if it is \"deleted\" later."

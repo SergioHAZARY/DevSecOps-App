@@ -1,0 +1,351 @@
+description:
+  fr: "Combiner les défenses en couches : DMZ, segmentation réseau, zero trust et un laboratoire Docker Compose avec des réseaux isolés frontend, backend et base de données."
+  en: "Combine layered defenses: DMZ, network segmentation, zero trust and a Docker Compose lab with isolated frontend, backend and database networks."
+duration: 22
+
+intro:
+  fr: |
+    Aucune défense n'est parfaite. Un pare-feu peut être mal configuré, un WAF contourné, une IP de confiance
+    usurpée. La **défense en profondeur** (*defense in depth*) accepte cette réalité : on empile **plusieurs
+    couches** indépendantes pour qu'une faille dans l'une soit rattrapée par les autres.
+
+    L'analogie : un château fort ne mise pas sur un seul mur. Il a des douves, un pont-levis, des remparts, une
+    herse, puis le donjon. Un assaillant qui franchit les douves doit encore franchir tout le reste. En
+    informatique, les couches sont le pare-feu, la segmentation réseau, le WAF, l'IDS, l'authentification, le
+    chiffrement, le moindre privilège.
+
+    Dans cette leçon, vous allez découvrir la **DMZ** (zone démilitarisée), la **segmentation** réseau et le
+    principe **zero trust** (« ne jamais faire confiance, toujours vérifier »), puis monter un laboratoire Docker
+    Compose où le frontend, le backend et la base de données vivent sur des **réseaux isolés** : même compromis,
+    le frontend ne peut pas parler directement à la base.
+  en: |
+    No single defense is perfect. A firewall can be misconfigured, a WAF bypassed, a trusted IP spoofed.
+    **Defense in depth** accepts this reality: you stack **several** independent layers so that a breach in one
+    is caught by the others.
+
+    The analogy: a castle does not rely on a single wall. It has a moat, a drawbridge, ramparts, a portcullis,
+    then the keep. An attacker who crosses the moat still has to get through everything else. In IT, the layers
+    are the firewall, network segmentation, the WAF, the IDS, authentication, encryption, least privilege.
+
+    In this lesson you will discover the **DMZ** (demilitarized zone), network **segmentation** and the **zero
+    trust** principle ("never trust, always verify"), then build a Docker Compose lab where the frontend, backend
+    and database live on **isolated networks**: even if compromised, the frontend cannot talk directly to the
+    database.
+
+sections:
+  - heading:
+      fr: "DMZ et segmentation réseau"
+      en: "DMZ and network segmentation"
+    body:
+      fr: |
+        Une **DMZ** est un sous-réseau tampon entre Internet et votre réseau interne. On y place les services
+        exposés (reverse proxy, serveur web) ; le réseau interne (bases de données, postes) reste séparé. Si un
+        attaquant compromet un serveur en DMZ, il n'atteint pas directement les données sensibles.
+
+        La **segmentation** généralise l'idée : on découpe le réseau en zones, et on n'autorise entre elles que
+        les flux strictement nécessaires.
+
+        | Zone | Contenu | Accès entrant autorisé |
+        |---|---|---|
+        | **Frontend / DMZ** | Reverse proxy, WAF | Internet (443) |
+        | **Backend** | API applicative | Depuis le frontend uniquement |
+        | **Data** | Base de données | Depuis le backend uniquement |
+
+        Un flux doit traverser chaque frontière : Internet → frontend → backend → data. La base n'a **aucune**
+        route vers Internet. C'est ce qu'on va reproduire avec des réseaux Docker isolés.
+      en: |
+        A **DMZ** is a buffer subnet between the Internet and your internal network. You place exposed services
+        there (reverse proxy, web server); the internal network (databases, workstations) stays separate. If an
+        attacker compromises a server in the DMZ, they do not directly reach the sensitive data.
+
+        **Segmentation** generalises the idea: you split the network into zones and allow only the strictly
+        necessary flows between them.
+
+        | Zone | Contents | Allowed inbound access |
+        |---|---|---|
+        | **Frontend / DMZ** | Reverse proxy, WAF | Internet (443) |
+        | **Backend** | Application API | From the frontend only |
+        | **Data** | Database | From the backend only |
+
+        A flow must cross every boundary: Internet → frontend → backend → data. The database has **no** route to
+        the Internet. This is what we will reproduce with isolated Docker networks.
+  - heading:
+      fr: "Zero trust : ne jamais faire confiance"
+      en: "Zero trust: never trust"
+    body:
+      fr: |
+        Le modèle historique faisait confiance au réseau interne : « si tu es dedans, tu es légitime ». Le **zero
+        trust** rejette cette hypothèse. Son mantra : *never trust, always verify*. Chaque requête est
+        authentifiée et autorisée, quelle que soit sa provenance — même interne.
+
+        | Modèle classique (périmètre) | Zero trust |
+        |---|---|
+        | Confiance implicite au réseau interne | Aucune confiance implicite |
+        | Authentification à l'entrée seulement | Vérification à chaque accès |
+        | « Mou au centre, dur à l'extérieur » | Contrôles partout |
+
+        Trois piliers pratiques : **vérifier explicitement** (identité + contexte), appliquer le **moindre
+        privilège** (chaque service n'a accès qu'au strict nécessaire), et **supposer la compromission** (segmenter,
+        chiffrer, journaliser pour limiter l'impact d'une intrusion). La segmentation réseau en est la traduction
+        la plus concrète.
+      en: |
+        The historical model trusted the internal network: "if you are inside, you are legitimate". **Zero trust**
+        rejects that assumption. Its mantra: *never trust, always verify*. Every request is authenticated and
+        authorised regardless of its origin — even internal.
+
+        | Classic model (perimeter) | Zero trust |
+        |---|---|
+        | Implicit trust of the internal network | No implicit trust |
+        | Authentication at the edge only | Verification on every access |
+        | "Soft in the centre, hard outside" | Controls everywhere |
+
+        Three practical pillars: **verify explicitly** (identity + context), enforce **least privilege** (each
+        service only accesses the strict minimum), and **assume breach** (segment, encrypt, log to limit the
+        impact of an intrusion). Network segmentation is its most concrete expression.
+
+examples:
+  - title:
+      fr: "Dangereux : tout sur un seul réseau plat"
+      en: "Dangerous: everything on one flat network"
+    file: docker-compose.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - a flat network: every container reaches every other.
+      services:
+        web:
+          image: nginx:1.27
+          ports:
+            - "80:80"
+        api:
+          image: node:22-alpine
+          command: node server.js
+        db:
+          image: postgres:16
+          environment:
+            POSTGRES_PASSWORD: changeme
+          # No network isolation and the DB port is even published:
+          ports:
+            - "5432:5432"      # database exposed on the host!
+
+      # With no `networks:` block, Docker puts everything on one bridge:
+      # a compromised `web` container can connect straight to `db`.
+    output: |
+      # From inside the compromised web container:
+      # psql -h db -U postgres   ->  connects directly, no barrier
+      # nmap also sees 5432 published on the host's public IP.
+    note:
+      fr: "Sans segmentation, le réseau est plat : le conteneur `web` exposé peut ouvrir une connexion directe vers `db`. Publier `5432:5432` expose même la base sur l'hôte. Une faille dans Nginx donne un accès direct aux données."
+      en: "Without segmentation, the network is flat: the exposed `web` container can open a direct connection to `db`. Publishing `5432:5432` even exposes the database on the host. A flaw in Nginx gives direct access to the data."
+
+  - title:
+      fr: "Sécurisé : réseaux segmentés frontend / backend / data"
+      en: "Secure: segmented frontend / backend / data networks"
+    file: docker-compose.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Defense in depth with three isolated Docker networks.
+      services:
+        web:
+          image: nginx:1.27
+          ports:
+            - "443:443"          # only the frontend faces the Internet
+          networks:
+            - frontend           # talks to the outside + to the api
+          depends_on: [api]
+
+        api:
+          image: node:22-alpine
+          command: node server.js
+          networks:
+            - frontend           # reachable from web...
+            - backend            # ...and can reach the db
+          depends_on: [db]
+
+        db:
+          image: postgres:16
+          environment:
+            POSTGRES_PASSWORD: changeme-in-vault
+          networks:
+            - backend            # ONLY on backend: web cannot reach it
+          # No `ports:` -> the database is never published on the host.
+
+      networks:
+        frontend:
+          driver: bridge
+        backend:
+          # `internal: true` cuts this network off from the Internet:
+          # the db and the api's backend leg have no outbound route.
+          internal: true
+    output: |
+      # From the web container:
+      #   psql -h db ...   ->  could not translate host name "db": no route
+      # web is NOT on the `backend` network, so the db is invisible to it.
+    note:
+      fr: "`web` n'est que sur `frontend`, `db` n'est que sur `backend` : le frontend ne peut physiquement pas joindre la base. Seul `api`, présent sur les deux réseaux, fait le pont. `internal: true` prive le backend de toute route vers Internet."
+      en: "`web` is only on `frontend`, `db` is only on `backend`: the frontend physically cannot reach the database. Only `api`, present on both networks, bridges them. `internal: true` denies the backend any route to the Internet."
+
+  - title:
+      fr: "Les couches combinées sur l'hôte (pare-feu + proxy)"
+      en: "Combining layers on the host (firewall + proxy)"
+    file: harden-host.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Layer 1 - host firewall: only 443 and SSH from the admin subnet.
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw limit from 192.0.2.0/24 to any port 22 proto tcp   # SSH, admins only
+      ufw allow 443/tcp                                       # public HTTPS
+      ufw --force enable
+
+      # Layer 2 - Fail2Ban watches auth + nginx logs (brute force).
+      systemctl enable --now fail2ban
+
+      # Layer 3 - Suricata IDS watches all traffic on the uplink.
+      systemctl enable --now suricata
+
+      # Layer 4 - Docker segmentation is defined in docker-compose.yml.
+      #           WAF (ModSecurity) runs in the frontend container.
+      docker compose up -d
+
+      # Even if one layer fails, the others still stand. Defense in depth.
+      echo "All layers active: firewall + fail2ban + IDS + segmentation + WAF"
+    output: |
+      Firewall is active and enabled on system startup
+      All layers active: firewall + fail2ban + IDS + segmentation + WAF
+    note:
+      fr: "Chaque couche est indépendante : si le WAF laisse passer une attaque, l'IDS l'alerte, la segmentation limite sa portée et Fail2Ban bloque la force brute. C'est l'addition qui protège, pas un outil unique."
+      en: "Each layer is independent: if the WAF lets an attack through, the IDS alerts on it, segmentation limits its reach and Fail2Ban blocks brute force. Protection comes from the sum, not a single tool."
+
+mistake:
+  fr: |
+    **Croire qu'une seule couche suffit.** « J'ai un WAF, je suis protégé » est une illusion dangereuse : un WAF
+    se contourne, un pare-feu se mal-configure, un mot de passe fuit. Le danger symétrique est le **réseau plat**,
+    où tout conteneur ou serveur interne peut parler à tout autre : la moindre compromission se propage
+    latéralement jusqu'à la base de données. La défense en profondeur exige des couches **indépendantes** ET une
+    segmentation qui empêche le déplacement latéral.
+  en: |
+    **Believing a single layer is enough.** "I have a WAF, I'm protected" is a dangerous illusion: a WAF gets
+    bypassed, a firewall gets misconfigured, a password leaks. The symmetric danger is the **flat network**, where
+    any internal container or server can talk to any other: the slightest compromise spreads laterally all the
+    way to the database. Defense in depth requires **independent** layers AND segmentation that prevents lateral
+    movement.
+
+bestPractice:
+  fr: |
+    - **Empilez des couches indépendantes** : pare-feu, segmentation, WAF, IDS, authentification, chiffrement.
+    - **Segmentez le réseau** : frontend / backend / data isolés ; la base n'a aucune route vers Internet.
+    - **Appliquez le moindre privilège** à chaque service : il n'accède qu'à ce dont il a besoin.
+    - **Supposez la compromission** (*assume breach*) : journalisez et surveillez pour détecter le déplacement latéral.
+    - **Ne publiez jamais** les ports internes (base de données) sur l'hôte : passez par le réseau interne Docker.
+  en: |
+    - **Stack independent layers**: firewall, segmentation, WAF, IDS, authentication, encryption.
+    - **Segment the network**: isolated frontend / backend / data; the database has no route to the Internet.
+    - **Apply least privilege** to each service: it accesses only what it needs.
+    - **Assume breach**: log and monitor to detect lateral movement.
+    - **Never publish** internal ports (database) on the host: go through the Docker internal network.
+
+exercise:
+  statement:
+    fr: |
+      Reprenez une stack à trois services (`web`, `api`, `db`). Vous devez la réécrire en appliquant la défense
+      en profondeur :
+      1. `web` ne doit être joignable que depuis Internet (443) et ne doit **pas** pouvoir atteindre `db` ;
+      2. `db` ne doit **jamais** être publiée sur l'hôte ni avoir accès à Internet ;
+      3. seul `api` fait le pont entre le frontend et la base.
+
+      Écrivez le `docker-compose.yml` avec les réseaux adéquats.
+    en: |
+      Take a three-service stack (`web`, `api`, `db`). You must rewrite it applying defense in depth:
+      1. `web` must be reachable only from the Internet (443) and must **not** be able to reach `db`;
+      2. `db` must **never** be published on the host nor have Internet access;
+      3. only `api` bridges the frontend and the database.
+
+      Write the `docker-compose.yml` with the appropriate networks.
+  solution:
+    file: docker-compose.yml
+    lang: yaml
+    code: |
+      services:
+        web:
+          image: nginx:1.27
+          ports:
+            - "443:443"       # Internet-facing only
+          networks: [frontend]
+
+        api:
+          image: node:22-alpine
+          command: node server.js
+          networks: [frontend, backend]   # the only bridge
+
+        db:
+          image: postgres:16
+          environment:
+            POSTGRES_PASSWORD: changeme-in-vault
+          networks: [backend]             # isolated, no `ports:`
+
+      networks:
+        frontend:
+          driver: bridge
+        backend:
+          internal: true                  # no route to the Internet
+    note:
+      fr: "`web` est seul sur `frontend`, `db` seule sur `backend` : aucune route directe entre eux. `api`, sur les deux réseaux, est le seul pont. `internal: true` coupe `backend` d'Internet et l'absence de `ports:` garde la base invisible depuis l'hôte."
+      en: "`web` is alone on `frontend`, `db` alone on `backend`: no direct route between them. `api`, on both networks, is the only bridge. `internal: true` cuts `backend` off from the Internet and the lack of `ports:` keeps the database invisible from the host."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que la défense en profondeur ?"
+      en: "What is defense in depth?"
+    options:
+      fr: ["Un seul pare-feu très puissant", "Empiler plusieurs couches de sécurité indépendantes", "Chiffrer uniquement la base de données", "Interdire totalement Internet"]
+      en: ["A single very powerful firewall", "Stacking several independent security layers", "Encrypting only the database", "Banning the Internet entirely"]
+    answer: 1
+    why:
+      fr: "L'idée est que si une couche échoue, les autres continuent de protéger : pare-feu, segmentation, WAF, IDS, authentification, etc. se cumulent."
+      en: "The idea is that if one layer fails, the others keep protecting: firewall, segmentation, WAF, IDS, authentication, etc. all add up."
+  - q:
+      fr: "Quel est le rôle d'une DMZ ?"
+      en: "What is the role of a DMZ?"
+    options:
+      fr: ["Chiffrer le trafic interne", "Accélérer la base de données", "Servir de zone tampon entre Internet et le réseau interne", "Remplacer le pare-feu"]
+      en: ["To encrypt internal traffic", "To speed up the database", "To act as a buffer zone between the Internet and the internal network", "To replace the firewall"]
+    answer: 2
+    why:
+      fr: "La DMZ héberge les services exposés ; compromettre un serveur de DMZ ne donne pas d'accès direct au réseau interne sensible."
+      en: "The DMZ hosts exposed services; compromising a DMZ server does not grant direct access to the sensitive internal network."
+  - q:
+      fr: "Quel est le mantra du modèle zero trust ?"
+      en: "What is the mantra of the zero trust model?"
+    options:
+      fr: ["Ne jamais faire confiance, toujours vérifier", "Faire confiance au réseau interne", "Tout bloquer en sortie", "Un seul mot de passe pour tous"]
+      en: ["Never trust, always verify", "Trust the internal network", "Block all outbound traffic", "One password for everyone"]
+    answer: 0
+    why:
+      fr: "Le zero trust refuse toute confiance implicite : chaque requête est authentifiée et autorisée, qu'elle vienne de l'extérieur ou de l'intérieur."
+      en: "Zero trust refuses all implicit trust: every request is authenticated and authorised, whether it comes from outside or inside."
+  - q:
+      fr: "Dans la stack segmentée, pourquoi `web` ne peut-il pas joindre `db` ?"
+      en: "In the segmented stack, why can `web` not reach `db`?"
+    options:
+      fr: ["Parce que la base est chiffrée", "Parce que `web` n'est pas sur le réseau `backend` où vit `db`", "Parce que `db` est éteinte", "Parce que Docker bloque Postgres"]
+      en: ["Because the database is encrypted", "Because `web` is not on the `backend` network where `db` lives", "Because `db` is powered off", "Because Docker blocks Postgres"]
+    answer: 1
+    why:
+      fr: "`web` n'est attaché qu'au réseau `frontend` et `db` qu'au réseau `backend` : il n'existe aucune route réseau entre eux. Seul `api`, sur les deux, fait le pont."
+      en: "`web` is attached only to the `frontend` network and `db` only to `backend`: there is no network route between them. Only `api`, on both, bridges them."
+  - q:
+      fr: "Que fait `internal: true` sur un réseau Docker ?"
+      en: "What does `internal: true` do on a Docker network?"
+    options:
+      fr: ["Il chiffre le réseau", "Il publie tous les ports", "Il accélère les conteneurs", "Il prive le réseau de toute route vers Internet"]
+      en: ["It encrypts the network", "It publishes all ports", "It speeds up containers", "It denies the network any route to the Internet"]
+    answer: 3
+    why:
+      fr: "`internal: true` isole le réseau : les conteneurs qui y sont attachés n'ont pas d'accès sortant vers Internet, ce qui limite l'exfiltration depuis la base."
+      en: "`internal: true` isolates the network: containers attached to it have no outbound Internet access, limiting exfiltration from the database."

@@ -1,0 +1,585 @@
+description:
+  fr: "Assembler un pipeline GitLab complet et sécurisé : lint, test, SAST, détection de secrets, SCA, build Kaniko, scan d'image Trivy, DAST sur review app et déploiement manuel protégé."
+  en: "Assemble a complete, secure GitLab pipeline: lint, test, SAST, secret detection, SCA, Kaniko build, Trivy image scan, DAST on a review app and a protected manual deploy."
+duration: 30
+
+intro:
+  fr: |
+    Vous avez appris, leçon après leçon, chaque brique d'un pipeline GitLab sécurisé : la syntaxe
+    (`stages`, `rules`, `needs`), les templates de sécurité, la gestion des secrets et le durcissement des
+    runners. Il est temps de **tout assembler** en un seul `.gitlab-ci.yml` de niveau production.
+
+    Imaginez une chaîne de production finale : la matière première (le code) entre d'un côté, traverse des
+    postes de contrôle successifs (qualité, sécurité, construction, tests dynamiques) et ne ressort en
+    production que si **chaque poste** a validé. Le moindre défaut arrête la chaîne. C'est exactement ce
+    qu'on construit ici.
+
+    Dans cette leçon, vous allez assembler un pipeline complet enchaînant : **lint** (qualité), **test**
+    (fonctionnel), **SAST** (analyse de code), **détection de secrets**, **SCA** (dépendances), **build**
+    avec Kaniko (sans privilège), **scan de l'image** avec Trivy, **DAST** contre une *review app*, et enfin
+    un **déploiement manuel** protégé par un `environment` et des `rules`. C'est la synthèse de tout le
+    cours : un pipeline que vous pourriez adapter à un vrai projet.
+  en: |
+    Lesson after lesson, you have learned each brick of a secure GitLab pipeline: the syntax (`stages`,
+    `rules`, `needs`), the security templates, secret management and runner hardening. It is time to
+    **assemble it all** into a single production-grade `.gitlab-ci.yml`.
+
+    Picture a final production line: raw material (the code) enters on one side, passes through successive
+    checkpoints (quality, security, build, dynamic tests) and only reaches production if **every
+    checkpoint** has approved. The slightest defect stops the line. This is exactly what we build here.
+
+    In this lesson you will assemble a complete pipeline chaining: **lint** (quality), **test**
+    (functional), **SAST** (code analysis), **secret detection**, **SCA** (dependencies), **build** with
+    Kaniko (no privilege), **image scan** with Trivy, **DAST** against a *review app*, and finally a
+    **manual deploy** protected by an `environment` and `rules`. It is the synthesis of the whole course: a
+    pipeline you could adapt to a real project.
+
+sections:
+  - heading:
+      fr: "L'architecture : des stages qui filtrent progressivement"
+      en: "The architecture: stages that filter progressively"
+    body:
+      fr: |
+        Un bon pipeline de sécurité est ordonné du **moins cher au plus cher**, pour échouer vite. On place
+        les contrôles rapides tôt (lint, tests, SAST), les contrôles lourds ensuite (build, scan d'image,
+        DAST), et le déploiement en dernier, sous validation humaine.
+
+        ```yaml
+        stages:
+          - quality      # lint: fast, catches obvious issues
+          - test         # unit tests
+          - security     # SAST, secret detection, SCA (run in parallel)
+          - build        # build the image (Kaniko, no privilege)
+          - scan         # scan the built image (Trivy)
+          - dast         # dynamic test against a review app
+          - deploy       # manual, protected
+        ```
+
+        Les jobs du stage `security` tournent **en parallèle** : SAST, détection de secrets et SCA
+        n'attendent pas l'un l'autre. Un échec dans n'importe lequel arrête le pipeline avant le build,
+        évitant de construire et scanner une image dont le code est déjà rejeté.
+
+        Le principe du **moindre privilège** s'applique partout : le build utilise Kaniko (pas de mode
+        privilégié), les secrets sont des variables **masquées et protégées**, et le déploiement vise un
+        `environment: production` dont les secrets sont isolés. Chaque étape ne reçoit que ce dont elle a
+        besoin.
+      en: |
+        A good security pipeline is ordered from **cheapest to most expensive**, to fail fast. You place the
+        quick checks early (lint, tests, SAST), the heavy checks later (build, image scan, DAST), and the
+        deploy last, under human validation.
+
+        ```yaml
+        stages:
+          - quality      # lint: fast, catches obvious issues
+          - test         # unit tests
+          - security     # SAST, secret detection, SCA (run in parallel)
+          - build        # build the image (Kaniko, no privilege)
+          - scan         # scan the built image (Trivy)
+          - dast         # dynamic test against a review app
+          - deploy       # manual, protected
+        ```
+
+        The `security` stage's jobs run **in parallel**: SAST, secret detection and SCA do not wait for one
+        another. A failure in any of them stops the pipeline before the build, avoiding building and
+        scanning an image whose code is already rejected.
+
+        The **least privilege** principle applies everywhere: the build uses Kaniko (no privileged mode),
+        the secrets are **masked and protected** variables, and the deploy targets an `environment:
+        production` whose secrets are isolated. Each step receives only what it needs.
+  - heading:
+      fr: "DAST sur une review app, déploiement gardé"
+      en: "DAST on a review app, gated deploy"
+    body:
+      fr: |
+        Le **DAST** a besoin d'une application en marche. Deux stratégies :
+
+        - **Review app** : déployer une copie temporaire et jetable de l'application (une URL unique par
+          merge request), scanner cette copie, puis la détruire. C'est idéal : on teste exactement le code
+          de la MR, sans toucher à la production.
+        - **Environnement de staging partagé** : scanner une préproduction stable. Plus simple, mais moins
+          fidèle à la MR courante.
+
+        GitLab gère les review apps avec `environment` et son champ `on_stop` : un job déploie
+        (`environment: review/$CI_COMMIT_REF_SLUG`), le DAST scanne son URL, et un job d'arrêt détruit
+        l'environnement. **Rappel** : ne scannez que vos propres applications, ici la review app démarrée par
+        le pipeline.
+
+        Le **déploiement en production** est le dernier verrou, et le plus gardé. Il combine :
+
+        - **`rules`** : n'apparaître que sur la branche par défaut (`$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH`).
+        - **`when: manual`** : un humain doit cliquer. Aucun déploiement automatique en production.
+        - **`environment: production`** : les secrets de production (variables protégées) ne sont fournis
+          qu'ici, et l'environnement peut exiger une approbation.
+        - **`tags`** : le job part sur le runner de production dédié et protégé.
+
+        Cette combinaison garantit qu'un déploiement en production n'arrive que pour du code revu, fusionné,
+        ayant passé **tous** les contrôles, et validé par un humain.
+      en: |
+        **DAST** needs a running application. Two strategies:
+
+        - **Review app**: deploy a temporary, disposable copy of the application (a unique URL per merge
+          request), scan that copy, then destroy it. This is ideal: you test exactly the MR's code, without
+          touching production.
+        - **Shared staging environment**: scan a stable staging. Simpler, but less faithful to the current
+          MR.
+
+        GitLab handles review apps with `environment` and its `on_stop` field: a job deploys
+        (`environment: review/$CI_COMMIT_REF_SLUG`), DAST scans its URL, and a stop job destroys the
+        environment. **Reminder**: only scan your own applications, here the review app started by the
+        pipeline.
+
+        The **production deployment** is the last lock, and the most gated. It combines:
+
+        - **`rules`**: appear only on the default branch (`$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH`).
+        - **`when: manual`**: a human must click. No automatic production deployment.
+        - **`environment: production`**: production secrets (protected variables) are provided only here,
+          and the environment can require an approval.
+        - **`tags`**: the job goes to the dedicated, protected production runner.
+
+        This combination guarantees that a production deployment only happens for reviewed, merged code that
+        passed **all** checks, and was validated by a human.
+  - heading:
+      fr: "Assembler sans sacrifier la vitesse ni la clarté"
+      en: "Assembling without sacrificing speed or clarity"
+    body:
+      fr: |
+        Un pipeline complet peut devenir lent et illisible. Trois leviers gardent l'équilibre.
+
+        **`needs` pour le parallélisme** : plutôt que d'attendre des stages entiers, on crée un graphe. Le
+        scan d'image `needs` le build ; le DAST `needs` le déploiement de la review app. Les jobs
+        indépendants démarrent au plus tôt.
+
+        **`rules` pour ne pas tout lancer partout** : les contrôles lourds (DAST, scan d'image) n'ont pas à
+        tourner sur chaque commit de chaque branche de fonctionnalité. On les réserve aux merge requests et à
+        la branche par défaut, en gardant les contrôles rapides (lint, SAST) partout.
+
+        **`default` et `include` pour éviter la répétition** : une section `default` factorise l'image ou le
+        `before_script` communs ; `include` importe les templates de sécurité plutôt que de réécrire les
+        jobs.
+
+        | Levier | Gain |
+        |---|---|
+        | `needs` | Vitesse (parallélisme en graphe) |
+        | `rules` | Économie (ne lancer que le nécessaire) |
+        | `include: template` | Simplicité (scanners prêts à l'emploi) |
+        | `default` | Lisibilité (pas de répétition) |
+
+        Le but n'est pas d'avoir le pipeline le plus long, mais le plus **efficace** : des contrôles qui
+        échouent vite, remontent un signal clair, et ne laissent passer en production que ce qui mérite d'y
+        être.
+      en: |
+        A complete pipeline can become slow and unreadable. Three levers keep the balance.
+
+        **`needs` for parallelism**: rather than waiting for whole stages, you build a graph. The image scan
+        `needs` the build; DAST `needs` the review app deploy. Independent jobs start as early as possible.
+
+        **`rules` to avoid running everything everywhere**: heavy checks (DAST, image scan) need not run on
+        every commit of every feature branch. You reserve them for merge requests and the default branch,
+        while keeping the quick checks (lint, SAST) everywhere.
+
+        **`default` and `include` to avoid repetition**: a `default` section factors out the common image or
+        `before_script`; `include` imports the security templates rather than rewriting the jobs.
+
+        | Lever | Gain |
+        |---|---|
+        | `needs` | Speed (graph parallelism) |
+        | `rules` | Economy (run only what is needed) |
+        | `include: template` | Simplicity (ready-made scanners) |
+        | `default` | Readability (no repetition) |
+
+        The goal is not to have the longest pipeline, but the most **effective** one: checks that fail fast,
+        raise a clear signal, and only let into production what deserves to be there.
+
+examples:
+  - title:
+      fr: "Le pipeline complet, de bout en bout"
+      en: "The complete pipeline, end to end"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      stages:
+        - quality
+        - test
+        - security
+        - build
+        - scan
+        - dast
+        - deploy
+
+      default:
+        image: python:3.12
+
+      # Ready-made security scanners (run in the "test" stage by default)
+      include:
+        - template: Jobs/SAST.gitlab-ci.yml
+        - template: Jobs/Secret-Detection.gitlab-ci.yml
+        - template: Jobs/Dependency-Scanning.gitlab-ci.yml
+
+      variables:
+        SECRET_DETECTION_HISTORIC_SCAN: "true"   # scan the full history
+        SAST_EXCLUDED_PATHS: "tests, vendor"
+
+      lint:
+        stage: quality
+        script:
+          - pip install ruff
+          - ruff check .
+
+      unit-tests:
+        stage: test
+        script:
+          - pip install -r requirements.txt
+          - pytest -q
+
+      # Make the imported scanner jobs run in the "security" stage
+      sast:
+        stage: security
+      secret_detection:
+        stage: security
+      dependency_scanning:
+        stage: security
+
+      build-image:
+        stage: build
+        # Kaniko: build without privileged mode or docker.sock
+        image:
+          name: gcr.io/kaniko-project/executor:v1.23.2-debug
+          entrypoint: [""]
+        script:
+          - /kaniko/executor
+              --context "$CI_PROJECT_DIR"
+              --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+              --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+        tags: [trusted-build]
+
+      image-scan:
+        stage: scan
+        needs: [build-image]            # start as soon as the image is built
+        image:
+          name: aquasec/trivy:0.57.0
+          entrypoint: [""]
+        script:
+          - trivy image --severity HIGH,CRITICAL --exit-code 1 "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+      dast-review:
+        stage: dast
+        needs: [image-scan]
+        image:
+          name: ghcr.io/zaproxy/zaproxy:stable
+          entrypoint: [""]
+        # Deploy a disposable review app, then scan ONLY that app
+        environment:
+          name: review/$CI_COMMIT_REF_SLUG
+          url: https://$CI_COMMIT_REF_SLUG.review.example.com
+        script:
+          - ./deploy-review-app.sh
+          - zap-baseline.py -t "https://$CI_COMMIT_REF_SLUG.review.example.com" -I
+        rules:
+          - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+      deploy-prod:
+        stage: deploy
+        script:
+          - ./deploy.sh "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+        environment:
+          name: production           # protected secrets, may require approval
+        tags: [prod-protected]       # dedicated, protected production runner
+        rules:
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+            when: manual             # a human must click to deploy
+          - when: never
+    note:
+      fr: "Tout le cours est ici : contrôles rapides d'abord (lint, test), sécurité en parallèle (SAST, secrets, SCA), build Kaniko sans privilège, scan d'image Trivy avec `--exit-code 1`, DAST sur une review app jetable, et déploiement `manual` réservé à la branche par défaut sur un runner protégé. Chaque stage ne passe que si le précédent a réussi."
+      en: "The whole course is here: quick checks first (lint, test), security in parallel (SAST, secrets, SCA), privilege-free Kaniko build, Trivy image scan with `--exit-code 1`, DAST on a disposable review app, and a `manual` deploy reserved for the default branch on a protected runner. Each stage only proceeds if the previous one passed."
+
+  - title:
+      fr: "Vulnérable : un pipeline qui « passe » mais ne protège rien"
+      en: "Vulnerable: a pipeline that \"passes\" but protects nothing"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      stages: [build, deploy]
+
+      build:
+        image: docker:27
+        services: [docker:27-dind]        # privileged runner: host escape risk
+        script:
+          - docker build -t my-app .
+          # Scan present, but it never blocks: errors are swallowed
+          - trivy image my-app || true
+
+      deploy:
+        stage: deploy
+        script:
+          - echo "Deploying with $PROD_PASSWORD"   # secret printed to the logs
+          - ./deploy.sh
+        # No rules, no environment: deploys automatically on EVERY branch
+    note:
+      fr: "Ce pipeline coche des cases mais ne protège rien : build privilégié (évasion possible), `trivy ... || true` qui avale les échecs (scan décoratif), secret affiché dans les logs, et déploiement **automatique sur toutes les branches** sans garde-fou. Le badge est vert, la sécurité est nulle."
+      en: "This pipeline ticks boxes but protects nothing: privileged build (escape possible), `trivy ... || true` that swallows failures (decorative scan), secret printed to the logs, and **automatic deployment on every branch** with no guardrail. The badge is green, the security is zero."
+
+  - title:
+      fr: "Détruire la review app après le DAST (on_stop)"
+      en: "Destroying the review app after DAST (on_stop)"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      dast-review:
+        stage: dast
+        environment:
+          name: review/$CI_COMMIT_REF_SLUG
+          url: https://$CI_COMMIT_REF_SLUG.review.example.com
+          on_stop: stop-review        # which job tears the app down
+        script:
+          - ./deploy-review-app.sh
+          - zap-baseline.py -t "https://$CI_COMMIT_REF_SLUG.review.example.com" -I
+
+      stop-review:
+        stage: dast
+        script:
+          - ./destroy-review-app.sh    # free resources, remove the temporary app
+        environment:
+          name: review/$CI_COMMIT_REF_SLUG
+          action: stop
+        rules:
+          - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+            when: manual
+    note:
+      fr: "La review app est **jetable** : `on_stop` relie le job qui la détruit. On teste exactement le code de la merge request sur une copie isolée, puis on nettoie. C'est plus sûr et plus fidèle que de scanner une préproduction partagée, et on ne scanne que sa propre application."
+      en: "The review app is **disposable**: `on_stop` links the job that destroys it. You test exactly the merge request's code on an isolated copy, then clean up. It is safer and more faithful than scanning a shared staging, and you only scan your own application."
+
+  - title:
+      fr: "Accélérer avec needs sans casser l'ordre de sécurité"
+      en: "Speeding up with needs without breaking the security order"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # The image scan must wait for the build, but not for unrelated jobs.
+      # needs creates a precise graph: image-scan starts the instant the image
+      # exists, while the security scans keep running in parallel.
+      build-image:
+        stage: build
+        script: [echo "kaniko build here"]
+
+      image-scan:
+        stage: scan
+        needs: [build-image]      # depends ONLY on the build
+        script:
+          - trivy image --severity HIGH,CRITICAL --exit-code 1 "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+      deploy-prod:
+        stage: deploy
+        # Depends on the checks that MUST pass before shipping
+        needs: [image-scan, unit-tests, sast]
+        script: [./deploy.sh]
+        environment: { name: production }
+        rules:
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+            when: manual
+    note:
+      fr: "`needs` accélère sans affaiblir la sécurité : `image-scan` démarre dès le build prêt, et `deploy-prod` ne peut partir que si `image-scan`, `unit-tests` et `sast` ont réussi. Le graphe est explicite : vitesse et garanties de sécurité coexistent."
+      en: "`needs` speeds things up without weakening security: `image-scan` starts as soon as the build is ready, and `deploy-prod` can only go if `image-scan`, `unit-tests` and `sast` passed. The graph is explicit: speed and security guarantees coexist."
+
+mistake:
+  fr: |
+    **Assembler un pipeline qui « coche les cases » sans que les contrôles bloquent réellement.**
+
+    Un pipeline peut contenir un scan SAST, un scan d'image, un DAST... et ne rien protéger si chacun est
+    neutralisé : `|| true` qui avale les échecs, scanner sans `--exit-code 1`, déploiement automatique sans
+    `rules` ni `environment`, build en mode privilégié, secret affiché dans les logs. Le badge reste vert et
+    donne une fausse assurance. Un pipeline sécurisé **échoue** sur les vraies failles, construit **sans
+    privilège**, réserve le déploiement à du code revu via `rules` + `when: manual` + `environment`, et ne
+    laisse jamais un secret toucher un log.
+  en: |
+    **Assembling a pipeline that "ticks the boxes" without the checks actually blocking.**
+
+    A pipeline can contain a SAST scan, an image scan, a DAST... and protect nothing if each is neutralised:
+    `|| true` that swallows failures, a scanner without `--exit-code 1`, automatic deployment with no
+    `rules` or `environment`, a privileged build, a secret printed to the logs. The badge stays green and
+    gives false assurance. A secure pipeline **fails** on real flaws, builds **without privilege**, reserves
+    deployment for reviewed code via `rules` + `when: manual` + `environment`, and never lets a secret touch
+    a log.
+
+bestPractice:
+  fr: |
+    - **Ordonnez du moins cher au plus cher** : lint et tests tôt, build/scan/DAST ensuite, déploiement en dernier.
+    - **Faites échouer chaque contrôle** sur les vraies failles (`--exit-code 1`, pas de `|| true`).
+    - **Construisez sans privilège** (Kaniko) et scannez l'image construite (Trivy).
+    - **Testez en DAST une review app jetable**, puis détruisez-la avec `on_stop`.
+    - **Gardez le déploiement** avec `rules` + `when: manual` + `environment: production` + runner protégé.
+    - **Accélérez avec `needs`** et limitez les jobs lourds avec `rules`, sans affaiblir les garanties.
+    - **Ne laissez aucun secret toucher un log** et isolez les secrets de production.
+  en: |
+    - **Order from cheapest to most expensive**: lint and tests early, build/scan/DAST next, deploy last.
+    - **Make every check fail** on real flaws (`--exit-code 1`, no `|| true`).
+    - **Build without privilege** (Kaniko) and scan the built image (Trivy).
+    - **DAST-test a disposable review app**, then destroy it with `on_stop`.
+    - **Gate the deploy** with `rules` + `when: manual` + `environment: production` + protected runner.
+    - **Speed up with `needs`** and limit heavy jobs with `rules`, without weakening the guarantees.
+    - **Let no secret touch a log** and isolate production secrets.
+
+exercise:
+  statement:
+    fr: |
+      À partir des briques du cours, écrivez un `.gitlab-ci.yml` **minimal mais complet** qui :
+
+      1. définit les stages `test`, `build`, `scan`, `deploy` ;
+      2. lance `pytest` au stage `test` ;
+      3. construit l'image avec **Kaniko** (sans privilège) au stage `build` ;
+      4. scanne l'image avec **Trivy** au stage `scan`, en **faisant échouer** le pipeline sur les CVE
+         HIGH/CRITICAL, et uniquement **après** le build (`needs`) ;
+      5. déploie au stage `deploy` **uniquement** sur la branche par défaut, **en manuel**, vers un
+         `environment: production`.
+    en: |
+      Using the course's building blocks, write a **minimal but complete** `.gitlab-ci.yml` that:
+
+      1. defines the `test`, `build`, `scan`, `deploy` stages;
+      2. runs `pytest` in the `test` stage;
+      3. builds the image with **Kaniko** (no privilege) in the `build` stage;
+      4. scans the image with **Trivy** in the `scan` stage, **failing** the pipeline on HIGH/CRITICAL CVEs,
+         and only **after** the build (`needs`);
+      5. deploys in the `deploy` stage **only** on the default branch, **manually**, to an `environment:
+         production`.
+  solution:
+    file: .gitlab-ci.yml
+    lang: yaml
+    code: |
+      stages: [test, build, scan, deploy]
+
+      unit-tests:
+        stage: test
+        image: python:3.12
+        script:
+          - pip install -r requirements.txt
+          - pytest -q
+
+      build-image:
+        stage: build
+        image:
+          name: gcr.io/kaniko-project/executor:v1.23.2-debug
+          entrypoint: [""]
+        script:
+          - /kaniko/executor
+              --context "$CI_PROJECT_DIR"
+              --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+              --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+      image-scan:
+        stage: scan
+        needs: [build-image]         # run as soon as the image exists
+        image:
+          name: aquasec/trivy:0.57.0
+          entrypoint: [""]
+        script:
+          - trivy image --severity HIGH,CRITICAL --exit-code 1 "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+      deploy-prod:
+        stage: deploy
+        script:
+          - ./deploy.sh "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+        environment:
+          name: production
+        rules:
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+            when: manual
+          - when: never
+    note:
+      fr: "Chaque exigence est couverte : Kaniko construit sans privilège, Trivy bloque via `--exit-code 1` et démarre après le build grâce à `needs`, et le déploiement combine `rules` (branche par défaut), `when: manual` et `environment: production`. La règle `when: never` ferme tous les autres cas."
+      en: "Every requirement is met: Kaniko builds without privilege, Trivy blocks via `--exit-code 1` and starts after the build thanks to `needs`, and the deploy combines `rules` (default branch), `when: manual` and `environment: production`. The `when: never` rule closes every other case."
+
+quiz:
+  - q:
+      fr: "Pourquoi ordonner le pipeline du contrôle le moins cher au plus cher ?"
+      en: "Why order the pipeline from the cheapest check to the most expensive?"
+    options:
+      fr:
+        - "Pour échouer vite et ne pas gaspiller de temps sur du code déjà rejeté"
+        - "Parce que GitLab l'impose"
+        - "Pour chiffrer les artifacts"
+        - "Pour éviter d'utiliser des runners"
+      en:
+        - "To fail fast and not waste time on already-rejected code"
+        - "Because GitLab requires it"
+        - "To encrypt the artifacts"
+        - "To avoid using runners"
+    answer: 0
+    why:
+      fr: "On place les contrôles rapides (lint, SAST) tôt : s'ils échouent, inutile de construire et scanner une image dont le code est déjà rejeté."
+      en: "You place the quick checks (lint, SAST) early: if they fail, there is no point building and scanning an image whose code is already rejected."
+  - q:
+      fr: "Quel avantage présente une review app pour le DAST ?"
+      en: "What advantage does a review app offer for DAST?"
+    options:
+      fr:
+        - "Elle chiffre le trafic réseau"
+        - "Elle teste exactement le code de la MR sur une copie jetable, sans toucher la production"
+        - "Elle supprime le besoin de build"
+        - "Elle rend le pipeline plus rapide que tous les autres"
+      en:
+        - "It encrypts network traffic"
+        - "It tests exactly the MR's code on a disposable copy, without touching production"
+        - "It removes the need to build"
+        - "It makes the pipeline faster than all others"
+    answer: 1
+    why:
+      fr: "La review app est une copie temporaire par merge request : on scanne précisément le code proposé, puis on la détruit avec `on_stop`, sans risque pour la production."
+      en: "The review app is a temporary per-merge-request copy: you scan precisely the proposed code, then destroy it with `on_stop`, with no risk to production."
+  - q:
+      fr: "Quelle combinaison garde le déploiement en production ?"
+      en: "Which combination gates the production deployment?"
+    options:
+      fr:
+        - "`cache` + `artifacts`"
+        - "`image` + `services`"
+        - "`needs` + `tags` seulement"
+        - "`rules` (branche par défaut) + `when: manual` + `environment`"
+      en:
+        - "`cache` + `artifacts`"
+        - "`image` + `services`"
+        - "`needs` + `tags` only"
+        - "`rules` (default branch) + `when: manual` + `environment`"
+    answer: 3
+    why:
+      fr: "`rules` limite à la branche par défaut, `when: manual` exige un clic humain, et `environment: production` isole les secrets et peut requérir une approbation."
+      en: "`rules` limits to the default branch, `when: manual` requires a human click, and `environment: production` isolates the secrets and can require an approval."
+  - q:
+      fr: "Pourquoi utiliser Kaniko pour le stage de build ?"
+      en: "Why use Kaniko for the build stage?"
+    options:
+      fr:
+        - "Pour construire l'image sans mode privilégié ni docker.sock"
+        - "Pour chiffrer l'image"
+        - "Pour accélérer les tests unitaires"
+        - "Pour masquer les secrets dans les logs"
+      en:
+        - "To build the image without privileged mode or docker.sock"
+        - "To encrypt the image"
+        - "To speed up unit tests"
+        - "To mask secrets in the logs"
+    answer: 0
+    why:
+      fr: "Kaniko construit en espace utilisateur, sans démon ni privilège : il supprime le risque d'évasion de conteneur du Docker-in-Docker privilégié."
+      en: "Kaniko builds in user space, without a daemon or privilege: it removes the container-escape risk of privileged Docker-in-Docker."
+  - q:
+      fr: "Qu'est-ce qui rend `trivy image my-app || true` dangereux dans un pipeline ?"
+      en: "What makes `trivy image my-app || true` dangerous in a pipeline?"
+    options:
+      fr:
+        - "Cela chiffre l'image par erreur"
+        - "Le `|| true` avale l'échec : le scan ne bloque jamais, même avec des failles"
+        - "Cela force un déploiement automatique"
+        - "Cela supprime les artifacts du build"
+      en:
+        - "It encrypts the image by mistake"
+        - "The `|| true` swallows the failure: the scan never blocks, even with flaws"
+        - "It forces an automatic deployment"
+        - "It deletes the build artifacts"
+    answer: 1
+    why:
+      fr: "`|| true` renvoie toujours 0 : le scanner affiche les vulnérabilités mais le job reste vert. Le scan devient décoratif ; il faut au contraire le laisser échouer sur les failles."
+      en: "`|| true` always returns 0: the scanner prints the vulnerabilities but the job stays green. The scan becomes decorative; it must instead be allowed to fail on the flaws."

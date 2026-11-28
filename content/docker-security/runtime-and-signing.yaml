@@ -1,0 +1,317 @@
+description:
+  fr: "Sécuriser les conteneurs à l'exécution (seccomp, AppArmor, limites, Docker Bench) et garantir leur provenance avec la signature Cosign sans clé et les attestations SBOM."
+  en: "Secure containers at runtime (seccomp, AppArmor, limits, Docker Bench) and guarantee their provenance with keyless Cosign signing and SBOM attestations."
+duration: 25
+
+intro:
+  fr: |
+    Les leçons précédentes ont durci l'image et son lancement. Il reste deux questions d'expert : comment
+    **restreindre encore** ce qu'un conteneur peut demander au noyau pendant qu'il tourne, et comment **prouver**
+    que l'image déployée est bien celle que vous avez construite, et non une version altérée par un attaquant ?
+
+    L'analogie : seccomp et AppArmor sont les règles de conduite une fois la voiture sur la route (quels gestes
+    sont permis au volant) ; la **signature** d'image est le sceau de cire sur une lettre officielle — si le sceau
+    est intact et reconnu, le destinataire sait que le contenu n'a pas été modifié et vient bien de l'expéditeur
+    annoncé.
+
+    Dans cette leçon, vous allez appliquer un profil **seccomp** et **AppArmor** pour filtrer les appels système,
+    auditer la configuration de l'hôte avec **Docker Bench**, puis entrer dans la sécurité de la **chaîne
+    d'approvisionnement** : signer une image avec **Cosign** en mode *keyless* (sans clé à gérer, via OIDC),
+    attacher une **attestation SBOM**, et **vérifier** la signature avant de déployer. C'est l'aboutissement de
+    la sécurité Docker.
+  en: |
+    The previous lessons hardened the image and its launch. Two expert questions remain: how do you **restrict
+    further** what a container can ask of the kernel while it runs, and how do you **prove** that the deployed
+    image is really the one you built, not a version tampered with by an attacker?
+
+    The analogy: seccomp and AppArmor are the driving rules once the car is on the road (which moves are allowed
+    at the wheel); image **signing** is the wax seal on an official letter — if the seal is intact and
+    recognised, the recipient knows the contents were not altered and genuinely come from the stated sender.
+
+    In this lesson you will apply a **seccomp** and **AppArmor** profile to filter system calls, audit the host
+    configuration with **Docker Bench**, then step into **supply-chain** security: sign an image with **Cosign**
+    in *keyless* mode (no key to manage, via OIDC), attach an **SBOM attestation**, and **verify** the signature
+    before deploying. This is the culmination of Docker security.
+
+sections:
+  - heading:
+      fr: "seccomp, AppArmor et limites"
+      en: "seccomp, AppArmor and limits"
+    body:
+      fr: |
+        Un conteneur dialogue avec le noyau via des **appels système** (syscalls). La plupart des applications n'en
+        utilisent qu'une petite partie ; en restreindre la liste réduit fortement la surface exploitable.
+
+        | Mécanisme | Ce qu'il filtre | Niveau |
+        |---|---|---|
+        | **seccomp** | Les appels système autorisés | Noyau (syscalls) |
+        | **AppArmor** | Les accès fichiers, réseau, capabilities | LSM (politique par profil) |
+        | **cgroups limits** | CPU, mémoire, processus | Ressources |
+
+        Docker applique déjà un profil **seccomp par défaut** qui bloque ~44 syscalls dangereux. On peut aller plus
+        loin avec un profil sur mesure (`--security-opt seccomp=profile.json`) ou un profil **AppArmor**
+        (`--security-opt apparmor=mon-profil`). L'erreur à éviter absolument est `--security-opt
+        seccomp=unconfined`, qui **désactive** ce filtrage. Enfin, **Docker Bench for Security** est un script qui
+        audite la configuration du démon et des conteneurs d'après le CIS Benchmark Docker.
+      en: |
+        A container talks to the kernel via **system calls** (syscalls). Most applications use only a small
+        subset; restricting the list sharply reduces the exploitable surface.
+
+        | Mechanism | What it filters | Level |
+        |---|---|---|
+        | **seccomp** | The allowed system calls | Kernel (syscalls) |
+        | **AppArmor** | File, network, capability access | LSM (per-profile policy) |
+        | **cgroups limits** | CPU, memory, processes | Resources |
+
+        Docker already applies a **default seccomp profile** that blocks ~44 dangerous syscalls. You can go
+        further with a custom profile (`--security-opt seccomp=profile.json`) or an **AppArmor** profile
+        (`--security-opt apparmor=my-profile`). The absolute mistake to avoid is `--security-opt
+        seccomp=unconfined`, which **disables** this filtering. Finally, **Docker Bench for Security** is a script
+        that audits the daemon and container configuration against the CIS Docker Benchmark.
+  - heading:
+      fr: "Signer et vérifier avec Cosign (keyless)"
+      en: "Signing and verifying with Cosign (keyless)"
+    body:
+      fr: |
+        Comment être sûr que l'image `app:1.4.0` dans le registre est bien la vôtre ? La **signature** répond à
+        cette question. **Cosign** (projet Sigstore) signe une image et stocke la signature à côté d'elle dans le
+        registre. Deux modes :
+
+        - **Avec clé** : vous gérez une paire de clés (privée pour signer, publique pour vérifier). Il faut
+          sécuriser la clé privée.
+        - **Keyless (sans clé)** : Cosign utilise votre **identité OIDC** (compte CI, email) et un certificat
+          éphémère délivré par l'autorité Fulcio, consigné publiquement dans le journal transparent Rekor. **Rien
+          à stocker**, idéal en CI.
+
+        L'étape complémentaire est l'**attestation SBOM** : on attache à l'image une déclaration signée de son
+        contenu (sa nomenclature logicielle). À la vérification, on exige que l'image soit **signée par l'identité
+        attendue** avant de la déployer. On peut même l'imposer dans Kubernetes via une politique d'admission
+        (Kyverno), fermant la boucle : seules les images signées par votre pipeline tournent en production.
+      en: |
+        How can you be sure the `app:1.4.0` image in the registry is really yours? **Signing** answers this.
+        **Cosign** (a Sigstore project) signs an image and stores the signature next to it in the registry. Two
+        modes:
+
+        - **With a key**: you manage a key pair (private to sign, public to verify). You must secure the private
+          key.
+        - **Keyless**: Cosign uses your **OIDC identity** (CI account, email) and a short-lived certificate issued
+          by the Fulcio authority, logged publicly in the Rekor transparency log. **Nothing to store**, ideal in
+          CI.
+
+        The complementary step is the **SBOM attestation**: you attach to the image a signed statement of its
+        contents (its software bill of materials). At verification time, you require the image to be **signed by
+        the expected identity** before deploying it. You can even enforce it in Kubernetes via an admission policy
+        (Kyverno), closing the loop: only images signed by your pipeline run in production.
+
+examples:
+  - title:
+      fr: "Dangereux : filtrage désactivé, image non vérifiée"
+      en: "Dangerous: filtering disabled, image unverified"
+    file: insecure-runtime.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # ANTI-PATTERN - removes kernel filtering and trusts any image.
+
+      # Disables the default seccomp profile: ALL syscalls allowed again,
+      # re-opening dangerous ones the default profile normally blocks.
+      docker run -d --name app \
+        --security-opt seccomp=unconfined \
+        --security-opt apparmor=unconfined \
+        app:latest                 # pulled by tag, never verified
+
+      # No signature check: an attacker who pushed a malicious image to the
+      # registry under the same tag would be deployed with no warning.
+    output: |
+      # The container can now call previously blocked syscalls, and the
+      # image provenance is unknown:
+      #   cosign verify app:latest  ->  no matching signatures found
+    note:
+      fr: "`seccomp=unconfined` et `apparmor=unconfined` suppriment le filtrage des appels système : on rouvre des syscalls dangereux normalement bloqués. De plus, l'image est tirée par tag sans vérifier sa signature : une image malveillante repoussée sous le même tag serait déployée sans alerte."
+      en: "`seccomp=unconfined` and `apparmor=unconfined` remove syscall filtering: dangerous syscalls normally blocked are reopened. Worse, the image is pulled by tag without verifying its signature: a malicious image re-pushed under the same tag would be deployed with no alert."
+
+  - title:
+      fr: "Sécurisé : profils seccomp/AppArmor + Docker Bench"
+      en: "Secure: seccomp/AppArmor profiles + Docker Bench"
+    file: secure-runtime.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Run with the DEFAULT seccomp profile (keep it!) plus a custom
+      # AppArmor profile, non-root and dropped capabilities.
+      docker run -d --name app \
+        --security-opt seccomp=default.json \     # explicit default profile
+        --security-opt apparmor=docker-app \       # custom AppArmor policy
+        --security-opt no-new-privileges \
+        --user 10001:10001 \
+        --cap-drop ALL \
+        --read-only --tmpfs /tmp \
+        --memory 256m --cpus 0.5 --pids-limit 100 \
+        app:1.4.0
+
+      # Audit the host + containers against the CIS Docker Benchmark.
+      docker run --rm --net host --pid host --cap-add audit_control \
+        -v /var/lib:/var/lib:ro -v /var/run/docker.sock:/var/run/docker.sock:ro \
+        docker/docker-bench-security
+    output: |
+      # Docker Bench highlights remaining hardening gaps:
+      # [PASS] 5.9 Ensure the host's network namespace is not shared
+      # [PASS] 5.12 Ensure the container's root filesystem is read-only
+      # [WARN] 2.8 Enable user namespace support (rootless)
+    note:
+      fr: "On **conserve** le filtrage seccomp (profil par défaut explicite) et on ajoute un profil AppArmor dédié, en plus du durcissement habituel. Docker Bench audite l'hôte selon le CIS Benchmark et signale les points restants, comme l'activation du mode rootless."
+      en: "We **keep** seccomp filtering (explicit default profile) and add a dedicated AppArmor profile, on top of the usual hardening. Docker Bench audits the host against the CIS Benchmark and flags remaining items, such as enabling rootless mode."
+
+  - title:
+      fr: "Sécurisé : signer et vérifier avec Cosign keyless"
+      en: "Secure: sign and verify with keyless Cosign"
+    file: sign-verify.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      IMAGE=registry.example.com/app:1.4.0
+
+      # 1. Sign the image KEYLESS using the CI's OIDC identity.
+      #    No private key to store; a short-lived cert is logged in Rekor.
+      COSIGN_EXPERIMENTAL=1 cosign sign --yes "$IMAGE"
+
+      # 2. Generate an SBOM and attach it as a signed attestation.
+      trivy image --format cyclonedx --output sbom.json "$IMAGE"
+      COSIGN_EXPERIMENTAL=1 cosign attest --yes \
+        --predicate sbom.json --type cyclonedx "$IMAGE"
+
+      # 3. BEFORE deploying, verify the image was signed by OUR pipeline.
+      cosign verify "$IMAGE" \
+        --certificate-identity-regexp "https://github.com/myorg/.*" \
+        --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+    output: |
+      # Verification succeeds only for images signed by our GitHub Actions:
+      # Verification for registry.example.com/app:1.4.0 --
+      # The following checks were performed on these signatures:
+      #   - The cosign claims were validated
+      #   - Existence of the claims in the transparency log was verified (Rekor)
+      #   - The code-signing certificate was verified
+    note:
+      fr: "Cosign keyless signe avec l'identité OIDC du pipeline (aucune clé à gérer), et la trace est publique dans Rekor. La vérification exige que l'image soit signée par **votre** organisation GitHub : une image inconnue ou altérée échoue au contrôle et n'est pas déployée."
+      en: "Keyless Cosign signs with the pipeline's OIDC identity (no key to manage), and the trace is public in Rekor. Verification requires the image to be signed by **your** GitHub organisation: an unknown or tampered image fails the check and is not deployed."
+
+mistake:
+  fr: |
+    **Désactiver seccomp pour « faire taire » une erreur.** Quand une application échoue sur un appel système
+    bloqué, la tentation est de lancer `--security-opt seccomp=unconfined`, ce qui rouvre **tous** les syscalls,
+    y compris les plus dangereux. La bonne démarche est d'identifier le syscall manquant (avec `strace` ou les
+    logs) et de l'autoriser dans un profil **sur mesure**, en gardant tout le reste bloqué. Autre erreur d'expert :
+    signer les images mais **ne jamais vérifier** la signature au déploiement — une signature que personne ne
+    contrôle ne protège de rien. La vérification doit être une étape obligatoire du pipeline (ou une politique
+    d'admission).
+  en: |
+    **Disabling seccomp to "silence" an error.** When an application fails on a blocked system call, the
+    temptation is to run `--security-opt seccomp=unconfined`, which reopens **all** syscalls, including the most
+    dangerous. The right approach is to identify the missing syscall (with `strace` or logs) and allow it in a
+    **custom** profile, keeping everything else blocked. Another expert mistake: signing images but **never
+    verifying** the signature at deploy time — a signature nobody checks protects nothing. Verification must be a
+    mandatory pipeline step (or an admission policy).
+
+bestPractice:
+  fr: |
+    - **Gardez le profil seccomp par défaut** ; durcissez avec un profil sur mesure plutôt que de le désactiver.
+    - **Ajoutez AppArmor** (ou SELinux) pour filtrer accès fichiers et réseau par profil.
+    - **Auditez l'hôte avec Docker Bench** selon le CIS Benchmark et corrigez les écarts.
+    - **Signez chaque image** avec Cosign (keyless en CI) et attachez une **attestation SBOM**.
+    - **Vérifiez la signature avant de déployer** (étape CI obligatoire ou politique d'admission Kyverno) : seules les images signées par votre pipeline tournent en prod.
+  en: |
+    - **Keep the default seccomp profile**; harden with a custom profile rather than disabling it.
+    - **Add AppArmor** (or SELinux) to filter file and network access per profile.
+    - **Audit the host with Docker Bench** against the CIS Benchmark and fix the gaps.
+    - **Sign every image** with Cosign (keyless in CI) and attach an **SBOM attestation**.
+    - **Verify the signature before deploying** (mandatory CI step or Kyverno admission policy): only images signed by your pipeline run in prod.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe veut garantir qu'**aucune image non signée** par le pipeline GitHub Actions de l'organisation
+      `myorg` ne soit déployée.
+
+      1. Écrivez la commande Cosign *keyless* qui **vérifie** qu'une image a bien été signée par ce pipeline.
+      2. Expliquez en une phrase pourquoi le mode keyless est préférable à une clé statique en CI.
+    en: |
+      Your team wants to guarantee that **no image unsigned** by the `myorg` organisation's GitHub Actions
+      pipeline is deployed.
+
+      1. Write the *keyless* Cosign command that **verifies** an image was signed by that pipeline.
+      2. Explain in one sentence why keyless mode is preferable to a static key in CI.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      # 1. Verify the image was signed keyless by myorg's GitHub Actions.
+      cosign verify registry.example.com/app:1.4.0 \
+        --certificate-identity-regexp "https://github.com/myorg/.*" \
+        --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+      # 2. Why keyless is preferable:
+      #    There is no long-lived private key to store, rotate or leak - the
+      #    signing identity is a short-lived OIDC cert tied to the CI run and
+      #    publicly logged in Rekor, so a stolen key cannot be reused.
+    note:
+      fr: "La vérification impose l'identité (`--certificate-identity-regexp`) ET l'émetteur OIDC (`--certificate-oidc-issuer`) : seule une image signée par le pipeline `myorg` passe. Le keyless évite de stocker une clé privée qui pourrait fuiter."
+      en: "Verification enforces both the identity (`--certificate-identity-regexp`) AND the OIDC issuer (`--certificate-oidc-issuer`): only an image signed by the `myorg` pipeline passes. Keyless avoids storing a private key that could leak."
+
+quiz:
+  - q:
+      fr: "Que filtre un profil seccomp ?"
+      en: "What does a seccomp profile filter?"
+    options:
+      fr: ["Les appels système que le conteneur peut faire", "La taille de l'image", "Le nombre de couches", "Les ports réseau"]
+      en: ["The system calls the container can make", "The image size", "The number of layers", "The network ports"]
+    answer: 0
+    why:
+      fr: "seccomp restreint la liste des appels système autorisés ; Docker en bloque déjà ~44 dangereux par défaut, et on peut durcir davantage avec un profil sur mesure."
+      en: "seccomp restricts the list of allowed system calls; Docker already blocks ~44 dangerous ones by default, and you can harden further with a custom profile."
+  - q:
+      fr: "Pourquoi `--security-opt seccomp=unconfined` est-il dangereux ?"
+      en: "Why is `--security-opt seccomp=unconfined` dangerous?"
+    options:
+      fr: ["Il chiffre le conteneur", "Il désactive le filtrage des syscalls, rouvrant les plus dangereux", "Il ralentit le conteneur", "Il réduit la mémoire"]
+      en: ["It encrypts the container", "It disables syscall filtering, reopening the most dangerous ones", "It slows the container down", "It reduces memory"]
+    answer: 1
+    why:
+      fr: "`unconfined` supprime le profil seccomp : tous les appels système redeviennent autorisés, y compris ceux que le profil par défaut bloquait pour la sécurité."
+      en: "`unconfined` removes the seccomp profile: all system calls are allowed again, including those the default profile blocked for security."
+  - q:
+      fr: "Que fait Docker Bench for Security ?"
+      en: "What does Docker Bench for Security do?"
+    options:
+      fr: ["Il signe les images", "Il compile les conteneurs", "Il audite l'hôte et les conteneurs selon le CIS Benchmark", "Il chiffre le réseau"]
+      en: ["It signs images", "It builds containers", "It audits the host and containers against the CIS Benchmark", "It encrypts the network"]
+    answer: 2
+    why:
+      fr: "Docker Bench est un script qui vérifie la configuration du démon et des conteneurs par rapport au CIS Docker Benchmark et signale les écarts à corriger."
+      en: "Docker Bench is a script that checks the daemon and container configuration against the CIS Docker Benchmark and flags gaps to fix."
+  - q:
+      fr: "Quel est l'avantage du mode keyless de Cosign ?"
+      en: "What is the advantage of Cosign's keyless mode?"
+    options:
+      fr: ["Il produit des images plus petites", "Il n'y a aucune clé privée à stocker : identité OIDC éphémère tracée dans Rekor", "Il désactive seccomp", "Il accélère le build"]
+      en: ["It produces smaller images", "There is no private key to store: ephemeral OIDC identity logged in Rekor", "It disables seccomp", "It speeds up the build"]
+    answer: 1
+    why:
+      fr: "En keyless, la signature s'appuie sur une identité OIDC et un certificat éphémère consigné publiquement (Rekor) : aucune clé privée à gérer, stocker ou risquer de voir fuiter."
+      en: "In keyless, signing relies on an OIDC identity and a short-lived certificate publicly logged (Rekor): no private key to manage, store or risk leaking."
+  - q:
+      fr: "Pourquoi signer une image ne suffit-il pas ?"
+      en: "Why is signing an image not enough on its own?"
+    options:
+      fr: ["Parce que la signature expire en une heure", "Parce qu'il faut aussi la chiffrer", "Parce que la signature grossit l'image", "Parce qu'il faut vérifier la signature avant de déployer"]
+      en: ["Because the signature expires in an hour", "Because you must also encrypt it", "Because the signature bloats the image", "Because you must verify the signature before deploying"]
+    answer: 3
+    why:
+      fr: "Une signature n'a de valeur que si elle est contrôlée : la vérification (`cosign verify`) doit être une étape obligatoire du déploiement, sinon une image altérée passerait quand même."
+      en: "A signature is only valuable if it is checked: verification (`cosign verify`) must be a mandatory deployment step, otherwise a tampered image would still get through."

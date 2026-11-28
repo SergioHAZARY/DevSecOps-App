@@ -1,0 +1,478 @@
+description:
+  fr: "Ajouter l'analyse statique au workflow : un job CodeQL (init/analyze) et un job Semgrep ou Bandit, avec remontée des résultats au format SARIF dans l'onglet Security."
+  en: "Add static analysis to the workflow: a CodeQL job (init/analyze) and a Semgrep or Bandit job, uploading results in SARIF format to the Security tab."
+duration: 25
+
+intro:
+  fr: |
+    Vous avez un pipeline qui teste le code. Il est temps de lui apprendre à **lire** le code pour y
+    chercher des failles, sans l'exécuter. C'est le rôle du **SAST** (*Static Application Security
+    Testing*, analyse statique de sécurité) : des outils qui parcourent le code source comme un relecteur
+    expert et signalent injections SQL, usages dangereux, secrets codés en dur.
+
+    Imaginez un correcteur qui lit un manuscrit et souligne chaque phrase risquée, sans jamais jouer la
+    pièce. Le SAST fait pareil : il analyse la structure du code (son *AST*, l'arbre syntaxique) et repère
+    les motifs dangereux avant même que le programme tourne.
+
+    Dans cette leçon, vous allez ajouter deux jobs à votre workflow : **CodeQL**, le moteur d'analyse de
+    GitHub (étapes `init` puis `analyze`), et **Semgrep** (ou **Bandit** pour Python), plus léger et doté
+    de règles personnalisables. Vous apprendrez surtout à remonter les résultats au format **SARIF**, le
+    format standard qui alimente l'onglet **Security** de GitHub, pour que les alertes apparaissent
+    directement dans l'interface et dans les pull requests.
+  en: |
+    You have a pipeline that tests the code. It is time to teach it to **read** the code to look for flaws,
+    without running it. This is the role of **SAST** (*Static Application Security Testing*): tools that
+    walk the source code like an expert reviewer and flag SQL injections, dangerous usages, hard-coded
+    secrets.
+
+    Picture a proofreader who reads a manuscript and underlines every risky sentence, without ever
+    performing the play. SAST does the same: it analyses the code structure (its *AST*, the syntax tree)
+    and spots dangerous patterns before the program even runs.
+
+    In this lesson you will add two jobs to your workflow: **CodeQL**, GitHub's analysis engine (`init`
+    then `analyze` steps), and **Semgrep** (or **Bandit** for Python), lighter and with customisable rules.
+    Above all you will learn to upload results in the **SARIF** format, the standard format that feeds
+    GitHub's **Security** tab, so alerts appear directly in the interface and in the pull requests.
+
+sections:
+  - heading:
+      fr: "SAST et le format SARIF"
+      en: "SAST and the SARIF format"
+    body:
+      fr: |
+        Le SAST analyse le code **sans l'exécuter**. Il excelle à trouver des catégories de failles
+        structurelles : injection (SQL, commande), désérialisation non sûre, cryptographie faible, secrets
+        en dur, mauvaise gestion des erreurs. Sa limite : il ne voit pas les failles qui n'apparaissent
+        qu'à l'exécution (mauvaise configuration serveur, logique métier) — ce sera le rôle du DAST.
+
+        Tous ces outils produisent des résultats dans des formats différents. Pour les unifier, un standard
+        existe : le **SARIF** (*Static Analysis Results Interchange Format*), un JSON décrivant chaque
+        alerte (règle, gravité, fichier, ligne). GitHub sait lire le SARIF : l'action
+        **`github/codeql-action/upload-sarif`** envoie le fichier dans l'onglet **Security**, où les
+        alertes deviennent navigables et apparaissent en commentaire sur les lignes concernées d'une PR.
+
+        | Notion | Rôle |
+        |---|---|
+        | **SAST** | Analyse le code source, sans l'exécuter |
+        | **SARIF** | Format JSON standard de résultats d'analyse |
+        | **upload-sarif** | Action qui pousse les résultats vers l'onglet Security |
+        | **Code Scanning** | La fonctionnalité GitHub qui affiche ces alertes |
+
+        Envoyer du SARIF demande la permission **`security-events: write`** : c'est la seule ouverture
+        nécessaire, le reste du workflow reste en lecture seule.
+      en: |
+        SAST analyses the code **without running it**. It excels at finding categories of structural flaws:
+        injection (SQL, command), unsafe deserialization, weak cryptography, hard-coded secrets, poor error
+        handling. Its limit: it does not see flaws that appear only at runtime (bad server config, business
+        logic) — that is DAST's job.
+
+        All these tools produce results in different formats. To unify them, a standard exists: **SARIF**
+        (*Static Analysis Results Interchange Format*), a JSON describing each alert (rule, severity, file,
+        line). GitHub can read SARIF: the **`github/codeql-action/upload-sarif`** action sends the file to
+        the **Security** tab, where alerts become browsable and show up as comments on the affected lines of
+        a PR.
+
+        | Notion | Role |
+        |---|---|
+        | **SAST** | Analyses the source code, without running it |
+        | **SARIF** | Standard JSON format for analysis results |
+        | **upload-sarif** | Action that pushes results to the Security tab |
+        | **Code Scanning** | The GitHub feature that displays these alerts |
+
+        Uploading SARIF requires the **`security-events: write`** permission: that is the only opening
+        needed, the rest of the workflow stays read-only.
+  - heading:
+      fr: "CodeQL : init puis analyze"
+      en: "CodeQL: init then analyze"
+    body:
+      fr: |
+        **CodeQL** est le moteur d'analyse de GitHub. Il traite le code comme une **base de données**
+        interrogeable : il compile (ou indexe) votre projet, puis exécute des requêtes qui décrivent des
+        failles. Il est gratuit pour les dépôts publics et pour GitHub Advanced Security sur les privés.
+
+        Un job CodeQL suit toujours trois temps :
+
+        1. **`github/codeql-action/init`** : prépare la base, en précisant les **langages** à analyser
+           (`languages: python, javascript`).
+        2. La construction du code si nécessaire (pour les langages compilés ; les langages interprétés
+           comme Python ou JavaScript ne nécessitent pas d'étape de build).
+        3. **`github/codeql-action/analyze`** : exécute les requêtes et **remonte automatiquement** les
+           résultats SARIF vers l'onglet Security — pas besoin d'`upload-sarif` séparé avec CodeQL.
+
+        La matrice est idéale ici : un axe `language` fait tourner une analyse par langage en parallèle.
+        On déclenche en général CodeQL sur `pull_request`, sur `push` vers `main`, et sur un `schedule`
+        hebdomadaire pour re-scanner avec les règles mises à jour, même sans nouveau commit.
+      en: |
+        **CodeQL** is GitHub's analysis engine. It treats the code as a queryable **database**: it compiles
+        (or indexes) your project, then runs queries that describe flaws. It is free for public repos and
+        for GitHub Advanced Security on private ones.
+
+        A CodeQL job always has three stages:
+
+        1. **`github/codeql-action/init`**: prepares the database, specifying the **languages** to analyse
+           (`languages: python, javascript`).
+        2. Building the code if needed (for compiled languages; interpreted languages like Python or
+           JavaScript need no build step).
+        3. **`github/codeql-action/analyze`**: runs the queries and **automatically uploads** the SARIF
+           results to the Security tab — no separate `upload-sarif` is needed with CodeQL.
+
+        The matrix is ideal here: a `language` axis runs one analysis per language in parallel. CodeQL is
+        usually triggered on `pull_request`, on `push` to `main`, and on a weekly `schedule` to re-scan
+        with updated rules even without a new commit.
+  - heading:
+      fr: "Semgrep et Bandit : plus légers, personnalisables"
+      en: "Semgrep and Bandit: lighter, customisable"
+    body:
+      fr: |
+        À côté de CodeQL, des outils plus légers couvrent le même besoin avec une mise en place plus
+        rapide :
+
+        - **Semgrep** (multi-langages) : des règles lisibles qui ressemblent au code qu'elles cherchent.
+          Il tourne vite, sans compilation, et produit du SARIF avec `--sarif`. Idéal pour des **règles
+          maison** (interdire une fonction interne dangereuse, par exemple).
+        - **Bandit** (spécifique Python) : cible les failles Python courantes (injection, `assert` en
+          production, usage de `subprocess` avec `shell=True`...). Il produit du SARIF avec le format
+          `-f sarif`.
+
+        | Outil | Langages | Build requis | Force |
+        |---|---|---|---|
+        | CodeQL | nombreux | parfois | Analyse de flux de données profonde |
+        | Semgrep | nombreux | non | Rapidité, règles personnalisées |
+        | Bandit | Python | non | Simplicité, ciblé Python |
+
+        En pratique, on combine souvent **CodeQL** (analyse profonde) et **Semgrep/Bandit** (rapide, règles
+        d'équipe). Les deux remontent leur SARIF dans le même onglet Security. Pour que le job **bloque** la
+        pull request, on s'assure que l'outil renvoie un **code non nul** quand il trouve une faille (c'est
+        le comportement par défaut de Bandit ; Semgrep échoue sur les règles de sévérité élevée).
+      en: |
+        Alongside CodeQL, lighter tools cover the same need with faster setup:
+
+        - **Semgrep** (multi-language): readable rules that look like the code they search for. It runs
+          fast, without compilation, and produces SARIF with `--sarif`. Ideal for **custom rules**
+          (forbidding a dangerous internal function, for example).
+        - **Bandit** (Python-specific): targets common Python flaws (injection, `assert` in production,
+          using `subprocess` with `shell=True`...). It produces SARIF with the `-f sarif` format.
+
+        | Tool | Languages | Build needed | Strength |
+        |---|---|---|---|
+        | CodeQL | many | sometimes | Deep data-flow analysis |
+        | Semgrep | many | no | Speed, custom rules |
+        | Bandit | Python | no | Simplicity, Python-focused |
+
+        In practice, you often combine **CodeQL** (deep analysis) and **Semgrep/Bandit** (fast, team rules).
+        Both upload their SARIF to the same Security tab. For the job to **block** the pull request, make
+        sure the tool returns a **non-zero code** when it finds a flaw (that is Bandit's default; Semgrep
+        fails on high-severity rules).
+
+examples:
+  - title:
+      fr: "Un job CodeQL avec matrice de langages"
+      en: "A CodeQL job with a language matrix"
+    file: .github/workflows/codeql.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: codeql
+      on:
+        pull_request:
+        push:
+          branches: [main]
+        schedule:
+          - cron: "0 6 * * 1"   # every Monday at 06:00 UTC, with updated rules
+
+      permissions:
+        contents: read
+        security-events: write  # REQUIRED to upload results to the Security tab
+
+      jobs:
+        analyze:
+          runs-on: ubuntu-latest
+          strategy:
+            fail-fast: false
+            matrix:
+              language: ["python", "javascript"]
+          steps:
+            - uses: actions/checkout@v4
+            - name: Initialize CodeQL
+              uses: github/codeql-action/init@v3
+              with:
+                languages: ${{ matrix.language }}
+            # Python and JavaScript are interpreted: no build step needed
+            - name: Run CodeQL analysis
+              uses: github/codeql-action/analyze@v3
+    note:
+      fr: "La matrice lance une analyse par langage en parallèle. `init` prépare la base, `analyze` exécute les requêtes **et** remonte le SARIF automatiquement (pas d'`upload-sarif` à ajouter). `security-events: write` est la seule permission d'écriture nécessaire. Le `schedule` re-scanne chaque semaine avec les règles à jour."
+      en: "The matrix runs one analysis per language in parallel. `init` prepares the database, `analyze` runs the queries **and** uploads the SARIF automatically (no `upload-sarif` to add). `security-events: write` is the only write permission needed. The `schedule` re-scans weekly with updated rules."
+
+  - title:
+      fr: "Un job Bandit pour Python, résultats dans Security"
+      en: "A Bandit job for Python, results in Security"
+    file: .github/workflows/bandit.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: bandit
+      on: [pull_request]
+
+      permissions:
+        contents: read
+        security-events: write
+
+      jobs:
+        bandit:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - name: Run Bandit and produce a SARIF report
+              # Bandit ships a SARIF formatter; -r scans recursively
+              run: |
+                pip install "bandit[sarif]"
+                bandit -r . -f sarif -o bandit.sarif
+            - name: Upload the SARIF report to the Security tab
+              # if: always() -> upload even when Bandit found issues and exited non-zero
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: bandit.sarif
+    note:
+      fr: "Bandit renvoie un code non nul s'il trouve une faille, ce qui fait échouer le step. `if: always()` garantit que le SARIF est quand même envoyé pour voir les alertes dans l'onglet Security. Contrairement à CodeQL, Semgrep/Bandit exigent l'étape `upload-sarif` explicite."
+      en: "Bandit returns a non-zero code if it finds a flaw, which fails the step. `if: always()` ensures the SARIF is still uploaded so you can see the alerts in the Security tab. Unlike CodeQL, Semgrep/Bandit require the explicit `upload-sarif` step."
+
+  - title:
+      fr: "Semgrep avec le jeu de règles par défaut et SARIF"
+      en: "Semgrep with the default ruleset and SARIF"
+    file: .github/workflows/semgrep.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: semgrep
+      on: [pull_request]
+
+      permissions:
+        contents: read
+        security-events: write
+
+      jobs:
+        semgrep:
+          runs-on: ubuntu-latest
+          container:
+            image: semgrep/semgrep:1.90.0   # pin the version for reproducibility
+          steps:
+            - uses: actions/checkout@v4
+            - name: Scan with the default security rules
+              # "p/default" is the curated ruleset; --sarif emits a SARIF report
+              run: semgrep scan --config p/default --sarif --output semgrep.sarif
+            - name: Upload results
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: semgrep.sarif
+    note:
+      fr: "`--config p/default` applique un jeu de règles de sécurité maintenu par Semgrep ; on peut y ajouter ses propres règles YAML. L'image est épinglée à une version précise. Le SARIF remonte dans le même onglet Security que CodeQL : les alertes des deux outils se côtoient."
+      en: "`--config p/default` applies a security ruleset maintained by Semgrep; you can add your own YAML rules. The image is pinned to a precise version. The SARIF lands in the same Security tab as CodeQL: alerts from both tools sit side by side."
+
+  - title:
+      fr: "Ce que CodeQL détecte : une injection de commande"
+      en: "What CodeQL detects: a command injection"
+    file: app.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import subprocess
+      from flask import Flask, request
+
+      app = Flask(__name__)
+
+
+      @app.route("/ping")
+      def ping():
+          host = request.args.get("host", "")
+          # DANGER: user input passed to a shell. CodeQL flags this as
+          # "Uncontrolled command line" (py/command-line-injection).
+          # An attacker sends ?host=localhost;rm -rf / to run arbitrary commands.
+          return subprocess.check_output(f"ping -c 1 {host}", shell=True)
+    output: |
+      Code Scanning alert: Uncontrolled command line
+      Rule: py/command-line-injection
+      Severity: High
+      File: app.py  Line: 13
+      This command depends on user-provided value "host".
+    note:
+      fr: "CodeQL suit le **flux de données** : il voit que `host`, contrôlé par l'utilisateur, arrive jusqu'à un appel shell. C'est le genre de faille qu'un simple grep manquerait. Le correctif : `subprocess.run([\"ping\", \"-c\", \"1\", host])` sans `shell=True`, pour que l'entrée ne soit jamais interprétée par le shell."
+      en: "CodeQL follows the **data flow**: it sees that `host`, user-controlled, reaches a shell call. This is the kind of flaw a plain grep would miss. The fix: `subprocess.run([\"ping\", \"-c\", \"1\", host])` without `shell=True`, so the input is never interpreted by the shell."
+
+mistake:
+  fr: |
+    **Produire un rapport SARIF puis le perdre, ou configurer le job pour « ne jamais échouer ».**
+
+    Deux erreurs fréquentes. D'abord, si l'outil échoue sur une faille (code non nul) sans `if: always()`
+    sur l'étape d'upload, le SARIF n'est jamais envoyé et personne ne voit les alertes : le travail
+    d'analyse est perdu. Ensuite, ajouter `|| true` ou `continue-on-error: true` pour garder le job vert
+    rend le SAST décoratif : il tourne mais ne bloque plus rien. Un bon job SAST **remonte toujours** ses
+    résultats et **échoue** sur les failles de gravité élevée.
+  en: |
+    **Producing a SARIF report then losing it, or configuring the job to "never fail".**
+
+    Two common mistakes. First, if the tool fails on a flaw (non-zero code) without `if: always()` on the
+    upload step, the SARIF is never sent and nobody sees the alerts: the analysis work is lost. Second,
+    adding `|| true` or `continue-on-error: true` to keep the job green makes SAST decorative: it runs but
+    blocks nothing. A good SAST job **always uploads** its results and **fails** on high-severity flaws.
+
+bestPractice:
+  fr: |
+    - **Combinez CodeQL** (analyse profonde de flux) **et Semgrep/Bandit** (rapide, règles d'équipe).
+    - **Déclarez `security-events: write`** seulement, le reste du workflow restant en lecture seule.
+    - **Mettez `if: always()`** sur l'étape `upload-sarif` pour ne jamais perdre les résultats.
+    - **Utilisez une matrice `language`** pour CodeQL : une analyse par langage en parallèle.
+    - **Ajoutez un `schedule`** hebdomadaire : les règles évoluent, un re-scan trouve de nouvelles failles.
+    - **Faites échouer le job** sur les alertes de gravité élevée pour bloquer la pull request.
+  en: |
+    - **Combine CodeQL** (deep data-flow analysis) **and Semgrep/Bandit** (fast, team rules).
+    - **Declare `security-events: write`** only, keeping the rest of the workflow read-only.
+    - **Put `if: always()`** on the `upload-sarif` step so results are never lost.
+    - **Use a `language` matrix** for CodeQL: one analysis per language in parallel.
+    - **Add a weekly `schedule`**: rules evolve, a re-scan finds new flaws.
+    - **Fail the job** on high-severity alerts to block the pull request.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez à votre workflow un job d'analyse statique Python avec **Bandit** qui doit :
+
+      1. se déclencher sur chaque **pull request** ;
+      2. n'accorder que les permissions nécessaires (lecture du code + écriture des *security events*) ;
+      3. produire un rapport **SARIF** et le remonter dans l'onglet Security, **même si** Bandit trouve des
+         failles et échoue.
+    en: |
+      Add a Python static analysis job with **Bandit** to your workflow that must:
+
+      1. trigger on every **pull request**;
+      2. grant only the needed permissions (read the code + write the *security events*);
+      3. produce a **SARIF** report and upload it to the Security tab, **even if** Bandit finds flaws and
+         fails.
+  solution:
+    file: bandit.yml
+    lang: yaml
+    code: |
+      name: bandit
+      on: [pull_request]
+
+      permissions:
+        contents: read
+        security-events: write   # needed to upload the SARIF report
+
+      jobs:
+        bandit:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - name: Run Bandit
+              run: |
+                pip install "bandit[sarif]"
+                bandit -r . -f sarif -o bandit.sarif
+            - name: Upload SARIF even if Bandit failed
+              if: always()          # upload runs even when the previous step failed
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: bandit.sarif
+    note:
+      fr: "Le point clé est `if: always()` : sans lui, l'échec de Bandit (code non nul sur une faille trouvée) interromprait le job avant l'upload et les alertes seraient perdues. `security-events: write` est la seule permission d'écriture."
+      en: "The key point is `if: always()`: without it, Bandit's failure (non-zero code on a found flaw) would stop the job before the upload and the alerts would be lost. `security-events: write` is the only write permission."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que le SAST ?"
+      en: "What is SAST?"
+    options:
+      fr:
+        - "L'analyse du code source sans l'exécuter"
+        - "Le test de l'application en cours d'exécution"
+        - "Le scan des dépendances tierces"
+        - "La signature des commits"
+      en:
+        - "Analysing the source code without running it"
+        - "Testing the application while it runs"
+        - "Scanning third-party dependencies"
+        - "Signing the commits"
+    answer: 0
+    why:
+      fr: "Le SAST (*Static Application Security Testing*) lit le code source statiquement. Tester l'application en marche, c'est le DAST."
+      en: "SAST (*Static Application Security Testing*) reads the source code statically. Testing the running application is DAST."
+  - q:
+      fr: "À quoi sert le format SARIF ?"
+      en: "What is the SARIF format for?"
+    options:
+      fr:
+        - "À compiler le code plus vite"
+        - "À chiffrer les résultats d'analyse"
+        - "À standardiser les résultats d'analyse pour les afficher dans l'onglet Security"
+        - "À stocker les secrets du workflow"
+      en:
+        - "To compile the code faster"
+        - "To encrypt the analysis results"
+        - "To standardise analysis results for display in the Security tab"
+        - "To store the workflow secrets"
+    answer: 2
+    why:
+      fr: "SARIF est un format JSON standard de résultats ; `upload-sarif` l'envoie dans l'onglet Security où les alertes deviennent navigables."
+      en: "SARIF is a standard JSON results format; `upload-sarif` sends it to the Security tab where alerts become browsable."
+  - q:
+      fr: "Quelle permission un job doit-il avoir pour remonter du SARIF ?"
+      en: "Which permission must a job have to upload SARIF?"
+    options:
+      fr:
+        - "`contents: write`"
+        - "`security-events: write`"
+        - "`id-token: write`"
+        - "`packages: write`"
+      en:
+        - "`contents: write`"
+        - "`security-events: write`"
+        - "`id-token: write`"
+        - "`packages: write`"
+    answer: 1
+    why:
+      fr: "`security-events: write` autorise l'envoi des résultats d'analyse ; aucune autre permission d'écriture n'est nécessaire."
+      en: "`security-events: write` authorises uploading analysis results; no other write permission is needed."
+  - q:
+      fr: "Quelles sont les deux étapes caractéristiques d'un job CodeQL ?"
+      en: "What are the two characteristic steps of a CodeQL job?"
+    options:
+      fr:
+        - "`build` puis `deploy`"
+        - "`scan` puis `revoke`"
+        - "`lint` puis `test`"
+        - "`init` puis `analyze`"
+      en:
+        - "`build` then `deploy`"
+        - "`scan` then `revoke`"
+        - "`lint` then `test`"
+        - "`init` then `analyze`"
+    answer: 3
+    why:
+      fr: "`codeql-action/init` prépare la base de code, `codeql-action/analyze` exécute les requêtes et remonte automatiquement le SARIF."
+      en: "`codeql-action/init` prepares the code database, `codeql-action/analyze` runs the queries and automatically uploads the SARIF."
+  - q:
+      fr: "Pourquoi mettre `if: always()` sur l'étape `upload-sarif` après Bandit ?"
+      en: "Why put `if: always()` on the `upload-sarif` step after Bandit?"
+    options:
+      fr:
+        - "Pour envoyer le rapport même si Bandit a échoué sur une faille trouvée"
+        - "Pour accélérer l'upload"
+        - "Pour chiffrer le rapport"
+        - "Pour relancer Bandit en boucle"
+      en:
+        - "To upload the report even if Bandit failed on a found flaw"
+        - "To speed up the upload"
+        - "To encrypt the report"
+        - "To rerun Bandit in a loop"
+    answer: 0
+    why:
+      fr: "Bandit renvoie un code non nul quand il trouve une faille ; sans `if: always()`, le job s'arrêterait avant l'upload et les alertes seraient perdues."
+      en: "Bandit returns a non-zero code when it finds a flaw; without `if: always()`, the job would stop before the upload and the alerts would be lost."

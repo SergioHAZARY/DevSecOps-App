@@ -1,0 +1,348 @@
+description:
+  fr: "Filtrer le trafic réseau d'un serveur Linux avec iptables et son successeur nftables : politique par défaut DROP, états de connexion et SSH limité."
+  en: "Filter a Linux server's network traffic with iptables and its successor nftables: default DROP policy, connection states and rate-limited SSH."
+duration: 25
+
+intro:
+  fr: |
+    Un **pare-feu** (firewall) est le videur d'une boîte de nuit : il décide quels paquets réseau entrent, lesquels
+    ressortent, et jette les autres. Sur Linux, ce videur s'appelle **Netfilter**, et on lui donne ses consignes
+    avec deux outils : **iptables** (l'historique, encore partout) et **nftables** (le remplaçant officiel depuis
+    le noyau 3.13, plus simple et plus rapide).
+
+    Le principe de sécurité tient en une phrase : **tout ce qui n'est pas explicitement autorisé est interdit**.
+    On parle de politique *default deny*. Un serveur qui accepte tout par défaut est une maison dont toutes les
+    portes sont ouvertes ; un serveur en *default DROP* est une maison où l'on ouvre une porte, une seule, pour
+    les invités attendus.
+
+    Dans cette leçon, vous allez écrire le **même** jeu de règles en iptables **et** en nftables, voir pourquoi
+    une règle d'acceptation globale est dangereuse, et limiter les tentatives de connexion SSH par force brute.
+  en: |
+    A **firewall** is a nightclub bouncer: it decides which network packets get in, which get out, and throws
+    the rest away. On Linux this bouncer is called **Netfilter**, and you give it instructions with two tools:
+    **iptables** (the classic one, still everywhere) and **nftables** (the official replacement since kernel
+    3.13, simpler and faster).
+
+    The security principle fits in one sentence: **anything not explicitly allowed is forbidden**. This is called
+    a *default deny* policy. A server that accepts everything by default is a house with every door wide open;
+    a server in *default DROP* is a house where you open one door, just one, for the guests you expect.
+
+    In this lesson you will write the **same** rule set in iptables **and** in nftables, see why a blanket accept
+    rule is dangerous, and rate-limit brute-force SSH connection attempts.
+
+sections:
+  - heading:
+      fr: "Chaînes, tables et politique par défaut"
+      en: "Chains, tables and the default policy"
+    body:
+      fr: |
+        Netfilter organise les règles en **chaînes**. Pour un serveur, trois comptent :
+
+        | Chaîne | Rôle | Exemple de trafic |
+        |---|---|---|
+        | `INPUT` | Paquets **destinés** à la machine | Une requête HTTP vers votre serveur |
+        | `OUTPUT` | Paquets **émis** par la machine | Une mise à jour `apt` sortante |
+        | `FORWARD` | Paquets **traversant** la machine | Un routeur/passerelle |
+
+        Chaque chaîne a une **politique par défaut** appliquée quand aucune règle ne correspond. Les deux seules
+        valeurs sûres pour `INPUT` sont `DROP` (jeter en silence) ou `REJECT` (refuser avec un message). `DROP`
+        est préféré côté Internet car il ne révèle pas que la machine existe. Toute la sécurité d'un pare-feu
+        repose sur cette bascule : **politique `DROP`, puis on autorise le strict nécessaire**.
+      en: |
+        Netfilter organises rules into **chains**. For a server, three matter:
+
+        | Chain | Role | Example traffic |
+        |---|---|---|
+        | `INPUT` | Packets **destined for** the machine | An HTTP request to your server |
+        | `OUTPUT` | Packets **sent by** the machine | An outgoing `apt` update |
+        | `FORWARD` | Packets **passing through** the machine | A router/gateway |
+
+        Every chain has a **default policy** applied when no rule matches. The only two safe values for `INPUT`
+        are `DROP` (silently discard) or `REJECT` (refuse with a message). `DROP` is preferred on the Internet
+        side because it does not reveal that the machine exists. A firewall's entire security rests on this
+        switch: **set the policy to `DROP`, then allow only the strict minimum**.
+  - heading:
+      fr: "Les connexions établies (conntrack)"
+      en: "Established connections (conntrack)"
+    body:
+      fr: |
+        Si vous bloquez tout le trafic entrant, les **réponses** à vos propres requêtes sont bloquées aussi :
+        votre `apt update` part, mais le paquet de réponse du serveur Debian est jeté. La solution est le suivi
+        de connexions (*conntrack*) : on autorise les paquets dont l'état est `ESTABLISHED` (connexion déjà
+        ouverte) ou `RELATED` (lié à une connexion connue, comme le FTP data).
+
+        C'est la règle la plus importante de tout pare-feu Linux :
+
+        - iptables : `-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`
+        - nftables : `ct state established,related accept`
+
+        On autorise aussi systématiquement l'interface de **loopback** (`lo`, `127.0.0.1`) : de nombreux services
+        locaux (base de données, métriques) communiquent entre eux par cette interface, la bloquer casse la machine.
+      en: |
+        If you block all incoming traffic, the **replies** to your own requests get blocked too: your `apt update`
+        goes out, but the response packet from the Debian server is dropped. The fix is connection tracking
+        (*conntrack*): you allow packets whose state is `ESTABLISHED` (connection already open) or `RELATED`
+        (tied to a known connection, such as FTP data).
+
+        This is the single most important rule in any Linux firewall:
+
+        - iptables: `-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`
+        - nftables: `ct state established,related accept`
+
+        You also always allow the **loopback** interface (`lo`, `127.0.0.1`): many local services (databases,
+        metrics) talk to each other over it, and blocking it breaks the machine.
+
+examples:
+  - title:
+      fr: "Dangereux : tout accepter par défaut"
+      en: "Dangerous: accept everything by default"
+    file: open-firewall.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # ANTI-PATTERN - do not use this on a real server.
+
+      # Default policy ACCEPT: any unmatched packet is allowed in.
+      iptables -P INPUT ACCEPT
+      iptables -P FORWARD ACCEPT
+      iptables -P OUTPUT ACCEPT
+
+      # "Temporary" rule a tired admin adds to make a service work:
+      # it exposes EVERY port to the whole Internet.
+      iptables -A INPUT -j ACCEPT
+
+      iptables -L INPUT -n
+    output: |
+      Chain INPUT (policy ACCEPT)
+      target     prot opt source               destination
+      ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0
+    note:
+      fr: "La politique `ACCEPT` plus la règle `-A INPUT -j ACCEPT` ouvrent la totalité des ports : base de données, panneaux d'admin, ports de debug. C'est l'équivalent de retirer la porte d'entrée. N'importe quel service lié à `0.0.0.0` devient accessible depuis Internet."
+      en: "The `ACCEPT` policy plus the `-A INPUT -j ACCEPT` rule open every port: databases, admin panels, debug ports. It is the equivalent of removing the front door. Any service bound to `0.0.0.0` becomes reachable from the Internet."
+
+  - title:
+      fr: "Durci avec iptables : default DROP + SSH limité"
+      en: "Hardened with iptables: default DROP + rate-limited SSH"
+    file: firewall-iptables.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # 1. Start from a clean slate.
+      iptables -F
+      iptables -X
+
+      # 2. Default DROP: anything not explicitly allowed is refused.
+      iptables -P INPUT DROP
+      iptables -P FORWARD DROP
+      iptables -P OUTPUT ACCEPT
+
+      # 3. Loopback: local services (DB, metrics) must keep talking to each other.
+      iptables -A INPUT -i lo -j ACCEPT
+
+      # 4. Allow replies to our own outgoing connections (apt, DNS, curl...).
+      iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+      # 5. Drop obviously invalid packets (malformed/forged) early.
+      iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+
+      # 6. Rate-limit new SSH connections: max 4 tries / 60s per source IP,
+      #    which slows brute-force attacks to a crawl.
+      iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW \
+        -m recent --set --name SSH
+      iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW \
+        -m recent --update --seconds 60 --hitcount 5 --name SSH -j DROP
+      iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+      # 7. Public web service.
+      iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+
+      # 8. Allow ping but rate-limited (diagnostics without amplification).
+      iptables -A INPUT -p icmp --icmp-type echo-request \
+        -m limit --limit 1/second -j ACCEPT
+    output: |
+      # Verify:  iptables -L INPUT -n --line-numbers
+      Chain INPUT (policy DROP)
+      1 ACCEPT  all  --  0.0.0.0/0  0.0.0.0/0   (lo)
+      2 ACCEPT  all  --  0.0.0.0/0  0.0.0.0/0   ctstate ESTABLISHED,RELATED
+    note:
+      fr: "L'ordre compte : les règles sont évaluées de haut en bas. La politique `DROP` attrape tout ce qui n'a pas été accepté. Le module `recent` journalise les IP et bloque celles qui dépassent 5 connexions SSH en 60 s."
+      en: "Order matters: rules are evaluated top to bottom. The `DROP` policy catches everything not accepted. The `recent` module records source IPs and blocks those exceeding 5 SSH connections in 60s."
+
+  - title:
+      fr: "Le même pare-feu en nftables (moderne)"
+      en: "The same firewall in nftables (modern)"
+    file: firewall.nft
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/sbin/nft -f
+      # nftables: one atomic ruleset file, loaded with `nft -f firewall.nft`.
+
+      flush ruleset
+
+      table inet filter {
+        chain input {
+          # Default DROP via the chain policy.
+          type filter hook input priority 0; policy drop;
+
+          # Loopback is always trusted.
+          iif "lo" accept
+
+          # Replies to our own connections; drop invalid packets.
+          ct state established,related accept
+          ct state invalid drop
+
+          # Rate-limit NEW SSH: 4 new connections/minute per IP, then drop.
+          tcp dport 22 ct state new meter ssh_meter \
+            { ip saddr limit rate over 4/minute } drop
+          tcp dport 22 accept
+
+          # Public HTTPS.
+          tcp dport 443 accept
+
+          # Rate-limited ping for diagnostics.
+          ip protocol icmp icmp type echo-request limit rate 1/second accept
+        }
+
+        chain forward { type filter hook forward priority 0; policy drop; }
+        chain output  { type filter hook output  priority 0; policy accept; }
+      }
+    output: |
+      # Verify:  nft list ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority filter; policy drop;
+          iif "lo" accept
+          ct state established,related accept
+        }
+      }
+    note:
+      fr: "`inet` couvre IPv4 **et** IPv6 d'un coup, ce qu'iptables exigeait de dédoubler avec `ip6tables`. Un seul fichier chargé atomiquement : pas de fenêtre où la machine est à moitié protégée. C'est pourquoi nftables est recommandé pour les nouveaux déploiements."
+      en: "`inet` covers IPv4 **and** IPv6 at once, which iptables required duplicating with `ip6tables`. A single file loaded atomically: no window where the machine is half-protected. This is why nftables is recommended for new deployments."
+
+mistake:
+  fr: |
+    **Se verrouiller dehors en SSH.** L'erreur classique : passer la politique `INPUT` à `DROP` *avant* d'avoir
+    ajouté la règle qui autorise le port 22. La connexion en cours se fige immédiatement et vous perdez l'accès
+    à un serveur distant. Ajoutez **toujours** la règle SSH (et conntrack ESTABLISHED) *avant* de changer la
+    politique, et testez d'abord avec un garde-fou comme `at now + 5 minutes <<< 'iptables -F'` qui réinitialise
+    le pare-feu si vous ne l'annulez pas.
+  en: |
+    **Locking yourself out over SSH.** The classic mistake: switching the `INPUT` policy to `DROP` *before*
+    adding the rule that allows port 22. Your current session freezes instantly and you lose access to a remote
+    server. **Always** add the SSH rule (and the conntrack ESTABLISHED rule) *before* changing the policy, and
+    test behind a safety net such as `at now + 5 minutes <<< 'iptables -F'`, which resets the firewall unless
+    you cancel it in time.
+
+bestPractice:
+  fr: |
+    - **Default DROP** sur `INPUT` et `FORWARD`, toujours. Autorisez explicitement, jamais l'inverse.
+    - **Autorisez conntrack ESTABLISHED,RELATED en tête** : sans cette règle, rien ne fonctionne correctement.
+    - **Limitez SSH** (module `recent` ou `limit rate`) pour casser la force brute, en plus de Fail2Ban.
+    - **Persistez les règles** : `netfilter-persistent save` (iptables) ou `systemctl enable nftables` ; sinon tout disparaît au redémarrage.
+    - **Préférez nftables** pour un nouveau serveur : syntaxe unifiée IPv4/IPv6 et chargement atomique.
+  en: |
+    - **Default DROP** on `INPUT` and `FORWARD`, always. Allow explicitly, never the reverse.
+    - **Put conntrack ESTABLISHED,RELATED first**: without that rule, nothing works properly.
+    - **Rate-limit SSH** (the `recent` module or `limit rate`) to break brute force, on top of Fail2Ban.
+    - **Persist the rules**: `netfilter-persistent save` (iptables) or `systemctl enable nftables`; otherwise everything is lost on reboot.
+    - **Prefer nftables** for a new server: unified IPv4/IPv6 syntax and atomic loading.
+
+exercise:
+  statement:
+    fr: |
+      Vous administrez un serveur web qui doit être joignable **uniquement** sur le port **443 (HTTPS)** et
+      **22 (SSH)**. Tout le reste du trafic entrant doit être jeté.
+
+      Écrivez un script `iptables` qui :
+      1. met la politique `INPUT` sur `DROP` (sans vous verrouiller) ;
+      2. autorise le loopback et les connexions déjà établies ;
+      3. autorise SSH et HTTPS.
+    en: |
+      You administer a web server that must be reachable **only** on port **443 (HTTPS)** and **22 (SSH)**.
+      All other incoming traffic must be dropped.
+
+      Write an `iptables` script that:
+      1. sets the `INPUT` policy to `DROP` (without locking yourself out);
+      2. allows loopback and already-established connections;
+      3. allows SSH and HTTPS.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      iptables -F
+
+      # Add the ALLOW rules FIRST, so we never cut our own SSH session.
+      iptables -A INPUT -i lo -j ACCEPT
+      iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      iptables -A INPUT -p tcp --dport 22 -j ACCEPT     # SSH
+      iptables -A INPUT -p tcp --dport 443 -j ACCEPT    # HTTPS
+
+      # Only now flip the default to DROP: everything else is refused.
+      iptables -P INPUT DROP
+      iptables -P FORWARD DROP
+
+      # Persist so the rules survive a reboot.
+      netfilter-persistent save
+    note:
+      fr: "L'ordre est la clé : les `ACCEPT` sont posés avant le passage en `DROP`, donc la session SSH active n'est jamais coupée. `netfilter-persistent save` rend les règles permanentes."
+      en: "Order is key: the `ACCEPT` rules are set before switching to `DROP`, so the active SSH session is never cut. `netfilter-persistent save` makes the rules permanent."
+
+quiz:
+  - q:
+      fr: "Quelle politique par défaut rend un pare-feu réellement sécurisé ?"
+      en: "Which default policy makes a firewall genuinely secure?"
+    options:
+      fr: ["ACCEPT, puis on bloque ce qui est dangereux", "DROP, puis on autorise le strict nécessaire", "REJECT sur OUTPUT uniquement", "LOG sur toutes les chaînes"]
+      en: ["ACCEPT, then block what is dangerous", "DROP, then allow only the strict minimum", "REJECT on OUTPUT only", "LOG on every chain"]
+    answer: 1
+    why:
+      fr: "Le modèle *default deny* (politique DROP puis autorisations explicites) est le seul robuste : on ne peut pas oublier de bloquer un port, puisque tout est bloqué par défaut."
+      en: "The *default deny* model (DROP policy then explicit allows) is the only robust one: you cannot forget to block a port, since everything is blocked by default."
+  - q:
+      fr: "Pourquoi la règle `ct state established,related accept` est-elle indispensable ?"
+      en: "Why is the rule `ct state established,related accept` indispensable?"
+    options:
+      fr: ["Elle chiffre le trafic", "Elle bloque les scans de ports", "Elle laisse revenir les réponses à nos propres requêtes", "Elle accélère le noyau"]
+      en: ["It encrypts traffic", "It blocks port scans", "It lets replies to our own requests come back", "It speeds up the kernel"]
+    answer: 2
+    why:
+      fr: "Sans cette règle, les paquets de réponse à vos connexions sortantes (apt, DNS, curl) seraient jetés par la politique DROP, et la machine serait incapable de communiquer."
+      en: "Without this rule, the reply packets to your outgoing connections (apt, DNS, curl) would be dropped by the DROP policy, and the machine could not communicate."
+  - q:
+      fr: "Quel avantage majeur la table `inet` de nftables offre-t-elle ?"
+      en: "What major advantage does the nftables `inet` table offer?"
+    options:
+      fr: ["Elle gère IPv4 et IPv6 avec un seul jeu de règles", "Elle supprime le besoin de politique par défaut", "Elle chiffre les paquets", "Elle remplace SSH"]
+      en: ["It handles IPv4 and IPv6 with a single rule set", "It removes the need for a default policy", "It encrypts packets", "It replaces SSH"]
+    answer: 0
+    why:
+      fr: "La famille `inet` couvre IPv4 et IPv6 ensemble, alors qu'iptables imposait de maintenir des règles séparées avec `ip6tables`."
+      en: "The `inet` family covers IPv4 and IPv6 together, whereas iptables required maintaining separate rules with `ip6tables`."
+  - q:
+      fr: "À quoi sert le module `recent` (ou `limit rate`) sur le port 22 ?"
+      en: "What is the `recent` module (or `limit rate`) on port 22 used for?"
+    options:
+      fr: ["À chiffrer SSH", "À ouvrir un second port SSH", "À désactiver le mot de passe", "À ralentir les attaques par force brute"]
+      en: ["To encrypt SSH", "To open a second SSH port", "To disable the password", "To slow down brute-force attacks"]
+    answer: 3
+    why:
+      fr: "En limitant le nombre de nouvelles connexions SSH par IP et par minute, on rend la force brute inefficace sans bloquer les administrateurs légitimes."
+      en: "By limiting the number of new SSH connections per IP per minute, brute force becomes ineffective without blocking legitimate administrators."
+  - q:
+      fr: "Quelle commande rend les règles persistantes après un redémarrage (iptables) ?"
+      en: "Which command makes the rules persist after a reboot (iptables)?"
+    options:
+      fr: ["iptables -F", "netfilter-persistent save", "iptables -L", "nft flush ruleset"]
+      en: ["iptables -F", "netfilter-persistent save", "iptables -L", "nft flush ruleset"]
+    answer: 1
+    why:
+      fr: "`netfilter-persistent save` écrit les règles courantes sur le disque ; sans cela, elles ne vivent qu'en mémoire et disparaissent au reboot. `iptables -F` les efface, `-L` les liste seulement."
+      en: "`netfilter-persistent save` writes the current rules to disk; without it they live only in memory and vanish on reboot. `iptables -F` flushes them, `-L` only lists them."

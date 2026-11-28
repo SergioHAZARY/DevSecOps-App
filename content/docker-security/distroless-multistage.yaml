@@ -1,0 +1,312 @@
+description:
+  fr: "Réduire drastiquement la taille et les vulnérabilités d'une image avec les builds multi-stage et les images distroless ou scratch, chiffres de CVE à l'appui."
+  en: "Drastically cut an image's size and vulnerabilities with multi-stage builds and distroless or scratch images, with CVE numbers to back it up."
+duration: 22
+
+intro:
+  fr: |
+    Plus une image contient de choses, plus elle a de vulnérabilités. Un compilateur, un shell, un gestionnaire
+    de paquets, des outils de debug : chacun ajoute du code… et des failles potentielles. Pourtant, une
+    application **compilée** n'a besoin d'aucun de ces outils pour *tourner*. Le secret d'une image minimale tient
+    en deux techniques : le **build multi-stage** et les images **distroless** ou **scratch**.
+
+    L'analogie : construire une image, c'est comme déménager. On a besoin de cartons, de ruban adhésif et d'un
+    cutter pour *emballer* (l'étape de build), mais on ne les emporte pas dans le nouvel appartement (l'image
+    finale). Le multi-stage construit dans une étape riche en outils, puis **ne copie que le résultat** dans une
+    étape finale quasi vide.
+
+    Dans cette leçon, vous allez transformer une grosse image à tout faire en une image distroless minuscule,
+    comparer **les tailles et les nombres de CVE** avant/après, et comprendre pourquoi une image sans shell ni
+    gestionnaire de paquets est beaucoup plus difficile à attaquer.
+  en: |
+    The more an image contains, the more vulnerabilities it has. A compiler, a shell, a package manager, debug
+    tools: each adds code… and potential flaws. Yet a **compiled** application needs none of those tools to
+    *run*. The secret of a minimal image lies in two techniques: the **multi-stage build** and **distroless** or
+    **scratch** images.
+
+    The analogy: building an image is like moving house. You need boxes, tape and a cutter to *pack* (the build
+    stage), but you do not take them to the new flat (the final image). Multi-stage builds in a tool-rich stage,
+    then **copies only the result** into a nearly empty final stage.
+
+    In this lesson you will turn a big do-everything image into a tiny distroless one, compare **sizes and CVE
+    counts** before and after, and understand why an image with no shell and no package manager is far harder to
+    attack.
+
+sections:
+  - heading:
+      fr: "Le principe du build multi-stage"
+      en: "The multi-stage build principle"
+    body:
+      fr: |
+        Un Dockerfile **multi-stage** contient plusieurs `FROM`. Chaque `FROM` démarre une **étape**. On compile
+        ou on installe les dépendances dans une étape de *build* (qui contient le compilateur, les en-têtes, le
+        gestionnaire de paquets), puis on **copie uniquement les artefacts** nécessaires (le binaire, les fichiers
+        statiques) dans une étape *finale* basée sur une image minimale.
+
+        ```
+        FROM golang:1.22 AS build      # étape riche: compilateur, outils
+        ...compilation...
+        FROM gcr.io/distroless/static  # étape finale: presque vide
+        COPY --from=build /app /app    # on ne garde que le binaire
+        ```
+
+        Résultat : l'image finale ne contient **ni** compilateur, **ni** shell, **ni** gestionnaire de paquets —
+        seulement l'application et le strict nécessaire pour l'exécuter. La taille chute souvent de centaines de
+        mégaoctets à quelques-uns, et la surface d'attaque avec.
+      en: |
+        A **multi-stage** Dockerfile contains several `FROM`. Each `FROM` starts a **stage**. You compile or
+        install dependencies in a *build* stage (which has the compiler, headers, package manager), then **copy
+        only the needed artefacts** (the binary, static files) into a *final* stage based on a minimal image.
+
+        ```
+        FROM golang:1.22 AS build       # rich stage: compiler, tools
+        ...compile...
+        FROM gcr.io/distroless/static   # final stage: almost empty
+        COPY --from=build /app /app     # keep only the binary
+        ```
+
+        The result: the final image contains **no** compiler, **no** shell, **no** package manager — only the
+        application and the bare minimum to run it. The size often drops from hundreds of megabytes to a few, and
+        the attack surface with it.
+  - heading:
+      fr: "Distroless vs scratch vs image complète"
+      en: "Distroless vs scratch vs full image"
+    body:
+      fr: |
+        Pour l'étape finale, trois options principales :
+
+        | Base finale | Contenu | Shell ? | Usage |
+        |---|---|---|---|
+        | `ubuntu`/`debian` | OS complet, des centaines de paquets | Oui | À éviter en prod |
+        | `distroless` | Juste le runtime (libc, certificats CA) | **Non** | Idéal pour apps compilées/interprétées |
+        | `scratch` | **Rien du tout** (image vide) | Non | Binaires statiques (Go, Rust) |
+
+        Les images **distroless** (projet Google) contiennent le strict runtime : pas de shell, pas de `apt`, pas
+        de `curl`. Avantage sécurité majeur : **sans shell, beaucoup d'exploits deviennent inutilisables** (un
+        attaquant qui obtient une RCE ne peut même pas lancer `/bin/sh`). Il existe une variante `:nonroot` qui
+        tourne déjà en utilisateur non privilégié.
+
+        **`scratch`** va plus loin : l'image est totalement vide. Parfaite pour un binaire Go **statiquement
+        lié**, elle produit des images de quelques mégaoctets avec quasiment zéro CVE. En contrepartie, le debug
+        est plus difficile (pas de shell) — mais c'est justement ce qui gêne aussi l'attaquant.
+      en: |
+        For the final stage, three main options:
+
+        | Final base | Contents | Shell? | Use |
+        |---|---|---|---|
+        | `ubuntu`/`debian` | Full OS, hundreds of packages | Yes | Avoid in prod |
+        | `distroless` | Just the runtime (libc, CA certs) | **No** | Ideal for compiled/interpreted apps |
+        | `scratch` | **Nothing at all** (empty image) | No | Static binaries (Go, Rust) |
+
+        **Distroless** images (a Google project) contain the bare runtime: no shell, no `apt`, no `curl`. Major
+        security advantage: **without a shell, many exploits become unusable** (an attacker who gets an RCE cannot
+        even launch `/bin/sh`). There is a `:nonroot` variant that already runs as an unprivileged user.
+
+        **`scratch`** goes further: the image is completely empty. Perfect for a **statically linked** Go binary,
+        it produces images of a few megabytes with almost zero CVEs. The trade-off is harder debugging (no
+        shell) — but that is exactly what also hinders the attacker.
+
+examples:
+  - title:
+      fr: "Dangereux : grosse image à tout faire"
+      en: "Dangerous: a big do-everything image"
+    file: Dockerfile
+    lang: dockerfile
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - single stage, full OS, compiler kept in the image.
+      FROM golang:1.22              # ~800 MB, hundreds of packages
+
+      WORKDIR /src
+      COPY . .
+      RUN go build -o /app ./cmd/server
+
+      # The final image still contains the Go toolchain, a shell, apt,
+      # git, curl... none of which the running server needs.
+      CMD ["/app"]
+    output: |
+      # Size and vulnerabilities of the result:
+      #   docker images app:fat        ->  812MB
+      #   trivy image app:fat          ->  Total: 240 (HIGH: 31, CRITICAL: 6)
+      # A shell is present, so an RCE attacker can run /bin/sh freely.
+    note:
+      fr: "L'image embarque toute la chaîne de compilation Go, un shell et apt pour faire tourner un simple binaire : 812 Mo et des centaines de CVE. Le shell présent facilite l'exploitation d'une RCE. C'est le gaspillage et le risque réunis."
+      en: "The image ships the whole Go toolchain, a shell and apt just to run a single binary: 812 MB and hundreds of CVEs. The present shell eases exploitation of an RCE. Waste and risk combined."
+
+  - title:
+      fr: "Sécurisé : multi-stage vers distroless"
+      en: "Secure: multi-stage to distroless"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # Stage 1: build in a tool-rich image.
+      FROM golang:1.22 AS build
+      WORKDIR /src
+      COPY go.mod go.sum ./
+      RUN go mod download
+      COPY . .
+      # Static, stripped binary so it needs no external libraries.
+      RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /app ./cmd/server
+
+      # Stage 2: final image = distroless, non-root, no shell, no package mgr.
+      FROM gcr.io/distroless/static:nonroot
+      # Copy ONLY the compiled binary from the build stage.
+      COPY --from=build /app /app
+      USER nonroot:nonroot
+      EXPOSE 8080
+      ENTRYPOINT ["/app"]
+    output: |
+      # Dramatic improvement in size and CVEs:
+      #   docker images app:slim   ->  12MB   (was 812MB)
+      #   trivy image app:slim     ->  Total: 0 (HIGH: 0, CRITICAL: 0)
+      # No /bin/sh in the image: `docker exec app sh` -> exec: "sh": not found
+    note:
+      fr: "Le compilateur reste dans l'étape `build` ; seul le binaire passe dans l'image distroless `:nonroot`. On tombe de 812 Mo à 12 Mo et de centaines de CVE à zéro. Sans shell, un attaquant ne peut même pas lancer `/bin/sh`."
+      en: "The compiler stays in the `build` stage; only the binary moves into the distroless `:nonroot` image. We drop from 812 MB to 12 MB and from hundreds of CVEs to zero. With no shell, an attacker cannot even run `/bin/sh`."
+
+  - title:
+      fr: "Encore plus petit : scratch (binaire statique)"
+      en: "Even smaller: scratch (static binary)"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      FROM golang:1.22 AS build
+      WORKDIR /src
+      COPY . .
+      # Fully static binary: no libc dependency, so `scratch` is enough.
+      RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /app ./cmd/server
+
+      # The final image is COMPLETELY empty (no OS, no files).
+      FROM scratch
+      # Bring the CA certificates so the app can make HTTPS calls.
+      COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+      COPY --from=build /app /app
+      # scratch has no user database; run as an explicit numeric UID.
+      USER 10001:10001
+      ENTRYPOINT ["/app"]
+    output: |
+      #   docker images app:scratch   ->  7MB
+      #   trivy image app:scratch     ->  Total: 0
+      # Nothing to attack: no shell, no libc, no package manager, no OS.
+    note:
+      fr: "`scratch` est l'image vide absolue : parfaite pour un binaire Go statique. 7 Mo, zéro CVE, aucun outil exploitable. On copie seulement les certificats CA (pour le HTTPS sortant) et le binaire. Le debug est plus dur, mais l'attaquant aussi est démuni."
+      en: "`scratch` is the absolute empty image: perfect for a static Go binary. 7 MB, zero CVEs, no exploitable tool. You copy only the CA certificates (for outbound HTTPS) and the binary. Debugging is harder, but the attacker is equally stripped of tools."
+
+mistake:
+  fr: |
+    **Garder la chaîne de build dans l'image finale.** Oublier le multi-stage (ou copier tout `/src` dans l'étape
+    finale) laisse le compilateur, les en-têtes, `git`, `curl` et un shell dans l'image livrée : des centaines de
+    mégaoctets et de CVE pour faire tourner un binaire de quelques mégaoctets. Autre piège : choisir `scratch`
+    pour un binaire **non statique** (`CGO_ENABLED=1`) — il ne démarrera pas, faute de libc. Pour du Go, on
+    compile avec `CGO_ENABLED=0` ; sinon on choisit `distroless/base` qui fournit la libc.
+  en: |
+    **Keeping the build toolchain in the final image.** Forgetting multi-stage (or copying all of `/src` into the
+    final stage) leaves the compiler, headers, `git`, `curl` and a shell in the shipped image: hundreds of
+    megabytes and CVEs just to run a few-megabyte binary. Another trap: choosing `scratch` for a **non-static**
+    binary (`CGO_ENABLED=1`) — it will not start, lacking libc. For Go, compile with `CGO_ENABLED=0`; otherwise
+    pick `distroless/base`, which provides libc.
+
+bestPractice:
+  fr: |
+    - **Utilisez un build multi-stage** : construisez dans une étape riche, ne copiez que les artefacts dans l'étape finale.
+    - **Choisissez une base finale minimale** : `distroless` pour la plupart des apps, `scratch` pour un binaire statique.
+    - **Préférez les variantes `:nonroot`** des images distroless pour tourner sans privilèges.
+    - **Mesurez le gain** : comparez taille et CVE avant/après avec `docker images` et `trivy image`.
+    - **Compilez statiquement** (`CGO_ENABLED=0`) si vous visez `scratch`, sinon utilisez `distroless/base`.
+  en: |
+    - **Use a multi-stage build**: build in a rich stage, copy only the artefacts into the final stage.
+    - **Choose a minimal final base**: `distroless` for most apps, `scratch` for a static binary.
+    - **Prefer the `:nonroot` variants** of distroless images to run without privileges.
+    - **Measure the gain**: compare size and CVEs before/after with `docker images` and `trivy image`.
+    - **Compile statically** (`CGO_ENABLED=0`) if you target `scratch`, otherwise use `distroless/base`.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez une application Go dont l'image fait actuellement 900 Mo (single-stage, basée sur `golang:1.22`).
+
+      Réécrivez le Dockerfile en **multi-stage** pour produire une image minimale et non-root, et indiquez quelle
+      base finale vous choisissez et pourquoi. L'application fait des appels HTTPS sortants (elle a besoin des
+      certificats CA).
+    en: |
+      You have a Go application whose image is currently 900 MB (single-stage, based on `golang:1.22`).
+
+      Rewrite the Dockerfile as **multi-stage** to produce a minimal, non-root image, and state which final base
+      you choose and why. The application makes outbound HTTPS calls (it needs the CA certificates).
+  solution:
+    file: Dockerfile
+    lang: dockerfile
+    code: |
+      # Build stage: compiler and dependencies live here only.
+      FROM golang:1.22 AS build
+      WORKDIR /src
+      COPY go.mod go.sum ./
+      RUN go mod download
+      COPY . .
+      # Static binary so we can use a near-empty final image.
+      RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /app ./cmd/server
+
+      # Final base: distroless static :nonroot.
+      # Chosen because it has no shell/package manager (small attack surface),
+      # already runs as non-root, and ships CA certs for outbound HTTPS.
+      FROM gcr.io/distroless/static:nonroot
+      COPY --from=build /app /app
+      USER nonroot:nonroot
+      ENTRYPOINT ["/app"]
+    note:
+      fr: "Le multi-stage laisse le compilateur dans l'étape `build` et ne copie que le binaire. `distroless/static:nonroot` est choisi car il n'a ni shell ni gestionnaire de paquets, tourne déjà en non-root et embarque les certificats CA pour le HTTPS sortant. L'image passe de ~900 Mo à ~12 Mo."
+      en: "Multi-stage leaves the compiler in the `build` stage and copies only the binary. `distroless/static:nonroot` is chosen because it has no shell or package manager, already runs non-root and ships CA certs for outbound HTTPS. The image goes from ~900 MB to ~12 MB."
+
+quiz:
+  - q:
+      fr: "Quel est le but d'un build multi-stage ?"
+      en: "What is the purpose of a multi-stage build?"
+    options:
+      fr: ["Compiler plus vite", "Construire dans une étape riche puis ne copier que les artefacts dans une étape finale minimale", "Ajouter plus de paquets", "Chiffrer l'image"]
+      en: ["To compile faster", "To build in a rich stage then copy only the artefacts into a minimal final stage", "To add more packages", "To encrypt the image"]
+    answer: 1
+    why:
+      fr: "Le multi-stage sépare la construction (compilateur, outils) de l'exécution : seuls les artefacts nécessaires passent dans l'image finale, qui reste minimale."
+      en: "Multi-stage separates building (compiler, tools) from running: only the needed artefacts move into the final image, which stays minimal."
+  - q:
+      fr: "Pourquoi une image distroless est-elle plus sûre ?"
+      en: "Why is a distroless image safer?"
+    options:
+      fr: ["Elle est chiffrée", "Elle n'a ni shell ni gestionnaire de paquets, réduisant la surface d'attaque", "Elle tourne plus vite", "Elle contient plus d'outils"]
+      en: ["It is encrypted", "It has no shell or package manager, reducing the attack surface", "It runs faster", "It contains more tools"]
+    answer: 1
+    why:
+      fr: "Sans shell ni gestionnaire de paquets, de nombreux exploits deviennent inutilisables : un attaquant ne peut même pas lancer `/bin/sh` après une RCE."
+      en: "With no shell or package manager, many exploits become unusable: an attacker cannot even run `/bin/sh` after an RCE."
+  - q:
+      fr: "Pour quel type de binaire l'image `scratch` est-elle idéale ?"
+      en: "For which kind of binary is the `scratch` image ideal?"
+    options:
+      fr: ["Un binaire statiquement lié (ex. Go avec CGO_ENABLED=0)", "Un script Python", "Une application Java avec JVM", "N'importe quelle image"]
+      en: ["A statically linked binary (e.g. Go with CGO_ENABLED=0)", "A Python script", "A Java app with a JVM", "Any image"]
+    answer: 0
+    why:
+      fr: "`scratch` est totalement vide (pas de libc) ; il convient à un binaire statique qui n'a besoin d'aucune bibliothèque externe, comme un binaire Go compilé avec `CGO_ENABLED=0`."
+      en: "`scratch` is completely empty (no libc); it suits a static binary needing no external library, such as a Go binary compiled with `CGO_ENABLED=0`."
+  - q:
+      fr: "Que se passe-t-il si on utilise `scratch` avec un binaire non statique ?"
+      en: "What happens if you use `scratch` with a non-static binary?"
+    options:
+      fr: ["L'image est chiffrée", "Rien de spécial", "Le conteneur ne démarre pas (libc manquante)", "L'image grossit"]
+      en: ["The image is encrypted", "Nothing special", "The container fails to start (missing libc)", "The image grows"]
+    answer: 2
+    why:
+      fr: "`scratch` ne contient aucune bibliothèque ; un binaire lié dynamiquement ne trouve pas la libc et ne peut pas démarrer. On choisit alors `distroless/base` qui fournit la libc."
+      en: "`scratch` contains no library; a dynamically linked binary cannot find libc and fails to start. You then pick `distroless/base`, which provides libc."
+  - q:
+      fr: "Quel bénéfice concret mesure-t-on après passage en multi-stage + distroless ?"
+      en: "What concrete benefit do you measure after moving to multi-stage + distroless?"
+    options:
+      fr: ["Plus de couches", "Une image bien plus petite ET beaucoup moins de CVE", "Un shell plus rapide", "Plus de capabilities"]
+      en: ["More layers", "A much smaller image AND far fewer CVEs", "A faster shell", "More capabilities"]
+    answer: 1
+    why:
+      fr: "On passe typiquement de centaines de mégaoctets et de CVE à quelques mégaoctets et souvent zéro CVE : la taille et la surface d'attaque chutent ensemble."
+      en: "You typically go from hundreds of megabytes and CVEs to a few megabytes and often zero CVEs: size and attack surface fall together."

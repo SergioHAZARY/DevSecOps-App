@@ -1,0 +1,533 @@
+description:
+  fr: "Comprendre les bases de .gitlab-ci.yml : stages, jobs, rules, needs, artifacts et cache, pour poser le premier pipeline GitLab d'une petite application."
+  en: "Understand the basics of .gitlab-ci.yml: stages, jobs, rules, needs, artifacts and cache, to lay down the first GitLab pipeline of a small application."
+duration: 20
+
+intro:
+  fr: |
+    **GitLab CI/CD** est le système d'intégration continue intégré à GitLab. Comme GitHub Actions, il
+    exécute des tâches automatiques à chaque `git push`, mais sa configuration suit une logique différente :
+    un seul fichier, **`.gitlab-ci.yml`**, à la racine du dépôt, décrit tout le pipeline.
+
+    Imaginez une recette de cuisine affichée au mur : chaque étape (préparer, cuire, dresser) est listée
+    dans l'ordre, et chaque cuisinier sait quoi faire et quand. Le `.gitlab-ci.yml` est cette recette : il
+    définit des **stages** (étapes) qui s'enchaînent, et des **jobs** (tâches) qui remplissent chaque étape.
+
+    Dans cette leçon, vous allez écrire votre premier pipeline GitLab et découvrir son vocabulaire : les
+    **stages** qui ordonnent le pipeline, les **jobs** qui exécutent le travail, les **rules** qui décident
+    quand un job tourne, **needs** qui crée un graphe de dépendances, les **artifacts** qui transmettent des
+    fichiers entre jobs, et le **cache** qui accélère les dépendances. Ce pipeline servira de base que nous
+    enrichirons de sécurité au fil des leçons.
+  en: |
+    **GitLab CI/CD** is GitLab's built-in continuous integration system. Like GitHub Actions, it runs
+    automatic tasks on every `git push`, but its configuration follows a different logic: a single file,
+    **`.gitlab-ci.yml`**, at the root of the repo, describes the whole pipeline.
+
+    Picture a recipe pinned to the wall: each step (prep, cook, plate) is listed in order, and each cook
+    knows what to do and when. The `.gitlab-ci.yml` is that recipe: it defines **stages** that run in
+    sequence, and **jobs** that fill each stage.
+
+    In this lesson you will write your first GitLab pipeline and learn its vocabulary: the **stages** that
+    order the pipeline, the **jobs** that do the work, the **rules** that decide when a job runs, **needs**
+    which builds a dependency graph, the **artifacts** that pass files between jobs, and the **cache** that
+    speeds up dependencies. This pipeline becomes the base we will enrich with security through the next
+    lessons.
+
+sections:
+  - heading:
+      fr: "Stages et jobs : l'ossature du pipeline"
+      en: "Stages and jobs: the pipeline's skeleton"
+    body:
+      fr: |
+        Un pipeline GitLab s'organise en **stages** (étapes), qui s'exécutent **l'un après l'autre**. Chaque
+        stage contient un ou plusieurs **jobs**, qui s'exécutent **en parallèle** au sein du même stage.
+        Tous les jobs d'un stage doivent réussir pour passer au stage suivant.
+
+        ```yaml
+        stages:
+          - build
+          - test
+          - deploy
+
+        compile:
+          stage: build        # this job belongs to the "build" stage
+          script:
+            - make
+        ```
+
+        Chaque job définit au minimum un **`script`** : la liste des commandes shell à exécuter. Un job
+        réussit si toutes ses commandes renvoient 0 ; dès qu'une échoue, le job est rouge et bloque le
+        pipeline.
+
+        | Terme | Rôle |
+        |---|---|
+        | **`stages`** | L'ordre global des étapes (séquentiel) |
+        | **`stage:`** | À quelle étape appartient un job |
+        | **`script:`** | Les commandes du job |
+        | **`image:`** | L'image Docker dans laquelle le job tourne |
+
+        Le job s'exécute sur un **runner**, une machine qui prend le travail en charge (sujet d'une leçon
+        dédiée). L'image Docker (`image: python:3.12`) fournit l'environnement : sans elle, le runner
+        utilise son image par défaut.
+      en: |
+        A GitLab pipeline is organised into **stages**, which run **one after another**. Each stage contains
+        one or more **jobs**, which run **in parallel** within the same stage. All jobs of a stage must
+        succeed to move to the next stage.
+
+        ```yaml
+        stages:
+          - build
+          - test
+          - deploy
+
+        compile:
+          stage: build        # this job belongs to the "build" stage
+          script:
+            - make
+        ```
+
+        Each job defines at least a **`script`**: the list of shell commands to run. A job succeeds if all
+        its commands return 0; as soon as one fails, the job is red and blocks the pipeline.
+
+        | Term | Role |
+        |---|---|
+        | **`stages`** | The global order of the steps (sequential) |
+        | **`stage:`** | Which stage a job belongs to |
+        | **`script:`** | The job's commands |
+        | **`image:`** | The Docker image the job runs in |
+
+        The job runs on a **runner**, a machine that takes on the work (the topic of a dedicated lesson).
+        The Docker image (`image: python:3.12`) provides the environment: without it, the runner uses its
+        default image.
+  - heading:
+      fr: "rules : décider quand un job s'exécute"
+      en: "rules: deciding when a job runs"
+    body:
+      fr: |
+        Par défaut, un job s'exécute à chaque pipeline. On contrôle **quand** avec la clé **`rules`**, qui
+        remplace l'ancienne syntaxe `only/except`. Chaque règle teste une condition et décide : exécuter,
+        ignorer, ou rendre le job manuel.
+
+        ```yaml
+        deploy:
+          stage: deploy
+          script: [./deploy.sh]
+          rules:
+            # Run only on the default branch, and only manually
+            - if: '$CI_COMMIT_BRANCH == "main"'
+              when: manual
+            # Otherwise, never create this job
+            - when: never
+        ```
+
+        Les variables prédéfinies de GitLab (toutes préfixées `CI_`) décrivent le contexte : `CI_COMMIT_BRANCH`
+        (la branche), `CI_PIPELINE_SOURCE` (l'origine : `push`, `merge_request_event`, `schedule`),
+        `CI_COMMIT_TAG` (le tag éventuel).
+
+        | `when:` | Effet |
+        |---|---|
+        | `on_success` (défaut) | Exécute si les stages précédents ont réussi |
+        | `manual` | Crée un bouton : un humain déclenche le job |
+        | `never` | Ne crée pas le job |
+        | `always` | Exécute même si un stage précédent a échoué |
+
+        Les `rules` sont évaluées **dans l'ordre** : la première qui correspond gagne. C'est l'outil central
+        pour, par exemple, ne lancer les scans de sécurité que sur les *merge requests*, ou réserver le
+        déploiement à `main`.
+      en: |
+        By default, a job runs on every pipeline. You control **when** with the **`rules`** key, which
+        replaces the older `only/except` syntax. Each rule tests a condition and decides: run, skip, or make
+        the job manual.
+
+        ```yaml
+        deploy:
+          stage: deploy
+          script: [./deploy.sh]
+          rules:
+            # Run only on the default branch, and only manually
+            - if: '$CI_COMMIT_BRANCH == "main"'
+              when: manual
+            # Otherwise, never create this job
+            - when: never
+        ```
+
+        GitLab's predefined variables (all prefixed `CI_`) describe the context: `CI_COMMIT_BRANCH` (the
+        branch), `CI_PIPELINE_SOURCE` (the origin: `push`, `merge_request_event`, `schedule`),
+        `CI_COMMIT_TAG` (the tag, if any).
+
+        | `when:` | Effect |
+        |---|---|
+        | `on_success` (default) | Runs if previous stages succeeded |
+        | `manual` | Creates a button: a human triggers the job |
+        | `never` | Does not create the job |
+        | `always` | Runs even if a previous stage failed |
+
+        `rules` are evaluated **in order**: the first match wins. It is the central tool to, for example,
+        run security scans only on *merge requests*, or reserve deployment for `main`.
+  - heading:
+      fr: "needs, artifacts et cache"
+      en: "needs, artifacts and cache"
+    body:
+      fr: |
+        Trois mécanismes affinent et accélèrent le pipeline :
+
+        **`needs`** permet à un job de démarrer **dès qu'un job précis est terminé**, sans attendre tout son
+        stage. Cela crée un *graphe d'acyclique dirigé* (DAG) et accélère le pipeline : un job de test peut
+        démarrer dès que son build est prêt, sans attendre les autres builds.
+
+        **`artifacts`** transmet des fichiers d'un job à un autre. Un job `build` produit un binaire ou un
+        rapport ; il le déclare en `artifacts.paths`, et les jobs suivants le récupèrent automatiquement.
+        C'est aussi ainsi qu'on expose les **rapports de sécurité** (`artifacts.reports`) à l'interface
+        GitLab.
+
+        ```yaml
+        build:
+          stage: build
+          script: [npm run build]
+          artifacts:
+            paths: [dist/]           # pass dist/ to later jobs
+            expire_in: 1 week        # auto-delete to save storage
+        ```
+
+        **`cache`** conserve des dossiers entre exécutions pour éviter de tout réinstaller. On lie
+        généralement la clé au fichier de verrouillage :
+
+        ```yaml
+        cache:
+          key:
+            files: [package-lock.json]
+          paths: [.npm/]
+        ```
+
+        Différence clé : un **artifact** passe d'un job à l'autre **dans le même pipeline** et est
+        visible/téléchargeable ; un **cache** est une optimisation réutilisée **entre pipelines**, sans
+        garantie de présence. On ne met jamais de secret ni dans l'un ni dans l'autre.
+      en: |
+        Three mechanisms refine and speed up the pipeline:
+
+        **`needs`** lets a job start **as soon as a specific job finishes**, without waiting for its whole
+        stage. This creates a *directed acyclic graph* (DAG) and speeds up the pipeline: a test job can
+        start as soon as its build is ready, without waiting for the other builds.
+
+        **`artifacts`** passes files from one job to another. A `build` job produces a binary or a report;
+        it declares it in `artifacts.paths`, and the following jobs retrieve it automatically. This is also
+        how you expose **security reports** (`artifacts.reports`) to the GitLab interface.
+
+        ```yaml
+        build:
+          stage: build
+          script: [npm run build]
+          artifacts:
+            paths: [dist/]           # pass dist/ to later jobs
+            expire_in: 1 week        # auto-delete to save storage
+        ```
+
+        **`cache`** keeps folders between runs to avoid reinstalling everything. You usually tie the key to
+        the lock file:
+
+        ```yaml
+        cache:
+          key:
+            files: [package-lock.json]
+          paths: [.npm/]
+        ```
+
+        Key difference: an **artifact** passes from one job to another **within the same pipeline** and is
+        visible/downloadable; a **cache** is an optimisation reused **between pipelines**, with no guarantee
+        it is present. You never put a secret in either.
+
+examples:
+  - title:
+      fr: "Un premier pipeline : build, test, avec cache"
+      en: "A first pipeline: build, test, with cache"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      stages:
+        - build
+        - test
+
+      # Default image for every job that does not override it
+      image: node:20
+
+      # Reuse the npm cache between pipelines, keyed on the lock file
+      cache:
+        key:
+          files: [package-lock.json]
+        paths: [.npm/]
+
+      build:
+        stage: build
+        script:
+          - npm ci --cache .npm --prefer-offline
+          - npm run build
+        artifacts:
+          paths: [dist/]        # hand dist/ to the test stage
+          expire_in: 1 day
+
+      test:
+        stage: test
+        script:
+          - npm ci --cache .npm --prefer-offline
+          - npm test            # a non-zero exit fails the job and the pipeline
+    note:
+      fr: "Deux stages séquentiels : `test` n'attend que si `build` réussit. L'artifact `dist/` passe du build au test. Le cache npm, lié à `package-lock.json`, évite de retélécharger les dépendances tant qu'elles ne changent pas. Si `npm test` échoue, le pipeline est rouge."
+      en: "Two sequential stages: `test` only runs if `build` succeeds. The `dist/` artifact passes from build to test. The npm cache, tied to `package-lock.json`, avoids re-downloading dependencies as long as they do not change. If `npm test` fails, the pipeline is red."
+
+  - title:
+      fr: "Contrôler l'exécution avec rules"
+      en: "Controlling execution with rules"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      stages: [test, deploy]
+
+      unit-tests:
+        stage: test
+        image: python:3.12
+        script: [pytest -q]
+        rules:
+          # Run on merge requests and on the default branch, never elsewhere
+          - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+      deploy-prod:
+        stage: deploy
+        script: [./deploy.sh]
+        rules:
+          # Only on the default branch, and only when a human clicks the button
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+            when: manual
+          - when: never         # in every other case, do not create this job
+    note:
+      fr: "`rules` décide quand chaque job existe. Les tests tournent sur les merge requests et sur la branche par défaut. Le déploiement n'apparaît que sur `main`, et encore uniquement en `manual` : un humain doit cliquer. La règle `when: never` finale ferme tous les autres cas."
+      en: "`rules` decides when each job exists. The tests run on merge requests and on the default branch. The deployment only appears on `main`, and even then only as `manual`: a human must click. The final `when: never` rule closes every other case."
+
+  - title:
+      fr: "Accélérer avec needs (graphe de dépendances)"
+      en: "Speeding up with needs (dependency graph)"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      stages: [build, test]
+
+      build-api:
+        stage: build
+        script: [echo "build api"]
+        artifacts:
+          paths: [api/dist/]
+
+      build-web:
+        stage: build
+        script: [echo "build web"]
+        artifacts:
+          paths: [web/dist/]
+
+      test-api:
+        stage: test
+        # Start as soon as build-api is done, without waiting for build-web
+        needs: [build-api]
+        script: [echo "test api with api/dist/"]
+    note:
+      fr: "`needs: [build-api]` libère `test-api` dès que `build-api` finit, sans attendre `build-web`. Sans `needs`, `test-api` attendrait tout le stage `build`. Les artifacts de `build-api` sont automatiquement récupérés car `test-api` en dépend."
+      en: "`needs: [build-api]` releases `test-api` as soon as `build-api` finishes, without waiting for `build-web`. Without `needs`, `test-api` would wait for the whole `build` stage. The `build-api` artifacts are automatically retrieved because `test-api` depends on it."
+
+  - title:
+      fr: "Vulnérable : un secret mis en cache ou en artifact"
+      en: "Vulnerable: a secret cached or stored as an artifact"
+    file: .gitlab-ci.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      build:
+        stage: build
+        script:
+          # The job writes credentials into a file...
+          - echo "DB_PASSWORD=SuperSecret123" > .env
+          - npm run build
+        artifacts:
+          # ...and then exposes that file as a downloadable artifact: anyone
+          # with access to the pipeline can download the secret.
+          paths:
+            - .env
+            - dist/
+    note:
+      fr: "Mettre `.env` en artifact le rend **téléchargeable** par tout utilisateur ayant accès au pipeline, et il persiste jusqu'à expiration. Même problème avec le cache, partagé entre pipelines. On ne met jamais de secret en artifact ni en cache : les secrets passent par des variables protégées (leçon dédiée)."
+      en: "Putting `.env` as an artifact makes it **downloadable** by any user with pipeline access, and it persists until expiry. Same problem with the cache, shared between pipelines. Never put a secret in an artifact or a cache: secrets go through protected variables (dedicated lesson)."
+
+mistake:
+  fr: |
+    **Confondre artifacts et cache, et y stocker des données sensibles.**
+
+    Un **artifact** transmet un fichier dans le pipeline courant et reste **téléchargeable** ; un **cache**
+    est une optimisation réutilisée entre pipelines, sans garantie de présence. Les deux sont partagés et
+    persistants : y écrire un `.env`, un jeton ou une clé revient à les exposer à toute personne ayant accès
+    au projet. Les secrets n'ont leur place ni dans l'un ni dans l'autre — ils passent par des variables
+    CI/CD protégées. Autre confusion fréquente : croire que l'ordre d'écriture des jobs définit leur ordre
+    d'exécution, alors que c'est le **stage** (et `needs`) qui l'impose.
+  en: |
+    **Confusing artifacts and cache, and storing sensitive data in them.**
+
+    An **artifact** passes a file within the current pipeline and stays **downloadable**; a **cache** is an
+    optimisation reused between pipelines, with no guarantee it is present. Both are shared and persistent:
+    writing a `.env`, a token or a key into them amounts to exposing them to anyone with project access.
+    Secrets belong in neither — they go through protected CI/CD variables. Another common confusion:
+    believing the jobs' writing order defines their execution order, when it is the **stage** (and `needs`)
+    that imposes it.
+
+bestPractice:
+  fr: |
+    - **Structurez en stages clairs** (`build`, `test`, `deploy`...) : l'ordre global doit être lisible.
+    - **Pilotez l'exécution avec `rules`** (et non l'ancien `only/except`), en testant les variables `CI_`.
+    - **Réservez le déploiement** à la branche par défaut et à `when: manual` pour une validation humaine.
+    - **Utilisez `needs`** pour accélérer le pipeline sans casser les dépendances réelles.
+    - **Liez la clé de cache au fichier de verrouillage** et fixez un `expire_in` sur les artifacts.
+    - **Ne mettez jamais de secret en cache ni en artifact** : ils sont partagés et persistants.
+  en: |
+    - **Structure into clear stages** (`build`, `test`, `deploy`...): the global order must be readable.
+    - **Drive execution with `rules`** (not the old `only/except`), testing the `CI_` variables.
+    - **Reserve deployment** for the default branch and `when: manual` for human validation.
+    - **Use `needs`** to speed up the pipeline without breaking the real dependencies.
+    - **Tie the cache key to the lock file** and set an `expire_in` on artifacts.
+    - **Never put a secret in a cache or an artifact**: they are shared and persistent.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un `.gitlab-ci.yml` pour une application Python qui doit :
+
+      1. définir deux stages : `test` puis `deploy` ;
+      2. un job `pytest` (image `python:3.12`) qui tourne sur les **merge requests** et sur la **branche par
+         défaut** ;
+      3. un job `deploy` qui ne s'exécute **que** sur la branche par défaut et **uniquement en manuel**.
+    en: |
+      Write a `.gitlab-ci.yml` for a Python application that must:
+
+      1. define two stages: `test` then `deploy`;
+      2. a `pytest` job (image `python:3.12`) that runs on **merge requests** and on the **default
+         branch**;
+      3. a `deploy` job that runs **only** on the default branch and **only manually**.
+  solution:
+    file: .gitlab-ci.yml
+    lang: yaml
+    code: |
+      stages:
+        - test
+        - deploy
+
+      pytest:
+        stage: test
+        image: python:3.12
+        script:
+          - pip install -r requirements.txt
+          - pytest -q
+        rules:
+          - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+      deploy:
+        stage: deploy
+        script:
+          - ./deploy.sh
+        rules:
+          - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+            when: manual        # a human must click to deploy
+          - when: never         # never create this job otherwise
+    note:
+      fr: "Les `rules` du job `pytest` couvrent les deux déclencheurs voulus. Pour `deploy`, la première règle limite à la branche par défaut en `manual`, et `when: never` ferme tous les autres cas (branches de fonctionnalité, forks...)."
+      en: "The `pytest` job's `rules` cover both wanted triggers. For `deploy`, the first rule limits to the default branch as `manual`, and `when: never` closes every other case (feature branches, forks...)."
+
+quiz:
+  - q:
+      fr: "Comment s'exécutent les stages d'un pipeline GitLab ?"
+      en: "How do a GitLab pipeline's stages run?"
+    options:
+      fr:
+        - "Les uns après les autres, dans l'ordre déclaré"
+        - "Tous en même temps"
+        - "Dans un ordre aléatoire"
+        - "Seulement sur la branche par défaut"
+      en:
+        - "One after another, in the declared order"
+        - "All at the same time"
+        - "In a random order"
+        - "Only on the default branch"
+    answer: 0
+    why:
+      fr: "Les stages sont séquentiels ; les jobs d'un même stage, eux, tournent en parallèle. Tous doivent réussir pour passer au stage suivant."
+      en: "Stages are sequential; the jobs within a stage run in parallel. All must succeed to move to the next stage."
+  - q:
+      fr: "Quelle clé décide aujourd'hui quand un job s'exécute ?"
+      en: "Which key decides nowadays when a job runs?"
+    options:
+      fr:
+        - "`when_to_run`"
+        - "`rules`"
+        - "`trigger`"
+        - "`schedule`"
+      en:
+        - "`when_to_run`"
+        - "`rules`"
+        - "`trigger`"
+        - "`schedule`"
+    answer: 1
+    why:
+      fr: "`rules` (qui remplace l'ancien `only/except`) teste des conditions, souvent sur les variables `CI_`, et décide d'exécuter, d'ignorer ou de rendre le job manuel."
+      en: "`rules` (replacing the old `only/except`) tests conditions, often on the `CI_` variables, and decides to run, skip or make the job manual."
+  - q:
+      fr: "À quoi sert `needs` dans un job ?"
+      en: "What is `needs` for in a job?"
+    options:
+      fr:
+        - "À chiffrer les artifacts"
+        - "À installer les dépendances"
+        - "À démarrer le job dès qu'un job précis est fini, sans attendre tout le stage"
+        - "À définir l'image Docker"
+      en:
+        - "To encrypt the artifacts"
+        - "To install dependencies"
+        - "To start the job as soon as a specific job finishes, without waiting for its whole stage"
+        - "To define the Docker image"
+    answer: 2
+    why:
+      fr: "`needs` crée un graphe de dépendances (DAG) : un job démarre dès que ceux dont il dépend sont finis, ce qui accélère le pipeline."
+      en: "`needs` creates a dependency graph (DAG): a job starts as soon as those it depends on finish, which speeds up the pipeline."
+  - q:
+      fr: "Quelle différence principale entre un artifact et un cache ?"
+      en: "What is the main difference between an artifact and a cache?"
+    options:
+      fr:
+        - "L'artifact chiffre les fichiers, pas le cache"
+        - "L'artifact passe entre jobs du pipeline et est téléchargeable ; le cache est une optimisation entre pipelines"
+        - "Le cache est garanti présent, pas l'artifact"
+        - "Il n'y a aucune différence"
+      en:
+        - "The artifact encrypts files, the cache does not"
+        - "The artifact passes between jobs of the pipeline and is downloadable; the cache is an optimisation between pipelines"
+        - "The cache is guaranteed present, the artifact is not"
+        - "There is no difference"
+    answer: 1
+    why:
+      fr: "Un artifact transmet des fichiers dans le pipeline et reste téléchargeable ; un cache réutilise des dossiers entre pipelines sans garantie de présence."
+      en: "An artifact passes files within the pipeline and stays downloadable; a cache reuses folders between pipelines with no guarantee it is present."
+  - q:
+      fr: "Pourquoi ne jamais mettre un fichier `.env` en artifact ?"
+      en: "Why never put a `.env` file as an artifact?"
+    options:
+      fr:
+        - "Parce qu'il ralentit le build"
+        - "Parce que les artifacts ne supportent pas les fichiers texte"
+        - "Parce qu'il empêche le cache de fonctionner"
+        - "Parce qu'il devient téléchargeable par tout utilisateur ayant accès au pipeline"
+      en:
+        - "Because it slows the build down"
+        - "Because artifacts do not support text files"
+        - "Because it prevents the cache from working"
+        - "Because it becomes downloadable by any user with pipeline access"
+    answer: 3
+    why:
+      fr: "Un artifact est partagé et persistant : y mettre un `.env` expose les secrets. Ceux-ci passent par des variables CI/CD protégées, jamais par un artifact ou un cache."
+      en: "An artifact is shared and persistent: putting a `.env` there exposes the secrets. Those go through protected CI/CD variables, never an artifact or a cache."

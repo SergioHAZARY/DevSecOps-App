@@ -1,0 +1,309 @@
+description:
+  fr: "Durcir l'exécution d'un conteneur : utilisateur non-root, retrait des capabilities, no-new-privileges, système de fichiers en lecture seule et mode rootless."
+  en: "Harden a container's runtime: non-root user, dropped capabilities, no-new-privileges, read-only filesystem and rootless mode."
+duration: 22
+
+intro:
+  fr: |
+    Écrire un bon Dockerfile, c'est la moitié du travail. L'autre moitié se joue **au lancement** : comment on
+    exécute le conteneur. Deux conteneurs issus de la même image peuvent avoir des postures de sécurité
+    radicalement différentes selon qu'ils tournent en root avec toutes les capabilities, ou en utilisateur
+    restreint avec un disque en lecture seule.
+
+    L'analogie : le Dockerfile, c'est la façon dont on construit la voiture ; les options de `docker run`, c'est
+    la façon dont on conduit. On peut avoir une voiture bien construite et rouler sans ceinture à 200 km/h. Les
+    drapeaux de durcissement sont la ceinture, l'airbag et le limiteur de vitesse.
+
+    Dans cette leçon, vous allez appliquer quatre protections d'exécution — **`--cap-drop ALL`** (retirer les
+    capabilities), **`--security-opt no-new-privileges`** (bloquer l'escalade), **`--read-only`** (disque non
+    modifiable) — puis découvrir le **mode rootless**, où le démon Docker lui-même tourne sans root, supprimant
+    toute une classe d'évasions. Tout cela se traduit aussi en YAML dans un `docker-compose.yml`.
+  en: |
+    Writing a good Dockerfile is half the job. The other half happens **at launch**: how you run the container.
+    Two containers from the same image can have radically different security postures depending on whether they
+    run as root with all capabilities, or as a restricted user with a read-only disk.
+
+    The analogy: the Dockerfile is how you build the car; the `docker run` options are how you drive it. You can
+    have a well-built car and still drive at 200 km/h with no seatbelt. The hardening flags are the seatbelt, the
+    airbag and the speed limiter.
+
+    In this lesson you will apply four runtime protections — **`--cap-drop ALL`** (drop capabilities),
+    **`--security-opt no-new-privileges`** (block escalation), **`--read-only`** (immutable disk) — then discover
+    **rootless mode**, where the Docker daemon itself runs without root, removing a whole class of escapes. All
+    of this also translates into YAML in a `docker-compose.yml`.
+
+sections:
+  - heading:
+      fr: "Les quatre protections d'exécution"
+      en: "The four runtime protections"
+    body:
+      fr: |
+        Même avec une image parfaite, le **runtime** doit être verrouillé. Les quatre réglages clés :
+
+        | Option | Effet | Pourquoi |
+        |---|---|---|
+        | `--user 10001:10001` | Tourne en UID non-root | Limite l'impact d'une RCE |
+        | `--cap-drop ALL` | Retire toutes les capabilities | Un processus root ne peut presque rien |
+        | `--security-opt no-new-privileges` | Bloque `setuid`/escalade | Pas de montée en droits via un binaire SUID |
+        | `--read-only` | Système de fichiers en lecture seule | Empêche d'écrire un malware, de modifier des binaires |
+
+        Avec `--read-only`, les répertoires réellement inscriptibles sont montés via `--tmpfs` (ex. `/tmp`), en y
+        ajoutant `noexec,nosuid` pour qu'on ne puisse pas y exécuter de code. Si l'application a besoin d'une
+        capability précise (ex. `NET_BIND_SERVICE` pour écouter sous le port 1024), on la rajoute explicitement
+        avec `--cap-add` après avoir tout retiré. **On part de zéro, on ajoute au besoin.**
+      en: |
+        Even with a perfect image, the **runtime** must be locked down. The four key settings:
+
+        | Option | Effect | Why |
+        |---|---|---|
+        | `--user 10001:10001` | Runs as non-root UID | Limits the impact of an RCE |
+        | `--cap-drop ALL` | Removes all capabilities | A root process can do almost nothing |
+        | `--security-opt no-new-privileges` | Blocks `setuid`/escalation | No privilege gain via a SUID binary |
+        | `--read-only` | Read-only filesystem | Prevents writing malware, altering binaries |
+
+        With `--read-only`, genuinely writable directories are mounted via `--tmpfs` (e.g. `/tmp`), adding
+        `noexec,nosuid` so no code can run there. If the app needs a specific capability (e.g. `NET_BIND_SERVICE`
+        to listen below port 1024), you add it back explicitly with `--cap-add` after dropping everything. **Start
+        from zero, add as needed.**
+  - heading:
+      fr: "Le mode rootless"
+      en: "Rootless mode"
+    body:
+      fr: |
+        Même durci, un conteneur classique repose sur un **démon Docker qui tourne en root** sur l'hôte. Si une
+        faille permet de sortir du conteneur, on hérite des droits de ce démon : root. Le **mode rootless** change
+        la donne : le démon et les conteneurs tournent sous un **utilisateur non privilégié** de l'hôte, grâce aux
+        *user namespaces* qui mappent le root *du conteneur* vers un UID non-root *de l'hôte*.
+
+        | | Docker classique | Docker rootless |
+        |---|---|---|
+        | Démon | root | utilisateur normal |
+        | root dans le conteneur = | root sur l'hôte | UID non-root sur l'hôte |
+        | Évasion = | accès root hôte | accès utilisateur limité |
+
+        Le mode rootless a quelques limites (ports < 1024 nécessitant une config, certaines fonctionnalités
+        réseau), mais il supprime la plus grosse conséquence d'une évasion. Combiné aux quatre protections
+        précédentes, c'est l'état de l'art pour exécuter des conteneurs non fiables.
+      en: |
+        Even hardened, a classic container relies on a **Docker daemon running as root** on the host. If a flaw
+        lets you leave the container, you inherit that daemon's rights: root. **Rootless mode** changes this: the
+        daemon and containers run under an **unprivileged host user**, thanks to *user namespaces* that map the
+        container's root to a non-root host UID.
+
+        | | Classic Docker | Rootless Docker |
+        |---|---|---|
+        | Daemon | root | normal user |
+        | root in the container = | root on the host | non-root UID on the host |
+        | Escape = | host root access | limited user access |
+
+        Rootless mode has a few limits (ports < 1024 needing config, some network features), but it removes the
+        biggest consequence of an escape. Combined with the four previous protections, it is the state of the art
+        for running untrusted containers.
+
+examples:
+  - title:
+      fr: "Dangereux : root, toutes capabilities, disque ouvert"
+      en: "Dangerous: root, all capabilities, writable disk"
+    file: run-insecure.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # ANTI-PATTERN - the default run is far too permissive.
+      docker run -d --name app app:1.4.0
+
+      # By default this container:
+      #  - runs as root (UID 0)
+      #  - keeps Docker's default capabilities (CHOWN, SETUID, NET_RAW...)
+      #  - has a writable root filesystem
+      #  - allows privilege escalation via setuid binaries
+      # A remote code execution in the app therefore lets the attacker:
+      docker exec app sh -c 'id; whoami; echo malware > /usr/local/bin/x'
+    output: |
+      uid=0(root) gid=0(root)
+      root
+      # The attacker can write to /usr/local/bin, add a SUID binary,
+      # use NET_RAW to sniff/spoof, and try to escalate to the host.
+    note:
+      fr: "Le lancement par défaut laisse le conteneur en root, avec les capabilities par défaut et un disque inscriptible. Une RCE donne alors un terrain de jeu complet à l'attaquant, premier pas vers l'évasion."
+      en: "The default launch leaves the container as root, with default capabilities and a writable disk. An RCE then gives the attacker a full playground, the first step toward escape."
+
+  - title:
+      fr: "Sécurisé : toutes les protections d'exécution"
+      en: "Secure: all runtime protections"
+    file: run-secure.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      docker run -d --name app \
+        --user 10001:10001 \                  # non-root
+        --cap-drop ALL \                       # no capabilities...
+        --cap-add NET_BIND_SERVICE \           # ...except binding low ports
+        --security-opt no-new-privileges \     # no setuid escalation
+        --read-only \                          # immutable root filesystem
+        --tmpfs /tmp:rw,noexec,nosuid,size=64m \  # writable but non-exec /tmp
+        --memory 256m --cpus 0.5 --pids-limit 100 \
+        app:1.4.0
+
+      # Verify the posture:
+      docker exec app id
+      docker exec app sh -c 'echo test > /usr/local/bin/x' || echo "write blocked (read-only)"
+    output: |
+      uid=10001 gid=10001
+      sh: can't create /usr/local/bin/x: Read-only file system
+      write blocked (read-only)
+    note:
+      fr: "Non-root, une seule capability ajoutée au besoin, pas d'escalade, disque en lecture seule avec `/tmp` non exécutable, limites cgroups. L'attaquant d'une RCE ne peut ni écrire de binaire, ni escalader : le rayon d'impact est minuscule."
+      en: "Non-root, a single capability added as needed, no escalation, read-only disk with a non-executable `/tmp`, cgroup limits. An RCE attacker can neither write a binary nor escalate: the blast radius is tiny."
+
+  - title:
+      fr: "Sécurisé : le même durcissement en Compose"
+      en: "Secure: the same hardening in Compose"
+    file: docker-compose.yml
+    lang: yaml
+    kind: secure
+    code: |
+      services:
+        app:
+          image: app:1.4.0
+          user: "10001:10001"          # non-root
+          read_only: true              # immutable root filesystem
+          cap_drop:
+            - ALL                      # drop every capability
+          cap_add:
+            - NET_BIND_SERVICE         # add back only what is needed
+          security_opt:
+            - no-new-privileges:true   # block privilege escalation
+          tmpfs:
+            - /tmp:rw,noexec,nosuid,size=64m
+          deploy:
+            resources:
+              limits:
+                cpus: "0.5"
+                memory: 256M
+          pids_limit: 100              # cap process count (fork bombs)
+          restart: unless-stopped
+    output: |
+      # docker compose up -d && docker compose exec app id
+      #   uid=10001 gid=10001
+      # The hardening is now versioned in Git alongside the app.
+    note:
+      fr: "Chaque drapeau de `docker run` a son équivalent déclaratif en Compose (`cap_drop`, `read_only`, `security_opt`, `pids_limit`). Versionner ce fichier dans Git fait de la sécurité d'exécution une configuration reproductible et revue."
+      en: "Every `docker run` flag has its declarative equivalent in Compose (`cap_drop`, `read_only`, `security_opt`, `pids_limit`). Versioning this file in Git makes runtime security a reproducible, reviewed configuration."
+
+mistake:
+  fr: |
+    **Mettre `--read-only` sans monter de `tmpfs`, puis tout annuler en remettant root.** Première erreur :
+    beaucoup d'applications écrivent dans `/tmp` ou un cache ; avec un disque en lecture seule et aucun `tmpfs`,
+    elles plantent, et la réaction courante est de retirer `--read-only` — alors qu'il suffit d'ajouter
+    `--tmpfs /tmp`. Deuxième erreur : ajouter `--cap-add` « au cas où » une capability dont on n'a pas besoin, ou
+    repasser l'utilisateur en root pour « que ça marche ». On garde la discipline : non-root, zéro capability, et
+    on n'ajoute que le strictement nécessaire, prouvé par le test.
+  en: |
+    **Setting `--read-only` without mounting a `tmpfs`, then undoing it all by going back to root.** First
+    mistake: many apps write to `/tmp` or a cache; with a read-only disk and no `tmpfs`, they crash, and the
+    common reaction is to drop `--read-only` — when all it takes is adding `--tmpfs /tmp`. Second mistake: adding
+    `--cap-add` "just in case" for a capability you do not need, or switching the user back to root "to make it
+    work". Keep the discipline: non-root, zero capabilities, and add only the strict minimum, proven by testing.
+
+bestPractice:
+  fr: |
+    - **Exécutez en non-root** (`--user`) : c'est la protection la plus efficace contre une RCE.
+    - **Retirez toutes les capabilities** (`--cap-drop ALL`) puis rajoutez seulement celle qui est prouvée nécessaire.
+    - **Ajoutez `--security-opt no-new-privileges`** pour bloquer l'escalade par binaire SUID.
+    - **Montez le disque en lecture seule** (`--read-only`) avec un `--tmpfs` pour les répertoires inscriptibles.
+    - **Passez au mode rootless** pour les charges non fiables : le démon ne tourne plus en root.
+  en: |
+    - **Run as non-root** (`--user`): it is the most effective protection against an RCE.
+    - **Drop all capabilities** (`--cap-drop ALL`) then add back only the one proven necessary.
+    - **Add `--security-opt no-new-privileges`** to block escalation via SUID binaries.
+    - **Mount the disk read-only** (`--read-only`) with a `--tmpfs` for writable directories.
+    - **Move to rootless mode** for untrusted workloads: the daemon no longer runs as root.
+
+exercise:
+  statement:
+    fr: |
+      Vous devez lancer une API web (image `api:2.0.0`) qui écoute sur le **port 80** (donc a besoin de la
+      capability `NET_BIND_SERVICE`) et qui écrit uniquement dans `/tmp`.
+
+      Écrivez la commande `docker run` durcie : non-root (UID 10001), toutes les capabilities retirées sauf
+      `NET_BIND_SERVICE`, pas d'escalade de privilèges, disque en lecture seule avec un `/tmp` inscriptible mais
+      non exécutable.
+    en: |
+      You must launch a web API (image `api:2.0.0`) that listens on **port 80** (so it needs the
+      `NET_BIND_SERVICE` capability) and writes only to `/tmp`.
+
+      Write the hardened `docker run` command: non-root (UID 10001), all capabilities dropped except
+      `NET_BIND_SERVICE`, no privilege escalation, read-only disk with a writable but non-executable `/tmp`.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      #!/usr/bin/env bash
+      docker run -d --name api \
+        --user 10001:10001 \                   # non-root
+        --cap-drop ALL \                        # remove everything...
+        --cap-add NET_BIND_SERVICE \            # ...except binding port 80
+        --security-opt no-new-privileges \      # no setuid escalation
+        --read-only \                           # immutable root filesystem
+        --tmpfs /tmp:rw,noexec,nosuid,size=32m \  # writable, non-exec /tmp
+        -p 80:80 \
+        api:2.0.0
+    note:
+      fr: "On part de `--cap-drop ALL` puis on rajoute uniquement `NET_BIND_SERVICE`, la seule capability réellement requise. `--read-only` + `--tmpfs /tmp` permet à l'app d'écrire ses fichiers temporaires sans rendre le reste modifiable."
+      en: "We start from `--cap-drop ALL` then add back only `NET_BIND_SERVICE`, the single capability actually required. `--read-only` + `--tmpfs /tmp` lets the app write temporary files without making the rest writable."
+
+quiz:
+  - q:
+      fr: "Quelle est la protection d'exécution la plus efficace contre une RCE ?"
+      en: "What is the most effective runtime protection against an RCE?"
+    options:
+      fr: ["Exécuter le conteneur en non-root", "Augmenter la mémoire", "Publier plus de ports", "Désactiver les logs"]
+      en: ["Running the container as non-root", "Increasing memory", "Publishing more ports", "Disabling logs"]
+    answer: 0
+    why:
+      fr: "Tourner en non-root limite drastiquement ce qu'un code exécuté à distance peut faire : pas d'écriture système, pas d'accès root à l'hôte en cas d'évasion."
+      en: "Running non-root drastically limits what remotely executed code can do: no system writes, no host root access if an escape happens."
+  - q:
+      fr: "Que fait `--security-opt no-new-privileges` ?"
+      en: "What does `--security-opt no-new-privileges` do?"
+    options:
+      fr: ["Il chiffre le conteneur", "Il bloque l'escalade de privilèges (binaires SUID)", "Il ajoute des capabilities", "Il ouvre un port"]
+      en: ["It encrypts the container", "It blocks privilege escalation (SUID binaries)", "It adds capabilities", "It opens a port"]
+    answer: 1
+    why:
+      fr: "Ce drapeau empêche un processus d'obtenir plus de droits via un binaire SUID, fermant une voie d'escalade fréquente à l'intérieur du conteneur."
+      en: "This flag prevents a process from gaining more rights via a SUID binary, closing a common escalation path inside the container."
+  - q:
+      fr: "Comment rendre `/tmp` inscriptible malgré `--read-only` ?"
+      en: "How do you keep `/tmp` writable despite `--read-only`?"
+    options:
+      fr: ["En remettant root", "En retirant `--read-only`", "En montant un `--tmpfs /tmp`", "C'est impossible"]
+      en: ["By going back to root", "By removing `--read-only`", "By mounting a `--tmpfs /tmp`", "It is impossible"]
+    answer: 2
+    why:
+      fr: "Un `--tmpfs /tmp` fournit un espace inscriptible en mémoire (idéalement `noexec,nosuid`) sans rendre le reste du système de fichiers modifiable."
+      en: "A `--tmpfs /tmp` provides a writable in-memory space (ideally `noexec,nosuid`) without making the rest of the filesystem writable."
+  - q:
+      fr: "Quelle est la bonne approche pour les capabilities ?"
+      en: "What is the right approach to capabilities?"
+    options:
+      fr: ["Tout garder par défaut", "Ajouter `SYS_ADMIN` partout", "Retirer toutes les capabilities puis ajouter seulement le nécessaire", "Les ignorer"]
+      en: ["Keep everything by default", "Add `SYS_ADMIN` everywhere", "Drop all capabilities then add only what is needed", "Ignore them"]
+    answer: 2
+    why:
+      fr: "On part de `--cap-drop ALL` (zéro capability) et on ne rajoute explicitement que celles réellement requises, respectant le moindre privilège."
+      en: "You start from `--cap-drop ALL` (zero capabilities) and add back explicitly only those actually required, following least privilege."
+  - q:
+      fr: "Quel est l'avantage principal du mode rootless ?"
+      en: "What is the main advantage of rootless mode?"
+    options:
+      fr: ["Des builds plus rapides", "Plus de ports disponibles", "Des images plus petites", "Le démon ne tourne pas en root, donc une évasion ne donne pas root sur l'hôte"]
+      en: ["Faster builds", "More available ports", "Smaller images", "The daemon does not run as root, so an escape does not grant host root"]
+    answer: 3
+    why:
+      fr: "En rootless, le démon et les conteneurs tournent sous un utilisateur non privilégié ; même en cas d'évasion, l'attaquant n'obtient qu'un accès utilisateur limité, pas root sur l'hôte."
+      en: "In rootless, the daemon and containers run under an unprivileged user; even on escape, the attacker gets only limited user access, not host root."

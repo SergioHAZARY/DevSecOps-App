@@ -1,0 +1,323 @@
+description:
+  fr: "Bloquer automatiquement les attaques par force brute avec Fail2Ban : jails sshd et nginx, failregex personnalisée et pilotage avec fail2ban-client."
+  en: "Automatically block brute-force attacks with Fail2Ban: sshd and nginx jails, custom failregex and control with fail2ban-client."
+duration: 20
+
+intro:
+  fr: |
+    Un pare-feu décide *quels ports* sont ouverts, mais il ne voit pas *qui* se comporte mal derrière un port
+    autorisé. Un attaquant peut tenter des milliers de mots de passe sur votre SSH ouvert : le port est légitime,
+    le comportement ne l'est pas. C'est là qu'intervient **Fail2Ban**.
+
+    L'analogie : Fail2Ban est un videur qui lit le registre d'entrée. Chaque fois qu'il voit la même personne
+    échouer à présenter son badge, il note l'heure ; après quelques échecs, il la met dehors pour un moment.
+    Techniquement, Fail2Ban **lit les journaux** (`/var/log/auth.log`, les logs Nginx), repère des motifs d'échec
+    avec des expressions régulières (*failregex*), et **bannit** l'IP fautive en ajoutant une règle de pare-feu
+    temporaire.
+
+    Dans cette leçon, vous allez écrire un `jail.local` qui protège SSH et Nginx, créer une failregex
+    personnalisée, et piloter le tout avec `fail2ban-client`.
+  en: |
+    A firewall decides *which ports* are open, but it cannot see *who* is misbehaving behind an allowed port.
+    An attacker can try thousands of passwords against your open SSH: the port is legitimate, the behaviour is
+    not. This is where **Fail2Ban** comes in.
+
+    The analogy: Fail2Ban is a bouncer who reads the entry log. Each time he sees the same person fail to show
+    their badge, he notes the time; after a few failures, he throws them out for a while. Technically, Fail2Ban
+    **reads log files** (`/var/log/auth.log`, Nginx logs), spots failure patterns with regular expressions
+    (*failregex*), and **bans** the offending IP by adding a temporary firewall rule.
+
+    In this lesson you will write a `jail.local` that protects SSH and Nginx, create a custom failregex, and
+    drive it all with `fail2ban-client`.
+
+sections:
+  - heading:
+      fr: "jail.local : ne jamais éditer jail.conf"
+      en: "jail.local: never edit jail.conf"
+    body:
+      fr: |
+        Fail2Ban lit deux fichiers : `jail.conf` (livré par le paquet, **écrasé à chaque mise à jour**) et
+        `jail.local` (le vôtre, qui a priorité). On ne touche **jamais** à `jail.conf` : on crée `jail.local` et
+        on n'y met que ce qu'on change.
+
+        Les quatre réglages clés d'une *jail* :
+
+        | Clé | Signification | Valeur typique |
+        |---|---|---|
+        | `maxretry` | Nombre d'échecs tolérés | `5` |
+        | `findtime` | Fenêtre d'observation | `10m` |
+        | `bantime` | Durée du bannissement | `1h` (ou `-1` = permanent) |
+        | `ignoreip` | IP jamais bannies | votre IP d'admin |
+
+        Avec `maxretry = 5` et `findtime = 10m`, une IP qui échoue 5 fois en 10 minutes est bannie pendant le
+        `bantime`. **Ajoutez toujours votre propre IP dans `ignoreip`** pour ne pas vous bannir vous-même.
+      en: |
+        Fail2Ban reads two files: `jail.conf` (shipped by the package, **overwritten on every update**) and
+        `jail.local` (yours, which takes priority). You **never** touch `jail.conf`: you create `jail.local` and
+        put only what you change in it.
+
+        The four key settings of a *jail*:
+
+        | Key | Meaning | Typical value |
+        |---|---|---|
+        | `maxretry` | Failures tolerated | `5` |
+        | `findtime` | Observation window | `10m` |
+        | `bantime` | Ban duration | `1h` (or `-1` = permanent) |
+        | `ignoreip` | IPs never banned | your admin IP |
+
+        With `maxretry = 5` and `findtime = 10m`, an IP that fails 5 times within 10 minutes is banned for the
+        `bantime`. **Always add your own IP to `ignoreip`** so you do not ban yourself.
+  - heading:
+      fr: "Filtres et failregex"
+      en: "Filters and failregex"
+    body:
+      fr: |
+        Chaque jail s'appuie sur un **filtre** (`/etc/fail2ban/filter.d/<nom>.conf`) qui contient une ou plusieurs
+        `failregex`. Une failregex est une expression régulière qui doit matcher une ligne de log d'échec et
+        capturer l'adresse IP avec le marqueur `<HOST>`.
+
+        Par exemple, pour repérer un accès refusé (403) sur une page d'admin dans les logs Nginx :
+
+        ```
+        failregex = ^<HOST> .* "(GET|POST) /admin.*" 403
+        ```
+
+        Le jeton `<HOST>` est remplacé par Fail2Ban par un motif qui capture l'IPv4/IPv6. Avant de déployer, on
+        **teste** toujours une failregex contre un vrai fichier de log avec `fail2ban-regex <logfile> <filterfile>` :
+        il affiche combien de lignes ont matché, ce qui évite de bannir dans le vide… ou de ne rien bannir.
+      en: |
+        Each jail relies on a **filter** (`/etc/fail2ban/filter.d/<name>.conf`) containing one or more `failregex`.
+        A failregex is a regular expression that must match a failure log line and capture the IP address with
+        the `<HOST>` token.
+
+        For example, to catch a denied (403) hit on an admin page in Nginx logs:
+
+        ```
+        failregex = ^<HOST> .* "(GET|POST) /admin.*" 403
+        ```
+
+        The `<HOST>` token is replaced by Fail2Ban with a pattern that captures the IPv4/IPv6 address. Before
+        deploying, you **always** test a failregex against a real log file with
+        `fail2ban-regex <logfile> <filterfile>`: it reports how many lines matched, which avoids banning nothing
+        … or banning on a pattern that never fires.
+
+examples:
+  - title:
+      fr: "Dangereux : réglages trop laxistes"
+      en: "Dangerous: settings that are too lax"
+    file: jail.local
+    lang: ini
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - this jail barely slows an attacker down.
+      [sshd]
+      enabled  = true
+      # 100 tries allowed: plenty for a password-spraying bot.
+      maxretry = 100
+      # 30-second window: the counter resets before 100 tries accumulate.
+      findtime = 30s
+      # 60-second ban: the bot is back one minute later.
+      bantime  = 60
+    output: |
+      # fail2ban-client status sshd
+      Status for the jail: sshd
+      |- Currently failed: 83
+      `- Total banned:     0      <-- nobody ever reaches 100 in 30s
+    note:
+      fr: "Avec `maxretry = 100` et `findtime = 30s`, le compteur se réinitialise avant d'atteindre le seuil : personne n'est jamais banni. Un `bantime` d'une minute serait de toute façon inutile. Ces réglages donnent une fausse impression de sécurité."
+      en: "With `maxretry = 100` and `findtime = 30s`, the counter resets before reaching the threshold: nobody is ever banned. A one-minute `bantime` would be useless anyway. These settings give a false sense of security."
+
+  - title:
+      fr: "Sécurisé : jail.local pour SSH et Nginx"
+      en: "Secure: jail.local for SSH and Nginx"
+    file: jail.local
+    lang: ini
+    kind: secure
+    code: |
+      # /etc/fail2ban/jail.local - overrides jail.conf, survives upgrades.
+
+      [DEFAULT]
+      # Never ban our own admin workstation (use YOUR real IP here).
+      ignoreip   = 127.0.0.1/8 ::1 192.0.2.50
+      # 5 failures within 10 minutes -> ban for 1 hour.
+      maxretry   = 5
+      findtime   = 10m
+      bantime    = 1h
+      # Escalate: each repeat offence multiplies the ban time.
+      bantime.increment = true
+      bantime.factor    = 2
+      # Use nftables to enforce the bans.
+      banaction  = nftables-multiport
+
+      [sshd]
+      enabled  = true
+      port     = ssh
+      backend  = systemd            # read SSH failures from journald
+
+      [nginx-http-auth]
+      enabled  = true
+      port     = http,https
+      logpath  = /var/log/nginx/error.log
+
+      # Custom jail using the filter defined in the next example.
+      [nginx-admin-403]
+      enabled  = true
+      port     = http,https
+      filter   = nginx-admin-403
+      logpath  = /var/log/nginx/access.log
+      maxretry = 3                  # stricter: 3 forbidden admin hits = ban
+    output: |
+      # After `systemctl restart fail2ban`:
+      # fail2ban-client status
+      Status
+      |- Number of jail:      3
+      `- Jail list:   nginx-admin-403, nginx-http-auth, sshd
+    note:
+      fr: "`bantime.increment` double la peine à chaque récidive, ce qui épuise les attaquants persistants. `ignoreip` protège votre poste d'admin. Chaque jail pointe vers un journal et un filtre précis."
+      en: "`bantime.increment` doubles the penalty on each repeat, wearing down persistent attackers. `ignoreip` protects your admin workstation. Each jail points to a specific log and filter."
+
+  - title:
+      fr: "Filtre personnalisé + pilotage fail2ban-client"
+      en: "Custom filter + fail2ban-client control"
+    file: nginx-admin-403.conf
+    lang: ini
+    kind: secure
+    code: |
+      # /etc/fail2ban/filter.d/nginx-admin-403.conf
+      # Bans IPs repeatedly hitting /admin and getting 403 Forbidden.
+      [Definition]
+      # <HOST> is Fail2Ban's placeholder that captures the attacker IP.
+      failregex = ^<HOST> .* "(GET|POST|HEAD) /admin.*" 403
+      ignoreregex =
+
+      # --- Validate and operate from the shell (lang-wise these are commands):
+      #   fail2ban-regex /var/log/nginx/access.log \
+      #     /etc/fail2ban/filter.d/nginx-admin-403.conf   # test the regex
+      #   fail2ban-client status nginx-admin-403          # see banned IPs
+      #   fail2ban-client set nginx-admin-403 unbanip 203.0.113.10  # unban
+      #   fail2ban-client set sshd banip 203.0.113.99     # ban manually
+    output: |
+      # fail2ban-client status sshd
+      Status for the jail: sshd
+      |- Filter
+      |  |- Currently failed: 1
+      |  `- Total failed:     47
+      `- Actions
+         |- Currently banned: 2
+         `- Banned IP list:   203.0.113.10 203.0.113.99
+    note:
+      fr: "La failregex capture l'IP via `<HOST>`. `fail2ban-regex` teste le filtre sur un vrai log avant déploiement. `fail2ban-client status <jail>` liste les IP bannies ; `set <jail> unbanip` corrige un faux positif."
+      en: "The failregex captures the IP via `<HOST>`. `fail2ban-regex` tests the filter against a real log before deployment. `fail2ban-client status <jail>` lists banned IPs; `set <jail> unbanip` fixes a false positive."
+
+mistake:
+  fr: |
+    **Oublier `ignoreip` et se bannir soi-même.** Si vous testez votre propre configuration en tapant un mauvais
+    mot de passe SSH plusieurs fois, Fail2Ban vous bannit comme n'importe quel attaquant — et vous perdez l'accès.
+    Mettez toujours votre IP d'administration dans `ignoreip`. Autre piège : une **failregex qui ne matche aucune
+    ligne** (format de log différent). Testez-la systématiquement avec `fail2ban-regex` ; une jail active qui ne
+    bannit jamais ne protège rien.
+  en: |
+    **Forgetting `ignoreip` and banning yourself.** If you test your own configuration by typing a wrong SSH
+    password a few times, Fail2Ban bans you like any attacker — and you lose access. Always put your admin IP in
+    `ignoreip`. Another trap: a **failregex that matches no line** (different log format). Test it systematically
+    with `fail2ban-regex`; an active jail that never bans protects nothing.
+
+bestPractice:
+  fr: |
+    - **Travaillez dans `jail.local`**, jamais `jail.conf` : ce dernier est écrasé aux mises à jour.
+    - **Renseignez `ignoreip`** avec votre IP d'admin pour ne pas vous verrouiller dehors.
+    - **Activez `bantime.increment`** : les récidivistes écopent de bans de plus en plus longs.
+    - **Testez chaque failregex** avec `fail2ban-regex` avant de l'activer.
+    - **Fail2Ban complète, ne remplace pas** : gardez clés SSH, mot de passe désactivé et pare-feu default deny.
+  en: |
+    - **Work in `jail.local`**, never `jail.conf`: the latter is overwritten on updates.
+    - **Set `ignoreip`** with your admin IP so you cannot lock yourself out.
+    - **Enable `bantime.increment`**: repeat offenders get progressively longer bans.
+    - **Test every failregex** with `fail2ban-regex` before enabling it.
+    - **Fail2Ban complements, does not replace**: keep SSH keys, password auth off and a default-deny firewall.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez protéger SSH avec Fail2Ban selon cette politique : **4 échecs en 15 minutes** entraînent un
+      bannissement de **2 heures**, votre poste d'administration `192.0.2.50` ne doit **jamais** être banni, et
+      les échecs doivent être lus depuis journald.
+
+      Écrivez le bloc `jail.local` correspondant.
+    en: |
+      You want to protect SSH with Fail2Ban under this policy: **4 failures in 15 minutes** trigger a **2-hour**
+      ban, your admin workstation `192.0.2.50` must **never** be banned, and failures should be read from
+      journald.
+
+      Write the matching `jail.local` block.
+  solution:
+    file: jail.local
+    lang: ini
+    code: |
+      # /etc/fail2ban/jail.local
+      [DEFAULT]
+      # Admin workstation is exempt from any ban.
+      ignoreip = 127.0.0.1/8 ::1 192.0.2.50
+
+      [sshd]
+      enabled  = true
+      port     = ssh
+      backend  = systemd    # read failures from journald
+      maxretry = 4          # 4 failures...
+      findtime = 15m        # ...within 15 minutes...
+      bantime  = 2h         # ...earns a 2-hour ban
+    note:
+      fr: "`backend = systemd` lit les échecs via journald (standard sur les distributions récentes). `ignoreip` protège votre IP. `maxretry`/`findtime`/`bantime` traduisent exactement la politique demandée."
+      en: "`backend = systemd` reads failures via journald (standard on modern distributions). `ignoreip` protects your IP. `maxretry`/`findtime`/`bantime` express exactly the requested policy."
+
+quiz:
+  - q:
+      fr: "Quel fichier doit-on éditer pour personnaliser Fail2Ban ?"
+      en: "Which file should you edit to customise Fail2Ban?"
+    options:
+      fr: ["jail.conf", "jail.local", "fail2ban.service", "iptables.rules"]
+      en: ["jail.conf", "jail.local", "fail2ban.service", "iptables.rules"]
+    answer: 1
+    why:
+      fr: "`jail.local` surcharge `jail.conf` et survit aux mises à jour du paquet, qui réécrivent `jail.conf`."
+      en: "`jail.local` overrides `jail.conf` and survives package updates, which rewrite `jail.conf`."
+  - q:
+      fr: "Que capture le jeton `<HOST>` dans une failregex ?"
+      en: "What does the `<HOST>` token capture in a failregex?"
+    options:
+      fr: ["Le nom du service", "L'adresse IP de l'attaquant", "La date", "Le port local"]
+      en: ["The service name", "The attacker's IP address", "The date", "The local port"]
+    answer: 1
+    why:
+      fr: "`<HOST>` est remplacé par un motif qui capture l'IPv4/IPv6 de la source, c'est elle que Fail2Ban bannira."
+      en: "`<HOST>` is replaced by a pattern capturing the source IPv4/IPv6, which is the address Fail2Ban will ban."
+  - q:
+      fr: "Pourquoi renseigner `ignoreip` avec son IP d'administration ?"
+      en: "Why set `ignoreip` with your admin IP?"
+    options:
+      fr: ["Pour accélérer Fail2Ban", "Pour chiffrer les logs", "Pour éviter de se bannir soi-même", "Pour désactiver SSH"]
+      en: ["To speed up Fail2Ban", "To encrypt the logs", "To avoid banning yourself", "To disable SSH"]
+    answer: 2
+    why:
+      fr: "Sans exemption, un test d'échec répété depuis votre propre poste vous bannirait exactement comme un attaquant."
+      en: "Without the exemption, repeatedly failing from your own workstation would ban you exactly like an attacker."
+  - q:
+      fr: "Quelle commande teste une failregex contre un fichier de log réel ?"
+      en: "Which command tests a failregex against a real log file?"
+    options:
+      fr: ["fail2ban-client status", "systemctl restart fail2ban", "ufw status", "fail2ban-regex"]
+      en: ["fail2ban-client status", "systemctl restart fail2ban", "ufw status", "fail2ban-regex"]
+    answer: 3
+    why:
+      fr: "`fail2ban-regex <log> <filtre>` indique combien de lignes matchent, ce qui valide le filtre avant de l'activer."
+      en: "`fail2ban-regex <log> <filter>` reports how many lines match, validating the filter before enabling it."
+  - q:
+      fr: "À quoi sert `bantime.increment = true` ?"
+      en: "What does `bantime.increment = true` do?"
+    options:
+      fr: ["Il allonge la peine à chaque récidive", "Il réduit le bannissement", "Il supprime les logs", "Il ouvre le port SSH"]
+      en: ["It lengthens the penalty on each repeat offence", "It shortens the ban", "It deletes the logs", "It opens the SSH port"]
+    answer: 0
+    why:
+      fr: "Avec l'incrément activé, chaque nouveau bannissement d'une même IP est multiplié (facteur configurable), ce qui décourage les attaquants persistants."
+      en: "With increment enabled, each new ban of the same IP is multiplied (configurable factor), discouraging persistent attackers."

@@ -1,0 +1,443 @@
+description:
+  fr: "Réduire drastiquement la taille et la surface d'attaque des images avec les builds multi-stage pour Python, Node et Go, et accélérer les builds avec les caches BuildKit."
+  en: "Drastically shrink image size and attack surface with multi-stage builds for Python, Node and Go, and speed up builds with BuildKit caches."
+duration: 35
+
+intro:
+  fr: |
+    Une image Docker de 1,2 Go pour une petite API, c'est courant... et c'est un problème. Elle est lente à
+    construire, lente à télécharger, et surtout elle embarque des centaines d'outils (compilateurs, en-têtes
+    de développement, gestionnaires de paquets) dont l'application n'a aucun besoin à l'exécution. Chacun de
+    ces outils est une faille potentielle de plus.
+
+    Le **build multi-stage** (*multi-stage build*) résout tout cela. L'idée : construire dans une première
+    image bien équipée (le *builder*), puis **ne copier que le résultat** dans une seconde image minuscule
+    qui sera livrée. C'est comme cuisiner dans une grande cuisine pleine d'ustensiles, puis ne servir que
+    l'assiette finale : le client n'a pas besoin de la cuisine.
+
+    Vous allez écrire des Dockerfiles multi-stage pour Python, Node et Go, comparer les tailles avant/après,
+    accélérer les builds avec les **caches BuildKit**, et terminer sur une image `scratch` de 15 Mo.
+  en: |
+    A 1.2 GB Docker image for a small API is common... and it is a problem. It is slow to build, slow to
+    pull, and above all it ships hundreds of tools (compilers, development headers, package managers) the
+    application does not need at run time. Each of those tools is one more potential vulnerability.
+
+    The **multi-stage build** solves all of this. The idea: build in a first, well-equipped image (the
+    *builder*), then **copy only the result** into a second, tiny image that ships. It is like cooking in a
+    large kitchen full of utensils, then serving only the finished plate: the diner does not need the
+    kitchen.
+
+    You will write multi-stage Dockerfiles for Python, Node and Go, compare before/after sizes, speed up
+    builds with **BuildKit caches**, and finish on a 15 MB `scratch` image.
+
+sections:
+  - heading:
+      fr: "Le principe du multi-stage"
+      en: "The multi-stage principle"
+    body:
+      fr: |
+        Un Dockerfile multi-stage contient plusieurs instructions `FROM`. Chaque `FROM` démarre une
+        **étape** (*stage*) que l'on peut nommer (`AS builder`). La dernière étape produit l'image finale ;
+        les précédentes servent uniquement à préparer des artefacts que l'on recopie avec
+        `COPY --from=builder`.
+
+        | Couche | Rôle | Présent dans l'image finale ? |
+        |---|---|---|
+        | Étape `builder` | Compiler, installer les dépendances | Non |
+        | Étape finale | Exécuter l'application | Oui |
+
+        L'intérêt sécurité est direct : le compilateur, `pip`, `npm`, les en-têtes de développement
+        restent dans le builder et **n'arrivent jamais** dans l'image livrée. Moins d'outils = moins de
+        surface d'attaque. Un attaquant qui prend pied dans un conteneur `scratch` ne trouve ni shell, ni
+        `curl`, ni compilateur pour continuer.
+      en: |
+        A multi-stage Dockerfile contains several `FROM` instructions. Each `FROM` starts a **stage** that
+        you can name (`AS builder`). The last stage produces the final image; the earlier ones only prepare
+        artifacts that you copy over with `COPY --from=builder`.
+
+        | Layer | Purpose | Present in the final image? |
+        |---|---|---|
+        | `builder` stage | Compile, install dependencies | No |
+        | Final stage | Run the application | Yes |
+
+        The security benefit is direct: the compiler, `pip`, `npm`, development headers stay in the builder
+        and **never reach** the shipped image. Fewer tools = less attack surface. An attacker who gains a
+        foothold in a `scratch` container finds no shell, no `curl`, no compiler to carry on.
+  - heading:
+      fr: "Images de base minimales"
+      en: "Minimal base images"
+    body:
+      fr: |
+        L'étape finale doit partir de la plus petite base viable. Le choix dépend du langage :
+
+        | Base finale | Taille typique | Contenu | Pour |
+        |---|---|---|---|
+        | `python:3.12` | ~1 Go | Debian complet + outils | À éviter en prod |
+        | `python:3.12-slim` | ~130 Mo | Debian minimal + Python | Python/Node interprétés |
+        | `gcr.io/distroless/*` | ~20-50 Mo | Juste le runtime, pas de shell | Prod durcie |
+        | `scratch` | 0 Mo | Image vide | Binaires statiques (Go) |
+
+        **Distroless** (fournie par Google) ne contient ni shell, ni gestionnaire de paquets, ni même
+        `ls` : seulement le strict runtime et quelques certificats. **`scratch`** est l'image vide absolue,
+        idéale pour un binaire Go compilé statiquement qui ne dépend de rien. Dans tous les cas, on fixe un
+        **utilisateur non-root** dans l'étape finale.
+      en: |
+        The final stage must start from the smallest viable base. The choice depends on the language:
+
+        | Final base | Typical size | Contents | For |
+        |---|---|---|---|
+        | `python:3.12` | ~1 GB | Full Debian + tools | Avoid in prod |
+        | `python:3.12-slim` | ~130 MB | Minimal Debian + Python | Interpreted Python/Node |
+        | `gcr.io/distroless/*` | ~20-50 MB | Just the runtime, no shell | Hardened prod |
+        | `scratch` | 0 MB | Empty image | Static binaries (Go) |
+
+        **Distroless** (provided by Google) contains no shell, no package manager, not even `ls`: only the
+        bare runtime and a few certificates. **`scratch`** is the absolute empty image, ideal for a
+        statically compiled Go binary that depends on nothing. In every case, set a **non-root user** in the
+        final stage.
+  - heading:
+      fr: "Caches BuildKit et .dockerignore"
+      en: "BuildKit caches and .dockerignore"
+    body:
+      fr: |
+        **BuildKit** est le moteur de build moderne de Docker (actif par défaut). Il apporte les **cache
+        mounts** : `RUN --mount=type=cache` conserve le cache de `pip`, `npm` ou `go` **entre deux builds**,
+        sans jamais l'inclure dans l'image. Les réinstallations deviennent quasi instantanées.
+
+        Deux leviers complémentaires :
+
+        - **L'ordre des couches** : copiez d'abord le fichier de dépendances (`requirements.txt`,
+          `package.json`), installez, *puis* copiez le code. Docker ne réinstalle les dépendances que si
+          ce fichier change, pas à chaque modification de code.
+        - **Le `.dockerignore`** : il exclut du contexte de build le `.git`, les `node_modules` locaux, les
+          secrets, les fichiers de test. Moins de contexte = build plus rapide et aucun risque d'embarquer
+          un fichier sensible par accident.
+
+        Ces techniques réduisent à la fois le temps de build et la taille finale, sans sacrifier la
+        sécurité.
+      en: |
+        **BuildKit** is Docker's modern build engine (on by default). It brings **cache mounts**:
+        `RUN --mount=type=cache` keeps the `pip`, `npm` or `go` cache **between builds**, without ever
+        baking it into the image. Reinstalls become nearly instant.
+
+        Two complementary levers:
+
+        - **Layer ordering**: copy the dependency file first (`requirements.txt`, `package.json`), install,
+          *then* copy the code. Docker only reinstalls dependencies when that file changes, not on every
+          code edit.
+        - **The `.dockerignore`**: it excludes `.git`, local `node_modules`, secrets and test files from
+          the build context. Less context = faster build and no risk of accidentally baking in a sensitive
+          file.
+
+        These techniques cut both build time and final size, without sacrificing security.
+
+examples:
+  - title:
+      fr: "VULNÉRABLE : image Node mono-stage, 1,1 Go en root"
+      en: "VULNERABLE: single-stage Node image, 1.1 GB as root"
+    file: Dockerfile
+    lang: dockerfile
+    kind: vulnerable
+    code: |
+      # Problem 1: the full image carries the whole toolchain into production
+      FROM node:22
+
+      WORKDIR /app
+      # Problem 2: copies everything, including devDependencies and local node_modules
+      COPY . .
+      RUN npm install
+
+      # Problem 3: runs as root (node:22 default user is root)
+      # Problem 4: dev dependencies, npm, git history all shipped
+      CMD ["node", "server.js"]
+    output: |
+      $ docker build -t demo:fat . && docker images demo:fat
+      REPOSITORY   TAG   SIZE
+      demo         fat   1.1GB
+    note:
+      fr: "1,1 Go contenant npm, les outils de build et toutes les devDependencies, le tout tournant en root. C'est lent, lourd, et offre une large surface d'attaque."
+      en: "1.1 GB containing npm, the build tools and all devDependencies, all running as root. It is slow, heavy and offers a wide attack surface."
+
+  - title:
+      fr: "SÉCURISÉ : Node multi-stage, 180 Mo non-root"
+      en: "SECURE: multi-stage Node, 180 MB non-root"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # syntax=docker/dockerfile:1
+      # --- Stage 1: build with the full toolchain ---
+      FROM node:22-slim AS builder
+      WORKDIR /app
+      COPY package.json package-lock.json ./
+      # Cache mount keeps npm's cache between builds, never baked into the image
+      RUN --mount=type=cache,target=/root/.npm \
+          npm ci --omit=dev
+
+      # --- Stage 2: tiny runtime, no build tools ---
+      FROM node:22-slim
+      WORKDIR /app
+      # Copy ONLY the production node_modules and the app code from the builder
+      COPY --from=builder /app/node_modules ./node_modules
+      COPY . .
+      # Run as the built-in unprivileged "node" user, never root
+      USER node
+      CMD ["node", "server.js"]
+    output: |
+      $ docker build -t demo:slim . && docker images demo:slim
+      REPOSITORY   TAG    SIZE
+      demo         slim   182MB
+    note:
+      fr: "De 1,1 Go à 182 Mo : npm et les outils de build restent dans le builder. `npm ci --omit=dev` ignore les devDependencies, et `USER node` abandonne les droits root."
+      en: "From 1.1 GB to 182 MB: npm and the build tools stay in the builder. `npm ci --omit=dev` skips devDependencies, and `USER node` drops root privileges."
+
+  - title:
+      fr: "Go : du builder à une image scratch de 15 Mo"
+      en: "Go: from builder to a 15 MB scratch image"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # syntax=docker/dockerfile:1
+      # --- Stage 1: compile a fully static binary ---
+      FROM golang:1.23 AS builder
+      WORKDIR /src
+      COPY go.mod go.sum ./
+      # Cache the module downloads and the build cache across builds
+      RUN --mount=type=cache,target=/go/pkg/mod go mod download
+      COPY . .
+      # CGO disabled -> no libc dependency -> runs on scratch
+      RUN --mount=type=cache,target=/root/.cache/go-build \
+          CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app ./cmd/server
+
+      # --- Stage 2: empty image, just the binary and CA certs ---
+      FROM scratch
+      # Needed for outgoing TLS (HTTPS) calls
+      COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+      COPY --from=builder /app /app
+      # Run as an unprivileged numeric UID (no /etc/passwd on scratch)
+      USER 10001:10001
+      ENTRYPOINT ["/app"]
+    output: |
+      $ docker build -t demo:go . && docker images demo:go
+      REPOSITORY   TAG   SIZE
+      demo         go    15.2MB
+    note:
+      fr: "`CGO_ENABLED=0` produit un binaire statique autonome. L'image `scratch` ne contient que ce binaire et les certificats : ni shell, ni outil, une surface d'attaque quasi nulle."
+      en: "`CGO_ENABLED=0` yields a self-contained static binary. The `scratch` image holds only that binary and the certs: no shell, no tools, an almost zero attack surface."
+
+  - title:
+      fr: "Python distroless et .dockerignore"
+      en: "Python distroless and .dockerignore"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # syntax=docker/dockerfile:1
+      # --- Stage 1: install deps into a local prefix ---
+      FROM python:3.12-slim AS builder
+      WORKDIR /app
+      COPY requirements.txt .
+      RUN --mount=type=cache,target=/root/.cache/pip \
+          pip install --prefix=/install -r requirements.txt
+
+      # --- Stage 2: distroless, no shell, no package manager ---
+      FROM gcr.io/distroless/python3-debian12:nonroot
+      WORKDIR /app
+      COPY --from=builder /install /usr/local
+      COPY . .
+      # The distroless :nonroot tag already runs as an unprivileged user
+      ENTRYPOINT ["python", "server.py"]
+    output: |
+      # .dockerignore (keeps secrets and junk out of the build context)
+      .git
+      .env
+      __pycache__/
+      tests/
+      *.md
+    note:
+      fr: "L'image `distroless` finale n'a ni shell ni `pip` : impossible pour un attaquant d'y installer quoi que ce soit. Le `.dockerignore` empêche `.git` et `.env` d'entrer dans le contexte de build."
+      en: "The final `distroless` image has no shell and no `pip`: an attacker cannot install anything in it. The `.dockerignore` keeps `.git` and `.env` out of the build context."
+
+mistake:
+  fr: |
+    **Installer les dépendances après avoir copié tout le code.**
+
+    Si votre Dockerfile fait `COPY . .` puis `RUN npm install`, Docker réinstalle **toutes** les
+    dépendances à chaque fois que la moindre ligne de code change, car la couche d'installation dépend de
+    tout le contexte. Résultat : des builds de plusieurs minutes pour un changement d'une virgule. Copiez
+    d'abord le seul fichier de dépendances (`package.json`, `requirements.txt`), installez, *puis* copiez le
+    code. Le cache de la couche d'installation est alors réutilisé tant que les dépendances ne changent pas.
+    Et un `.dockerignore` oublié peut, au passage, embarquer vos secrets dans l'image.
+  en: |
+    **Installing dependencies after copying the whole codebase.**
+
+    If your Dockerfile does `COPY . .` then `RUN npm install`, Docker reinstalls **all** dependencies every
+    time a single line of code changes, because the install layer depends on the whole context. Result:
+    multi-minute builds for a one-character change. Copy only the dependency file first (`package.json`,
+    `requirements.txt`), install, *then* copy the code. The install layer's cache is then reused as long as
+    dependencies do not change. And a forgotten `.dockerignore` can, along the way, bake your secrets into
+    the image.
+
+bestPractice:
+  fr: |
+    - **Multi-stage systématique** : builder bien équipé, image finale minimale.
+    - **Base finale la plus petite viable** : `slim` pour l'interprété, `distroless` ou `scratch` sinon.
+    - **`USER` non-root** (ou UID numérique) dans l'étape finale, jamais root.
+    - **Dépendances copiées et installées avant le code** pour maximiser le cache de couches.
+    - **`RUN --mount=type=cache`** (BuildKit) pour accélérer `pip`/`npm`/`go` sans gonfler l'image.
+    - **`.dockerignore`** pour exclure `.git`, `.env`, secrets et fichiers de test du contexte.
+  en: |
+    - **Multi-stage by default**: well-equipped builder, minimal final image.
+    - **Smallest viable final base**: `slim` for interpreted, `distroless` or `scratch` otherwise.
+    - **Non-root `USER`** (or numeric UID) in the final stage, never root.
+    - **Dependencies copied and installed before the code** to maximise layer caching.
+    - **`RUN --mount=type=cache`** (BuildKit) to speed up `pip`/`npm`/`go` without bloating the image.
+    - **`.dockerignore`** to exclude `.git`, `.env`, secrets and test files from the context.
+
+exercise:
+  statement:
+    fr: |
+      Transformez ce Dockerfile Python mono-stage en un build multi-stage sécurisé :
+
+      ```dockerfile
+      FROM python:3.12
+      WORKDIR /app
+      COPY . .
+      RUN pip install -r requirements.txt
+      CMD ["python", "app.py"]
+      ```
+
+      Votre version doit : installer les dépendances dans une étape `builder`, utiliser une image finale
+      `python:3.12-slim`, copier les dépendances installées depuis le builder, tourner avec un utilisateur
+      non-root, et optimiser l'ordre des couches.
+    en: |
+      Turn this single-stage Python Dockerfile into a secure multi-stage build:
+
+      ```dockerfile
+      FROM python:3.12
+      WORKDIR /app
+      COPY . .
+      RUN pip install -r requirements.txt
+      CMD ["python", "app.py"]
+      ```
+
+      Your version must: install dependencies in a `builder` stage, use a `python:3.12-slim` final image,
+      copy the installed dependencies from the builder, run as a non-root user, and optimise layer ordering.
+  solution:
+    file: Dockerfile
+    lang: dockerfile
+    code: |
+      # syntax=docker/dockerfile:1
+      # --- Stage 1: build ---
+      FROM python:3.12-slim AS builder
+      WORKDIR /app
+      # Copy ONLY requirements first: the install layer is cached until it changes
+      COPY requirements.txt .
+      RUN --mount=type=cache,target=/root/.cache/pip \
+          pip install --prefix=/install -r requirements.txt
+
+      # --- Stage 2: slim runtime ---
+      FROM python:3.12-slim
+      WORKDIR /app
+      # Create an unprivileged user to run the app
+      RUN useradd --create-home --uid 10001 appuser
+      COPY --from=builder /install /usr/local
+      COPY . .
+      USER appuser
+      CMD ["python", "app.py"]
+    note:
+      fr: "`requirements.txt` est copié avant le code : la couche `pip install` reste en cache tant que les dépendances ne changent pas. L'image finale `slim` tourne en `appuser`, sans les outils de build."
+      en: "`requirements.txt` is copied before the code: the `pip install` layer stays cached as long as dependencies do not change. The `slim` final image runs as `appuser`, without the build tools."
+
+quiz:
+  - q:
+      fr: "Quel est l'intérêt sécurité principal d'un build multi-stage ?"
+      en: "What is the main security benefit of a multi-stage build?"
+    options:
+      fr:
+        - "Il chiffre l'image finale"
+        - "Les outils de build (compilateur, pip, npm) n'arrivent pas dans l'image livrée"
+        - "Il signe automatiquement l'image"
+        - "Il interdit les connexions réseau"
+      en:
+        - "It encrypts the final image"
+        - "The build tools (compiler, pip, npm) do not reach the shipped image"
+        - "It automatically signs the image"
+        - "It forbids network connections"
+    answer: 1
+    why:
+      fr: "On copie seulement l'artefact final depuis le builder : compilateurs et gestionnaires de paquets restent derrière, réduisant la surface d'attaque."
+      en: "Only the final artifact is copied from the builder: compilers and package managers stay behind, reducing the attack surface."
+  - q:
+      fr: "Quelle image de base convient à un binaire Go compilé statiquement ?"
+      en: "Which base image suits a statically compiled Go binary?"
+    options:
+      fr:
+        - "`golang:1.23`"
+        - "`ubuntu:24.04`"
+        - "`scratch`"
+        - "`node:22`"
+      en:
+        - "`golang:1.23`"
+        - "`ubuntu:24.04`"
+        - "`scratch`"
+        - "`node:22`"
+    answer: 2
+    why:
+      fr: "Un binaire statique (`CGO_ENABLED=0`) ne dépend de rien : l'image vide `scratch` suffit et offre une surface d'attaque quasi nulle."
+      en: "A static binary (`CGO_ENABLED=0`) depends on nothing: the empty `scratch` image is enough and offers an almost zero attack surface."
+  - q:
+      fr: "Pourquoi copier `requirements.txt` avant le reste du code ?"
+      en: "Why copy `requirements.txt` before the rest of the code?"
+    options:
+      fr:
+        - "Pour que la couche d'installation reste en cache tant que les dépendances ne changent pas"
+        - "Parce que Docker l'exige"
+        - "Pour chiffrer les dépendances"
+        - "Pour réduire le nombre de `FROM`"
+      en:
+        - "So the install layer stays cached as long as dependencies do not change"
+        - "Because Docker requires it"
+        - "To encrypt the dependencies"
+        - "To reduce the number of `FROM`"
+    answer: 0
+    why:
+      fr: "La couche `pip install` ne dépend alors que de `requirements.txt` : un changement de code ne la réinvalide pas, les builds sont bien plus rapides."
+      en: "The `pip install` layer then depends only on `requirements.txt`: a code change does not invalidate it, making builds much faster."
+  - q:
+      fr: "Que fait `RUN --mount=type=cache` de BuildKit ?"
+      en: "What does BuildKit's `RUN --mount=type=cache` do?"
+    options:
+      fr:
+        - "Il monte un secret dans l'image finale"
+        - "Il conserve le cache (pip/npm/go) entre les builds sans l'inclure dans l'image"
+        - "Il chiffre les couches"
+        - "Il supprime toutes les couches intermédiaires"
+      en:
+        - "It mounts a secret into the final image"
+        - "It keeps the (pip/npm/go) cache between builds without baking it into the image"
+        - "It encrypts the layers"
+        - "It deletes all intermediate layers"
+    answer: 1
+    why:
+      fr: "Le cache mount persiste entre deux builds pour accélérer les réinstallations, mais n'est jamais écrit dans l'image résultante."
+      en: "The cache mount persists between builds to speed up reinstalls, but is never written into the resulting image."
+  - q:
+      fr: "À quoi sert un fichier `.dockerignore` ?"
+      en: "What is a `.dockerignore` file for?"
+    options:
+      fr:
+        - "À lister les images à supprimer"
+        - "À définir l'utilisateur du conteneur"
+        - "À signer l'image"
+        - "À exclure des fichiers (`.git`, `.env`, secrets) du contexte de build"
+      en:
+        - "To list images to delete"
+        - "To define the container user"
+        - "To sign the image"
+        - "To exclude files (`.git`, `.env`, secrets) from the build context"
+    answer: 3
+    why:
+      fr: "`.dockerignore` réduit le contexte envoyé au moteur et évite d'embarquer par accident des secrets ou l'historique Git dans l'image."
+      en: "`.dockerignore` shrinks the context sent to the engine and avoids accidentally baking secrets or the Git history into the image."
