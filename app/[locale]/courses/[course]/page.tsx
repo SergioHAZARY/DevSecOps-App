@@ -46,7 +46,7 @@ export default async function CoursePage({ params }: { params: Promise<{ locale:
   const keys = course.lessons.map((l) => `${slug}/${l.slug}`);
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-1">
+    <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col lg:flex-row">
       <Sidebar locale={locale} module={sidebar.module} courses={sidebar.courses} t={{ nav: dict.nav, course: dict.course }} />
 
       <main id="main" className="min-w-0 flex-1 px-4 py-8 sm:px-6 lg:px-10">
