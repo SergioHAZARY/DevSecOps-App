@@ -1,0 +1,368 @@
+description:
+  fr: "Déployer Wazuh en single-node avec le dépôt officiel wazuh-docker : cloner un tag épinglé, générer les certificats, lancer Docker Compose, changer les mots de passe par défaut et accéder au tableau de bord."
+  en: "Deploy Wazuh single-node with the official wazuh-docker repository: clone a pinned tag, generate the certificates, run Docker Compose, change the default passwords and access the dashboard."
+duration: 30
+
+intro:
+  fr: |
+    La machine `wazuh-manager` est prête (prérequis de la leçon 1). On va maintenant y déployer le cœur du
+    SIEM : le **manager** (le cerveau qui analyse), l'**indexer** (la base qui stocke et cherche) et le
+    **dashboard** (l'interface web). La façon officielle et reproductible est d'utiliser le dépôt
+    **wazuh-docker** maintenu par l'éditeur.
+
+    Reprenons l'image du poste de sécurité : on installe aujourd'hui les **écrans de contrôle, les
+    enregistreurs et le logiciel d'analyse**. Les caméras (les agents) seront branchées en leçon 3.
+
+    > Les commandes et numéros de version ci-dessous valent **au moment de la rédaction (2026)**. Wazuh
+    > évolue : vérifiez toujours la **procédure officielle** et le **tag exact** sur la documentation et le
+    > dépôt `wazuh/wazuh-docker` avant de lancer. On déploie la **ligne 4.x** (par exemple 4.9) en
+    > **single-node**, suffisante pour un lab.
+  en: |
+    The `wazuh-manager` machine is ready (lesson 1 prerequisites). We now deploy the heart of the SIEM: the
+    **manager** (the brain that analyzes), the **indexer** (the store that keeps and searches) and the
+    **dashboard** (the web interface). The official, reproducible way is to use the **wazuh-docker**
+    repository maintained by the vendor.
+
+    Back to the security-office image: today we install the **control screens, the recorders and the
+    analysis software**. The cameras (the agents) get plugged in during lesson 3.
+
+    > The commands and version numbers below are valid **at the time of writing (2026)**. Wazuh evolves:
+    > always check the **official procedure** and the **exact tag** on the documentation and the
+    > `wazuh/wazuh-docker` repository before launching. We deploy the **4.x line** (for example 4.9) in
+    > **single-node** mode, which is enough for a lab.
+
+sections:
+  - heading:
+      fr: "La procédure officielle wazuh-docker"
+      en: "The official wazuh-docker procedure"
+    body:
+      fr: |
+        Le dépôt officiel fournit tout : les fichiers Docker Compose, un script de génération de
+        certificats et la configuration par défaut. La procédure single-node, telle que documentée par
+        Wazuh, se résume à :
+
+        1. **Cloner** le dépôt en épinglant le tag de version (la reproductibilité passe par un tag précis,
+           jamais `main`).
+        2. **Générer les certificats** internes avec le script fourni (`generate-indexer-certs.yml`), qui
+           crée les certificats TLS que le manager, l'indexer et le dashboard utilisent pour se parler.
+        3. **Démarrer** la stack avec `docker compose up`.
+        4. **Changer les mots de passe par défaut**, puis accéder au dashboard en HTTPS.
+
+        Travailler depuis un **tag** garantit que votre lab se reconstruit à l'identique. `main` peut
+        contenir des changements non publiés qui cassent le déploiement.
+      en: |
+        The official repository provides everything: the Docker Compose files, a certificate generation
+        script and the default configuration. The single-node procedure, as documented by Wazuh, boils down
+        to:
+
+        1. **Clone** the repository pinning the version tag (reproducibility requires a precise tag, never
+           `main`).
+        2. **Generate the certificates** with the provided script (`generate-indexer-certs.yml`), which
+           creates the TLS certificates that the manager, indexer and dashboard use to talk to each other.
+        3. **Start** the stack with `docker compose up`.
+        4. **Change the default passwords**, then access the dashboard over HTTPS.
+
+        Working from a **tag** guarantees your lab rebuilds identically. `main` may contain unreleased
+        changes that break the deployment.
+  - heading:
+      fr: "Changer les mots de passe par défaut (indispensable)"
+      en: "Change the default passwords (mandatory)"
+    body:
+      fr: |
+        Wazuh démarre avec des **identifiants par défaut connus de tous** (`admin` / un mot de passe
+        documenté). Les laisser en place reviendrait à installer une alarme... et à coller le code sur la
+        porte. C'est l'étape la plus souvent oubliée.
+
+        La procédure officielle de changement de mot de passe utilise un outil fourni dans le conteneur
+        indexer (`wazuh-passwords-tool`) ou la modification du fichier `internal_users.yml` suivie de
+        l'application de la configuration de sécurité. On change **au moins** :
+
+        - le mot de passe de l'utilisateur **`admin`** de l'indexer,
+        - les identifiants de l'**API Wazuh** et du **dashboard**.
+
+        Ensuite, le dashboard est accessible sur `https://localhost` (ou `https://192.0.2.10`). Le
+        certificat étant auto-signé dans un lab, le navigateur affiche un avertissement : c'est normal
+        ici, on l'accepte pour un lab local.
+      en: |
+        Wazuh starts with **default credentials known to everyone** (`admin` / a documented password).
+        Leaving them in place would be like installing an alarm... and taping the code to the door. This is
+        the most frequently skipped step.
+
+        The official password-change procedure uses a tool shipped in the indexer container
+        (`wazuh-passwords-tool`) or editing `internal_users.yml` followed by applying the security
+        configuration. You change **at least**:
+
+        - the indexer **`admin`** user password,
+        - the **Wazuh API** and **dashboard** credentials.
+
+        Afterwards, the dashboard is reachable at `https://localhost` (or `https://192.0.2.10`). As the
+        certificate is self-signed in a lab, the browser shows a warning: that is expected here, and we
+        accept it for a local lab.
+
+examples:
+  - title:
+      fr: "Déployer Wazuh single-node de bout en bout"
+      en: "Deploy Wazuh single-node end to end"
+    file: manager/setup-manager.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Deploy Wazuh single-node from the official wazuh-docker repo.
+      # Versions/paths are valid at the time of writing (2026) — confirm on the official docs.
+      set -euo pipefail
+
+      WAZUH_VERSION="v4.9.0"   # pin an exact release tag, never 'main'
+
+      # 1. Clone the official repository at the pinned tag
+      git clone https://github.com/wazuh/wazuh-docker.git -b "${WAZUH_VERSION}"
+      cd wazuh-docker/single-node
+
+      # 2. Generate the internal TLS certificates with the provided script
+      docker compose -f generate-indexer-certs.yml run --rm generator
+
+      # 3. Start the full stack (manager + indexer + dashboard) in the background
+      docker compose up -d
+
+      # 4. Wait and check the three containers are healthy
+      sleep 60
+      docker compose ps
+      echo "Dashboard will be available at https://localhost (accept the self-signed cert in a lab)."
+    output: |
+      Cloning into 'wazuh-docker'...
+      [+] Running 1/1  generator  Exited (0)
+      [+] Running 3/3
+       ✔ Container single-node-wazuh.indexer-1    Started
+       ✔ Container single-node-wazuh.manager-1    Started
+       ✔ Container single-node-wazuh.dashboard-1  Started
+      Dashboard will be available at https://localhost (accept the self-signed cert in a lab).
+    note:
+      fr: "Le tag `v4.9.0` est **épinglé** : le lab se reconstruit à l'identique. Le script `generate-indexer-certs.yml` crée les certificats TLS internes **avant** le premier démarrage ; sans eux, les composants ne peuvent pas se parler."
+      en: "The `v4.9.0` tag is **pinned**: the lab rebuilds identically. The `generate-indexer-certs.yml` script creates the internal TLS certificates **before** the first start; without them, the components cannot talk to each other."
+
+  - title:
+      fr: "Changer le mot de passe admin de l'indexer"
+      en: "Change the indexer admin password"
+    file: manager/change-passwords.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Change the default Wazuh credentials. Procedure valid at time of writing (2026);
+      # confirm the exact tool path on the official Wazuh documentation.
+      set -euo pipefail
+
+      # Pick a strong password and keep it in your password manager / vault, never in Git
+      NEW_ADMIN_PASSWORD="changeme-in-vault"
+
+      # The indexer container ships a tool to rotate the admin password hash
+      docker exec -i single-node-wazuh.indexer-1 \
+        bash -c "export INSTALLATION_DIR=/usr/share/wazuh-indexer && \
+          bash /usr/share/wazuh-indexer/plugins/opensearch-security/tools/wazuh-passwords-tool.sh \
+          -u admin -p '${NEW_ADMIN_PASSWORD}'"
+
+      # Restart so every component picks up the new credentials
+      docker restart single-node-wazuh.indexer-1 single-node-wazuh.dashboard-1 single-node-wazuh.manager-1
+      echo "Admin password changed. Update your .env and your browser-saved credentials."
+    note:
+      fr: "On **ne laisse jamais** le mot de passe par défaut. Le nouveau secret va dans un gestionnaire de secrets, pas dans Git. Après le changement, on redémarre les conteneurs pour qu'ils rechargent les identifiants."
+      en: "We **never leave** the default password. The new secret goes into a secrets manager, not into Git. After the change, we restart the containers so they reload the credentials."
+
+  - title:
+      fr: "Vérifier que la stack est en bonne santé"
+      en: "Verify the stack is healthy"
+    file: manager/healthcheck.txt
+    lang: text
+    kind: neutral
+    code: |
+      # List the containers and their status
+      $ docker compose ps
+      NAME                             STATUS          PORTS
+      single-node-wazuh.dashboard-1    Up (healthy)    0.0.0.0:443->5601/tcp
+      single-node-wazuh.indexer-1      Up (healthy)    9200/tcp
+      single-node-wazuh.manager-1      Up (healthy)    1514-1515/tcp, 0.0.0.0:55000->55000/tcp
+
+      # Confirm the indexer answers (replace the password with yours)
+      $ curl -sk -u admin:changeme-in-vault https://localhost:9200/_cluster/health | head
+      {"cluster_name":"wazuh-cluster","status":"green","number_of_nodes":1, ...}
+    note:
+      fr: "`status: green` côté indexer et trois conteneurs `healthy` : la stack est opérationnelle. Les ports **1514/1515** du manager attendent les agents (leçon 3) ; **443** sert le dashboard ; **55000** est l'API Wazuh."
+      en: "`status: green` on the indexer and three `healthy` containers: the stack is operational. The manager's **1514/1515** ports await the agents (lesson 3); **443** serves the dashboard; **55000** is the Wazuh API."
+
+  - title:
+      fr: "Contre-exemple : déployer sans épingler ni sécuriser"
+      en: "Counter-example: deploying without pinning or securing"
+    file: manager/bad-setup.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      #!/usr/bin/env bash
+      # DO NOT do this. Shown to highlight three real mistakes.
+
+      # Mistake 1: cloning 'main' — unreproducible, may be broken or unreleased
+      git clone https://github.com/wazuh/wazuh-docker.git
+      cd wazuh-docker/single-node
+
+      # Mistake 2: skipping certificate generation — components cannot establish TLS
+      docker compose up -d
+
+      # Mistake 3: never changing the default password — anyone who reaches the dashboard logs in
+      echo "Open https://localhost and log in with admin / <the well-known default>"
+    note:
+      fr: "Trois erreurs réunies : cloner `main` (non reproductible), sauter la génération des certificats (la stack ne démarre pas correctement) et garder le mot de passe par défaut (accès trivial). Faites l'inverse de ce script."
+      en: "Three mistakes together: cloning `main` (not reproducible), skipping certificate generation (the stack won't start properly) and keeping the default password (trivial access). Do the opposite of this script."
+
+mistake:
+  fr: |
+    **Laisser les identifiants par défaut de Wazuh.**
+
+    Wazuh est livré avec un compte `admin` dont le mot de passe par défaut est **public** (dans la
+    documentation). Beaucoup de labs — et, hélas, de déploiements réels — restent ainsi. N'importe qui
+    atteignant le dashboard ou l'API prend alors le contrôle du SIEM : il peut lire tous les journaux,
+    désactiver les règles, effacer les traces. Changez **tous** les mots de passe par défaut juste après
+    le premier démarrage, et stockez les nouveaux dans un gestionnaire de secrets.
+  en: |
+    **Leaving Wazuh's default credentials.**
+
+    Wazuh ships with an `admin` account whose default password is **public** (in the documentation). Many
+    labs — and, sadly, real deployments — stay that way. Anyone reaching the dashboard or the API then
+    takes control of the SIEM: they can read every log, disable rules, erase traces. Change **all** default
+    passwords right after the first start, and store the new ones in a secrets manager.
+
+bestPractice:
+  fr: |
+    - **Clonez un tag précis** (`-b vX.Y.Z`), jamais `main` : le lab doit être reproductible.
+    - **Générez les certificats** avec le script officiel avant le premier `docker compose up`.
+    - **Changez tous les mots de passe par défaut** immédiatement, et conservez-les dans un coffre.
+    - **Vérifiez l'état « green »** de l'indexer et le `healthy` des conteneurs avant de continuer.
+    - **Confirmez toujours la procédure officielle** : versions, chemins et outils évoluent avec Wazuh.
+  en: |
+    - **Clone a precise tag** (`-b vX.Y.Z`), never `main`: the lab must be reproducible.
+    - **Generate the certificates** with the official script before the first `docker compose up`.
+    - **Change all default passwords** immediately, and keep them in a vault.
+    - **Check the indexer's "green" status** and the containers' `healthy` state before continuing.
+    - **Always confirm the official procedure**: versions, paths and tools change with Wazuh.
+
+exercise:
+  statement:
+    fr: |
+      Après `docker compose up -d`, un seul conteneur, `wazuh.indexer`, redémarre en boucle alors que le
+      manager et le dashboard sont `healthy`.
+
+      1. Donnez la commande pour lire les logs du conteneur indexer.
+      2. Quelle est la cause la plus probable, et comment la corriger ?
+    en: |
+      After `docker compose up -d`, a single container, `wazuh.indexer`, keeps restarting while the manager
+      and dashboard are `healthy`.
+
+      1. Give the command to read the indexer container's logs.
+      2. What is the most likely cause, and how do you fix it?
+  solution:
+    file: debug-indexer.sh
+    lang: bash
+    code: |
+      # 1. Read the indexer logs to see why it crash-loops
+      docker logs single-node-wazuh.indexer-1 | tail -n 30
+      # Look for: "max virtual memory areas vm.max_map_count [65530] is too low"
+
+      # 2. Most likely cause: vm.max_map_count too low (the lesson-1 prerequisite was skipped
+      #    or lost after a reboot). Fix it permanently, then restart the stack:
+      sudo sysctl -w vm.max_map_count=262144
+      echo "vm.max_map_count=262144" | sudo tee /etc/sysctl.d/99-wazuh.conf
+      docker restart single-node-wazuh.indexer-1
+    note:
+      fr: "Quand **seul** l'indexer tombe, pensez d'abord à `vm.max_map_count`. C'est le même piège que la leçon 1, qui réapparaît si le réglage n'a pas été rendu permanent et que la machine a redémarré."
+      en: "When **only** the indexer fails, think of `vm.max_map_count` first. It is the same trap as lesson 1, which reappears if the setting was not made permanent and the machine rebooted."
+
+quiz:
+  - q:
+      fr: "Pourquoi cloner wazuh-docker sur un tag précis plutôt que sur `main` ?"
+      en: "Why clone wazuh-docker at a precise tag rather than `main`?"
+    options:
+      fr:
+        - "Pour que le déploiement soit reproductible et éviter des changements non publiés qui cassent le lab"
+        - "Parce que `main` est payant"
+        - "Pour télécharger moins de fichiers"
+        - "Parce que Docker refuse les branches"
+      en:
+        - "So the deployment is reproducible and to avoid unreleased changes that break the lab"
+        - "Because `main` is paid"
+        - "To download fewer files"
+        - "Because Docker refuses branches"
+    answer: 0
+    why:
+      fr: "Un tag fige une version publiée et testée ; `main` peut contenir du code en cours qui ne démarre pas."
+      en: "A tag freezes a released, tested version; `main` may contain in-progress code that does not start."
+  - q:
+      fr: "À quoi sert le script `generate-indexer-certs.yml` ?"
+      en: "What is the `generate-indexer-certs.yml` script for?"
+    options:
+      fr:
+        - "À créer les comptes utilisateurs"
+        - "À générer les certificats TLS internes que manager, indexer et dashboard utilisent"
+        - "À télécharger les règles de détection"
+        - "À régler `vm.max_map_count`"
+      en:
+        - "To create the user accounts"
+        - "To generate the internal TLS certificates used by manager, indexer and dashboard"
+        - "To download the detection rules"
+        - "To set `vm.max_map_count`"
+    answer: 1
+    why:
+      fr: "Les composants communiquent en TLS ; sans ces certificats générés au préalable, ils ne peuvent pas établir la connexion sécurisée."
+      en: "The components communicate over TLS; without these pre-generated certificates, they cannot establish the secure connection."
+  - q:
+      fr: "Quelle étape ne faut-il jamais sauter après le premier démarrage ?"
+      en: "Which step must never be skipped after the first start?"
+    options:
+      fr:
+        - "Supprimer les logs"
+        - "Désactiver le pare-feu"
+        - "Changer tous les mots de passe par défaut"
+        - "Ouvrir le port 9200 sur Internet"
+      en:
+        - "Deleting the logs"
+        - "Disabling the firewall"
+        - "Changing all default passwords"
+        - "Opening port 9200 to the internet"
+    answer: 2
+    why:
+      fr: "Les identifiants par défaut de Wazuh sont publics. Les garder donne le contrôle du SIEM à quiconque atteint le dashboard ou l'API."
+      en: "Wazuh's default credentials are public. Keeping them hands control of the SIEM to anyone reaching the dashboard or API."
+  - q:
+      fr: "Quels ports du manager attendent la connexion des agents ?"
+      en: "Which manager ports wait for agents to connect?"
+    options:
+      fr:
+        - "80 et 443"
+        - "1514 (collecte) et 1515 (enrôlement)"
+        - "22 et 3389"
+        - "9200 et 5601"
+      en:
+        - "80 and 443"
+        - "1514 (collection) and 1515 (enrollment)"
+        - "22 and 3389"
+        - "9200 and 5601"
+
+    answer: 1
+    why:
+      fr: "L'agent s'enrôle sur 1515 puis envoie ses événements sur 1514. Le 443 sert le dashboard, le 9200 est l'indexer."
+      en: "The agent enrolls on 1515 then sends its events on 1514. Port 443 serves the dashboard, 9200 is the indexer."
+  - q:
+      fr: "Dans un lab, pourquoi le navigateur affiche-t-il un avertissement en ouvrant le dashboard ?"
+      en: "In a lab, why does the browser show a warning when opening the dashboard?"
+    options:
+      fr:
+        - "Parce que le certificat TLS est auto-signé, ce qui est attendu en local"
+        - "Parce que Wazuh est en panne"
+        - "Parce que le mot de passe est faux"
+        - "Parce que Docker bloque le port"
+      en:
+        - "Because the TLS certificate is self-signed, which is expected locally"
+        - "Because Wazuh is down"
+        - "Because the password is wrong"
+        - "Because Docker blocks the port"
+    answer: 0
+    why:
+      fr: "Les certificats du lab sont auto-signés, donc non reconnus par une autorité ; l'avertissement est normal et l'on accepte pour un usage local."
+      en: "The lab certificates are self-signed, so not recognized by an authority; the warning is normal and we accept it for local use."

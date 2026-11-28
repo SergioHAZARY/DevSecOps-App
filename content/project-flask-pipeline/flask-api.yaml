@@ -1,0 +1,491 @@
+description:
+  fr: "Écrire l'API Flask sécurisée : app factory, configuration par environnement, requêtes SQLite paramétrées, validation des entrées, en-têtes de sécurité et tests pytest."
+  en: "Write the secure Flask API: app factory, environment-based configuration, parameterized SQLite queries, input validation, security headers and pytest tests."
+duration: 30
+
+intro:
+  fr: |
+    C'est le cœur du projet : l'**API Flask**. Flask est un micro-framework Python pour créer des serveurs
+    web. Nous allons écrire une API propre et sécurisée, puis ses tests.
+
+    L'application gère des « items » (un `id` et un `name`). Simple en apparence, mais chaque ligne
+    applique une règle de sécurité : **configuration hors du code**, **requêtes SQL paramétrées**,
+    **validation des entrées** et **en-têtes de sécurité HTTP**.
+
+    Analogie : construire l'API, c'est comme installer une porte. Beaucoup la posent et passent à autre
+    chose. Nous, on pose la porte *et* la serrure, le judas et le pêne : la sécurité fait partie de la
+    construction, pas d'une rénovation ultérieure. À la fin, `pytest` vérifiera que la porte tient.
+  en: |
+    This is the heart of the project: the **Flask API**. Flask is a Python micro-framework for building
+    web servers. We will write a clean, secure API, then its tests.
+
+    The application manages "items" (an `id` and a `name`). Simple on the surface, but every line applies
+    a security rule: **configuration out of the code**, **parameterized SQL queries**, **input
+    validation** and **HTTP security headers**.
+
+    Analogy: building the API is like fitting a door. Many fit it and move on. We fit the door *and* the
+    lock, the peephole and the bolt: security is part of the build, not a later renovation. At the end,
+    `pytest` will verify that the door holds.
+
+sections:
+  - heading:
+      fr: "L'app factory : une application configurable et testable"
+      en: "The app factory: a configurable and testable application"
+    body:
+      fr: |
+        Plutôt qu'une variable `app` globale, on utilise le patron **app factory** : une fonction
+        `create_app(config)` qui construit et renvoie l'application. Deux avantages majeurs :
+
+        1. **Testabilité** : chaque test crée une application neuve avec une base jetable, sans effet de bord.
+        2. **Configuration injectée** : on passe une configuration différente en test et en production.
+
+        La configuration (clé secrète, chemin de la base) est lue depuis l'**environnement**
+        (`os.environ`), jamais écrite en dur. C'est la règle du *12-factor app* et la première défense
+        contre les secrets en clair.
+      en: |
+        Rather than a global `app` variable, we use the **app factory** pattern: a `create_app(config)`
+        function that builds and returns the application. Two major benefits:
+
+        1. **Testability**: each test creates a fresh application with a throwaway database, no side effects.
+        2. **Injected configuration**: we pass a different configuration in tests and in production.
+
+        The configuration (secret key, database path) is read from the **environment** (`os.environ`),
+        never hard-coded. This is the *12-factor app* rule and the first defense against clear-text secrets.
+  - heading:
+      fr: "Requêtes paramétrées et validation des entrées"
+      en: "Parameterized queries and input validation"
+    body:
+      fr: |
+        Toutes les requêtes SQL utilisent des **marqueurs `?`** : la valeur fournie par l'utilisateur est
+        transmise séparément et **jamais** interprétée comme du SQL. C'est la parade définitive à
+        l'**injection SQL** (OWASP A03).
+
+        En parallèle, chaque entrée est **validée** avant usage : le champ `name` doit être une chaîne de
+        1 à 80 caractères. On rejette tout le reste avec un code HTTP `400`. Ne jamais faire confiance aux
+        données du client est un principe fondamental de l'AppSec.
+      en: |
+        Every SQL query uses **`?` placeholders**: the user-supplied value is sent separately and
+        **never** interpreted as SQL. This is the definitive defense against **SQL injection** (OWASP A03).
+
+        In parallel, every input is **validated** before use: the `name` field must be a string of 1 to
+        80 characters. Everything else is rejected with an HTTP `400`. Never trusting client data is a
+        fundamental AppSec principle.
+  - heading:
+      fr: "En-têtes de sécurité et gestion des erreurs"
+      en: "Security headers and error handling"
+    body:
+      fr: |
+        Un hook `after_request` ajoute des **en-têtes de sécurité** à **chaque** réponse :
+
+        | En-tête | Rôle |
+        |---|---|
+        | `X-Content-Type-Options: nosniff` | Empêche le navigateur de deviner le type de contenu |
+        | `X-Frame-Options: DENY` | Bloque l'inclusion dans une iframe (anti-clickjacking) |
+        | `Content-Security-Policy: default-src 'none'` | Restreint les sources autorisées |
+        | `Referrer-Policy: no-referrer` | Ne divulgue pas l'URL d'origine |
+
+        Enfin, les erreurs renvoient un **JSON propre** (`{"error": "..."}`) sans fuite de trace technique :
+        une pile d'exécution exposée est une mine d'informations pour un attaquant.
+      en: |
+        An `after_request` hook adds **security headers** to **every** response:
+
+        | Header | Purpose |
+        |---|---|
+        | `X-Content-Type-Options: nosniff` | Stops the browser from guessing the content type |
+        | `X-Frame-Options: DENY` | Blocks framing in an iframe (anti-clickjacking) |
+        | `Content-Security-Policy: default-src 'none'` | Restricts allowed sources |
+        | `Referrer-Policy: no-referrer` | Does not leak the originating URL |
+
+        Finally, errors return **clean JSON** (`{"error": "..."}`) without leaking a technical trace: an
+        exposed stack trace is a goldmine for an attacker.
+
+examples:
+  - title:
+      fr: "La configuration, lue depuis l'environnement"
+      en: "The configuration, read from the environment"
+    file: app/config.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+
+
+      class Config:
+          # Secrets and paths come from the environment, never hard-coded.
+          # A missing SECRET_KEY in production is better than a leaked one in Git.
+          SECRET_KEY = os.environ.get("SECRET_KEY", "")
+          # Default to a local file; the container overrides this via DATABASE env var.
+          DATABASE = os.environ.get("DATABASE", "items.db")
+          # Do not expose the server banner / keep responses lean.
+          JSON_SORT_KEYS = False
+    note:
+      fr: "Aucune valeur sensible n'est écrite dans le code. En production, `SECRET_KEY` et `DATABASE` sont injectés par le conteneur ou le coffre de secrets."
+      en: "No sensitive value is written in the code. In production, `SECRET_KEY` and `DATABASE` are injected by the container or the secret vault."
+
+  - title:
+      fr: "Accès à la base : SQLite avec requêtes paramétrées"
+      en: "Database access: SQLite with parameterized queries"
+    file: app/db.py
+    lang: python
+    kind: secure
+    code: |
+      import sqlite3
+
+      from flask import current_app, g
+
+
+      def get_db():
+          # One connection per request, stored on Flask's "g" object.
+          if "db" not in g:
+              g.db = sqlite3.connect(current_app.config["DATABASE"])
+              g.db.row_factory = sqlite3.Row  # rows behave like dicts
+          return g.db
+
+
+      def close_db(exception=None):
+          db = g.pop("db", None)
+          if db is not None:
+              db.close()
+
+
+      def init_db():
+          db = get_db()
+          db.execute(
+              "CREATE TABLE IF NOT EXISTS items ("
+              "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)"
+          )
+          db.commit()
+
+
+      def init_app(app):
+          # Close the connection after each request, create the table at startup.
+          app.teardown_appcontext(close_db)
+          with app.app_context():
+              init_db()
+    note:
+      fr: "La connexion est ouverte par requête puis fermée proprement. `init_db` crée la table au démarrage. Toutes les requêtes métier (dans `routes.py`) utiliseront des marqueurs `?`."
+      en: "The connection is opened per request then closed cleanly. `init_db` creates the table at startup. All business queries (in `routes.py`) will use `?` placeholders."
+
+  - title:
+      fr: "Les endpoints : validation stricte et marqueurs SQL"
+      en: "The endpoints: strict validation and SQL placeholders"
+    file: app/routes.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Blueprint, abort, jsonify, request
+
+      from .db import get_db
+
+      bp = Blueprint("api", __name__)
+      MAX_NAME = 80
+
+
+      @bp.get("/health")
+      def health():
+          # Liveness probe used by Docker and the DAST scan.
+          return jsonify(status="ok")
+
+
+      @bp.get("/api/items")
+      def list_items():
+          db = get_db()
+          rows = db.execute("SELECT id, name FROM items ORDER BY id").fetchall()
+          return jsonify(items=[dict(r) for r in rows])
+
+
+      @bp.post("/api/items")
+      def create_item():
+          data = request.get_json(silent=True) or {}
+          name = data.get("name")
+          # Validate BEFORE touching the database: never trust client input.
+          if not isinstance(name, str) or not 1 <= len(name.strip()) <= MAX_NAME:
+              abort(400, description="name must be a string of 1..80 chars")
+          db = get_db()
+          # Parameterized query: "name" can never alter the SQL statement.
+          cur = db.execute("INSERT INTO items (name) VALUES (?)", (name.strip(),))
+          db.commit()
+          return jsonify(id=cur.lastrowid, name=name.strip()), 201
+
+
+      @bp.get("/api/items/<int:item_id>")
+      def get_item(item_id):
+          # <int:...> already rejects non-numeric ids at the routing layer.
+          db = get_db()
+          row = db.execute(
+              "SELECT id, name FROM items WHERE id = ?", (item_id,)
+          ).fetchone()
+          if row is None:
+              abort(404, description="item not found")
+          return jsonify(dict(row))
+    note:
+      fr: "Chaque requête SQL utilise `?`. La validation du `name` rejette une entrée vide ou trop longue avec un `400`. Le convertisseur `<int:item_id>` filtre déjà les identifiants non numériques."
+      en: "Every SQL query uses `?`. The `name` validation rejects empty or overly long input with a `400`. The `<int:item_id>` converter already filters out non-numeric ids."
+
+  - title:
+      fr: "L'app factory : en-têtes de sécurité et erreurs propres"
+      en: "The app factory: security headers and clean errors"
+    file: app/__init__.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, jsonify
+
+      from . import db
+      from .config import Config
+
+
+      def create_app(config=Config):
+          app = Flask(__name__)
+          app.config.from_object(config)
+
+          db.init_app(app)
+          from .routes import bp
+          app.register_blueprint(bp)
+
+          @app.after_request
+          def set_security_headers(resp):
+              # Defense-in-depth headers applied to EVERY response.
+              resp.headers["X-Content-Type-Options"] = "nosniff"
+              resp.headers["X-Frame-Options"] = "DENY"
+              resp.headers["Content-Security-Policy"] = "default-src 'none'"
+              resp.headers["Referrer-Policy"] = "no-referrer"
+              return resp
+
+          @app.errorhandler(400)
+          @app.errorhandler(404)
+          def handle_error(err):
+              # Return clean JSON, never a stack trace that leaks internals.
+              return jsonify(error=err.description), err.code
+
+          return app
+    note:
+      fr: "L'application est assemblée ici. Les en-têtes de sécurité sont ajoutés à toutes les réponses et les erreurs renvoient un JSON sans fuite d'information."
+      en: "The application is assembled here. Security headers are added to all responses and errors return JSON with no information leak."
+
+  - title:
+      fr: "Les tests pytest : fonctionnels ET de sécurité"
+      en: "The pytest tests: functional AND security"
+    file: tests/test_api.py
+    lang: python
+    kind: secure
+    code: |
+      import pytest
+
+      from app import create_app
+      from app.config import Config
+
+
+      @pytest.fixture
+      def client(tmp_path):
+          # A throwaway file database per test: isolated, no shared state.
+          class TestConfig(Config):
+              DATABASE = str(tmp_path / "test.db")
+              SECRET_KEY = "test-only-not-a-real-secret"
+
+          return create_app(TestConfig).test_client()
+
+
+      def test_health(client):
+          resp = client.get("/health")
+          assert resp.status_code == 200
+          assert resp.get_json() == {"status": "ok"}
+
+
+      def test_create_then_read(client):
+          created = client.post("/api/items", json={"name": "laptop"})
+          assert created.status_code == 201
+          item_id = created.get_json()["id"]
+          fetched = client.get(f"/api/items/{item_id}")
+          assert fetched.get_json()["name"] == "laptop"
+
+
+      def test_validation_rejects_blank_name(client):
+          resp = client.post("/api/items", json={"name": "   "})
+          assert resp.status_code == 400  # input validation works
+
+
+      def test_security_headers_present(client):
+          resp = client.get("/health")
+          assert resp.headers["X-Content-Type-Options"] == "nosniff"
+          assert resp.headers["X-Frame-Options"] == "DENY"
+    output: |
+      $ pytest -q
+      ....                                                         [100%]
+      4 passed in 0.12s
+    note:
+      fr: "On teste le fonctionnel (créer/lire) **et** la sécurité (validation, en-têtes). Une base jetable par test (`tmp_path`) garantit l'isolation."
+      en: "We test the functional side (create/read) **and** security (validation, headers). A throwaway database per test (`tmp_path`) guarantees isolation."
+
+mistake:
+  fr: |
+    **Construire la requête SQL par concaténation de chaînes.**
+
+    ```python
+    db.execute("SELECT * FROM items WHERE name = '" + name + "'")  # DANGER
+    ```
+
+    Avec une entrée comme `x' OR '1'='1`, l'attaquant récupère toute la table, voire modifie des données.
+    La bonne version passe la valeur en paramètre : `db.execute("... WHERE name = ?", (name,))`. Ne
+    concaténez **jamais** une donnée utilisateur dans une requête.
+  en: |
+    **Building the SQL query by string concatenation.**
+
+    ```python
+    db.execute("SELECT * FROM items WHERE name = '" + name + "'")  # DANGER
+    ```
+
+    With input like `x' OR '1'='1`, the attacker retrieves the whole table, or even modifies data. The
+    correct version passes the value as a parameter: `db.execute("... WHERE name = ?", (name,))`. **Never**
+    concatenate user data into a query.
+
+bestPractice:
+  fr: |
+    - **App factory** (`create_app`) : testable et configurable, une base jetable par test.
+    - **Configuration par environnement** : aucun secret dans le code.
+    - **Requêtes paramétrées partout** : marqueurs `?`, jamais de concaténation.
+    - **Valider en entrée** : type, longueur, bornes ; rejeter avec un `400` explicite.
+    - **En-têtes de sécurité systématiques** via `after_request`.
+    - **Tester la sécurité**, pas seulement le fonctionnel (validation, en-têtes).
+  en: |
+    - **App factory** (`create_app`): testable and configurable, a throwaway database per test.
+    - **Environment-based configuration**: no secret in the code.
+    - **Parameterized queries everywhere**: `?` placeholders, never concatenation.
+    - **Validate on input**: type, length, bounds; reject with an explicit `400`.
+    - **Security headers on every response** via `after_request`.
+    - **Test security**, not only functionality (validation, headers).
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez un endpoint **`DELETE /api/items/<int:item_id>`** qui supprime un item.
+
+      Contraintes de sécurité :
+      - utilisez une requête **paramétrée** ;
+      - renvoyez `404` si l'item n'existe pas, sinon `204` (pas de contenu) ;
+      - ajoutez un test pytest qui crée un item, le supprime, puis vérifie qu'un second `GET` renvoie `404`.
+    en: |
+      Add a **`DELETE /api/items/<int:item_id>`** endpoint that deletes an item.
+
+      Security constraints:
+      - use a **parameterized** query;
+      - return `404` if the item does not exist, otherwise `204` (no content);
+      - add a pytest test that creates an item, deletes it, then checks that a second `GET` returns `404`.
+  solution:
+    file: delete_item.py
+    lang: python
+    code: |
+      # --- add to app/routes.py ---
+      @bp.delete("/api/items/<int:item_id>")
+      def delete_item(item_id):
+          db = get_db()
+          # Parameterized DELETE; rowcount tells us if anything was removed.
+          cur = db.execute("DELETE FROM items WHERE id = ?", (item_id,))
+          db.commit()
+          if cur.rowcount == 0:
+              abort(404, description="item not found")
+          return "", 204
+
+
+      # --- add to tests/test_api.py ---
+      def test_delete_item(client):
+          created = client.post("/api/items", json={"name": "to-delete"})
+          item_id = created.get_json()["id"]
+          assert client.delete(f"/api/items/{item_id}").status_code == 204
+          # The item is gone: a second read returns 404.
+          assert client.get(f"/api/items/{item_id}").status_code == 404
+    note:
+      fr: "`cur.rowcount` vaut 0 quand aucun item n'a été supprimé : on renvoie alors `404`. La requête reste paramétrée, donc insensible à l'injection."
+      en: "`cur.rowcount` is 0 when nothing was deleted: we then return `404`. The query stays parameterized, so it is immune to injection."
+
+quiz:
+  - q:
+      fr: "Comment ce code se protège-t-il de l'injection SQL ?"
+      en: "How does this code protect against SQL injection?"
+    options:
+      fr:
+        - "En chiffrant la base de données"
+        - "En utilisant des marqueurs `?` (requêtes paramétrées)"
+        - "En limitant la taille de la base"
+        - "En cachant les messages d'erreur"
+      en:
+        - "By encrypting the database"
+        - "By using `?` placeholders (parameterized queries)"
+        - "By limiting the database size"
+        - "By hiding error messages"
+    answer: 1
+    why:
+      fr: "Avec `?`, la valeur est transmise séparément de la requête et n'est jamais interprétée comme du SQL."
+      en: "With `?`, the value is sent separately from the query and is never interpreted as SQL."
+  - q:
+      fr: "Pourquoi utiliser une app factory `create_app(config)` ?"
+      en: "Why use an app factory `create_app(config)`?"
+    options:
+      fr:
+        - "Pour que l'application démarre plus vite"
+        - "Parce que Flask l'impose"
+        - "Pour injecter une configuration différente en test et créer une base jetable"
+        - "Pour éviter d'écrire des tests"
+      en:
+        - "To make the application start faster"
+        - "Because Flask requires it"
+        - "To inject a different configuration in tests and create a throwaway database"
+        - "To avoid writing tests"
+    answer: 2
+    why:
+      fr: "La factory permet à chaque test de construire une application isolée avec sa propre base, sans effet de bord."
+      en: "The factory lets each test build an isolated application with its own database, without side effects."
+  - q:
+      fr: "D'où provient la clé secrète (`SECRET_KEY`) de l'application ?"
+      en: "Where does the application's secret key (`SECRET_KEY`) come from?"
+    options:
+      fr:
+        - "De l'environnement via `os.environ`"
+        - "Elle est écrite en dur dans `config.py`"
+        - "Elle est générée dans `routes.py` à chaque requête"
+        - "Elle est stockée dans la base de données"
+      en:
+        - "From the environment via `os.environ`"
+        - "It is hard-coded in `config.py`"
+        - "It is generated in `routes.py` on each request"
+        - "It is stored in the database"
+    answer: 0
+    why:
+      fr: "La configuration est lue depuis l'environnement : aucun secret n'est écrit dans le code source."
+      en: "Configuration is read from the environment: no secret is written in the source code."
+  - q:
+      fr: "Que renvoie `POST /api/items` avec le corps `{\"name\": \"   \"}` ?"
+      en: "What does `POST /api/items` return with the body `{\"name\": \"   \"}`?"
+    options:
+      fr:
+        - "201 Created"
+        - "500 Internal Server Error"
+        - "404 Not Found"
+        - "400 Bad Request"
+      en:
+        - "201 Created"
+        - "500 Internal Server Error"
+        - "404 Not Found"
+        - "400 Bad Request"
+    answer: 3
+    why:
+      fr: "La validation rejette un `name` vide après `strip()` : la longueur n'est pas dans l'intervalle 1..80, d'où un `400`."
+      en: "Validation rejects a `name` that is empty after `strip()`: the length is not in the 1..80 range, hence a `400`."
+  - q:
+      fr: "Quel est le rôle du hook `after_request` dans l'app factory ?"
+      en: "What is the role of the `after_request` hook in the app factory?"
+    options:
+      fr:
+        - "Fermer la connexion à la base"
+        - "Ajouter les en-têtes de sécurité à chaque réponse"
+        - "Valider le corps des requêtes"
+        - "Créer la table `items`"
+      en:
+        - "Close the database connection"
+        - "Add security headers to every response"
+        - "Validate request bodies"
+        - "Create the `items` table"
+    answer: 1
+    why:
+      fr: "`after_request` s'exécute pour chaque réponse et y ajoute les en-têtes de sécurité (nosniff, DENY, CSP, Referrer-Policy)."
+      en: "`after_request` runs for every response and adds the security headers to it (nosniff, DENY, CSP, Referrer-Policy)."

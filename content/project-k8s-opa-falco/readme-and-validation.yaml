@@ -1,0 +1,431 @@
+description:
+  fr: "Dernière leçon du projet : rédiger le README complet du dépôt et valider le cluster durci par des attaques simulées — Pod privilégié refusé, shell détecté par Falco, trafic inter-namespace bloqué par NetworkPolicy."
+  en: "Final lesson of the project: write the complete repository README and validate the hardened cluster with simulated attacks — privileged Pod rejected, shell detected by Falco, cross-namespace traffic blocked by NetworkPolicy."
+duration: 25
+
+intro:
+  fr: |
+    Le cluster est construit (leçon 1), les workloads sont durcis (leçon 2), Gatekeeper filtre
+    l'admission (leçon 3) et Falco surveille l'exécution (leçon 4). Il reste deux choses pour que ce soit
+    un **vrai projet de portfolio** : un **README** qui raconte le projet, et une **preuve** que les
+    défenses fonctionnent.
+
+    « Ça devrait marcher » ne vaut rien en sécurité. On **le démontre** en jouant trois attaques, toutes
+    dans votre propre lab, et en vérifiant que chaque couche réagit :
+
+    1. Un **Pod privilégié** est refusé à l'admission (Pod Security + Gatekeeper).
+    2. Un **shell ouvert** dans un conteneur déclenche une alerte Falco.
+    3. Un **curl entre namespaces** est bloqué par la NetworkPolicy « default deny ».
+
+    Pensez à cette leçon comme à la **réception des travaux** : on teste chaque serrure, chaque alarme,
+    chaque mur, et on consigne le résultat. Un projet qu'on peut rejouer d'une commande impressionne en
+    entretien bien plus qu'un long discours.
+  en: |
+    The cluster is built (lesson 1), the workloads are hardened (lesson 2), Gatekeeper filters admission
+    (lesson 3) and Falco watches runtime (lesson 4). Two things remain to make this a **real portfolio
+    project**: a **README** that tells the story, and **proof** that the defenses work.
+
+    "It should work" is worth nothing in security. We **demonstrate** it by running three attacks, all in
+    your own lab, and checking that each layer reacts:
+
+    1. A **privileged Pod** is rejected at admission (Pod Security + Gatekeeper).
+    2. A **shell opened** in a container triggers a Falco alert.
+    3. A **curl across namespaces** is blocked by the "default deny" NetworkPolicy.
+
+    Think of this lesson as the **handover inspection**: we test every lock, every alarm, every wall, and
+    record the result. A project you can replay with one command impresses in an interview far more than a
+    long speech.
+
+sections:
+  - heading:
+      fr: "Un README qui donne envie"
+      en: "A README that makes people want to read"
+    body:
+      fr: |
+        Le README est la première chose qu'un recruteur lit. Il doit répondre en un coup d'œil à : *qu'est-ce
+        que c'est ?*, *comment je le lance ?*, *qu'est-ce que ça prouve ?*. Une bonne structure :
+
+        - Un **titre** et une phrase d'accroche.
+        - Un **schéma** des couches de défense (admission, réseau, exécution).
+        - Les **prérequis** et la commande de démarrage.
+        - La **liste des contrôles** et ce que chacun empêche.
+        - La section **validation** : les attaques jouées et leur résultat attendu.
+        - Le **nettoyage** (`kind delete cluster`).
+
+        On y met des blocs de commandes copiables et, idéalement, les sorties réelles des scénarios. Le
+        lecteur doit pouvoir reproduire le projet sans vous poser de question.
+      en: |
+        The README is the first thing a recruiter reads. At a glance it must answer: *what is it?*, *how do
+        I run it?*, *what does it prove?*. A good structure:
+
+        - A **title** and a one-line hook.
+        - A **diagram** of the defense layers (admission, network, runtime).
+        - The **prerequisites** and the start command.
+        - The **list of controls** and what each one prevents.
+        - The **validation** section: the attacks run and their expected result.
+        - The **cleanup** (`kind delete cluster`).
+
+        Include copyable command blocks and, ideally, the real outputs of the scenarios. The reader must be
+        able to reproduce the project without asking you anything.
+  - heading:
+      fr: "Valider par des attaques simulées"
+      en: "Validate with simulated attacks"
+    body:
+      fr: |
+        Chaque scénario suit le même schéma : **une action offensive**, dans votre lab uniquement, et
+        **un résultat attendu** qui prouve qu'une couche a réagi.
+
+        | Scénario | Action | Couche qui réagit | Résultat attendu |
+        |---|---|---|---|
+        | 1 | Créer un Pod privilégié dans `shop` | Pod Security + Gatekeeper | `Forbidden` à l'admission |
+        | 2 | `kubectl exec ... -- sh` dans le Pod web | Falco (exécution) | Alerte « Shell started » |
+        | 3 | `curl` depuis `attacker` vers `web` dans `shop` | NetworkPolicy (Calico) | Connexion en timeout |
+
+        > Rappel : ces attaques ne visent **que votre propre cluster local**. On montre l'attaque
+        > uniquement pour prouver la défense.
+
+        On regroupe tout dans `scripts/validate.sh`, exécutable d'une commande. Si les trois scénarios
+        donnent le résultat attendu, le cluster est validé.
+      en: |
+        Each scenario follows the same shape: **an offensive action**, in your lab only, and an **expected
+        result** that proves a layer reacted.
+
+        | Scenario | Action | Reacting layer | Expected result |
+        |---|---|---|---|
+        | 1 | Create a privileged Pod in `shop` | Pod Security + Gatekeeper | `Forbidden` at admission |
+        | 2 | `kubectl exec ... -- sh` in the web Pod | Falco (runtime) | "Shell started" alert |
+        | 3 | `curl` from `attacker` to `web` in `shop` | NetworkPolicy (Calico) | Connection times out |
+
+        > Reminder: these attacks target **only your own local cluster**. We show the attack solely to
+        > prove the defense.
+
+        We gather everything in `scripts/validate.sh`, runnable with one command. If all three scenarios
+        give the expected result, the cluster is validated.
+
+examples:
+  - title:
+      fr: "Le README complet du projet"
+      en: "The complete project README"
+    file: README.md
+    lang: markdown
+    kind: neutral
+    code: |
+      # hardened-k8s-lab
+
+      A local, hardened Kubernetes cluster with defense in depth: Pod Security,
+      least-privilege RBAC, default-deny NetworkPolicies, OPA Gatekeeper admission
+      policies and Falco runtime detection — plus simulated attacks that prove it works.
+
+      > Everything runs locally with kind. Never point these steps at a production cluster.
+
+      ## Defense layers
+
+      | Layer | Tool | Prevents / detects |
+      |-------|------|--------------------|
+      | Admission (built-in) | Pod Security Admission (`restricted`) | Root, privileged, dangerous caps |
+      | Admission (custom) | OPA Gatekeeper | Bad registries, `:latest`, missing labels/limits |
+      | Network | Calico + NetworkPolicy | Any-to-any Pod traffic (default deny) |
+      | Identity | RBAC + dedicated ServiceAccount | Over-privileged workloads |
+      | Runtime | Falco (eBPF) + Falcosidekick | Shells, `/etc` writes, odd egress |
+
+      ## Prerequisites
+
+      Docker, kind v0.24+, kubectl v1.31+, Helm v3.16+.
+
+      ## Quick start
+
+      ```bash
+      ./scripts/setup.sh                     # cluster + Calico + namespaces
+      helm install gatekeeper gatekeeper/gatekeeper -n gatekeeper-system --create-namespace
+      kubectl apply -f gatekeeper/templates/ -f gatekeeper/constraints/
+      helm install falco falcosecurity/falco -n falco --create-namespace -f falco/values.yaml
+      kubectl apply -f workloads/
+      ```
+
+      ## Validate
+
+      ```bash
+      ./scripts/validate.sh                  # runs the three simulated attacks
+      ```
+
+      Expected: privileged Pod rejected, Falco alert on shell exec, cross-namespace
+      curl times out.
+
+      ## Cleanup
+
+      ```bash
+      kind delete cluster --name secure-lab
+      ```
+    note:
+      fr: "Un README se lit en 30 secondes : tableau des couches, démarrage, validation, nettoyage. Les commandes sont copiables telles quelles et cohérentes avec les fichiers des leçons 1 à 4."
+      en: "A README is read in 30 seconds: layer table, start, validation, cleanup. The commands are copyable as-is and consistent with the files from lessons 1 to 4."
+
+  - title:
+      fr: "Scénario 1 : le Pod privilégié est refusé"
+      en: "Scenario 1: the privileged Pod is rejected"
+    file: scenario-1-privileged.txt
+    lang: text
+    kind: neutral
+    code: |
+      $ kubectl run pwned --image=busybox -n shop --restart=Never \
+          --overrides='{"spec":{"containers":[{"name":"pwned","image":"busybox",
+          "securityContext":{"privileged":true}}]}}' -- sleep 3600
+
+      Error from server (Forbidden): pods "pwned" is forbidden:
+      violates PodSecurity "restricted:latest": privileged
+      (container "pwned" must not set securityContext.privileged=true),
+      allowPrivilegeEscalation != false, unrestricted capabilities,
+      runAsNonRoot != true, seccompProfile
+    note:
+      fr: "Résultat attendu : **refus à l'admission**. La requête n'atteint jamais etcd, donc aucun Pod privilégié ne tourne. Pod Security Admission suffit ici ; Gatekeeper ajoute les règles métier (registre, labels)."
+      en: "Expected result: **rejection at admission**. The request never reaches etcd, so no privileged Pod runs. Pod Security Admission is enough here; Gatekeeper adds the business rules (registry, labels)."
+
+  - title:
+      fr: "Scénario 2 : le shell déclenche Falco"
+      en: "Scenario 2: the shell triggers Falco"
+    file: scenario-2-shell.txt
+    lang: text
+    kind: neutral
+    code: |
+      # Attack: open an interactive shell inside the running web Pod
+      $ kubectl exec -it deploy/web -n shop -- sh
+      # (type 'exit' to leave)
+
+      # Defense: Falco detected it. Read the alert:
+      $ kubectl logs -n falco -l app.kubernetes.io/name=falco --since=1m \
+          | grep "Shell started"
+
+      23:14:07.882 Warning Shell started in container
+      (user=root container=web image=registry.example.com/web
+      proc=sh parent=runc) tags=[container, shell, mitre_execution]
+    note:
+      fr: "Résultat attendu : **une alerte Falco** en quelques millisecondes. Le `readOnlyRootFilesystem` empêche en plus l'attaquant d'écrire ses outils : détection (Falco) et prévention (securityContext) agissent ensemble."
+      en: "Expected result: **a Falco alert** within milliseconds. The `readOnlyRootFilesystem` also stops the attacker from writing their tools: detection (Falco) and prevention (securityContext) work together."
+
+  - title:
+      fr: "Scénario 3 : le trafic inter-namespace est bloqué"
+      en: "Scenario 3: cross-namespace traffic is blocked"
+    file: scenario-3-network.txt
+    lang: text
+    kind: neutral
+    code: |
+      # Attack: from a Pod in the 'attacker' namespace, try to reach the web Service
+      $ kubectl run probe --image=curlimages/curl -n attacker --restart=Never -it -- \
+          curl --max-time 5 http://web.shop.svc.cluster.local:8080
+
+      curl: (28) Connection timed out after 5001 milliseconds
+      pod "probe" deleted
+
+      # Proof the Service works from INSIDE shop (allowed by the ingress policy):
+      $ kubectl run probe --image=curlimages/curl -n shop --restart=Never -it -- \
+          curl --max-time 5 http://web.shop.svc.cluster.local:8080
+      <html>... web app responds ...</html>
+    note:
+      fr: "Résultat attendu : **timeout depuis `attacker`**, réponse depuis `shop`. Le default deny bloque le trafic entrant venu d'un autre namespace, tandis que la règle `web-allow-ingress` autorise le trafic interne. C'est la preuve que Calico applique bien les politiques."
+      en: "Expected result: **timeout from `attacker`**, response from `shop`. The default deny blocks inbound traffic from another namespace, while the `web-allow-ingress` rule permits internal traffic. This proves Calico actually enforces the policies."
+
+  - title:
+      fr: "Le script de validation complet"
+      en: "The complete validation script"
+    file: scripts/validate.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Run the three simulated attacks and report whether each defense held.
+      # Lab only: targets the local secure-lab cluster.
+      set -uo pipefail
+
+      pass() { echo "PASS: $1"; }
+      fail() { echo "FAIL: $1"; }
+
+      echo "== Scenario 1: privileged Pod must be rejected =="
+      if kubectl run pwned --image=busybox -n shop --restart=Never \
+          --overrides='{"spec":{"containers":[{"name":"pwned","image":"busybox","securityContext":{"privileged":true}}]}}' \
+          -- sleep 10 2>&1 | grep -q "Forbidden"; then
+        pass "privileged Pod rejected at admission"
+      else
+        fail "privileged Pod was NOT rejected"
+      fi
+
+      echo "== Scenario 2: shell in container must raise a Falco alert =="
+      kubectl exec deploy/web -n shop -- sh -c "echo hi" >/dev/null 2>&1 || true
+      sleep 3
+      if kubectl logs -n falco -l app.kubernetes.io/name=falco --since=30s 2>/dev/null \
+          | grep -q "Shell started"; then
+        pass "Falco detected the shell"
+      else
+        fail "no Falco alert found"
+      fi
+
+      echo "== Scenario 3: cross-namespace traffic must be blocked =="
+      if kubectl run probe --image=curlimages/curl -n attacker --restart=Never --rm -i \
+          -- curl --max-time 5 http://web.shop.svc.cluster.local:8080 2>&1 | grep -q "timed out"; then
+        pass "NetworkPolicy blocked cross-namespace traffic"
+      else
+        fail "cross-namespace traffic was NOT blocked"
+      fi
+    output: |
+      == Scenario 1: privileged Pod must be rejected ==
+      PASS: privileged Pod rejected at admission
+      == Scenario 2: shell in container must raise a Falco alert ==
+      PASS: Falco detected the shell
+      == Scenario 3: cross-namespace traffic must be blocked ==
+      PASS: NetworkPolicy blocked cross-namespace traffic
+    note:
+      fr: "Le script est volontairement lisible : chaque scénario affiche `PASS` ou `FAIL`. On n'utilise pas `set -e` ici car certaines commandes doivent « échouer » (le refus d'admission) sans arrêter le script."
+      en: "The script is deliberately readable: each scenario prints `PASS` or `FAIL`. We do not use `set -e` here because some commands are meant to \"fail\" (the admission rejection) without stopping the script."
+
+mistake:
+  fr: |
+    **Montrer un projet sans jamais prouver qu'il fonctionne.**
+
+    Beaucoup de dépôts affichent de belles politiques... qui ne sont pas appliquées, ou pas testées. En
+    entretien, c'est démasqué en une question : « comment savez-vous que ça marche ? ». Un projet sérieux
+    inclut une **validation rejouable** : des attaques simulées et leurs résultats attendus. Sans preuve,
+    une configuration de sécurité n'est qu'une intention.
+  en: |
+    **Showing a project without ever proving it works.**
+
+    Many repositories display beautiful policies... that are not enforced, or not tested. In an interview,
+    it is exposed in one question: "how do you know it works?". A serious project includes **replayable
+    validation**: simulated attacks and their expected results. Without proof, a security configuration is
+    only an intention.
+
+bestPractice:
+  fr: |
+    - **Écrivez un README orienté lecteur** : quoi, comment le lancer, ce que ça prouve, comment nettoyer.
+    - **Automatisez la validation** dans un script rejouable d'une commande.
+    - **Associez chaque attaque à une couche** et à un résultat attendu précis.
+    - **Rappelez le cadre légal** : tout se passe dans votre lab local, jamais sur un système tiers.
+    - **Nettoyez** : `kind delete cluster` à la fin, et documentez-le, pour ne pas laisser de ressources.
+  en: |
+    - **Write a reader-focused README**: what, how to run it, what it proves, how to clean up.
+    - **Automate the validation** in a one-command replayable script.
+    - **Map each attack to a layer** and a precise expected result.
+    - **Restate the legal frame**: everything happens in your local lab, never on a third-party system.
+    - **Clean up**: `kind delete cluster` at the end, and document it, to leave no resources behind.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez un **quatrième scénario** de validation : prouver que Gatekeeper refuse un Pod dont l'image
+      vient d'un registre non autorisé (par exemple `docker.io/library/nginx:1.27`) dans le namespace `shop`.
+
+      Écrivez les commandes du scénario et le résultat attendu.
+    en: |
+      Add a **fourth validation scenario**: prove that Gatekeeper rejects a Pod whose image comes from a
+      disallowed registry (for example `docker.io/library/nginx:1.27`) in the `shop` namespace.
+
+      Write the scenario commands and the expected result.
+  solution:
+    file: scenario-4-registry.sh
+    lang: bash
+    code: |
+      echo "== Scenario 4: image from a disallowed registry must be rejected =="
+      # Labels are set so only the registry rule fires, isolating the test
+      if kubectl run offimg --image=docker.io/library/nginx:1.27 -n shop --restart=Never \
+          --labels=app=test,owner=lab \
+          --overrides='{"spec":{"containers":[{"name":"offimg","image":"docker.io/library/nginx:1.27","resources":{"limits":{"memory":"64Mi"}}}]}}' \
+          2>&1 | grep -q "not from an allowed registry"; then
+        echo "PASS: Gatekeeper rejected the disallowed registry"
+      else
+        echo "FAIL: disallowed registry was NOT rejected"
+      fi
+      # Expected output line from the API:
+      # [only-internal-registry] image "docker.io/library/nginx:1.27" is not from an allowed registry ["registry.example.com/"]
+    note:
+      fr: "On fournit les labels `app`/`owner` et une limite mémoire pour que **seule** la règle de registre se déclenche : le test isole exactement ce qu'il veut prouver. C'est la bonne façon d'écrire un test de politique."
+      en: "We provide the `app`/`owner` labels and a memory limit so that **only** the registry rule fires: the test isolates exactly what it wants to prove. This is the right way to write a policy test."
+
+quiz:
+  - q:
+      fr: "Pourquoi jouer des attaques simulées à la fin du projet ?"
+      en: "Why run simulated attacks at the end of the project?"
+    options:
+      fr:
+        - "Pour prouver, de façon rejouable, que chaque couche de défense réagit réellement"
+        - "Pour augmenter la charge du cluster"
+        - "Parce que Falco l'exige"
+        - "Pour supprimer les namespaces inutilisés"
+      en:
+        - "To prove, in a replayable way, that each defense layer actually reacts"
+        - "To increase the cluster load"
+        - "Because Falco requires it"
+        - "To delete unused namespaces"
+    answer: 0
+    why:
+      fr: "Une configuration de sécurité non testée n'est qu'une intention. Les scénarios prouvent que l'admission, le réseau et l'exécution réagissent."
+      en: "An untested security configuration is only an intention. The scenarios prove that admission, network and runtime react."
+  - q:
+      fr: "Dans le scénario 3, pourquoi le curl depuis `attacker` échoue-t-il ?"
+      en: "In scenario 3, why does the curl from `attacker` fail?"
+    options:
+      fr:
+        - "Parce que l'image curl est bloquée par Gatekeeper"
+        - "Parce que la NetworkPolicy « default deny » bloque le trafic entrant d'un autre namespace"
+        - "Parce que Falco supprime le Pod"
+        - "Parce que le Service web n'existe pas"
+      en:
+        - "Because the curl image is blocked by Gatekeeper"
+        - "Because the \"default deny\" NetworkPolicy blocks inbound traffic from another namespace"
+        - "Because Falco deletes the Pod"
+        - "Because the web Service does not exist"
+    answer: 1
+    why:
+      fr: "Le default deny, appliqué par Calico, bloque le trafic entrant non autorisé ; seul le trafic interne à `shop` est permis par la règle d'ingress."
+      en: "The default deny, enforced by Calico, blocks unauthorized inbound traffic; only traffic internal to `shop` is allowed by the ingress rule."
+  - q:
+      fr: "Pourquoi le script `validate.sh` n'utilise-t-il pas `set -e` ?"
+      en: "Why does `validate.sh` not use `set -e`?"
+    options:
+      fr:
+        - "Parce que `set -e` n'existe pas en bash"
+        - "Parce que certaines commandes doivent « échouer » (le refus d'admission) sans arrêter le script"
+        - "Pour accélérer le script"
+        - "Parce que kubectl l'interdit"
+      en:
+        - "Because `set -e` does not exist in bash"
+        - "Because some commands are meant to \"fail\" (the admission rejection) without stopping the script"
+        - "To speed up the script"
+        - "Because kubectl forbids it"
+    answer: 1
+    why:
+      fr: "On attend volontairement un code d'erreur sur le refus d'admission ; `set -e` arrêterait le script et empêcherait de tester les scénarios suivants."
+      en: "We deliberately expect an error code on the admission rejection; `set -e` would stop the script and prevent testing the following scenarios."
+  - q:
+      fr: "Que doit contenir en priorité un bon README de projet ?"
+      en: "What should a good project README contain first?"
+    options:
+      fr:
+        - "L'historique complet des commits"
+        - "Quoi, comment le lancer, ce que ça prouve, et comment nettoyer"
+        - "Le CV de l'auteur"
+        - "Le code source dupliqué"
+      en:
+        - "The full commit history"
+        - "What it is, how to run it, what it proves, and how to clean up"
+        - "The author's résumé"
+        - "The duplicated source code"
+    answer: 1
+    why:
+      fr: "Le lecteur doit comprendre et reproduire le projet sans aide : objectif, démarrage, validation, nettoyage."
+      en: "The reader must understand and reproduce the project without help: goal, start, validation, cleanup."
+  - q:
+      fr: "Quelle commande nettoie entièrement le lab à la fin ?"
+      en: "Which command fully cleans up the lab at the end?"
+    options:
+      fr:
+        - "kubectl delete pods --all"
+        - "helm uninstall falco"
+        - "kind delete cluster --name secure-lab"
+        - "docker stop secure-lab"
+      en:
+        - "kubectl delete pods --all"
+        - "helm uninstall falco"
+        - "kind delete cluster --name secure-lab"
+        - "docker stop secure-lab"
+    answer: 2
+    why:
+      fr: "`kind delete cluster` supprime le cluster et tous ses conteneurs d'un coup, ne laissant aucune ressource derrière."
+      en: "`kind delete cluster` removes the cluster and all its containers at once, leaving no resources behind."

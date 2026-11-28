@@ -1,0 +1,385 @@
+description:
+  fr: "Première leçon du projet : concevoir l'architecture d'un homelab de détection avec Wazuh — schéma du réseau, rôle de chaque machine, prérequis système dont vm.max_map_count, et arborescence du dépôt."
+  en: "First lesson of the project: design the architecture of a Wazuh detection homelab — network diagram, role of each machine, system prerequisites including vm.max_map_count, and the repository tree."
+duration: 25
+
+intro:
+  fr: |
+    Bienvenue dans le **projet 5** : monter un **homelab DevSecOps** autour de **Wazuh**, une plateforme
+    libre de sécurité (SIEM + XDR). Un **SIEM** (*Security Information and Event Management*) collecte les
+    journaux de vos machines, les analyse en temps réel et **alerte** quand quelque chose ressemble à une
+    attaque. En 5 leçons, vous allez déployer Wazuh, y connecter une machine surveillée avec une
+    application volontairement vulnérable, écrire vos propres règles de détection, puis **jouer des
+    attaques dans votre lab** pour vérifier que tout se déclenche.
+
+    L'analogie : Wazuh est le **poste de sécurité** d'un centre commercial. Les caméras (les agents sur
+    chaque machine) envoient leurs images au poste central, où un agent de sécurité (le moteur de règles)
+    repère les comportements suspects et sonne l'alarme.
+
+    Aujourd'hui, pas encore de déploiement : on **dessine le plan**. On définit les machines, le réseau du
+    lab, les prérequis système (dont un réglage noyau indispensable), et l'arborescence du dépôt qui
+    restera stable sur tout le projet.
+  en: |
+    Welcome to **project 5**: build a **DevSecOps homelab** around **Wazuh**, an open-source security
+    platform (SIEM + XDR). A **SIEM** (*Security Information and Event Management*) collects your machines'
+    logs, analyzes them in real time and **alerts** when something looks like an attack. Over 5 lessons
+    you will deploy Wazuh, connect a monitored machine running a deliberately vulnerable application, write
+    your own detection rules, then **run attacks inside your lab** to verify everything fires.
+
+    The analogy: Wazuh is the **security office** of a shopping mall. The cameras (the agents on each
+    machine) send their footage to the central office, where a guard (the rule engine) spots suspicious
+    behaviour and raises the alarm.
+
+    Today there is no deployment yet: we **draw the plan**. We define the machines, the lab network, the
+    system prerequisites (including one essential kernel setting), and the repository tree that stays
+    stable across the whole project.
+
+sections:
+  - heading:
+      fr: "Les trois machines du lab"
+      en: "The three machines of the lab"
+    body:
+      fr: |
+        Le lab tient en trois machines virtuelles, sur un réseau **isolé** (host-only ou NAT privé), avec
+        des adresses de la plage de documentation `192.0.2.0/24` :
+
+        | Machine | Rôle | Adresse (exemple) |
+        |---|---|---|
+        | `wazuh-manager` | Le SIEM : manager + indexer + dashboard (Docker) | 192.0.2.10 |
+        | `web-target` | Ubuntu : agent Wazuh + NGINX + application vulnérable | 192.0.2.20 |
+        | `attacker` | Kali (dans le lab) : lance les attaques de test | 192.0.2.30 |
+
+        Les flux sont simples : l'agent de `web-target` envoie ses événements au manager sur les ports
+        **1514** (collecte) et **1515** (enrôlement). Vous consultez le tableau de bord Wazuh depuis votre
+        navigateur en **HTTPS**. L'`attacker` n'attaque **que** `web-target`, jamais Internet.
+
+        > Tout reste dans **votre** laboratoire. N'attaquez jamais une machine que vous ne possédez pas.
+      en: |
+        The lab fits in three virtual machines, on an **isolated** network (host-only or private NAT), with
+        addresses from the documentation range `192.0.2.0/24`:
+
+        | Machine | Role | Address (example) |
+        |---|---|---|
+        | `wazuh-manager` | The SIEM: manager + indexer + dashboard (Docker) | 192.0.2.10 |
+        | `web-target` | Ubuntu: Wazuh agent + NGINX + vulnerable app | 192.0.2.20 |
+        | `attacker` | Kali (inside the lab): runs the test attacks | 192.0.2.30 |
+
+        The flows are simple: the agent on `web-target` sends its events to the manager on ports **1514**
+        (collection) and **1515** (enrollment). You browse the Wazuh dashboard over **HTTPS**. The
+        `attacker` only attacks `web-target`, never the internet.
+
+        > Everything stays in **your** lab. Never attack a machine you do not own.
+  - heading:
+      fr: "Les prérequis système (dont vm.max_map_count)"
+      en: "System prerequisites (including vm.max_map_count)"
+    body:
+      fr: |
+        Wazuh stocke ses données dans un **indexer** basé sur OpenSearch. Comme Elasticsearch, cet indexer
+        a besoin que le noyau Linux autorise un grand nombre de zones mémoire mappées. Sur
+        `wazuh-manager`, il faut donc régler :
+
+        ```bash
+        # Temporaire (jusqu'au prochain redémarrage)
+        sudo sysctl -w vm.max_map_count=262144
+        # Permanent : ajouter la ligne au fichier de configuration sysctl
+        echo "vm.max_map_count=262144" | sudo tee /etc/sysctl.d/99-wazuh.conf
+        ```
+
+        Si vous l'oubliez, l'indexer **refuse de démarrer** avec une erreur du type `max virtual memory
+        areas vm.max_map_count [65530] is too low`. C'est l'erreur numéro un des débutants.
+
+        Autres prérequis sur le manager : **Docker** et **Docker Compose** récents, au moins **4 Go de RAM
+        dédiés** (6 Go confortables), et le port 443 libre. Les machines doivent avoir l'**heure
+        synchronisée** (NTP) : un SIEM corrèle par horodatage, un décalage fausse tout.
+      en: |
+        Wazuh stores its data in an **indexer** based on OpenSearch. Like Elasticsearch, this indexer needs
+        the Linux kernel to allow a large number of memory-mapped areas. On `wazuh-manager`, you therefore
+        set:
+
+        ```bash
+        # Temporary (until the next reboot)
+        sudo sysctl -w vm.max_map_count=262144
+        # Permanent: add the line to a sysctl configuration file
+        echo "vm.max_map_count=262144" | sudo tee /etc/sysctl.d/99-wazuh.conf
+        ```
+
+        If you forget it, the indexer **refuses to start** with an error like `max virtual memory areas
+        vm.max_map_count [65530] is too low`. This is beginners' number-one error.
+
+        Other prerequisites on the manager: recent **Docker** and **Docker Compose**, at least **4 GB of
+        dedicated RAM** (6 GB comfortable), and port 443 free. The machines must have their **clocks
+        synchronized** (NTP): a SIEM correlates by timestamp, and drift breaks everything.
+
+examples:
+  - title:
+      fr: "Le schéma du homelab"
+      en: "The homelab diagram"
+    file: docs/lab-diagram.txt
+    lang: text
+    kind: neutral
+    code: |
+      Isolated lab network 192.0.2.0/24 (host-only / private NAT)
+
+        +-------------------------+        events 1514/tcp         +--------------------------+
+        |      attacker (Kali)    |  ───────attacks──────▶         |       web-target         |
+        |      192.0.2.30         |   (SSH, HTTP, sqlmap...)        |       192.0.2.20         |
+        |  only targets the lab   |                                |  Ubuntu                  |
+        +-------------------------+                                |  - NGINX (reverse proxy) |
+                                                                   |  - Juice Shop (vuln app) |
+                                                                   |  - Wazuh agent ──────────┼──┐
+                                                                   +--------------------------+  │
+                                                                                                 │ 1514 events
+                                                                                                 │ 1515 enroll
+                                                                                                 ▼
+        your browser  ──HTTPS 443──▶   +-------------------------------------------+
+                                       |              wazuh-manager                |
+                                       |              192.0.2.10 (Docker)          |
+                                       |  wazuh.manager  +  wazuh.indexer          |
+                                       |  +  wazuh.dashboard (https://localhost)   |
+                                       +-------------------------------------------+
+    note:
+      fr: "Un schéma vaut mille mots : on voit d'un coup qui parle à qui et sur quels ports. L'agent pousse ses événements vers le manager ; vous consultez le dashboard en HTTPS. L'attaquant est confiné au lab."
+      en: "A diagram is worth a thousand words: you see at a glance who talks to whom and on which ports. The agent pushes its events to the manager; you browse the dashboard over HTTPS. The attacker is confined to the lab."
+
+  - title:
+      fr: "L'arborescence du dépôt"
+      en: "The repository tree"
+    file: tree.txt
+    lang: text
+    kind: neutral
+    code: |
+      devsecops-homelab-wazuh/
+      ├── README.md                    # lesson 5: overview + attack scenarios
+      ├── docs/
+      │   └── lab-diagram.txt          # lesson 1: this diagram
+      ├── manager/
+      │   ├── setup-manager.sh         # lesson 2: clone wazuh-docker, certs, up
+      │   └── .env.example             # lesson 2: passwords to change (never commit real ones)
+      ├── agent/
+      │   ├── install-agent.sh         # lesson 3: enroll the Linux agent
+      │   ├── ossec-localfile.conf     # lesson 3: <localfile> + <syscheck> snippets
+      │   └── nginx-juice.conf         # lesson 3: NGINX in front of the vulnerable app
+      ├── rules/
+      │   ├── local_rules.xml          # lesson 4: SSH brute force, web attack, FIM
+      │   └── local_decoder.xml        # lesson 4: custom decoder
+      ├── active-response/
+      │   └── active-responses.conf    # lesson 4: firewall-drop response
+      └── scenarios/
+          ├── ssh-bruteforce.sh        # lesson 5: hydra against the lab
+          ├── web-attack.sh            # lesson 5: curl / sqlmap against the lab
+          └── file-tamper.sh           # lesson 5: FIM test
+    note:
+      fr: "Cette structure reste **stable sur les 5 leçons** : chaque dossier correspond à une étape. Le fichier `.env.example` montre quels mots de passe changer, sans jamais contenir de vrai secret."
+      en: "This structure stays **stable across the 5 lessons**: each folder matches a step. The `.env.example` file shows which passwords to change, without ever holding a real secret."
+
+  - title:
+      fr: "Le script de prérequis sur le manager"
+      en: "The prerequisites script on the manager"
+    file: manager/prereqs.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Prepare wazuh-manager before deploying Wazuh. Run on the 192.0.2.10 host.
+      set -euo pipefail
+
+      # 1. The Wazuh indexer (OpenSearch) needs a high vm.max_map_count or it won't start
+      sudo sysctl -w vm.max_map_count=262144
+      echo "vm.max_map_count=262144" | sudo tee /etc/sysctl.d/99-wazuh.conf
+
+      # 2. Verify Docker and Compose are available (install them if needed, see Docker docs)
+      docker --version
+      docker compose version
+
+      # 3. Keep the clock in sync: a SIEM correlates events by timestamp
+      timedatectl status | grep -i "synchronized"
+
+      echo "Prereqs OK. Current vm.max_map_count: $(cat /proc/sys/vm/max_map_count)"
+    output: |
+      vm.max_map_count = 262144
+      vm.max_map_count=262144
+      Docker version 27.3.1, build ...
+      Docker Compose version v2.29.7
+      System clock synchronized: yes
+      Prereqs OK. Current vm.max_map_count: 262144
+    note:
+      fr: "On règle `vm.max_map_count` **avant** de lancer Wazuh, de façon permanente (`/etc/sysctl.d/`). La vérification de l'horloge est souvent négligée mais essentielle : un SIEM désynchronisé corrèle mal les événements."
+      en: "We set `vm.max_map_count` **before** launching Wazuh, permanently (`/etc/sysctl.d/`). The clock check is often overlooked but essential: an out-of-sync SIEM correlates events poorly."
+
+  - title:
+      fr: "Le fichier d'environnement (secrets à changer)"
+      en: "The environment file (secrets to change)"
+    file: manager/.env.example
+    lang: ini
+    kind: neutral
+    code: |
+      # Copy to .env and REPLACE every value. Never commit the real .env to Git.
+      # These placeholders are deliberately obvious fakes.
+
+      # Wazuh dashboard / API admin credentials
+      WAZUH_ADMIN_USER=admin
+      WAZUH_ADMIN_PASSWORD=changeme-in-vault
+
+      # Indexer (OpenSearch) admin credentials
+      INDEXER_USERNAME=admin
+      INDEXER_PASSWORD=changeme-in-vault
+
+      # Which Wazuh version line to deploy (confirm the exact tag on the official repo)
+      WAZUH_VERSION=4.9
+    note:
+      fr: "On versionne un `.env.example` avec des valeurs **manifestement fausses** (`changeme-in-vault`), jamais le vrai `.env`. Le `.gitignore` du projet exclura `.env`. La leçon 2 montrera comment changer réellement ces mots de passe par défaut."
+      en: "We version a `.env.example` with **obviously fake** values (`changeme-in-vault`), never the real `.env`. The project's `.gitignore` will exclude `.env`. Lesson 2 will show how to actually change these default passwords."
+
+mistake:
+  fr: |
+    **Lancer Wazuh sans régler `vm.max_map_count`.**
+
+    C'est l'échec classique du premier déploiement : vous faites `docker compose up`, le conteneur
+    `wazuh.indexer` démarre... puis s'arrête en boucle. Dans les logs : `max virtual memory areas
+    vm.max_map_count [65530] is too low, increase to at least [262144]`. L'indexer OpenSearch a besoin de
+    cette valeur noyau. Réglez-la **avant** de déployer, et rendez-la permanente, sinon elle disparaîtra
+    au redémarrage.
+  en: |
+    **Launching Wazuh without setting `vm.max_map_count`.**
+
+    This is the classic first-deployment failure: you run `docker compose up`, the `wazuh.indexer`
+    container starts... then crash-loops. In the logs: `max virtual memory areas vm.max_map_count [65530]
+    is too low, increase to at least [262144]`. The OpenSearch indexer needs this kernel value. Set it
+    **before** deploying, and make it permanent, otherwise it vanishes on reboot.
+
+bestPractice:
+  fr: |
+    - **Isolez le réseau du lab** (host-only ou NAT privé) : l'attaquant ne doit jamais atteindre l'extérieur.
+    - **Réglez `vm.max_map_count=262144`** de façon permanente sur le manager avant tout déploiement.
+    - **Synchronisez l'heure** (NTP) sur les trois machines : un SIEM corrèle par horodatage.
+    - **Dimensionnez la RAM** : au moins 4 Go dédiés au manager (indexer + manager + dashboard).
+    - **Versionnez un `.env.example`**, jamais le vrai `.env` : les secrets restent hors de Git.
+  en: |
+    - **Isolate the lab network** (host-only or private NAT): the attacker must never reach the outside.
+    - **Set `vm.max_map_count=262144`** permanently on the manager before any deployment.
+    - **Synchronize the clock** (NTP) on all three machines: a SIEM correlates by timestamp.
+    - **Size the RAM**: at least 4 GB dedicated to the manager (indexer + manager + dashboard).
+    - **Version a `.env.example`**, never the real `.env`: secrets stay out of Git.
+
+exercise:
+  statement:
+    fr: |
+      Vous préparez la machine `wazuh-manager`. Écrivez les commandes qui :
+
+      1. Règlent `vm.max_map_count` à 262144 de façon **permanente**.
+      2. Vérifient que la valeur appliquée est bien 262144.
+      3. Vérifient que l'horloge système est synchronisée.
+    en: |
+      You are preparing the `wazuh-manager` machine. Write the commands that:
+
+      1. Set `vm.max_map_count` to 262144 **permanently**.
+      2. Verify the applied value is indeed 262144.
+      3. Verify the system clock is synchronized.
+  solution:
+    file: check-prereqs.sh
+    lang: bash
+    code: |
+      # 1. Apply now and persist across reboots
+      sudo sysctl -w vm.max_map_count=262144
+      echo "vm.max_map_count=262144" | sudo tee /etc/sysctl.d/99-wazuh.conf
+
+      # 2. Confirm the value the kernel is actually using
+      cat /proc/sys/vm/max_map_count        # expected: 262144
+
+      # 3. Confirm the clock is in sync (essential for log correlation)
+      timedatectl status | grep -i "synchronized"   # expected: System clock synchronized: yes
+    note:
+      fr: "Écrire la valeur dans `/etc/sysctl.d/` la rend **permanente** ; `sysctl -w` seul la perdrait au redémarrage. On vérifie toujours la valeur réellement appliquée via `/proc`, pas seulement la commande d'écriture."
+      en: "Writing the value in `/etc/sysctl.d/` makes it **permanent**; `sysctl -w` alone would lose it on reboot. Always verify the actually applied value via `/proc`, not just the write command."
+
+quiz:
+  - q:
+      fr: "Pourquoi régler `vm.max_map_count` à 262144 avant de déployer Wazuh ?"
+      en: "Why set `vm.max_map_count` to 262144 before deploying Wazuh?"
+    options:
+      fr:
+        - "Pour accélérer le réseau"
+        - "Parce que l'indexer OpenSearch refuse de démarrer si la valeur est trop basse"
+        - "Pour chiffrer les journaux"
+        - "Parce que Docker l'exige pour tout conteneur"
+      en:
+        - "To speed up the network"
+        - "Because the OpenSearch indexer refuses to start if the value is too low"
+        - "To encrypt the logs"
+        - "Because Docker requires it for every container"
+    answer: 1
+    why:
+      fr: "L'indexer basé sur OpenSearch a besoin d'un grand nombre de zones mémoire mappées ; sinon il tombe en boucle au démarrage."
+      en: "The OpenSearch-based indexer needs a large number of memory-mapped areas; otherwise it crash-loops at start-up."
+  - q:
+      fr: "Que signifie SIEM ?"
+      en: "What does SIEM stand for?"
+    options:
+      fr:
+        - "Security Information and Event Management"
+        - "System Integrity and Encryption Module"
+        - "Secure Internet Email Monitor"
+        - "Server Infrastructure Event Mapper"
+      en:
+        - "Security Information and Event Management"
+        - "System Integrity and Encryption Module"
+        - "Secure Internet Email Monitor"
+        - "Server Infrastructure Event Mapper"
+    answer: 0
+    why:
+      fr: "Un SIEM collecte, corrèle et analyse les événements de sécurité pour alerter en temps réel. Wazuh en est un exemple libre."
+      en: "A SIEM collects, correlates and analyzes security events to alert in real time. Wazuh is an open-source example."
+  - q:
+      fr: "Pourquoi synchroniser l'heure des machines du lab ?"
+      en: "Why synchronize the clocks of the lab machines?"
+    options:
+      fr:
+        - "Pour économiser de la batterie"
+        - "Pour que Docker démarre plus vite"
+        - "Parce qu'un SIEM corrèle les événements par horodatage ; un décalage fausse l'analyse"
+        - "Parce que c'est exigé par NGINX"
+      en:
+        - "To save battery"
+        - "To make Docker start faster"
+        - "Because a SIEM correlates events by timestamp; drift distorts the analysis"
+        - "Because NGINX requires it"
+    answer: 2
+    why:
+      fr: "La corrélation d'événements repose sur l'ordre chronologique ; des horloges décalées rendent les alertes incohérentes."
+      en: "Event correlation relies on chronological order; skewed clocks make alerts inconsistent."
+  - q:
+      fr: "Dans ce lab, qui la machine `attacker` doit-elle cibler ?"
+      en: "In this lab, who must the `attacker` machine target?"
+    options:
+      fr:
+        - "N'importe quel site sur Internet"
+        - "Uniquement la machine `web-target` du lab"
+        - "Le manager Wazuh en priorité"
+        - "Le réseau de votre fournisseur d'accès"
+      en:
+        - "Any website on the internet"
+        - "Only the lab's `web-target` machine"
+        - "The Wazuh manager first"
+        - "Your internet provider's network"
+    answer: 1
+    why:
+      fr: "On n'attaque que des machines que l'on possède, ici `web-target`, sur un réseau isolé. Jamais de cible extérieure."
+      en: "You only attack machines you own, here `web-target`, on an isolated network. Never an external target."
+  - q:
+      fr: "Pourquoi versionner `.env.example` et non le vrai `.env` ?"
+      en: "Why version `.env.example` and not the real `.env`?"
+    options:
+      fr:
+        - "Parce que `.env` est trop volumineux"
+        - "Pour montrer quelles variables définir sans jamais exposer de secret réel dans Git"
+        - "Parce que Docker ignore `.env`"
+        - "Pour accélérer le clone du dépôt"
+      en:
+        - "Because `.env` is too large"
+        - "To show which variables to set without ever exposing a real secret in Git"
+        - "Because Docker ignores `.env`"
+        - "To speed up cloning the repo"
+    answer: 1
+    why:
+      fr: "`.env.example` documente les variables avec des valeurs factices ; le vrai `.env`, qui contient les secrets, est exclu par `.gitignore`."
+      en: "`.env.example` documents the variables with fake values; the real `.env`, which holds the secrets, is excluded by `.gitignore`."

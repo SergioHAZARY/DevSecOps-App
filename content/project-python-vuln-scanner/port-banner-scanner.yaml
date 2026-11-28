@@ -1,0 +1,438 @@
+description:
+  fr: "Écrire le cœur du scanner : un scan de ports TCP concurrent avec timeouts, la récupération de bannières de services, et des tests qui n'utilisent aucun réseau externe."
+  en: "Write the core of the scanner: a concurrent TCP port scan with timeouts, service banner grabbing, and tests that use no external network."
+duration: 30
+
+intro:
+  fr: |
+    Place au code. On commence par la fonction centrale de tout scanner : savoir quels **ports** sont
+    ouverts sur une cible, et quelle **bannière** (identité du service) répond derrière chacun.
+
+    Un port, c'est une porte numérotée sur une machine : le 22 pour SSH, le 80 pour le web, le 443 pour le
+    HTTPS... Scanner, c'est frapper à chaque porte et noter lesquelles s'ouvrent. Pour que ce soit rapide,
+    on frappe à **plusieurs portes en même temps** (concurrence), avec un **délai maximal** (timeout) pour
+    ne pas attendre indéfiniment une porte murée.
+
+    Analogie : un facteur qui vérifie une rangée de boîtes aux lettres. Plutôt que de tester chaque boîte
+    l'une après l'autre, il envoie plusieurs aides en parallèle, et chacune abandonne au bout de quelques
+    secondes si la boîte ne répond pas. Dans cette leçon : `ports.py`, `banners.py`, et leurs tests.
+  en: |
+    Time to code. We start with the central function of any scanner: finding out which **ports** are open
+    on a target, and what **banner** (service identity) answers behind each one.
+
+    A port is a numbered door on a machine: 22 for SSH, 80 for the web, 443 for HTTPS... Scanning means
+    knocking on each door and noting which ones open. To be fast, we knock on **several doors at once**
+    (concurrency), with a **maximum delay** (timeout) so we do not wait forever on a bricked-up door.
+
+    Analogy: a postal worker checking a row of mailboxes. Rather than testing each box one after another,
+    they send several helpers in parallel, and each gives up after a few seconds if the box does not
+    answer. In this lesson: `ports.py`, `banners.py`, and their tests.
+
+sections:
+  - heading:
+      fr: "Le scan TCP connect, avec timeout"
+      en: "The TCP connect scan, with a timeout"
+    body:
+      fr: |
+        La technique la plus simple et la plus fiable est le **TCP connect scan** : on tente une connexion
+        TCP classique sur le port. Si la connexion aboutit, le port est **ouvert**. On utilise
+        `socket.connect_ex()`, qui renvoie `0` en cas de succès (plutôt que de lever une exception), ce
+        qui simplifie le code.
+
+        Deux précautions indispensables :
+
+        - **le timeout** (`settimeout`) : sans lui, un port filtré fait attendre le scanner très
+          longtemps. Une à deux secondes suffisent en général ;
+        - **le gestionnaire de contexte** (`with socket.socket(...)`) : garantit que la socket est bien
+          fermée, même en cas d'erreur, pour ne pas épuiser les descripteurs de fichiers.
+      en: |
+        The simplest and most reliable technique is the **TCP connect scan**: we attempt a normal TCP
+        connection on the port. If the connection succeeds, the port is **open**. We use
+        `socket.connect_ex()`, which returns `0` on success (rather than raising an exception), which
+        simplifies the code.
+
+        Two essential precautions:
+
+        - **the timeout** (`settimeout`): without it, a filtered port makes the scanner wait a very long
+          time. One or two seconds is usually enough;
+        - **the context manager** (`with socket.socket(...)`): guarantees the socket is properly closed,
+          even on error, so we do not exhaust file descriptors.
+  - heading:
+      fr: "La concurrence avec ThreadPoolExecutor"
+      en: "Concurrency with ThreadPoolExecutor"
+    body:
+      fr: |
+        Scanner 1000 ports l'un après l'autre, avec un timeout d'une seconde, prendrait jusqu'à
+        **1000 secondes**. Inacceptable. La solution : la **concurrence**. Le scan de ports passe
+        l'essentiel de son temps à **attendre** le réseau (opération d'entrée/sortie), pas à calculer :
+        c'est le cas d'usage idéal pour des **threads**.
+
+        `concurrent.futures.ThreadPoolExecutor` gère un pool de threads. On soumet une tâche par port, et
+        `as_completed` nous rend les résultats au fur et à mesure. Avec 100 threads, les 1000 ports sont
+        scannés en quelques secondes au lieu de quelques minutes. On ne fixe pas un nombre de threads
+        déraisonnable : trop de threads simultanés peut saturer la cible (et ressembler à une attaque).
+      en: |
+        Scanning 1000 ports one after another, with a one-second timeout, would take up to **1000
+        seconds**. Unacceptable. The solution: **concurrency**. Port scanning spends most of its time
+        **waiting** on the network (I/O), not computing: this is the ideal use case for **threads**.
+
+        `concurrent.futures.ThreadPoolExecutor` manages a thread pool. We submit one task per port, and
+        `as_completed` hands back results as they come. With 100 threads, 1000 ports are scanned in a few
+        seconds instead of a few minutes. We do not set an unreasonable number of threads: too many
+        simultaneous threads can overwhelm the target (and look like an attack).
+  - heading:
+      fr: "Les bannières et des tests sans réseau externe"
+      en: "Banners and tests without an external network"
+    body:
+      fr: |
+        Une **bannière** est le message qu'un service envoie à la connexion : `SSH-2.0-OpenSSH_9.6`,
+        `220 mail.example.com ESMTP`... Elle révèle souvent le logiciel et sa version — une information
+        précieuse pour repérer des composants obsolètes (OWASP A06). Le module `banners.py` se connecte,
+        lit les premiers octets et les décode prudemment.
+
+        Enfin, un point de méthode essentiel : les **tests ne doivent jamais dépendre d'internet**. Un
+        test qui scanne un vrai site est lent, fragile et potentiellement illégal. À la place, le test
+        **ouvre lui-même une socket locale** sur un port éphémère (`127.0.0.1:0`), puis vérifie que le
+        scanner la détecte. Tout reste sur la machine, reproductible et sûr.
+      en: |
+        A **banner** is the message a service sends on connection: `SSH-2.0-OpenSSH_9.6`,
+        `220 mail.example.com ESMTP`... It often reveals the software and its version — valuable
+        information for spotting outdated components (OWASP A06). The `banners.py` module connects, reads
+        the first bytes and decodes them carefully.
+
+        Finally, an essential method point: **tests must never depend on the internet**. A test that scans
+        a real site is slow, fragile and potentially illegal. Instead, the test **opens a local socket
+        itself** on an ephemeral port (`127.0.0.1:0`), then checks that the scanner detects it. Everything
+        stays on the machine, reproducible and safe.
+
+examples:
+  - title:
+      fr: "ports.py : scan TCP concurrent avec timeout"
+      en: "ports.py: concurrent TCP scan with a timeout"
+    file: scanner/ports.py
+    lang: python
+    kind: secure
+    code: |
+      """Concurrent TCP connect port scanner (detection only)."""
+      from __future__ import annotations
+
+      import socket
+      from concurrent.futures import ThreadPoolExecutor, as_completed
+
+      # A small default set; the CLI can override it.
+      COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 143, 443, 3306, 3389, 5432, 8080]
+
+
+      def scan_port(host: str, port: int, timeout: float = 1.0) -> bool:
+          """Return True if a TCP connection to host:port succeeds."""
+          # Context manager guarantees the socket is closed even on error.
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+              sock.settimeout(timeout)  # never wait forever on a filtered port
+              try:
+                  # connect_ex returns 0 on success instead of raising.
+                  return sock.connect_ex((host, port)) == 0
+              except OSError:
+                  return False
+
+
+      def scan_ports(
+          host: str, ports: list[int], timeout: float = 1.0, workers: int = 100
+      ) -> list[int]:
+          """Scan ports concurrently; return the sorted list of open ports."""
+          open_ports: list[int] = []
+          with ThreadPoolExecutor(max_workers=workers) as pool:
+              future_to_port = {
+                  pool.submit(scan_port, host, p, timeout): p for p in ports
+              }
+              for future in as_completed(future_to_port):
+                  if future.result():
+                      open_ports.append(future_to_port[future])
+          return sorted(open_ports)
+    note:
+      fr: "Le `with` ferme toujours la socket ; `settimeout` évite les attentes infinies ; `ThreadPoolExecutor` scanne en parallèle. La fonction renvoie une liste triée de ports ouverts."
+      en: "The `with` always closes the socket; `settimeout` avoids infinite waits; `ThreadPoolExecutor` scans in parallel. The function returns a sorted list of open ports."
+
+  - title:
+      fr: "banners.py : récupérer l'identité d'un service"
+      en: "banners.py: grab a service's identity"
+    file: scanner/banners.py
+    lang: python
+    kind: secure
+    code: |
+      """Best-effort service banner grabbing (detection only)."""
+      from __future__ import annotations
+
+      import socket
+
+
+      def grab_banner(host: str, port: int, timeout: float = 2.0) -> str | None:
+          """Connect and read an initial banner, if the service sends one."""
+          try:
+              with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                  sock.settimeout(timeout)
+                  sock.connect((host, port))
+                  # HTTP services only speak after a request; nudge them.
+                  if port in (80, 8080):
+                      sock.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
+                  data = sock.recv(256)
+              # Decode defensively: a banner is untrusted bytes.
+              text = data.decode("latin-1", errors="replace").strip()
+              return text or None
+          except OSError:
+              return None
+    note:
+      fr: "On lit au maximum 256 octets et on décode en `latin-1` avec remplacement : une bannière est une donnée non fiable, on ne la laisse jamais planter l'outil. Pour HTTP, on envoie d'abord une requête `HEAD`."
+      en: "We read at most 256 bytes and decode as `latin-1` with replacement: a banner is untrusted data, we never let it crash the tool. For HTTP, we first send a `HEAD` request."
+
+  - title:
+      fr: "test_ports.py : tester avec une socket locale, sans internet"
+      en: "test_ports.py: test with a local socket, no internet"
+    file: tests/test_ports.py
+    lang: python
+    kind: secure
+    code: |
+      import socket
+
+      from scanner.ports import scan_port, scan_ports
+
+
+      def _listening_socket():
+          """Open a local listening socket on a random free port."""
+          srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          srv.bind(("127.0.0.1", 0))  # 0 = let the OS pick a free port
+          srv.listen()
+          return srv, srv.getsockname()[1]
+
+
+      def test_scan_port_detects_open_port():
+          srv, port = _listening_socket()
+          try:
+              assert scan_port("127.0.0.1", port) is True
+          finally:
+              srv.close()
+
+
+      def test_scan_port_reports_closed_port():
+          # After closing, the port is no longer accepting connections.
+          srv, port = _listening_socket()
+          srv.close()
+          assert scan_port("127.0.0.1", port, timeout=0.5) is False
+
+
+      def test_scan_ports_returns_only_open():
+          srv, port = _listening_socket()
+          try:
+              result = scan_ports("127.0.0.1", [port, 1], timeout=0.5)
+              assert port in result  # the open one is found
+              assert result == sorted(result)  # result is sorted
+          finally:
+              srv.close()
+    output: |
+      $ pytest -q tests/test_ports.py
+      ...                                                          [100%]
+      3 passed in 0.06s
+    note:
+      fr: "Le test crée sa propre cible locale sur un port éphémère : aucun réseau externe, aucune question légale, et un résultat reproductible. C'est la bonne façon de tester un scanner."
+      en: "The test creates its own local target on an ephemeral port: no external network, no legal question, and a reproducible result. This is the right way to test a scanner."
+
+  - title:
+      fr: "Utilisation combinée : ports ouverts et bannières"
+      en: "Combined use: open ports and banners"
+    file: demo.py
+    lang: python
+    kind: neutral
+    code: |
+      from scanner.ports import scan_ports, COMMON_PORTS
+      from scanner.banners import grab_banner
+
+      target = "127.0.0.1"  # scan ONLY your own machine here
+      open_ports = scan_ports(target, COMMON_PORTS, timeout=1.0)
+
+      for port in open_ports:
+          banner = grab_banner(target, port)
+          print(f"{port:>5}  open   {banner or '(no banner)'}")
+    output: |
+         22  open   SSH-2.0-OpenSSH_9.6
+         80  open   HTTP/1.0 200 OK
+    note:
+      fr: "On enchaîne les deux modules : d'abord les ports ouverts, puis la bannière de chacun. La sortie montre immédiatement les services exposés et leur version éventuelle."
+      en: "We chain the two modules: first the open ports, then each one's banner. The output immediately shows the exposed services and their possible version."
+
+mistake:
+  fr: |
+    **Scanner les ports séquentiellement et sans timeout.**
+
+    ```python
+    for port in range(1, 65536):
+        sock = socket.socket()
+        sock.connect((host, port))  # pas de timeout : bloque sur un port filtré
+    ```
+
+    Sans timeout, un seul port filtré peut bloquer le scanner plusieurs minutes ; sans concurrence, scanner
+    65535 ports est interminable ; et sans `with`, les sockets non fermées épuisent les descripteurs. La
+    bonne version combine `settimeout`, `ThreadPoolExecutor` et un gestionnaire de contexte.
+  en: |
+    **Scanning ports sequentially and without a timeout.**
+
+    ```python
+    for port in range(1, 65536):
+        sock = socket.socket()
+        sock.connect((host, port))  # no timeout: blocks on a filtered port
+    ```
+
+    Without a timeout, a single filtered port can block the scanner for minutes; without concurrency,
+    scanning 65535 ports is endless; and without `with`, unclosed sockets exhaust the file descriptors.
+    The correct version combines `settimeout`, `ThreadPoolExecutor` and a context manager.
+
+bestPractice:
+  fr: |
+    - **Toujours un timeout** : jamais d'attente infinie sur un port filtré.
+    - **Concurrence par threads** pour une opération d'E/S : rapide et efficace.
+    - **Gestionnaire de contexte** (`with`) pour fermer chaque socket proprement.
+    - **Nombre de threads raisonnable** : ne pas saturer la cible.
+    - **Décoder les bannières défensivement** (`errors="replace"`) : données non fiables.
+    - **Tester sans réseau externe** : une socket locale sur un port éphémère.
+  en: |
+    - **Always a timeout**: never an infinite wait on a filtered port.
+    - **Thread-based concurrency** for I/O work: fast and efficient.
+    - **Context manager** (`with`) to close each socket cleanly.
+    - **Reasonable thread count**: do not overwhelm the target.
+    - **Decode banners defensively** (`errors="replace"`): untrusted data.
+    - **Test without an external network**: a local socket on an ephemeral port.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez à `ports.py` une fonction **`scan_range(host, start, end, timeout=1.0)`** qui scanne tous
+      les ports d'une **plage** `[start, end]` (bornes incluses) et renvoie la liste triée des ports
+      ouverts, en réutilisant `scan_ports`.
+
+      Bonus : validez que `start` et `end` sont entre 1 et 65535 et que `start <= end`, sinon levez
+      `ValueError`.
+    en: |
+      Add to `ports.py` a function **`scan_range(host, start, end, timeout=1.0)`** that scans all ports in
+      a **range** `[start, end]` (inclusive) and returns the sorted list of open ports, reusing
+      `scan_ports`.
+
+      Bonus: validate that `start` and `end` are between 1 and 65535 and that `start <= end`, otherwise
+      raise `ValueError`.
+  solution:
+    file: scan_range.py
+    lang: python
+    code: |
+      # --- add to scanner/ports.py ---
+      def scan_range(host: str, start: int, end: int, timeout: float = 1.0) -> list[int]:
+          """Scan every port in [start, end] (inclusive) and return the open ones."""
+          # Validate bounds before doing any network work.
+          if not (1 <= start <= 65535 and 1 <= end <= 65535):
+              raise ValueError("ports must be between 1 and 65535")
+          if start > end:
+              raise ValueError("start must be <= end")
+          return scan_ports(host, list(range(start, end + 1)), timeout=timeout)
+
+
+      # --- tests/test_ports.py ---
+      import pytest
+      from scanner.ports import scan_range
+
+
+      def test_scan_range_rejects_bad_bounds():
+          with pytest.raises(ValueError):
+              scan_range("127.0.0.1", 100, 50)   # start > end
+          with pytest.raises(ValueError):
+              scan_range("127.0.0.1", 0, 10)     # port 0 is invalid
+    note:
+      fr: "On valide les bornes **avant** toute opération réseau, puis on délègue à `scan_ports` pour profiter de la concurrence. Réutiliser le code existant évite les bugs et garde le module cohérent."
+      en: "We validate the bounds **before** any network work, then delegate to `scan_ports` to reuse the concurrency. Reusing existing code avoids bugs and keeps the module consistent."
+
+quiz:
+  - q:
+      fr: "Pourquoi fixer un timeout sur chaque connexion de scan ?"
+      en: "Why set a timeout on each scan connection?"
+    options:
+      fr:
+        - "Pour chiffrer la connexion"
+        - "Pour éviter que le scanner n'attende indéfiniment sur un port filtré"
+        - "Pour ouvrir plus de ports"
+        - "Pour réduire la taille du code"
+      en:
+        - "To encrypt the connection"
+        - "To stop the scanner from waiting forever on a filtered port"
+        - "To open more ports"
+        - "To reduce the size of the code"
+    answer: 1
+    why:
+      fr: "Un port filtré ne répond jamais : sans timeout, la connexion bloquerait très longtemps."
+      en: "A filtered port never answers: without a timeout, the connection would block for a long time."
+  - q:
+      fr: "Pourquoi utiliser des threads (ThreadPoolExecutor) pour le scan de ports ?"
+      en: "Why use threads (ThreadPoolExecutor) for port scanning?"
+    options:
+      fr:
+        - "Parce que le scan est une tâche de calcul intensif"
+        - "Parce que Python l'impose pour les sockets"
+        - "Parce que le scan attend surtout le réseau (E/S) : la concurrence le rend bien plus rapide"
+        - "Pour utiliser plus de CPU"
+      en:
+        - "Because scanning is a CPU-intensive task"
+        - "Because Python requires it for sockets"
+        - "Because scanning mostly waits on the network (I/O): concurrency makes it much faster"
+        - "To use more CPU"
+    answer: 2
+    why:
+      fr: "Le scan passe son temps à attendre les réponses réseau : les threads permettent d'attendre plusieurs ports à la fois."
+      en: "Scanning spends its time waiting for network responses: threads let it wait on many ports at once."
+  - q:
+      fr: "Que renvoie `socket.connect_ex()` quand le port est ouvert ?"
+      en: "What does `socket.connect_ex()` return when the port is open?"
+    options:
+      fr:
+        - "0"
+        - "True"
+        - "Le numéro de port"
+        - "Une exception"
+      en:
+        - "0"
+        - "True"
+        - "The port number"
+        - "An exception"
+    answer: 0
+    why:
+      fr: "`connect_ex` renvoie `0` en cas de succès (et un code d'erreur sinon), au lieu de lever une exception comme `connect`."
+      en: "`connect_ex` returns `0` on success (and an error code otherwise), instead of raising an exception like `connect`."
+  - q:
+      fr: "Comment les tests du scanner évitent-ils de dépendre d'internet ?"
+      en: "How do the scanner's tests avoid depending on the internet?"
+    options:
+      fr:
+        - "Ils scannent un vrai site public"
+        - "Ils ouvrent une socket locale sur un port éphémère et la scannent"
+        - "Ils désactivent le réseau du système"
+        - "Ils utilisent une base de données"
+      en:
+        - "They scan a real public site"
+        - "They open a local socket on an ephemeral port and scan it"
+        - "They disable the system network"
+        - "They use a database"
+    answer: 1
+    why:
+      fr: "Le test crée sa propre cible locale (`127.0.0.1:0`) : reproductible, rapide et sans question légale."
+      en: "The test creates its own local target (`127.0.0.1:0`): reproducible, fast and with no legal question."
+  - q:
+      fr: "Pourquoi décoder une bannière avec `errors=\"replace\"` ?"
+      en: "Why decode a banner with `errors=\"replace\"`?"
+    options:
+      fr:
+        - "Pour traduire la bannière"
+        - "Pour chiffrer la bannière"
+        - "Pour accélérer la lecture"
+        - "Parce qu'une bannière est une donnée non fiable qui ne doit pas faire planter l'outil"
+      en:
+        - "To translate the banner"
+        - "To encrypt the banner"
+        - "To speed up reading"
+        - "Because a banner is untrusted data that must not crash the tool"
+    answer: 3
+    why:
+      fr: "Les octets reçus peuvent être invalides en UTF-8 ; `errors=\"replace\"` évite une exception et garde l'outil robuste."
+      en: "The received bytes may be invalid UTF-8; `errors=\"replace\"` avoids an exception and keeps the tool robust."

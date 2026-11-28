@@ -1,0 +1,515 @@
+description:
+  fr: "Assembler l'outil : un modèle de données en dataclasses, des rapports JSON et HTML sûrs (html.escape), et une CLI argparse avec validation de la cible et confirmation d'autorisation."
+  en: "Assemble the tool: a dataclass data model, safe JSON and HTML reports (html.escape), and an argparse CLI with target validation and an authorization confirmation."
+duration: 30
+
+intro:
+  fr: |
+    Les modules d'analyse sont prêts. Il manque deux pièces pour en faire un **vrai outil** : un
+    **rapport** présentable, et une **interface en ligne de commande** qui orchestre tout en imposant le
+    garde-fou éthique.
+
+    Le rapport s'appuie sur des **dataclasses** (des structures de données Python propres) et se décline
+    en **JSON** (pour être traité par une machine, ex. un pipeline) et en **HTML** (pour être lu par un
+    humain). Point de sécurité crucial : les données du rapport viennent de la cible scannée, donc **non
+    fiables** — on les échappe avec `html.escape` pour éviter une injection dans le rapport lui-même.
+
+    La CLI, construite avec `argparse`, est la porte d'entrée. Elle **valide la cible**, exige le drapeau
+    `--i-have-authorization` pour toute cible non locale, puis lance le scan et écrit le rapport.
+    Analogie : on monte enfin le tableau de bord et les commandes de la voiture dont on a fabriqué le
+    moteur. Dans cette leçon : `report.py` et `cli.py`.
+  en: |
+    The analysis modules are ready. Two pieces are missing to make it a **real tool**: a presentable
+    **report**, and a **command-line interface** that orchestrates everything while enforcing the ethics
+    guardrail.
+
+    The report is built on **dataclasses** (clean Python data structures) and comes in **JSON** (for
+    machine processing, e.g. a pipeline) and **HTML** (for a human to read). A crucial security point:
+    the report data comes from the scanned target, so it is **untrusted** — we escape it with
+    `html.escape` to avoid an injection into the report itself.
+
+    The CLI, built with `argparse`, is the entry point. It **validates the target**, requires the
+    `--i-have-authorization` flag for any non-local target, then runs the scan and writes the report.
+    Analogy: we finally fit the dashboard and controls onto the car whose engine we built. In this lesson:
+    `report.py` and `cli.py`.
+
+sections:
+  - heading:
+      fr: "Un modèle de données avec des dataclasses"
+      en: "A data model with dataclasses"
+    body:
+      fr: |
+        Plutôt que de trimballer des dictionnaires informes, on structure les résultats avec des
+        **dataclasses**. Une classe `Finding` (conclusion) décrit un problème détecté : catégorie
+        (`port`, `http`, `tls`), sévérité (`info`, `low`, `medium`, `high`), titre et détail. Une classe
+        `Report` agrège toutes les conclusions pour une cible.
+
+        Les dataclasses offrent gratuitement un constructeur, une représentation lisible et la conversion
+        en dictionnaire via `asdict()` — idéale pour le JSON. Le code devient **auto-documenté** : on sait
+        exactement quels champs existent, ce qui réduit les bugs et facilite les évolutions.
+      en: |
+        Rather than passing shapeless dictionaries around, we structure the results with **dataclasses**.
+        A `Finding` class describes a detected issue: category (`port`, `http`, `tls`), severity (`info`,
+        `low`, `medium`, `high`), title and detail. A `Report` class aggregates all the findings for a
+        target.
+
+        Dataclasses give you a constructor, a readable representation and conversion to a dictionary via
+        `asdict()` for free — ideal for JSON. The code becomes **self-documenting**: you know exactly
+        which fields exist, which reduces bugs and eases future changes.
+  - heading:
+      fr: "Rapports JSON et HTML : échapper les données non fiables"
+      en: "JSON and HTML reports: escaping untrusted data"
+    body:
+      fr: |
+        Le rapport JSON est direct : `json.dumps(asdict(report))`. Le rapport HTML demande une
+        **précaution de sécurité**. Les données proviennent de la cible (une bannière, un nom d'hôte, un
+        en-tête) : un attaquant pourrait y glisser du code comme `<script>alert(1)</script>`. Si on
+        l'insère tel quel dans le HTML, on crée une faille **XSS dans notre propre rapport**.
+
+        La parade : **`html.escape()`** sur **chaque** valeur insérée. `<` devient `&lt;`, les balises ne
+        s'exécutent plus, elles s'affichent comme du texte. C'est exactement le principe de l'échappement
+        contextuel vu en AppSec, appliqué ici à l'outil de sécurité lui-même. Un test vérifiera qu'une
+        charge malveillante est bien neutralisée.
+      en: |
+        The JSON report is straightforward: `json.dumps(asdict(report))`. The HTML report requires a
+        **security precaution**. The data comes from the target (a banner, a hostname, a header): an
+        attacker could slip in code like `<script>alert(1)</script>`. If we insert it as-is into the HTML,
+        we create an **XSS flaw in our own report**.
+
+        The defense: **`html.escape()`** on **every** inserted value. `<` becomes `&lt;`, tags no longer
+        execute, they display as text. This is exactly the contextual-escaping principle seen in AppSec,
+        applied here to the security tool itself. A test will verify that a malicious payload is properly
+        neutralised.
+  - heading:
+      fr: "La CLI : validation et garde-fou d'autorisation"
+      en: "The CLI: validation and authorization guardrail"
+    body:
+      fr: |
+        `cli.py` utilise **`argparse`** pour offrir une interface claire : une cible, des options de ports,
+        un format de sortie, un fichier de sortie. Trois responsabilités de sécurité :
+
+        1. **Valider la cible** : on vérifie qu'elle se résout (`socket.gethostbyname`) ; une cible
+           invalide est rejetée avant tout scan.
+        2. **Garde-fou éthique** : si la cible n'est pas dans `DEFAULT_TARGETS` **et** que
+           `--i-have-authorization` n'est pas fourni, l'outil **refuse** de scanner et explique pourquoi.
+        3. **Orchestrer** : lancer le scan de ports, puis, si un port web/HTTPS est ouvert, les
+           vérifications HTTP et TLS, et assembler le rapport.
+
+        C'est ici que l'éthique de la leçon 1 devient **exécutable** : la permission n'est pas supposée,
+        elle est exigée par le code.
+      en: |
+        `cli.py` uses **`argparse`** to offer a clear interface: a target, port options, an output format,
+        an output file. Three security responsibilities:
+
+        1. **Validate the target**: check that it resolves (`socket.gethostbyname`); an invalid target is
+           rejected before any scan.
+        2. **Ethics guardrail**: if the target is not in `DEFAULT_TARGETS` **and** `--i-have-authorization`
+           is not provided, the tool **refuses** to scan and explains why.
+        3. **Orchestrate**: run the port scan, then, if a web/HTTPS port is open, the HTTP and TLS checks,
+           and assemble the report.
+
+        This is where the ethics of lesson 1 becomes **executable**: permission is not assumed, it is
+        required by the code.
+
+examples:
+  - title:
+      fr: "report.py : dataclasses et rapports JSON/HTML échappés"
+      en: "report.py: dataclasses and escaped JSON/HTML reports"
+    file: scanner/report.py
+    lang: python
+    kind: secure
+    code: |
+      """Aggregate findings and render JSON or HTML reports."""
+      from __future__ import annotations
+
+      import html
+      import json
+      from dataclasses import asdict, dataclass, field
+
+
+      @dataclass
+      class Finding:
+          category: str  # "port" | "http" | "tls"
+          severity: str  # "info" | "low" | "medium" | "high"
+          title: str
+          detail: str
+
+
+      @dataclass
+      class Report:
+          target: str
+          findings: list[Finding] = field(default_factory=list)
+
+          def add(self, category: str, severity: str, title: str, detail: str) -> None:
+              self.findings.append(Finding(category, severity, title, detail))
+
+          def to_json(self) -> str:
+              # asdict() turns the dataclasses into plain dicts for JSON.
+              return json.dumps(asdict(self), indent=2)
+
+          def to_html(self) -> str:
+              # html.escape on EVERY value: report data is untrusted (from the target).
+              rows = "".join(
+                  "<tr>"
+                  f"<td>{html.escape(f.category)}</td>"
+                  f"<td>{html.escape(f.severity)}</td>"
+                  f"<td>{html.escape(f.title)}</td>"
+                  f"<td>{html.escape(f.detail)}</td>"
+                  "</tr>"
+                  for f in self.findings
+              )
+              return (
+                  "<!doctype html><html><head><meta charset='utf-8'>"
+                  f"<title>Scan report: {html.escape(self.target)}</title></head>"
+                  f"<body><h1>Scan report: {html.escape(self.target)}</h1>"
+                  "<table border='1'>"
+                  "<tr><th>Category</th><th>Severity</th><th>Title</th><th>Detail</th></tr>"
+                  f"{rows}</table></body></html>"
+              )
+    note:
+      fr: "Chaque valeur insérée dans le HTML passe par `html.escape` : une bannière contenant `<script>` s'affichera comme texte, jamais comme code. `asdict()` simplifie la sortie JSON."
+      en: "Every value inserted into the HTML goes through `html.escape`: a banner containing `<script>` will display as text, never as code. `asdict()` simplifies the JSON output."
+
+  - title:
+      fr: "cli.py : argparse, validation et garde-fou d'autorisation"
+      en: "cli.py: argparse, validation and authorization guardrail"
+    file: scanner/cli.py
+    lang: python
+    kind: secure
+    code: |
+      """Command-line interface for vulnscan.
+
+      LEGAL: scan only systems you own or are explicitly authorised to test.
+      """
+      from __future__ import annotations
+
+      import argparse
+      import socket
+      import sys
+
+      from . import DEFAULT_TARGETS, __version__
+      from .banners import grab_banner
+      from .http_checks import check_headers
+      from .ports import COMMON_PORTS, scan_ports
+      from .report import Report
+      from .tls_checks import check_tls
+
+
+      def validate_target(target: str) -> str:
+          """Reject a target that does not resolve, before any scanning."""
+          try:
+              socket.gethostbyname(target)
+          except socket.gaierror:
+              raise SystemExit(f"error: cannot resolve target '{target}'")
+          return target
+
+
+      def build_parser() -> argparse.ArgumentParser:
+          p = argparse.ArgumentParser(prog="vulnscan",
+                                      description="Detection-only vulnerability scanner.")
+          p.add_argument("target", nargs="?", default="127.0.0.1",
+                         help="host to scan (default: 127.0.0.1)")
+          p.add_argument("--ports", default="", help="comma-separated ports")
+          p.add_argument("--format", choices=["json", "html"], default="json")
+          p.add_argument("--output", help="write the report to this file")
+          p.add_argument("--i-have-authorization", action="store_true",
+                         help="confirm you are authorised to scan the target")
+          p.add_argument("--version", action="version", version=f"vulnscan {__version__}")
+          return p
+
+
+      def main(argv: list[str] | None = None) -> int:
+          args = build_parser().parse_args(argv)
+
+          # Ethics gate: refuse a non-default target without explicit consent.
+          if args.target.lower() not in DEFAULT_TARGETS and not args.i_have_authorization:
+              print("refusing to scan a non-default target without "
+                    "--i-have-authorization", file=sys.stderr)
+              print("Scan ONLY systems you own or are authorised to test.", file=sys.stderr)
+              return 2
+
+          target = validate_target(args.target)
+          ports = [int(p) for p in args.ports.split(",") if p] or COMMON_PORTS
+
+          report = Report(target=target)
+          open_ports = scan_ports(target, ports)
+          for port in open_ports:
+              report.add("port", "info", f"Open port {port}",
+                         grab_banner(target, port) or "no banner")
+
+          # If a web port is open, check security headers.
+          if 80 in open_ports or 443 in open_ports:
+              scheme = "https" if 443 in open_ports else "http"
+              try:
+                  for missing in check_headers(f"{scheme}://{target}")["missing"]:
+                      report.add("http", "medium", f"Missing header {missing}", scheme)
+              except Exception as exc:  # a bad response must not crash the tool
+                  report.add("http", "info", "HTTP check failed", str(exc))
+
+          # If HTTPS is open, inspect the TLS certificate.
+          if 443 in open_ports:
+              try:
+                  tls = check_tls(target)
+                  if tls["weak_protocol"]:
+                      report.add("tls", "high", "Weak TLS protocol", tls["protocol"])
+                  if tls["expiring_soon"]:
+                      report.add("tls", "medium", "Certificate expiring soon",
+                                 f"{tls['days_left']} days left")
+              except Exception as exc:
+                  report.add("tls", "info", "TLS check failed", str(exc))
+
+          rendered = report.to_json() if args.format == "json" else report.to_html()
+          if args.output:
+              with open(args.output, "w", encoding="utf-8") as fh:
+                  fh.write(rendered)
+          else:
+              print(rendered)
+          return 0
+
+
+      if __name__ == "__main__":
+          raise SystemExit(main())
+    note:
+      fr: "Le garde-fou éthique est la première vérification de `main` : toute cible non locale sans `--i-have-authorization` renvoie le code 2 et refuse de scanner. Les erreurs réseau sont capturées, jamais fatales."
+      en: "The ethics guardrail is the first check in `main`: any non-local target without `--i-have-authorization` returns code 2 and refuses to scan. Network errors are caught, never fatal."
+
+  - title:
+      fr: "Exécuter la CLI et lire le rapport"
+      en: "Running the CLI and reading the report"
+    file: run.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Default target (127.0.0.1): no authorization flag needed
+      vulnscan 127.0.0.1 --format json
+
+      # A non-default target is REFUSED without explicit consent
+      vulnscan example.com
+      # -> refusing to scan a non-default target without --i-have-authorization
+
+      # With authorization and an HTML report written to a file
+      vulnscan scanme.nmap.org --i-have-authorization --format html --output report.html
+    output: |
+      {
+        "target": "127.0.0.1",
+        "findings": [
+          {
+            "category": "port",
+            "severity": "info",
+            "title": "Open port 22",
+            "detail": "SSH-2.0-OpenSSH_9.6"
+          }
+        ]
+      }
+    note:
+      fr: "La deuxième commande est refusée : la cible n'est pas locale et l'autorisation n'est pas confirmée. C'est le garde-fou éthique en action, directement dans l'interface."
+      en: "The second command is refused: the target is not local and authorisation is not confirmed. This is the ethics guardrail in action, right in the interface."
+
+  - title:
+      fr: "test_report.py : vérifier l'échappement HTML (anti-XSS)"
+      en: "test_report.py: verifying HTML escaping (anti-XSS)"
+    file: tests/test_report.py
+    lang: python
+    kind: secure
+    code: |
+      from scanner.report import Report
+
+
+      def test_json_contains_target():
+          report = Report(target="127.0.0.1")
+          report.add("port", "info", "Open port 80", "banner")
+          assert '"target": "127.0.0.1"' in report.to_json()
+
+
+      def test_html_escapes_malicious_input():
+          # A malicious banner/target must NOT become a live tag in the report.
+          report = Report(target="<script>alert(1)</script>")
+          report.add("http", "medium", "Missing header", "x")
+          html_out = report.to_html()
+          assert "<script>alert(1)</script>" not in html_out  # not raw
+          assert "&lt;script&gt;" in html_out                 # escaped instead
+    output: |
+      $ pytest -q tests/test_report.py
+      ..                                                           [100%]
+      2 passed in 0.02s
+    note:
+      fr: "Ce test prouve que notre propre rapport est à l'abri d'une injection : une charge `<script>` est transformée en texte inoffensif. On teste la sécurité de l'outil, pas seulement sa logique."
+      en: "This test proves our own report is safe from injection: a `<script>` payload is turned into harmless text. We test the tool's security, not only its logic."
+
+mistake:
+  fr: |
+    **Insérer les données de la cible dans le rapport HTML sans les échapper.**
+
+    ```python
+    rows += f"<td>{finding.detail}</td>"  # DANGER: XSS dans le rapport
+    ```
+
+    Une bannière ou un en-tête contrôlé par la cible peut contenir `<script>...`. Ouvert dans un
+    navigateur, le rapport exécuterait ce code : on aurait créé une faille dans l'outil censé en détecter.
+    Toujours passer chaque valeur par `html.escape()`. Même règle que pour une application web : ne jamais
+    faire confiance à une donnée externe.
+  en: |
+    **Inserting the target's data into the HTML report without escaping it.**
+
+    ```python
+    rows += f"<td>{finding.detail}</td>"  # DANGER: XSS in the report
+    ```
+
+    A banner or header controlled by the target may contain `<script>...`. Opened in a browser, the report
+    would execute that code: we would have created a flaw in the very tool meant to detect them. Always
+    pass each value through `html.escape()`. Same rule as for a web app: never trust external data.
+
+bestPractice:
+  fr: |
+    - **Dataclasses** pour un modèle de données clair et auto-documenté.
+    - **`html.escape()` sur chaque valeur** du rapport HTML : anti-XSS.
+    - **Garde-fou éthique dans la CLI** : refus explicite sans `--i-have-authorization`.
+    - **Valider la cible** (résolution DNS) avant tout scan.
+    - **Capturer les erreurs réseau** et les transformer en entrées de rapport, jamais en crash.
+    - **Deux formats** : JSON pour les machines, HTML pour les humains.
+  en: |
+    - **Dataclasses** for a clear, self-documenting data model.
+    - **`html.escape()` on every value** in the HTML report: anti-XSS.
+    - **Ethics guardrail in the CLI**: explicit refusal without `--i-have-authorization`.
+    - **Validate the target** (DNS resolution) before any scan.
+    - **Catch network errors** and turn them into report entries, never a crash.
+    - **Two formats**: JSON for machines, HTML for humans.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez à `Report` une méthode **`severity_counts()`** qui renvoie un dictionnaire comptant les
+      conclusions par sévérité, par exemple `{"high": 1, "medium": 3, "info": 5}`.
+
+      Puis ajoutez à la CLI une option **`--fail-on`** (valeurs `high`, `medium`, `low`) : si une
+      conclusion de sévérité **égale ou supérieure** au seuil existe, `main` renvoie le code `1` (utile
+      pour faire échouer un pipeline).
+    en: |
+      Add to `Report` a method **`severity_counts()`** that returns a dictionary counting findings by
+      severity, for example `{"high": 1, "medium": 3, "info": 5}`.
+
+      Then add a CLI option **`--fail-on`** (values `high`, `medium`, `low`): if a finding of severity
+      **equal to or above** the threshold exists, `main` returns exit code `1` (useful to fail a
+      pipeline).
+  solution:
+    file: fail_on.py
+    lang: python
+    code: |
+      # --- add to scanner/report.py ---
+      from collections import Counter
+
+      SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3}
+
+
+      def severity_counts(self) -> dict[str, int]:
+          """Count findings grouped by severity."""
+          return dict(Counter(f.severity for f in self.findings))
+
+
+      def max_severity(self) -> int:
+          """Highest severity level present (0 if no findings)."""
+          return max((SEVERITY_ORDER.get(f.severity, 0) for f in self.findings),
+                     default=0)
+
+      # --- in scanner/cli.py: add the argument ---
+      # p.add_argument("--fail-on", choices=["low", "medium", "high"])
+
+      # --- in main(), just before returning 0 ---
+      if args.fail_on and report.max_severity() >= SEVERITY_ORDER[args.fail_on]:
+          print(f"findings at or above '{args.fail_on}' severity", file=sys.stderr)
+          return 1
+    note:
+      fr: "`--fail-on` transforme le scanner en porte de sécurité pour un pipeline : un code de sortie 1 fait échouer la CI si une conclusion dépasse le seuil choisi. On réutilise l'ordre de sévérité défini une seule fois."
+      en: "`--fail-on` turns the scanner into a security gate for a pipeline: exit code 1 fails CI if a finding exceeds the chosen threshold. We reuse the severity order defined once."
+
+quiz:
+  - q:
+      fr: "Pourquoi appliquer `html.escape()` sur les données du rapport HTML ?"
+      en: "Why apply `html.escape()` to the HTML report data?"
+    options:
+      fr:
+        - "Pour compresser le rapport"
+        - "Pour empêcher qu'une donnée de la cible (ex. `<script>`) ne s'exécute dans le rapport (XSS)"
+        - "Pour traduire le rapport"
+        - "Pour trier les conclusions"
+      en:
+        - "To compress the report"
+        - "To stop target data (e.g. `<script>`) from executing in the report (XSS)"
+        - "To translate the report"
+        - "To sort the findings"
+    answer: 1
+    why:
+      fr: "Les données viennent de la cible, non fiables : sans échappement, une bannière piégée créerait une faille XSS dans notre propre rapport."
+      en: "The data comes from the untrusted target: without escaping, a booby-trapped banner would create an XSS flaw in our own report."
+  - q:
+      fr: "Que fait la CLI si la cible n'est pas locale et que `--i-have-authorization` est absent ?"
+      en: "What does the CLI do if the target is not local and `--i-have-authorization` is absent?"
+    options:
+      fr:
+        - "Elle scanne quand même après un avertissement"
+        - "Elle demande un mot de passe"
+        - "Elle refuse de scanner et renvoie un code d'erreur"
+        - "Elle scanne uniquement le port 80"
+      en:
+        - "It scans anyway after a warning"
+        - "It asks for a password"
+        - "It refuses to scan and returns an error code"
+        - "It scans only port 80"
+    answer: 2
+    why:
+      fr: "Le garde-fou éthique refuse toute cible non locale sans confirmation explicite d'autorisation (code de sortie 2)."
+      en: "The ethics guardrail refuses any non-local target without explicit authorisation (exit code 2)."
+  - q:
+      fr: "Quel est l'intérêt d'utiliser des dataclasses pour le modèle de données ?"
+      en: "What is the benefit of using dataclasses for the data model?"
+    options:
+      fr:
+        - "Un code clair et auto-documenté, convertible en dict via `asdict()` pour le JSON"
+        - "Elles chiffrent automatiquement les données"
+        - "Elles rendent le réseau plus rapide"
+        - "Elles sont obligatoires pour argparse"
+      en:
+        - "Clear, self-documenting code, convertible to a dict via `asdict()` for JSON"
+        - "They automatically encrypt the data"
+        - "They make the network faster"
+        - "They are required by argparse"
+    answer: 0
+    why:
+      fr: "Les dataclasses donnent constructeur, représentation et `asdict()` ; les champs sont explicites, ce qui réduit les bugs."
+      en: "Dataclasses give a constructor, representation and `asdict()`; fields are explicit, which reduces bugs."
+  - q:
+      fr: "Pourquoi la CLI capture-t-elle les exceptions des vérifications HTTP/TLS ?"
+      en: "Why does the CLI catch exceptions from the HTTP/TLS checks?"
+    options:
+      fr:
+        - "Pour ignorer définitivement les erreurs"
+        - "Pour qu'une cible qui répond mal n'interrompe pas le scan et soit signalée dans le rapport"
+        - "Pour accélérer le scan"
+        - "Parce qu'argparse l'exige"
+      en:
+        - "To permanently ignore errors"
+        - "So a target that answers poorly does not interrupt the scan and is reported instead"
+        - "To speed up the scan"
+        - "Because argparse requires it"
+    answer: 1
+    why:
+      fr: "Un scanner robuste signale l'échec d'une vérification et poursuit ; il ne plante pas à cause d'une cible défaillante."
+      en: "A robust scanner reports a failed check and continues; it does not crash because of a faulty target."
+  - q:
+      fr: "Dans quels formats le rapport peut-il être produit ?"
+      en: "In which formats can the report be produced?"
+    options:
+      fr:
+        - "PDF et CSV"
+        - "XML et YAML"
+        - "Uniquement du texte brut"
+        - "JSON (pour les machines) et HTML (pour les humains)"
+      en:
+        - "PDF and CSV"
+        - "XML and YAML"
+        - "Plain text only"
+        - "JSON (for machines) and HTML (for humans)"
+    answer: 3
+    why:
+      fr: "Le JSON s'intègre à un pipeline ; le HTML, lisible, convient à un rapport d'audit humain."
+      en: "JSON integrates into a pipeline; readable HTML suits a human audit report."

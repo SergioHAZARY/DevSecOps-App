@@ -1,0 +1,354 @@
+description:
+  fr: "Défense : réduire sa surface d'attaque en fermant les ports inutiles, en limitant les fuites d'information et en gérant son exposition externe (EASM)."
+  en: "Defense: reduce your attack surface by closing unused ports, limiting information disclosure and managing external exposure (EASM)."
+duration: 20
+
+intro:
+  fr: |
+    Les leçons précédentes ont montré comment un attaquant **cartographie** une cible : OSINT, scan de ports,
+    énumération de services et de contenu web. Cette leçon renverse la perspective : comment **réduire** ce
+    qu'il peut trouver ? C'est la défense par la **réduction de la surface d'attaque**.
+
+    La **surface d'attaque**, c'est l'ensemble des points par lesquels un attaquant peut tenter d'entrer :
+    chaque port ouvert, chaque service exposé, chaque information qui fuite. Moins il y en a, moins il y a de
+    portes à défendre. Pensez à une maison : moins vous laissez de fenêtres ouvertes, moins un cambrioleur a
+    d'occasions.
+
+    Dans cette leçon, vous allez apprendre à **fermer les ports inutiles**, **minimiser la divulgation
+    d'information** (bannières, en-têtes, messages d'erreur), et découvrir le concept d'**EASM** (*External
+    Attack Surface Management*) : voir son organisation **comme un attaquant la voit**, en continu. Ces
+    pratiques s'appliquent à **vos propres** systèmes : l'objectif est de durcir ce que vous administrez.
+  en: |
+    The previous lessons showed how an attacker **maps** a target: OSINT, port scanning, service and web
+    content enumeration. This lesson flips the perspective: how do you **reduce** what they can find? This is
+    defence through **attack surface reduction**.
+
+    The **attack surface** is the set of points through which an attacker can try to get in: every open port,
+    every exposed service, every piece of information that leaks. The fewer there are, the fewer doors to
+    defend. Think of a house: the fewer windows you leave open, the fewer opportunities a burglar has.
+
+    In this lesson you will learn to **close unused ports**, **minimise information disclosure** (banners,
+    headers, error messages), and discover the concept of **EASM** (*External Attack Surface Management*):
+    seeing your organisation **the way an attacker sees it**, continuously. These practices apply to **your
+    own** systems: the goal is to harden what you administer.
+
+sections:
+  - heading:
+      fr: "Fermer les ports et services inutiles"
+      en: "Close unused ports and services"
+    body:
+      fr: |
+        Chaque port ouvert est une porte potentielle. La règle de base est le **moindre privilège réseau** :
+        n'exposer que ce qui est strictement nécessaire, et seulement à ceux qui en ont besoin.
+
+        Trois leviers, du plus simple au plus robuste :
+
+        1. **Désinstaller ou arrêter** les services non utilisés : un service absent ne peut pas être attaqué.
+        2. **Lier les services à `localhost`** quand ils n'ont pas besoin d'être joignables de l'extérieur
+           (base de données, cache). Un MySQL en `bind-address = 127.0.0.1` n'apparaît plus au scan réseau.
+        3. **Filtrer avec un pare-feu** : n'autoriser que les ports nécessaires, idéalement depuis des sources
+           précises.
+
+        Pour vérifier ce qui écoute réellement sur une machine, `ss -tulpn` (ou `ss -tulwn`) liste les sockets
+        en écoute. C'est l'inverse d'un scan externe : on regarde **de l'intérieur** ce qui est exposé, puis on
+        ferme tout ce qui n'a pas de raison d'être ouvert.
+      en: |
+        Every open port is a potential door. The basic rule is **network least privilege**: expose only what is
+        strictly necessary, and only to those who need it.
+
+        Three levers, from simplest to most robust:
+
+        1. **Uninstall or stop** unused services: a service that is absent cannot be attacked.
+        2. **Bind services to `localhost`** when they do not need to be reachable from outside (database, cache).
+           A MySQL with `bind-address = 127.0.0.1` no longer appears to a network scan.
+        3. **Filter with a firewall**: allow only the necessary ports, ideally from specific sources.
+
+        To check what is really listening on a machine, `ss -tulpn` (or `ss -tulwn`) lists listening sockets. It
+        is the opposite of an external scan: you look **from the inside** at what is exposed, then close
+        everything that has no reason to be open.
+  - heading:
+      fr: "Minimiser la divulgation d'information"
+      en: "Minimise information disclosure"
+    body:
+      fr: |
+        Les attaquants adorent les **détails gratuits** : une version exacte, un en-tête bavard, un message
+        d'erreur détaillé. Réduire ces signaux ne corrige pas une faille, mais prive l'attaquant de
+        renseignements et complique l'énumération.
+
+        | Fuite | Exemple | Réduction |
+        |---|---|---|
+        | Bannière de version | `Server: Apache/2.4.58 (Ubuntu)` | `ServerTokens Prod` (masque la version) |
+        | En-tête de langage | `X-Powered-By: PHP/8.1.2` | `expose_php = Off` dans php.ini |
+        | Messages d'erreur | Stack trace SQL affichée | Pages d'erreur génériques |
+        | Fichiers oubliés | `config.bak`, `.git/` exposé | Supprimer, bloquer au niveau serveur |
+
+        Attention : masquer une version n'est **pas** une sécurité en soi — un service vulnérable le reste même
+        sans bannière (c'est de la *security through obscurity*). Mais combiné au vrai durcissement (mises à
+        jour, pare-feu), réduire la divulgation ralentit l'attaquant et diminue le bruit exploitable.
+      en: |
+        Attackers love **free details**: an exact version, a chatty header, a detailed error message. Reducing
+        these signals does not fix a flaw, but it deprives the attacker of intelligence and complicates
+        enumeration.
+
+        | Leak | Example | Reduction |
+        |---|---|---|
+        | Version banner | `Server: Apache/2.4.58 (Ubuntu)` | `ServerTokens Prod` (hides the version) |
+        | Language header | `X-Powered-By: PHP/8.1.2` | `expose_php = Off` in php.ini |
+        | Error messages | SQL stack trace displayed | Generic error pages |
+        | Forgotten files | `config.bak`, exposed `.git/` | Delete, block at the server level |
+
+        Caution: hiding a version is **not** security in itself — a vulnerable service stays vulnerable without a
+        banner (this is *security through obscurity*). But combined with real hardening (updates, firewall),
+        reducing disclosure slows the attacker and lowers the exploitable noise.
+  - heading:
+      fr: "EASM : voir son exposition comme un attaquant"
+      en: "EASM: seeing your exposure like an attacker"
+    body:
+      fr: |
+        L'**EASM** (*External Attack Surface Management*) est une pratique défensive : scanner et surveiller
+        **en continu** tout ce que votre organisation expose sur Internet, exactement avec les méthodes vues
+        dans ce cours (CT logs, scan de ports, énumération), mais **sur vos propres biens**.
+
+        Pourquoi en continu ? Parce que la surface d'attaque **bouge** : un développeur met en ligne un
+        sous-domaine de test, un bucket de stockage devient public, un vieux serveur reste allumé. L'EASM
+        détecte ces expositions avant les attaquants.
+
+        Les grandes étapes de l'EASM :
+
+        1. **Découverte** : inventorier domaines, sous-domaines, IP, services (via CT, DNS, scans).
+        2. **Classification** : identifier ce qui est critique, obsolète, oublié.
+        3. **Priorisation** : traiter d'abord ce qui est exposé ET vulnérable.
+        4. **Surveillance** : recommencer régulièrement, car tout change.
+
+        En clair : utilisez les outils offensifs de ce module **contre vous-même**, en boucle, pour fermer les
+        portes avant qu'un attaquant ne les trouve.
+      en: |
+        **EASM** (*External Attack Surface Management*) is a defensive practice: scanning and monitoring
+        **continuously** everything your organisation exposes on the internet, with exactly the methods seen in
+        this course (CT logs, port scanning, enumeration), but **on your own assets**.
+
+        Why continuously? Because the attack surface **moves**: a developer puts a test sub-domain online, a
+        storage bucket becomes public, an old server stays powered on. EASM detects these exposures before
+        attackers do.
+
+        The main stages of EASM:
+
+        1. **Discovery**: inventory domains, sub-domains, IPs, services (via CT, DNS, scans).
+        2. **Classification**: identify what is critical, obsolete, forgotten.
+        3. **Prioritisation**: deal first with what is exposed AND vulnerable.
+        4. **Monitoring**: start again regularly, because everything changes.
+
+        In short: use the offensive tools of this module **against yourself**, in a loop, to close doors before
+        an attacker finds them.
+
+examples:
+  - title:
+      fr: "Voir ce qui écoute vraiment sur votre serveur"
+      en: "Seeing what really listens on your server"
+    file: listening.sh
+    lang: bash
+    kind: secure
+    code: |
+      # From INSIDE your own server: list every listening TCP/UDP socket.
+      # -t TCP, -u UDP, -l listening, -p process, -n numeric.
+      # This is the defender's view: what would a scanner see?
+      ss -tulpn
+    output: |
+      Netid State  Local Address:Port  Process
+      tcp   LISTEN 0.0.0.0:22          users:(("sshd",pid=701))
+      tcp   LISTEN 0.0.0.0:80          users:(("apache2",pid=912))
+      tcp   LISTEN 0.0.0.0:3306        users:(("mysqld",pid=1033))
+    note:
+      fr: "MySQL écoute sur `0.0.0.0:3306`, donc sur toutes les interfaces : exposé au réseau sans raison. Le durcir consiste à le lier à `127.0.0.1`, comme le montre l'exemple suivant."
+      en: "MySQL listens on `0.0.0.0:3306`, i.e. on all interfaces: exposed to the network for no reason. Hardening it means binding it to `127.0.0.1`, as the next example shows."
+  - title:
+      fr: "Lier la base de données à localhost uniquement"
+      en: "Binding the database to localhost only"
+    file: mysqld.cnf
+    lang: ini
+    kind: secure
+    code: |
+      [mysqld]
+      # Before: bind-address = 0.0.0.0  -> MySQL reachable from the whole network
+      # After: listen only on the loopback interface. The app on the same host
+      # still connects; external scanners no longer see port 3306 at all.
+      bind-address = 127.0.0.1
+
+      # Defence in depth: even if a rule is misconfigured later, the database
+      # never answers remote connections.
+    note:
+      fr: "Lier à `127.0.0.1` retire un service entier de la surface d'attaque réseau : un scan externe ne verra plus du tout le port 3306, sans casser l'application locale."
+      en: "Binding to `127.0.0.1` removes a whole service from the network attack surface: an external scan no longer sees port 3306 at all, without breaking the local application."
+  - title:
+      fr: "Masquer la version du serveur web (Apache)"
+      en: "Hiding the web server version (Apache)"
+    file: security.conf
+    lang: apache
+    kind: secure
+    code: |
+      # Reduce information disclosure in HTTP responses.
+      # ServerTokens Prod -> the Server header shows only "Apache", no version.
+      ServerTokens Prod
+
+      # ServerSignature Off -> no version/footer on auto-generated error pages.
+      ServerSignature Off
+
+      # Note: this is NOT a fix by itself. A vulnerable Apache stays vulnerable.
+      # Combine it with updates and a firewall for real defence.
+    output: |
+      # Before: Server: Apache/2.4.58 (Ubuntu)
+      # After:  Server: Apache
+    note:
+      fr: "La bannière passe de `Apache/2.4.58 (Ubuntu)` à `Apache`. Cela prive l'attaquant d'une version exacte, mais ne remplace jamais les mises à jour : c'est une couche, pas une solution."
+      en: "The banner goes from `Apache/2.4.58 (Ubuntu)` to `Apache`. It deprives the attacker of an exact version, but never replaces updates: it is a layer, not a solution."
+
+mistake:
+  fr: |
+    **Croire que masquer les versions suffit à être en sécurité.** Cacher la bannière d'Apache ou désactiver
+    `X-Powered-By` gêne l'attaquant, mais un service vulnérable reste exploitable même sans version affichée :
+    c'est de la *security through obscurity*. À l'inverse, certains laissent des bases de données exposées en
+    `0.0.0.0` en pensant qu'un mot de passe suffit. La vraie défense **retire** les portes inutiles (fermeture,
+    bind localhost, pare-feu) ET maintient à jour ce qui reste, la réduction de divulgation n'étant qu'une
+    couche complémentaire.
+  en: |
+    **Believing that hiding versions is enough to be secure.** Hiding Apache's banner or disabling
+    `X-Powered-By` annoys the attacker, but a vulnerable service stays exploitable even without a displayed
+    version: this is *security through obscurity*. Conversely, some leave databases exposed on `0.0.0.0`
+    thinking a password is enough. Real defence **removes** the unneeded doors (closing, localhost bind,
+    firewall) AND keeps what remains up to date, with disclosure reduction being only a complementary layer.
+
+bestPractice:
+  fr: |
+    - **Moindre privilège réseau** : n'exposez que les ports strictement nécessaires, aux bonnes sources.
+    - **Liez à `localhost`** tout service qui n'a pas besoin du réseau (bases de données, caches).
+    - **Vérifiez de l'intérieur** avec `ss -tulpn`, puis fermez tout ce qui n'a pas de justification.
+    - **Réduisez la divulgation** (bannières, en-têtes, erreurs génériques) — en complément, jamais à la place du durcissement.
+    - **Faites de l'EASM** : scannez vos propres biens en continu pour trouver les expositions avant les attaquants.
+  en: |
+    - **Network least privilege**: expose only the strictly necessary ports, to the right sources.
+    - **Bind to `localhost`** any service that does not need the network (databases, caches).
+    - **Check from the inside** with `ss -tulpn`, then close everything without a justification.
+    - **Reduce disclosure** (banners, headers, generic errors) — as a complement, never instead of hardening.
+    - **Do EASM**: scan your own assets continuously to find exposures before attackers do.
+
+exercise:
+  statement:
+    fr: |
+      Un `ss -tulpn` sur votre serveur montre que **Redis** écoute sur `0.0.0.0:6379` (toutes les interfaces),
+      alors que seule l'application locale l'utilise.
+
+      1. Expliquez le risque de cette exposition.
+      2. Donnez la ligne de configuration qui réduit cette surface d'attaque.
+    en: |
+      An `ss -tulpn` on your server shows that **Redis** listens on `0.0.0.0:6379` (all interfaces), while only
+      the local application uses it.
+
+      1. Explain the risk of this exposure.
+      2. Give the configuration line that reduces this attack surface.
+  solution:
+    file: redis.conf
+    lang: ini
+    code: |
+      # Risk: Redis on 0.0.0.0:6379 is reachable from the whole network.
+      # Redis has no authentication by default, so any machine that can reach
+      # port 6379 could read/write all cached data - a serious exposure.
+
+      # Fix: bind Redis to the loopback interface only. The local app still works;
+      # external scanners and hosts can no longer reach the service.
+      bind 127.0.0.1
+      protected-mode yes
+    note:
+      fr: "Lier Redis à `127.0.0.1` le retire de la surface d'attaque réseau. `protected-mode yes` ajoute une protection si jamais le bind était élargi par erreur."
+      en: "Binding Redis to `127.0.0.1` removes it from the network attack surface. `protected-mode yes` adds protection in case the bind were widened by mistake."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que la surface d'attaque ?"
+      en: "What is the attack surface?"
+    options:
+      fr:
+        - "La vitesse d'un serveur"
+        - "L'ensemble des points par lesquels un attaquant peut tenter d'entrer"
+        - "La taille du disque dur"
+        - "Le nombre d'utilisateurs"
+      en:
+        - "A server's speed"
+        - "The set of points through which an attacker can try to get in"
+        - "The size of the hard drive"
+        - "The number of users"
+    answer: 1
+    why:
+      fr: "La surface d'attaque regroupe tous les ports, services et informations exposés : la réduire, c'est réduire les opportunités d'attaque."
+      en: "The attack surface is all exposed ports, services and information: reducing it reduces the opportunities to attack."
+  - q:
+      fr: "Quel est l'effet de lier un service à `127.0.0.1` ?"
+      en: "What is the effect of binding a service to `127.0.0.1`?"
+    options:
+      fr:
+        - "Il devient accessible depuis Internet"
+        - "Il n'est plus joignable que depuis la machine locale"
+        - "Il est chiffré automatiquement"
+        - "Il tourne plus vite"
+      en:
+        - "It becomes reachable from the internet"
+        - "It can only be reached from the local machine"
+        - "It is automatically encrypted"
+        - "It runs faster"
+    answer: 1
+    why:
+      fr: "Lié à la loopback, le service disparaît des scans réseau : seule l'application locale peut l'atteindre."
+      en: "Bound to loopback, the service vanishes from network scans: only the local application can reach it."
+  - q:
+      fr: "Pourquoi masquer une version n'est-il pas une vraie sécurité ?"
+      en: "Why is hiding a version not real security?"
+    options:
+      fr:
+        - "Parce qu'un service vulnérable le reste même sans bannière"
+        - "Parce que c'est illégal"
+        - "Parce que cela ralentit le serveur"
+        - "Parce que cela ouvre des ports"
+      en:
+        - "Because a vulnerable service stays vulnerable even without a banner"
+        - "Because it is illegal"
+        - "Because it slows the server down"
+        - "Because it opens ports"
+    answer: 0
+    why:
+      fr: "C'est de la *security through obscurity* : utile en complément, mais la faille demeure tant que le service n'est pas corrigé ou mis à jour."
+      en: "It is *security through obscurity*: useful as a complement, but the flaw remains until the service is fixed or updated."
+  - q:
+      fr: "Que fait principalement l'EASM ?"
+      en: "What does EASM mainly do?"
+    options:
+      fr:
+        - "Il chiffre les bases de données"
+        - "Il remplace le pare-feu"
+        - "Il surveille en continu ce que votre organisation expose sur Internet"
+        - "Il bloque tous les scans entrants"
+      en:
+        - "It encrypts databases"
+        - "It replaces the firewall"
+        - "It continuously monitors what your organisation exposes on the internet"
+        - "It blocks all incoming scans"
+    answer: 2
+    why:
+      fr: "L'EASM inventorie et surveille en boucle votre exposition externe, pour détecter les expositions avant les attaquants."
+      en: "EASM inventories and continuously monitors your external exposure, to detect exposures before attackers do."
+  - q:
+      fr: "Quelle commande liste les sockets en écoute sur votre propre serveur ?"
+      en: "Which command lists listening sockets on your own server?"
+    options:
+      fr:
+        - "ss -tulpn"
+        - "ping -c 4"
+        - "whois example.com"
+        - "curl -I"
+      en:
+        - "ss -tulpn"
+        - "ping -c 4"
+        - "whois example.com"
+        - "curl -I"
+    answer: 0
+    why:
+      fr: "`ss -tulpn` montre, de l'intérieur, tous les ports TCP/UDP en écoute et les processus associés."
+      en: "`ss -tulpn` shows, from the inside, every listening TCP/UDP port and the associated processes."

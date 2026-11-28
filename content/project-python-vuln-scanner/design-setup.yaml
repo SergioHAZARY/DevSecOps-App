@@ -1,0 +1,405 @@
+description:
+  fr: "Concevoir un scanner de vulnérabilités en Python : objectif, éthique et cadre légal, architecture en modules, structure du paquet et fichier pyproject.toml."
+  en: "Design a vulnerability scanner in Python: goal, ethics and legal boundaries, modular architecture, package structure and the pyproject.toml file."
+duration: 25
+
+intro:
+  fr: |
+    Quatrième projet de portfolio : un **scanner de vulnérabilités** en Python, utilisable en ligne de
+    commande. L'outil détecte des problèmes courants sur une cible : **ports ouverts**, **bannières de
+    services**, **en-têtes de sécurité HTTP manquants** et **certificats TLS** faibles ou expirés. Puis
+    il produit un **rapport** JSON ou HTML.
+
+    Point capital, à poser **avant** d'écrire la moindre ligne : c'est un outil de **détection et de
+    reporting**, **jamais** d'exploitation. Et il ne se lance **que** contre des systèmes que vous
+    possédez ou que vous êtes **explicitement autorisé** à tester. Par défaut, il ne vise que
+    `127.0.0.1` (votre propre machine) et `scanme.nmap.org` (un hôte public prévu pour l'entraînement).
+
+    Analogie : ce scanner est l'**inspecteur immobilier** qui vérifie si les portes sont ouvertes et les
+    serrures à jour — il ne cambriole pas. Cette première leçon pose les fondations : l'éthique, l'
+    architecture en modules et la structure du paquet Python.
+  en: |
+    A fourth portfolio project: a **vulnerability scanner** in Python, usable from the command line. The
+    tool detects common issues on a target: **open ports**, **service banners**, **missing HTTP security
+    headers** and weak or expired **TLS certificates**. Then it produces a JSON or HTML **report**.
+
+    A crucial point, to set **before** writing a single line: this is a **detection and reporting** tool,
+    **never** an exploitation one. And it runs **only** against systems you own or are **explicitly
+    authorised** to test. By default it only targets `127.0.0.1` (your own machine) and
+    `scanme.nmap.org` (a public host meant for practice).
+
+    Analogy: this scanner is the **home inspector** who checks whether doors are open and locks are up to
+    date — it does not burgle. This first lesson lays the foundations: ethics, modular architecture and
+    the Python package structure.
+
+sections:
+  - heading:
+      fr: "Éthique et cadre légal : la règle d'or"
+      en: "Ethics and legal boundaries: the golden rule"
+    body:
+      fr: |
+        Scanner un système que l'on ne possède pas, **sans autorisation écrite**, est **illégal** dans la
+        plupart des pays (en France, articles 323-1 et suivants du Code pénal ; ailleurs, des lois
+        équivalentes comme le Computer Fraud and Abuse Act). Même un simple scan de ports peut être
+        considéré comme une intrusion.
+
+        La règle d'or, gravée dans l'outil lui-même :
+
+        > **Ne scannez que des systèmes qui vous appartiennent, ou pour lesquels vous disposez d'une
+        > autorisation écrite.**
+
+        Concrètement, le scanner **refusera** de viser une cible autre que les cibles par défaut
+        (`127.0.0.1`, `scanme.nmap.org`) tant que l'utilisateur n'a pas confirmé, via un drapeau explicite
+        `--i-have-authorization`, qu'il est autorisé. L'éthique n'est pas un commentaire dans le README :
+        c'est une **fonction du code**.
+      en: |
+        Scanning a system you do not own, **without written authorisation**, is **illegal** in most
+        countries (in France, articles 323-1 ff. of the Penal Code; elsewhere, equivalent laws such as the
+        Computer Fraud and Abuse Act). Even a simple port scan can be treated as an intrusion.
+
+        The golden rule, carved into the tool itself:
+
+        > **Scan only systems you own, or for which you hold written authorisation.**
+
+        Concretely, the scanner will **refuse** to target anything other than the default targets
+        (`127.0.0.1`, `scanme.nmap.org`) until the user confirms, through an explicit
+        `--i-have-authorization` flag, that they are authorised. Ethics is not a comment in the README:
+        it is a **function of the code**.
+  - heading:
+      fr: "Une architecture en modules"
+      en: "A modular architecture"
+    body:
+      fr: |
+        Un bon outil est découpé en **modules à responsabilité unique**. Chaque module fait une chose et
+        la fait bien, ce qui le rend **testable** isolément :
+
+        | Module | Rôle |
+        |---|---|
+        | `ports.py` | Scan TCP concurrent avec timeouts |
+        | `banners.py` | Récupération des bannières de services |
+        | `http_checks.py` | En-têtes de sécurité HTTP manquants |
+        | `tls_checks.py` | Expiration et protocole du certificat TLS |
+        | `report.py` | Modèle de données + rapports JSON/HTML |
+        | `cli.py` | Interface en ligne de commande + garde-fou éthique |
+
+        On privilégie la **bibliothèque standard** de Python (`socket`, `ssl`, `concurrent.futures`,
+        `json`, `html`) : moins de dépendances, moins de surface d'attaque, et un outil qui tourne presque
+        partout. Seul `requests` est ajouté pour simplifier les requêtes HTTP.
+      en: |
+        A good tool is split into **single-responsibility modules**. Each module does one thing and does
+        it well, which makes it **testable** in isolation:
+
+        | Module | Role |
+        |---|---|
+        | `ports.py` | Concurrent TCP scan with timeouts |
+        | `banners.py` | Service banner grabbing |
+        | `http_checks.py` | Missing HTTP security headers |
+        | `tls_checks.py` | TLS certificate expiry and protocol |
+        | `report.py` | Data model + JSON/HTML reports |
+        | `cli.py` | Command-line interface + ethics guardrail |
+
+        We favour Python's **standard library** (`socket`, `ssl`, `concurrent.futures`, `json`, `html`):
+        fewer dependencies, a smaller attack surface, and a tool that runs almost anywhere. Only
+        `requests` is added to simplify HTTP requests.
+  - heading:
+      fr: "Le paquet Python et pyproject.toml"
+      en: "The Python package and pyproject.toml"
+    body:
+      fr: |
+        Le code vit dans un **paquet** nommé `scanner/`. Le fichier **`pyproject.toml`** décrit le projet
+        de façon moderne et standard (PEP 621) : nom, version, dépendances **épinglées**, et surtout un
+        **point d'entrée console** (`[project.scripts]`) qui crée la commande `vulnscan`.
+
+        Grâce à ce point d'entrée, après installation (`pip install -e .`), l'utilisateur tape simplement
+        `vulnscan 127.0.0.1` au lieu de `python -m scanner.cli`. C'est ce qui transforme un script en un
+        **vrai outil** installable, la marque d'un projet soigné dans un portfolio.
+      en: |
+        The code lives in a **package** named `scanner/`. The **`pyproject.toml`** file describes the
+        project in a modern, standard way (PEP 621): name, version, **pinned** dependencies, and above all
+        a **console entry point** (`[project.scripts]`) that creates the `vulnscan` command.
+
+        Thanks to this entry point, after installation (`pip install -e .`), the user simply types
+        `vulnscan 127.0.0.1` instead of `python -m scanner.cli`. This is what turns a script into a **real
+        installable tool**, the mark of a polished project in a portfolio.
+
+examples:
+  - title:
+      fr: "L'arborescence cible du projet"
+      en: "The target project tree"
+    file: tree.txt
+    lang: text
+    kind: neutral
+    code: |
+      devsecops-scanner/
+      ├── scanner/
+      │   ├── __init__.py       # package metadata + ethics reminder
+      │   ├── ports.py          # concurrent TCP connect scan + timeouts
+      │   ├── banners.py        # best-effort service banner grabbing
+      │   ├── http_checks.py    # missing HTTP security headers
+      │   ├── tls_checks.py     # TLS certificate expiry / protocol
+      │   ├── report.py         # dataclasses + JSON / HTML report
+      │   └── cli.py            # argparse CLI + authorization guardrail
+      ├── tests/
+      │   ├── test_ports.py     # local listening socket, no external network
+      │   └── test_report.py    # JSON/HTML + html.escape safety
+      ├── pyproject.toml        # project metadata, deps, console script
+      ├── Dockerfile            # non-root image
+      ├── .github/
+      │   └── workflows/
+      │       └── ci.yml        # tests + bandit + pip-audit
+      └── README.md
+    note:
+      fr: "Chaque fichier a une responsabilité claire. Les tests n'utilisent **aucun** réseau externe : ils lancent un serveur local. Ces noms resteront identiques dans toutes les leçons."
+      en: "Each file has a clear responsibility. The tests use **no** external network: they start a local server. These names stay the same across all lessons."
+
+  - title:
+      fr: "__init__.py : métadonnées et rappel éthique"
+      en: "__init__.py: metadata and ethics reminder"
+    file: scanner/__init__.py
+    lang: python
+    kind: secure
+    code: |
+      """vulnscan - a detection-and-reporting vulnerability scanner.
+
+      LEGAL / ETHICS:
+        Scan ONLY systems you own, or for which you hold WRITTEN authorisation.
+        Unauthorised scanning is illegal in most jurisdictions.
+        This tool performs DETECTION and REPORTING only - never exploitation.
+      """
+
+      __version__ = "0.1.0"
+
+      # Targets the CLI accepts without an explicit authorization flag.
+      DEFAULT_TARGETS = ("127.0.0.1", "localhost", "scanme.nmap.org")
+    note:
+      fr: "Le rappel éthique est la toute première chose du paquet. `DEFAULT_TARGETS` liste les seules cibles autorisées sans confirmation : la machine locale et l'hôte d'entraînement public de Nmap."
+      en: "The ethics reminder is the very first thing in the package. `DEFAULT_TARGETS` lists the only targets allowed without confirmation: the local machine and Nmap's public practice host."
+
+  - title:
+      fr: "pyproject.toml : projet, dépendances et commande vulnscan"
+      en: "pyproject.toml: project, dependencies and the vulnscan command"
+    file: pyproject.toml
+    lang: toml
+    kind: secure
+    code: |
+      [build-system]
+      requires = ["setuptools>=68"]
+      build-backend = "setuptools.build_meta"
+
+      [project]
+      name = "devsecops-scanner"
+      version = "0.1.0"
+      description = "Detection-and-reporting vulnerability scanner (ports, banners, HTTP, TLS)."
+      readme = "README.md"
+      requires-python = ">=3.11"
+      license = { text = "MIT" }
+      # Pinned: reproducible installs and auditable with pip-audit.
+      dependencies = [
+        "requests==2.32.3",
+      ]
+
+      [project.optional-dependencies]
+      dev = [
+        "pytest==8.3.4",
+        "bandit==1.8.0",
+        "pip-audit==2.7.3",
+      ]
+
+      # Creates the "vulnscan" command pointing at scanner/cli.py:main
+      [project.scripts]
+      vulnscan = "scanner.cli:main"
+
+      [tool.setuptools]
+      packages = ["scanner"]
+    note:
+      fr: "Le bloc `[project.scripts]` crée la commande `vulnscan`. Les dépendances de développement (tests, sécurité) sont séparées dans `optional-dependencies` : on les installe avec `pip install -e \".[dev]\"`."
+      en: "The `[project.scripts]` block creates the `vulnscan` command. Development dependencies (tests, security) are separated in `optional-dependencies`: install them with `pip install -e \".[dev]\"`."
+
+  - title:
+      fr: "Préparer l'environnement de développement"
+      en: "Setting up the development environment"
+    file: setup.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Create the structure
+      mkdir -p devsecops-scanner/scanner devsecops-scanner/tests \
+               devsecops-scanner/.github/workflows
+      cd devsecops-scanner
+
+      # Isolated virtual environment
+      python -m venv .venv
+      source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+
+      # Install the project in editable mode WITH dev tools, once pyproject exists
+      pip install -e ".[dev]"
+
+      # From now on, the "vulnscan" command is available:
+      vulnscan --help
+    note:
+      fr: "`pip install -e .` installe le projet en mode « éditable » : vos modifications du code sont prises en compte sans réinstaller. La commande `vulnscan` devient disponible dans le venv."
+      en: "`pip install -e .` installs the project in \"editable\" mode: your code changes are picked up without reinstalling. The `vulnscan` command becomes available in the venv."
+
+mistake:
+  fr: |
+    **Écrire le scanner sans garde-fou éthique, « parce que c'est juste pour apprendre ».**
+
+    Un outil de scan sans contrôle d'autorisation finit tôt ou tard lancé par mégarde (ou par un tiers)
+    contre une cible interdite — avec des conséquences légales réelles. L'éthique ne doit pas être une
+    bonne intention : elle doit être **codée**. Ici, la cible par défaut est la machine locale, et viser
+    autre chose exige une confirmation explicite. On conçoit la sécurité de l'outil **avant** ses fonctions.
+  en: |
+    **Writing the scanner with no ethics guardrail, "because it's just for learning".**
+
+    A scanning tool with no authorization check sooner or later gets run by mistake (or by a third party)
+    against a forbidden target — with real legal consequences. Ethics must not be a good intention: it
+    must be **coded**. Here the default target is the local machine, and aiming at anything else requires
+    an explicit confirmation. We design the tool's safety **before** its features.
+
+bestPractice:
+  fr: |
+    - **Le cadre éthique d'abord** : cible par défaut locale, confirmation explicite pour le reste.
+    - **Détection et reporting uniquement**, jamais d'exploitation.
+    - **Modules à responsabilité unique** : chacun testable isolément.
+    - **Bibliothèque standard d'abord** : moins de dépendances, moins de risques.
+    - **`pyproject.toml` (PEP 621)** avec dépendances épinglées et point d'entrée console.
+    - **Environnement virtuel + installation éditable** (`pip install -e ".[dev]"`).
+  en: |
+    - **Ethics framing first**: local default target, explicit confirmation for the rest.
+    - **Detection and reporting only**, never exploitation.
+    - **Single-responsibility modules**: each testable in isolation.
+    - **Standard library first**: fewer dependencies, fewer risks.
+    - **`pyproject.toml` (PEP 621)** with pinned dependencies and a console entry point.
+    - **Virtual environment + editable install** (`pip install -e ".[dev]"`).
+
+exercise:
+  statement:
+    fr: |
+      Préparez l'ossature du projet. Écrivez une fonction Python `is_default_target(target)` qui, en se
+      basant sur `DEFAULT_TARGETS`, renvoie `True` si la cible peut être scannée **sans** autorisation
+      explicite, `False` sinon.
+
+      Cette fonction sera le cœur du garde-fou éthique utilisé par la CLI. Prévoyez aussi un test simple.
+    en: |
+      Prepare the project skeleton. Write a Python function `is_default_target(target)` that, based on
+      `DEFAULT_TARGETS`, returns `True` if the target may be scanned **without** explicit authorisation,
+      `False` otherwise.
+
+      This function will be the heart of the ethics guardrail used by the CLI. Also provide a simple test.
+  solution:
+    file: guardrail.py
+    lang: python
+    code: |
+      # --- scanner/__init__.py already defines DEFAULT_TARGETS ---
+      from scanner import DEFAULT_TARGETS
+
+
+      def is_default_target(target: str) -> bool:
+          """True if the target is one the tool may scan without a consent flag."""
+          return target.strip().lower() in DEFAULT_TARGETS
+
+
+      # --- tests/test_guardrail.py ---
+      def test_local_is_default():
+          assert is_default_target("127.0.0.1") is True
+          assert is_default_target("SCANME.nmap.org") is True  # case-insensitive
+
+
+      def test_external_is_not_default():
+          # A random external host must require explicit authorization.
+          assert is_default_target("example.com") is False
+    note:
+      fr: "La comparaison est insensible à la casse et aux espaces. Toute cible hors de `DEFAULT_TARGETS` renverra `False` : la CLI exigera alors le drapeau `--i-have-authorization`."
+      en: "The comparison is case- and whitespace-insensitive. Any target outside `DEFAULT_TARGETS` returns `False`: the CLI will then require the `--i-have-authorization` flag."
+
+quiz:
+  - q:
+      fr: "Quelle est la règle d'or avant d'utiliser ce scanner ?"
+      en: "What is the golden rule before using this scanner?"
+    options:
+      fr:
+        - "Scanner le plus de cibles possible pour s'entraîner"
+        - "Ne scanner que des systèmes que l'on possède ou que l'on est autorisé à tester"
+        - "Scanner uniquement la nuit"
+        - "Toujours scanner depuis un VPN"
+      en:
+        - "Scan as many targets as possible to practise"
+        - "Scan only systems you own or are authorised to test"
+        - "Scan only at night"
+        - "Always scan through a VPN"
+    answer: 1
+    why:
+      fr: "Scanner sans autorisation est illégal. L'outil impose cette règle via une cible par défaut locale et une confirmation explicite."
+      en: "Scanning without authorisation is illegal. The tool enforces this rule with a local default target and an explicit confirmation."
+  - q:
+      fr: "Quel type d'outil est ce scanner ?"
+      en: "What kind of tool is this scanner?"
+    options:
+      fr:
+        - "Un outil de détection et de reporting, sans exploitation"
+        - "Un outil d'exploitation de failles"
+        - "Un pare-feu"
+        - "Un gestionnaire de mots de passe"
+      en:
+        - "A detection-and-reporting tool, with no exploitation"
+        - "A vulnerability exploitation tool"
+        - "A firewall"
+        - "A password manager"
+    answer: 0
+    why:
+      fr: "Le scanner détecte et signale des problèmes (ports, en-têtes, TLS) mais n'exploite jamais les failles trouvées."
+      en: "The scanner detects and reports issues (ports, headers, TLS) but never exploits the flaws it finds."
+  - q:
+      fr: "Pourquoi privilégier la bibliothèque standard de Python dans cet outil ?"
+      en: "Why favour Python's standard library in this tool?"
+    options:
+      fr:
+        - "Parce qu'elle est plus rapide dans tous les cas"
+        - "Parce que les dépendances externes sont interdites"
+        - "Pour réduire les dépendances et donc la surface d'attaque"
+        - "Parce qu'elle gère le HTML automatiquement"
+      en:
+        - "Because it is faster in all cases"
+        - "Because external dependencies are forbidden"
+        - "To reduce dependencies and therefore the attack surface"
+        - "Because it handles HTML automatically"
+    answer: 2
+    why:
+      fr: "Moins de dépendances, c'est moins de CVE potentielles et un outil plus portable ; `socket`, `ssl`, `json` suffisent souvent."
+      en: "Fewer dependencies means fewer potential CVEs and a more portable tool; `socket`, `ssl`, `json` are often enough."
+  - q:
+      fr: "Que crée le bloc `[project.scripts]` du pyproject.toml ?"
+      en: "What does the `[project.scripts]` block in pyproject.toml create?"
+    options:
+      fr:
+        - "Un fichier de configuration"
+        - "La commande `vulnscan` installable qui appelle `scanner.cli:main`"
+        - "Un conteneur Docker"
+        - "Un dépôt Git"
+      en:
+        - "A configuration file"
+        - "The installable `vulnscan` command that calls `scanner.cli:main`"
+        - "A Docker container"
+        - "A Git repository"
+    answer: 1
+    why:
+      fr: "Le point d'entrée console crée la commande `vulnscan` : l'utilisateur tape `vulnscan` au lieu de `python -m scanner.cli`."
+      en: "The console entry point creates the `vulnscan` command: the user types `vulnscan` instead of `python -m scanner.cli`."
+  - q:
+      fr: "Pourquoi découper l'outil en modules à responsabilité unique ?"
+      en: "Why split the tool into single-responsibility modules?"
+    options:
+      fr:
+        - "Pour que le code soit plus long"
+        - "Parce que Python l'exige"
+        - "Pour utiliser plus de mémoire"
+        - "Pour que chaque partie soit testable et maintenable isolément"
+      en:
+        - "To make the code longer"
+        - "Because Python requires it"
+        - "To use more memory"
+        - "So each part is testable and maintainable in isolation"
+    answer: 3
+    why:
+      fr: "Un module qui fait une seule chose est facile à tester et à faire évoluer sans casser le reste."
+      en: "A module that does one thing is easy to test and evolve without breaking the rest."

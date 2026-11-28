@@ -1,0 +1,396 @@
+description:
+  fr: "Écrire des règles de détection Wazuh personnalisées (force brute SSH, attaques web, intégrité des fichiers), un décodeur sur mesure et une réponse active de blocage pare-feu, puis tout tester avec wazuh-logtest."
+  en: "Write custom Wazuh detection rules (SSH brute force, web attacks, file integrity), a custom decoder and a firewall-drop active response, then test it all with wazuh-logtest."
+duration: 35
+
+intro:
+  fr: |
+    Les caméras filment (leçon 3), le poste de sécurité reçoit les images. Mais pour qu'une **alarme**
+    sonne, il faut dire au système *ce qui est suspect*. C'est le rôle des **règles** de Wazuh : elles
+    examinent chaque événement et déclenchent une alerte quand un motif correspond.
+
+    Wazuh arrive avec des milliers de règles par défaut. On ne les modifie **jamais** directement : on
+    ajoute les nôtres dans `local_rules.xml`, qui a la priorité. De même, les **décodeurs** (qui extraient
+    les champs d'une ligne de log brute) personnalisés vont dans `local_decoder.xml`.
+
+    Trois détections pour ce lab :
+
+    1. **Force brute SSH** : trop d'échecs de connexion en peu de temps.
+    2. **Attaque web** : une requête qui ressemble à une injection SQL dans les logs NGINX.
+    3. **Intégrité** : un fichier surveillé par le FIM a été modifié.
+
+    Enfin, on ajoute une **réponse active** : quand la force brute SSH se confirme, Wazuh **bloque
+    automatiquement** l'adresse de l'attaquant au pare-feu. On validera chaque règle avec l'outil
+    `wazuh-logtest`, qui rejoue une ligne de log et montre quelle règle se déclenche.
+  en: |
+    The cameras are filming (lesson 3), the security office receives the footage. But for an **alarm** to
+    ring, you must tell the system *what is suspicious*. That is the job of Wazuh's **rules**: they examine
+    each event and raise an alert when a pattern matches.
+
+    Wazuh ships with thousands of default rules. We **never** edit them directly: we add ours to
+    `local_rules.xml`, which takes precedence. Likewise, custom **decoders** (which extract fields from a
+    raw log line) go into `local_decoder.xml`.
+
+    Three detections for this lab:
+
+    1. **SSH brute force**: too many failed logins in a short time.
+    2. **Web attack**: a request that looks like a SQL injection in the NGINX logs.
+    3. **Integrity**: a FIM-watched file has been modified.
+
+    Finally, we add an **active response**: when SSH brute force is confirmed, Wazuh **automatically
+    blocks** the attacker's address at the firewall. We will validate each rule with the `wazuh-logtest`
+    tool, which replays a log line and shows which rule fires.
+
+sections:
+  - heading:
+      fr: "Anatomie d'une règle Wazuh"
+      en: "Anatomy of a Wazuh rule"
+    body:
+      fr: |
+        Une règle Wazuh est un élément XML `<rule>` avec un **id** (≥ 100000 pour les règles locales), un
+        **niveau** de gravité (0 à 15) et des conditions. Les plus utiles :
+
+        | Élément | Rôle |
+        |---|---|
+        | `id` | Identifiant unique de la règle (100000+ pour les vôtres) |
+        | `level` | Gravité : 0 (info) à 15 (critique) |
+        | `if_sid` / `if_matched_sid` | Chaîner : « si cette autre règle s'est déclenchée » |
+        | `match` / `regex` | Motif recherché dans l'événement |
+        | `frequency` + `timeframe` | Corrélation : N occurrences en X secondes |
+        | `description` | Texte affiché dans l'alerte |
+
+        La **corrélation** est la force d'un SIEM : un seul échec SSH n'est pas une attaque, mais **huit
+        échecs en 60 secondes**, si. On exprime cela avec `frequency` et `timeframe`, en s'appuyant sur une
+        règle de base existante grâce à `if_matched_sid`.
+      en: |
+        A Wazuh rule is an XML `<rule>` element with an **id** (≥ 100000 for local rules), a **severity
+        level** (0 to 15) and conditions. The most useful ones:
+
+        | Element | Role |
+        |---|---|
+        | `id` | Unique rule identifier (100000+ for yours) |
+        | `level` | Severity: 0 (info) to 15 (critical) |
+        | `if_sid` / `if_matched_sid` | Chaining: "if this other rule fired" |
+        | `match` / `regex` | Pattern searched in the event |
+        | `frequency` + `timeframe` | Correlation: N occurrences in X seconds |
+        | `description` | Text shown in the alert |
+
+        **Correlation** is a SIEM's strength: a single SSH failure is not an attack, but **eight failures
+        in 60 seconds** is. We express that with `frequency` and `timeframe`, building on an existing base
+        rule through `if_matched_sid`.
+  - heading:
+      fr: "Décodeurs et réponse active"
+      en: "Decoders and active response"
+    body:
+      fr: |
+        Un **décodeur** transforme une ligne de log brute en champs exploitables (adresse IP, utilisateur,
+        URL). Wazuh décode déjà SSH et beaucoup de formats. Pour notre format de log NGINX personnalisé, on
+        écrit un petit décodeur qui extrait l'**IP source** et la **requête** ; les règles pourront alors
+        tester ces champs.
+
+        La **réponse active** (*active response*) rend Wazuh capable d'**agir**, pas seulement d'alerter.
+        Le script intégré `firewall-drop` ajoute une règle de pare-feu qui bloque l'IP de l'attaquant
+        pendant une durée définie. On le relie à notre règle de force brute SSH : dès qu'elle se déclenche,
+        l'IP est **bannie automatiquement**.
+
+        > La réponse active est puissante mais dangereuse : une règle trop large pourrait bannir un
+        > utilisateur légitime (voire vous-même). On la limite à une attaque claire et on garde une
+        > `timeout` pour que le blocage soit temporaire.
+
+        On teste **tout** avec `wazuh-logtest` : on colle une ligne de log, l'outil affiche le décodeur
+        utilisé, la règle déclenchée et le niveau. C'est le moyen le plus rapide de vérifier une règle sans
+        lancer une vraie attaque.
+      en: |
+        A **decoder** turns a raw log line into usable fields (IP address, user, URL). Wazuh already
+        decodes SSH and many formats. For our custom NGINX log format, we write a small decoder that
+        extracts the **source IP** and the **request**; the rules can then test those fields.
+
+        The **active response** makes Wazuh able to **act**, not just alert. The built-in `firewall-drop`
+        script adds a firewall rule that blocks the attacker's IP for a defined time. We tie it to our SSH
+        brute-force rule: as soon as it fires, the IP is **banned automatically**.
+
+        > Active response is powerful but dangerous: too broad a rule could ban a legitimate user (or even
+        > yourself). We limit it to a clear attack and keep a `timeout` so the block is temporary.
+
+        We test **everything** with `wazuh-logtest`: paste a log line, and the tool shows the decoder used,
+        the triggered rule and the level. It is the fastest way to check a rule without launching a real
+        attack.
+
+examples:
+  - title:
+      fr: "Décodeur personnalisé pour les logs NGINX"
+      en: "Custom decoder for the NGINX logs"
+    file: rules/local_decoder.xml
+    lang: xml
+    kind: secure
+    code: |
+      <!-- /var/ossec/etc/decoders/local_decoder.xml on the manager -->
+      <!-- Matches our custom webattack log_format: IP - [time] "METHOD url" status "UA" -->
+
+      <decoder name="nginx-webattack">
+        <prematch>^\S+ - \[</prematch>
+      </decoder>
+
+      <decoder name="nginx-webattack-fields">
+        <parent>nginx-webattack</parent>
+        <!-- Extract the source IP and the full request line into named fields -->
+        <regex>^(\S+) - \[\S+ \S+] "(\.+)" (\d+)</regex>
+        <order>srcip,url,id</order>
+      </decoder>
+    note:
+      fr: "`<prematch>` filtre vite les lignes concernées ; `<regex>` + `<order>` nomment les champs `srcip`, `url`, `id`. Une fois décodés, ces champs sont testables par les règles (par exemple « l'URL contient une injection SQL »)."
+      en: "`<prematch>` quickly filters the relevant lines; `<regex>` + `<order>` name the fields `srcip`, `url`, `id`. Once decoded, these fields can be tested by rules (for example \"the URL contains a SQL injection\")."
+
+  - title:
+      fr: "Les règles de détection (local_rules.xml)"
+      en: "The detection rules (local_rules.xml)"
+    file: rules/local_rules.xml
+    lang: xml
+    kind: secure
+    code: |
+      <!-- /var/ossec/etc/rules/local_rules.xml on the manager -->
+      <group name="local,lab,">
+
+        <!-- 1. SSH brute force: 8 failed logins from the same source in 60s.
+             Rule 5760 is Wazuh's built-in "sshd: authentication failed". -->
+        <rule id="100100" level="10" frequency="8" timeframe="60">
+          <if_matched_sid>5760</if_matched_sid>
+          <same_source_ip />
+          <description>SSH brute force: 8 failed logins from $(srcip) in 60s</description>
+          <mitre>
+            <id>T1110</id>
+          </mitre>
+        </rule>
+
+        <!-- 2. Web attack: a SQL-injection pattern in the decoded NGINX request URL -->
+        <rule id="100200" level="12">
+          <decoded_as>nginx-webattack</decoded_as>
+          <field name="url" type="pcre2">(?i)(union\s+select|'\s+or\s+'1'='1|sleep\(|information_schema)</field>
+          <description>Possible SQL injection from $(srcip): $(url)</description>
+          <mitre>
+            <id>T1190</id>
+          </mitre>
+        </rule>
+
+        <!-- 3. File integrity: a watched file under /etc was modified.
+             Rule 550 is the built-in "Integrity checksum changed". -->
+        <rule id="100300" level="10">
+          <if_sid>550</if_sid>
+          <field name="file">^/etc/ssh/</field>
+          <description>FIM: critical SSH config file changed: $(file)</description>
+          <mitre>
+            <id>T1098</id>
+          </mitre>
+        </rule>
+
+      </group>
+    note:
+      fr: "Chaque règle a un id ≥ 100000 et un tag `<mitre>` (T1110 force brute, T1190 exploitation d'app web, T1098 manipulation de compte). La règle 100100 **corrèle** 8 échecs via `if_matched_sid` + `frequency` : c'est la détection, pas un simple filtre."
+      en: "Each rule has an id ≥ 100000 and a `<mitre>` tag (T1110 brute force, T1190 web app exploitation, T1098 account manipulation). Rule 100100 **correlates** 8 failures via `if_matched_sid` + `frequency`: that is detection, not a mere filter."
+
+  - title:
+      fr: "La réponse active : bloquer l'IP au pare-feu"
+      en: "The active response: block the IP at the firewall"
+    file: active-response/active-responses.conf
+    lang: xml
+    kind: secure
+    code: |
+      <!-- Add inside <ossec_config> in the manager's ossec.conf -->
+
+      <!-- Run the built-in firewall-drop command when our SSH brute-force rule fires -->
+      <active-response>
+        <command>firewall-drop</command>
+        <location>local</location>
+        <!-- Our custom rule 100100 (SSH brute force) is the trigger -->
+        <rules_id>100100</rules_id>
+        <!-- Block the source IP, but only for 600 seconds (temporary, reversible) -->
+        <timeout>600</timeout>
+      </active-response>
+    note:
+      fr: "`firewall-drop` est un script fourni par Wazuh : il ajoute une règle de pare-feu bloquant `$(srcip)`. Le `<timeout>600</timeout>` rend le blocage **temporaire** (10 min) pour limiter le risque de bannir par erreur un utilisateur légitime."
+      en: "`firewall-drop` is a script shipped with Wazuh: it adds a firewall rule blocking `$(srcip)`. The `<timeout>600</timeout>` makes the block **temporary** (10 min) to limit the risk of mistakenly banning a legitimate user."
+
+  - title:
+      fr: "Tester une règle avec wazuh-logtest"
+      en: "Testing a rule with wazuh-logtest"
+    file: rules/logtest.txt
+    lang: text
+    kind: neutral
+    code: |
+      # Replay a raw log line through decoders + rules, interactively, on the manager
+      $ docker exec -it single-node-wazuh.manager-1 /var/ossec/bin/wazuh-logtest
+
+      # Paste a fake NGINX line carrying a SQL injection (lab test input):
+      192.0.2.30 - [27/Nov/2026:23:10:01 +0000] "GET /rest/products?q=1' OR '1'='1 HTTP/1.1" 200 "curl"
+
+      **Phase 1: Completed pre-decoding.
+      **Phase 2: Completed decoding.
+             decoder: 'nginx-webattack'
+             srcip: '192.0.2.30'
+             url: 'GET /rest/products?q=1' OR '1'='1 HTTP/1.1'
+      **Phase 3: Completed filtering (rules).
+             Rule id: '100200'
+             Level: '12'
+             Description: 'Possible SQL injection from 192.0.2.30: ...'
+    note:
+      fr: "`wazuh-logtest` montre les trois phases : pré-décodage, décodage (les champs `srcip`/`url` extraits), filtrage (la règle **100200** déclenchée, niveau 12). C'est la preuve que décodeur et règle fonctionnent, **sans** lancer d'attaque réelle."
+      en: "`wazuh-logtest` shows the three phases: pre-decoding, decoding (the extracted `srcip`/`url` fields), filtering (rule **100200** fired, level 12). It proves the decoder and rule work, **without** running a real attack."
+
+mistake:
+  fr: |
+    **Modifier les règles par défaut de Wazuh au lieu d'écrire dans `local_rules.xml`.**
+
+    Les règles livrées (dans `/var/ossec/ruleset/rules/`) sont **écrasées à chaque mise à jour** de
+    Wazuh. Si vous les éditez directement, vos changements disparaissent au prochain upgrade, souvent sans
+    prévenir. Vos règles personnalisées vont **uniquement** dans `local_rules.xml` (et vos décodeurs dans
+    `local_decoder.xml`), avec des id ≥ 100000 pour ne jamais entrer en collision avec les règles officielles.
+  en: |
+    **Editing Wazuh's default rules instead of writing in `local_rules.xml`.**
+
+    The shipped rules (in `/var/ossec/ruleset/rules/`) are **overwritten on every Wazuh update**. If you
+    edit them directly, your changes vanish at the next upgrade, often silently. Your custom rules go
+    **only** into `local_rules.xml` (and your decoders into `local_decoder.xml`), with ids ≥ 100000 so they
+    never collide with the official rules.
+
+bestPractice:
+  fr: |
+    - **Écrivez vos règles dans `local_rules.xml`** avec des id ≥ 100000 ; ne touchez jamais aux règles livrées.
+    - **Corrélez plutôt que de filtrer** : `frequency` + `timeframe` + `same_source_ip` distinguent une
+      attaque d'un événement isolé.
+    - **Testez chaque règle avec `wazuh-logtest`** avant de compter dessus.
+    - **Taguez avec `<mitre>`** pour relier vos alertes à des techniques ATT&CK.
+    - **Encadrez la réponse active** : ciblez une règle précise, gardez un `timeout`, surveillez les
+      faux positifs pour ne bannir personne par erreur.
+  en: |
+    - **Write your rules in `local_rules.xml`** with ids ≥ 100000; never touch the shipped rules.
+    - **Correlate rather than filter**: `frequency` + `timeframe` + `same_source_ip` separate an attack
+      from an isolated event.
+    - **Test every rule with `wazuh-logtest`** before relying on it.
+    - **Tag with `<mitre>`** to map your alerts to ATT&CK techniques.
+    - **Constrain active response**: target a precise rule, keep a `timeout`, watch for false positives so
+      you never ban anyone by mistake.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez détecter un **scan de répertoires web** : beaucoup de réponses `404` depuis la même IP
+      en peu de temps (un outil comme `gobuster` dans le lab).
+
+      En supposant qu'une règle de base `100250` se déclenche sur une réponse NGINX `404`, écrivez une
+      règle locale `100260` de niveau 10 qui alerte si **la même IP** génère **20 fois** la règle 100250
+      en **30 secondes**.
+    en: |
+      You want to detect a **web directory scan**: many `404` responses from the same IP in a short time
+      (a tool like `gobuster` in the lab).
+
+      Assuming a base rule `100250` fires on an NGINX `404` response, write a local rule `100260` at level
+      10 that alerts if **the same IP** triggers rule 100250 **20 times** in **30 seconds**.
+  solution:
+    file: scan-rule.xml
+    lang: xml
+    code: |
+      <!-- Add inside the <group> in local_rules.xml -->
+      <rule id="100260" level="10" frequency="20" timeframe="30">
+        <!-- Correlate on the base 404 rule, same attacker IP -->
+        <if_matched_sid>100250</if_matched_sid>
+        <same_source_ip />
+        <description>Web directory scan from $(srcip): 20 x 404 in 30s</description>
+        <mitre>
+          <id>T1595</id>
+        </mitre>
+      </rule>
+    note:
+      fr: "`frequency=\"20\"` + `timeframe=\"30\"` + `same_source_ip` traduisent « 20 fois, même IP, en 30 s ». `if_matched_sid` relie à la règle de base 404. Le tag T1595 correspond à la reconnaissance active dans MITRE ATT&CK."
+      en: "`frequency=\"20\"` + `timeframe=\"30\"` + `same_source_ip` express \"20 times, same IP, in 30s\". `if_matched_sid` links to the base 404 rule. The T1595 tag maps to active scanning in MITRE ATT&CK."
+
+quiz:
+  - q:
+      fr: "Où placez-vous vos règles de détection personnalisées ?"
+      en: "Where do you put your custom detection rules?"
+    options:
+      fr:
+        - "Directement dans les règles livrées de Wazuh"
+        - "Dans local_rules.xml, avec des id ≥ 100000"
+        - "Dans ossec.conf"
+        - "Dans le décodeur par défaut"
+      en:
+        - "Directly in Wazuh's shipped rules"
+        - "In local_rules.xml, with ids ≥ 100000"
+        - "In ossec.conf"
+        - "In the default decoder"
+    answer: 1
+    why:
+      fr: "`local_rules.xml` n'est pas écrasé par les mises à jour, et les id ≥ 100000 évitent toute collision avec les règles officielles."
+      en: "`local_rules.xml` is not overwritten by updates, and ids ≥ 100000 avoid any collision with the official rules."
+  - q:
+      fr: "Comment distingue-t-on une force brute SSH d'un simple échec de connexion ?"
+      en: "How do you tell SSH brute force from a single failed login?"
+    options:
+      fr:
+        - "Avec `frequency` et `timeframe` : plusieurs échecs de la même IP en peu de temps"
+        - "En chiffrant auth.log"
+        - "En augmentant le niveau de la règle à 15"
+        - "En désactivant le décodeur SSH"
+      en:
+        - "With `frequency` and `timeframe`: several failures from the same IP in a short time"
+        - "By encrypting auth.log"
+        - "By raising the rule level to 15"
+        - "By disabling the SSH decoder"
+    answer: 0
+    why:
+      fr: "La corrélation (N occurrences en X secondes, même source) transforme des événements isolés en détection d'attaque."
+      en: "Correlation (N occurrences in X seconds, same source) turns isolated events into attack detection."
+  - q:
+      fr: "À quoi sert le script `firewall-drop` en réponse active ?"
+      en: "What does the `firewall-drop` active-response script do?"
+    options:
+      fr:
+        - "Il supprime le fichier de log"
+        - "Il ajoute une règle de pare-feu bloquant l'IP de l'attaquant"
+        - "Il redémarre l'agent"
+        - "Il envoie un e-mail"
+      en:
+        - "It deletes the log file"
+        - "It adds a firewall rule blocking the attacker's IP"
+        - "It restarts the agent"
+        - "It sends an email"
+    answer: 1
+    why:
+      fr: "`firewall-drop` bannit l'IP source au pare-feu ; avec un `<timeout>`, le blocage est temporaire et réversible."
+      en: "`firewall-drop` bans the source IP at the firewall; with a `<timeout>`, the block is temporary and reversible."
+  - q:
+      fr: "Que montre `wazuh-logtest` quand on lui donne une ligne de log ?"
+      en: "What does `wazuh-logtest` show when given a log line?"
+    options:
+      fr:
+        - "Le décodeur utilisé, les champs extraits et la règle déclenchée"
+        - "La charge CPU du manager"
+        - "La liste des agents connectés"
+        - "Le mot de passe admin"
+      en:
+        - "The decoder used, the extracted fields and the triggered rule"
+        - "The manager's CPU load"
+        - "The list of connected agents"
+        - "The admin password"
+    answer: 0
+    why:
+      fr: "`wazuh-logtest` rejoue une ligne à travers décodeurs et règles et affiche chaque phase : c'est l'outil de test d'une règle sans attaque réelle."
+      en: "`wazuh-logtest` replays a line through decoders and rules and prints each phase: it is the tool to test a rule without a real attack."
+  - q:
+      fr: "Pourquoi garder un `<timeout>` sur une réponse active de blocage ?"
+      en: "Why keep a `<timeout>` on a blocking active response?"
+    options:
+      fr:
+        - "Pour chiffrer la règle"
+        - "Pour que le blocage soit temporaire et limiter le risque de bannir un utilisateur légitime"
+        - "Pour accélérer le pare-feu"
+        - "Parce que Wazuh l'impose à 0"
+      en:
+        - "To encrypt the rule"
+        - "To make the block temporary and limit the risk of banning a legitimate user"
+        - "To speed up the firewall"
+        - "Because Wazuh forces it to 0"
+    answer: 1
+    why:
+      fr: "Un faux positif pourrait bannir un utilisateur légitime ; un `timeout` lève le blocage automatiquement après un délai, réduisant l'impact."
+      en: "A false positive could ban a legitimate user; a `timeout` lifts the block automatically after a delay, reducing the impact."

@@ -1,0 +1,458 @@
+description:
+  fr: "Ajouter deux modules d'analyse : la détection des en-têtes de sécurité HTTP manquants avec requests, et l'inspection des certificats TLS (expiration, protocole) avec le module ssl de la bibliothèque standard."
+  en: "Add two analysis modules: detecting missing HTTP security headers with requests, and inspecting TLS certificates (expiry, protocol) with the standard library's ssl module."
+duration: 30
+
+intro:
+  fr: |
+    Le scanner sait déjà repérer les ports ouverts. On va maintenant l'enrichir avec deux analyses de plus
+    haut niveau, celles qu'un auditeur vérifie en premier sur un site web : les **en-têtes de sécurité
+    HTTP** et la **qualité du TLS** (le chiffrement derrière le « https »).
+
+    Un serveur web peut répondre correctement tout en étant mal configuré : sans en-têtes de sécurité, il
+    expose ses utilisateurs au clickjacking ou au vol de données ; avec un certificat expiré ou un vieux
+    protocole, le chiffrement est illusoire. Détecter ces faiblesses ne demande pas d'attaquer : il suffit
+    de **lire** la réponse du serveur et le certificat.
+
+    Analogie : après avoir vérifié quelles portes sont ouvertes (les ports), l'inspecteur regarde la
+    **qualité des serrures** (le TLS) et si les **consignes de sécurité** sont affichées (les en-têtes).
+    Dans cette leçon : `http_checks.py` et `tls_checks.py`.
+  en: |
+    The scanner already finds open ports. We now enrich it with two higher-level analyses, the ones an
+    auditor checks first on a website: **HTTP security headers** and **TLS quality** (the encryption
+    behind "https").
+
+    A web server can answer correctly while being misconfigured: without security headers, it exposes its
+    users to clickjacking or data theft; with an expired certificate or an old protocol, the encryption is
+    an illusion. Detecting these weaknesses requires no attack: you just **read** the server's response
+    and its certificate.
+
+    Analogy: after checking which doors are open (the ports), the inspector looks at the **quality of the
+    locks** (TLS) and whether the **safety notices** are posted (the headers). In this lesson:
+    `http_checks.py` and `tls_checks.py`.
+
+sections:
+  - heading:
+      fr: "Les en-têtes de sécurité HTTP à vérifier"
+      en: "The HTTP security headers to check"
+    body:
+      fr: |
+        Un serveur web bien configuré renvoie plusieurs **en-têtes de sécurité**. Leur absence est une
+        faiblesse concrète (OWASP A05, mauvaise configuration) :
+
+        | En-tête | Protège contre |
+        |---|---|
+        | `Strict-Transport-Security` | Le retour en HTTP non chiffré (force HTTPS) |
+        | `Content-Security-Policy` | L'injection de scripts (XSS) |
+        | `X-Content-Type-Options` | Le MIME sniffing |
+        | `X-Frame-Options` | Le clickjacking |
+        | `Referrer-Policy` | La fuite d'URL via le référent |
+
+        Le module `http_checks.py` fait une simple requête **GET** avec `requests`, compare les en-têtes
+        présents à cette liste de référence et renvoie ceux qui **manquent**. C'est de la pure détection :
+        on ne modifie rien, on observe.
+      en: |
+        A well-configured web server returns several **security headers**. Their absence is a concrete
+        weakness (OWASP A05, misconfiguration):
+
+        | Header | Protects against |
+        |---|---|
+        | `Strict-Transport-Security` | Falling back to unencrypted HTTP (forces HTTPS) |
+        | `Content-Security-Policy` | Script injection (XSS) |
+        | `X-Content-Type-Options` | MIME sniffing |
+        | `X-Frame-Options` | Clickjacking |
+        | `Referrer-Policy` | URL leakage via the referrer |
+
+        The `http_checks.py` module makes a simple **GET** request with `requests`, compares the present
+        headers against this reference list and returns the ones that are **missing**. This is pure
+        detection: we change nothing, we observe.
+  - heading:
+      fr: "Inspecter TLS avec le module ssl standard"
+      en: "Inspecting TLS with the standard ssl module"
+    body:
+      fr: |
+        Pas besoin de bibliothèque externe pour analyser le TLS : le module **`ssl`** de la bibliothèque
+        standard suffit. On ouvre une connexion, on « enveloppe » la socket avec un contexte TLS
+        (`create_default_context`), puis on récupère deux informations clés :
+
+        - **le protocole négocié** (`tls.version()`) : s'il s'agit de `TLSv1`, `TLSv1.1` ou `SSLv3`, c'est
+          **obsolète et dangereux** — seuls TLS 1.2 et 1.3 sont considérés sûrs ;
+        - **la date d'expiration du certificat** (`getpeercert()["notAfter"]`) : un certificat expiré
+          casse la confiance et provoque des alertes navigateur.
+
+        On calcule le nombre de **jours restants** avant expiration. En dessous de 30 jours, on lève une
+        alerte : c'est le délai habituel pour renouveler sereinement (Let's Encrypt renouvelle à J-30).
+      en: |
+        No external library is needed to analyse TLS: the standard library's **`ssl`** module is enough.
+        We open a connection, "wrap" the socket in a TLS context (`create_default_context`), then read two
+        key pieces of information:
+
+        - **the negotiated protocol** (`tls.version()`): if it is `TLSv1`, `TLSv1.1` or `SSLv3`, it is
+          **obsolete and dangerous** — only TLS 1.2 and 1.3 are considered safe;
+        - **the certificate's expiry date** (`getpeercert()["notAfter"]`): an expired certificate breaks
+          trust and triggers browser warnings.
+
+        We compute the number of **days left** before expiry. Below 30 days we raise an alert: that is the
+        usual window to renew comfortably (Let's Encrypt renews at day 30 before expiry).
+  - heading:
+      fr: "Gérer les erreurs réseau proprement"
+      en: "Handling network errors cleanly"
+    body:
+      fr: |
+        Ces deux modules parlent à de vrais serveurs : tout peut mal se passer (délai dépassé, hôte
+        injoignable, certificat auto-signé, connexion refusée). Un scanner robuste ne doit **jamais
+        planter** à cause d'une cible qui répond mal ; il doit **signaler** l'échec et continuer.
+
+        On fixe donc systématiquement un **timeout** sur chaque requête et chaque connexion TLS, et on
+        laisse l'appelant (la CLI, en leçon 4) attraper les exceptions pour les transformer en entrées de
+        rapport (« vérification HTTP échouée »). Chaque module reste simple et prévisible : il renvoie un
+        dictionnaire de résultats ou lève une exception claire, rien de plus.
+      en: |
+        These two modules talk to real servers: anything can go wrong (timeout, unreachable host,
+        self-signed certificate, connection refused). A robust scanner must **never crash** because of a
+        target that answers poorly; it must **report** the failure and move on.
+
+        So we systematically set a **timeout** on every request and TLS connection, and let the caller
+        (the CLI, in lesson 4) catch the exceptions to turn them into report entries ("HTTP check
+        failed"). Each module stays simple and predictable: it returns a results dictionary or raises a
+        clear exception, nothing more.
+
+examples:
+  - title:
+      fr: "http_checks.py : détecter les en-têtes de sécurité manquants"
+      en: "http_checks.py: detect missing security headers"
+    file: scanner/http_checks.py
+    lang: python
+    kind: secure
+    code: |
+      """Check HTTP responses for missing security headers (detection only)."""
+      from __future__ import annotations
+
+      import requests
+
+      # Reference headers a hardened web app should set, and why.
+      SECURITY_HEADERS = {
+          "Strict-Transport-Security": "Enforce HTTPS (HSTS)",
+          "Content-Security-Policy": "Restrict resource origins (anti-XSS)",
+          "X-Content-Type-Options": "Stop MIME sniffing",
+          "X-Frame-Options": "Prevent clickjacking",
+          "Referrer-Policy": "Limit referrer leakage",
+      }
+
+
+      def check_headers(url: str, timeout: float = 5.0) -> dict:
+          """Return which security headers are present or missing on a URL."""
+          # A timeout is mandatory: never hang on a slow server.
+          resp = requests.get(url, timeout=timeout, allow_redirects=True)
+          present = [h for h in SECURITY_HEADERS if h in resp.headers]
+          missing = [h for h in SECURITY_HEADERS if h not in resp.headers]
+          return {
+              "url": url,
+              "status": resp.status_code,
+              "present": present,
+              "missing": missing,
+              # Server banner is useful but also an information leak if verbose.
+              "server": resp.headers.get("Server", ""),
+          }
+    note:
+      fr: "On compare les en-têtes de la réponse à la liste de référence et on renvoie les manquants. Le `timeout` est obligatoire. Aucune modification n'est faite : c'est de la détection."
+      en: "We compare the response's headers to the reference list and return the missing ones. The `timeout` is mandatory. Nothing is modified: this is detection."
+
+  - title:
+      fr: "tls_checks.py : expiration et protocole du certificat"
+      en: "tls_checks.py: certificate expiry and protocol"
+    file: scanner/tls_checks.py
+    lang: python
+    kind: secure
+    code: |
+      """Inspect a TLS certificate: expiry and protocol (detection only)."""
+      from __future__ import annotations
+
+      import socket
+      import ssl
+      from datetime import datetime, timezone
+
+      # Protocols that must no longer be accepted.
+      WEAK_PROTOCOLS = {"SSLv3", "TLSv1", "TLSv1.1"}
+
+
+      def check_tls(host: str, port: int = 443, timeout: float = 5.0) -> dict:
+          """Return the TLS protocol and days until the certificate expires."""
+          context = ssl.create_default_context()
+          with socket.create_connection((host, port), timeout=timeout) as sock:
+              with context.wrap_socket(sock, server_hostname=host) as tls:
+                  cert = tls.getpeercert()
+                  protocol = tls.version()
+
+          # notAfter looks like 'Jun  1 12:00:00 2026 GMT'
+          not_after = datetime.strptime(
+              cert["notAfter"], "%b %d %H:%M:%S %Y %Z"
+          ).replace(tzinfo=timezone.utc)
+          days_left = (not_after - datetime.now(timezone.utc)).days
+
+          return {
+              "host": host,
+              "protocol": protocol,
+              "not_after": cert["notAfter"],
+              "days_left": days_left,
+              "weak_protocol": protocol in WEAK_PROTOCOLS,
+              "expiring_soon": days_left < 30,
+          }
+    note:
+      fr: "Tout est fait avec le module `ssl` standard, sans dépendance. On signale un protocole faible (TLS < 1.2) et un certificat expirant dans moins de 30 jours. Le timeout protège des cibles lentes."
+      en: "Everything is done with the standard `ssl` module, no dependency. We flag a weak protocol (TLS < 1.2) and a certificate expiring in under 30 days. The timeout guards against slow targets."
+
+  - title:
+      fr: "Exemple de sortie sur un hôte de test"
+      en: "Example output on a test host"
+    file: demo_checks.py
+    lang: python
+    kind: neutral
+    code: |
+      from scanner.http_checks import check_headers
+      from scanner.tls_checks import check_tls
+
+      # Run against a host you own or are authorised to test.
+      headers = check_headers("https://scanme.nmap.org")
+      print("HTTP status:", headers["status"])
+      print("Missing headers:", headers["missing"])
+
+      tls = check_tls("scanme.nmap.org")
+      print("TLS protocol:", tls["protocol"], "| days left:", tls["days_left"])
+    output: |
+      HTTP status: 200
+      Missing headers: ['Strict-Transport-Security', 'Content-Security-Policy', 'X-Frame-Options']
+      TLS protocol: TLSv1.3 | days left: 74
+    note:
+      fr: "La sortie liste les en-têtes manquants et confirme un protocole TLS moderne. Ces informations alimenteront le rapport (leçon 4). On ne vise ici que des cibles autorisées."
+      en: "The output lists the missing headers and confirms a modern TLS protocol. This information will feed the report (lesson 4). We target only authorised hosts here."
+
+  - title:
+      fr: "test_http_checks.py : tester sans serveur réel, avec un mock"
+      en: "test_http_checks.py: test without a real server, with a mock"
+    file: tests/test_http_checks.py
+    lang: python
+    kind: secure
+    code: |
+      from unittest.mock import patch, MagicMock
+
+      from scanner.http_checks import check_headers
+
+
+      def _fake_response(headers):
+          resp = MagicMock()
+          resp.status_code = 200
+          resp.headers = headers
+          return resp
+
+
+      def test_detects_missing_headers():
+          # Mock requests.get: no real network call is made.
+          fake = _fake_response({"X-Content-Type-Options": "nosniff"})
+          with patch("scanner.http_checks.requests.get", return_value=fake):
+              result = check_headers("http://example.test")
+          # Only one header is present; the others must be reported missing.
+          assert "X-Content-Type-Options" in result["present"]
+          assert "Content-Security-Policy" in result["missing"]
+
+
+      def test_all_headers_present():
+          all_headers = {
+              "Strict-Transport-Security": "max-age=63072000",
+              "Content-Security-Policy": "default-src 'none'",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "DENY",
+              "Referrer-Policy": "no-referrer",
+          }
+          with patch("scanner.http_checks.requests.get",
+                     return_value=_fake_response(all_headers)):
+              result = check_headers("http://example.test")
+          assert result["missing"] == []  # nothing missing
+    output: |
+      $ pytest -q tests/test_http_checks.py
+      ..                                                           [100%]
+      2 passed in 0.03s
+    note:
+      fr: "On remplace `requests.get` par un mock : le test est instantané, déterministe et ne touche aucun réseau. On vérifie la logique de détection, pas la connectivité."
+      en: "We replace `requests.get` with a mock: the test is instant, deterministic and touches no network. We verify the detection logic, not connectivity."
+
+mistake:
+  fr: |
+    **Désactiver la vérification du certificat « pour que ça marche ».**
+
+    ```python
+    requests.get(url, verify=False)                 # DANGER
+    ssl._create_unverified_context()                # DANGER
+    ```
+
+    Désactiver `verify` supprime justement la protection que l'on cherche à auditer et expose au
+    *man-in-the-middle*. Un scanner de sécurité qui ignore les certificats invalides est un comble.
+    Laissez la vérification active (`create_default_context`) : si le certificat est invalide, c'est
+    précisément une **conclusion** à rapporter, pas un obstacle à contourner.
+  en: |
+    **Disabling certificate verification "to make it work".**
+
+    ```python
+    requests.get(url, verify=False)                 # DANGER
+    ssl._create_unverified_context()                # DANGER
+    ```
+
+    Disabling `verify` removes the very protection you are trying to audit and opens the door to
+    man-in-the-middle. A security scanner that ignores invalid certificates is a contradiction. Keep
+    verification on (`create_default_context`): if the certificate is invalid, that is precisely a
+    **finding** to report, not an obstacle to bypass.
+
+bestPractice:
+  fr: |
+    - **Pure détection** : on lit les en-têtes et le certificat, on ne modifie rien.
+    - **Timeout obligatoire** sur chaque requête HTTP et connexion TLS.
+    - **Vérification TLS active** (`create_default_context`), jamais `verify=False`.
+    - **Signaler les protocoles faibles** (< TLS 1.2) et les certificats proches de l'expiration.
+    - **Robustesse** : une cible qui répond mal ne doit pas faire planter l'outil.
+    - **Tester avec des mocks** : pas de dépendance à un serveur réel ni au réseau.
+  en: |
+    - **Pure detection**: we read the headers and the certificate, we change nothing.
+    - **Mandatory timeout** on every HTTP request and TLS connection.
+    - **TLS verification kept on** (`create_default_context`), never `verify=False`.
+    - **Flag weak protocols** (< TLS 1.2) and certificates close to expiry.
+    - **Robustness**: a target that answers poorly must not crash the tool.
+    - **Test with mocks**: no dependency on a real server or the network.
+
+exercise:
+  statement:
+    fr: |
+      Enrichissez `http_checks.py` d'une fonction **`grade_headers(result)`** qui attribue une note simple
+      à partir du dictionnaire renvoyé par `check_headers` :
+
+      - `"A"` si **aucun** en-tête de sécurité ne manque ;
+      - `"B"` s'il en manque 1 ou 2 ;
+      - `"C"` s'il en manque 3 ou plus.
+
+      Écrivez aussi un test (avec un mock) couvrant les trois cas.
+    en: |
+      Enrich `http_checks.py` with a function **`grade_headers(result)`** that assigns a simple grade from
+      the dictionary returned by `check_headers`:
+
+      - `"A"` if **no** security header is missing;
+      - `"B"` if 1 or 2 are missing;
+      - `"C"` if 3 or more are missing.
+
+      Also write a test (with a mock) covering the three cases.
+  solution:
+    file: grade_headers.py
+    lang: python
+    code: |
+      # --- add to scanner/http_checks.py ---
+      def grade_headers(result: dict) -> str:
+          """Grade a check_headers() result: A (none missing) to C (3+ missing)."""
+          missing = len(result["missing"])
+          if missing == 0:
+              return "A"
+          if missing <= 2:
+              return "B"
+          return "C"
+
+
+      # --- tests/test_http_checks.py ---
+      from scanner.http_checks import grade_headers
+
+
+      def test_grade_levels():
+          assert grade_headers({"missing": []}) == "A"
+          assert grade_headers({"missing": ["X-Frame-Options"]}) == "B"
+          assert grade_headers({"missing": ["a", "b", "c"]}) == "C"
+    note:
+      fr: "La note transforme une liste d'en-têtes manquants en un indicateur lisible pour le rapport. Le test ne dépend que d'un dictionnaire : aucun réseau, aucun serveur."
+      en: "The grade turns a list of missing headers into a readable indicator for the report. The test depends only on a dictionary: no network, no server."
+
+quiz:
+  - q:
+      fr: "Quel module de la bibliothèque standard permet d'inspecter un certificat TLS ?"
+      en: "Which standard library module lets you inspect a TLS certificate?"
+    options:
+      fr:
+        - "requests"
+        - "ssl"
+        - "http"
+        - "crypto"
+      en:
+        - "requests"
+        - "ssl"
+        - "http"
+        - "crypto"
+    answer: 1
+    why:
+      fr: "Le module `ssl` établit la connexion TLS et expose le certificat via `getpeercert()` et le protocole via `version()`."
+      en: "The `ssl` module establishes the TLS connection and exposes the certificate via `getpeercert()` and the protocol via `version()`."
+  - q:
+      fr: "Quels protocoles sont considérés comme faibles par le module tls_checks ?"
+      en: "Which protocols does the tls_checks module consider weak?"
+    options:
+      fr:
+        - "TLS 1.2 et TLS 1.3"
+        - "Uniquement HTTP/2"
+        - "SSLv3, TLS 1.0 et TLS 1.1"
+        - "Tous les protocoles TLS"
+      en:
+        - "TLS 1.2 and TLS 1.3"
+        - "Only HTTP/2"
+        - "SSLv3, TLS 1.0 and TLS 1.1"
+        - "All TLS protocols"
+    answer: 2
+    why:
+      fr: "SSLv3, TLS 1.0 et TLS 1.1 sont obsolètes ; seuls TLS 1.2 et 1.3 sont considérés sûrs aujourd'hui."
+      en: "SSLv3, TLS 1.0 and TLS 1.1 are obsolete; only TLS 1.2 and 1.3 are considered safe today."
+  - q:
+      fr: "Pourquoi ne faut-il PAS utiliser `verify=False` dans un scanner de sécurité ?"
+      en: "Why should you NOT use `verify=False` in a security scanner?"
+    options:
+      fr:
+        - "Cela supprime la protection à auditer et expose au man-in-the-middle"
+        - "Cela ralentit les requêtes"
+        - "Cela consomme trop de mémoire"
+        - "Cela empêche d'ouvrir le port 443"
+      en:
+        - "It removes the very protection you audit and opens the door to man-in-the-middle"
+        - "It slows down requests"
+        - "It uses too much memory"
+        - "It prevents opening port 443"
+    answer: 0
+    why:
+      fr: "Un certificat invalide est une conclusion à rapporter, pas un obstacle à contourner : on garde la vérification active."
+      en: "An invalid certificate is a finding to report, not an obstacle to bypass: keep verification on."
+  - q:
+      fr: "À partir de combien de jours restants le scanner signale-t-il un certificat proche de l'expiration ?"
+      en: "Below how many days left does the scanner flag a certificate as expiring soon?"
+    options:
+      fr:
+        - "90 jours"
+        - "7 jours"
+        - "1 jour"
+        - "30 jours"
+      en:
+        - "90 days"
+        - "7 days"
+        - "1 day"
+        - "30 days"
+    answer: 3
+    why:
+      fr: "En dessous de 30 jours, on alerte : c'est le délai usuel de renouvellement (Let's Encrypt renouvelle à J-30)."
+      en: "Below 30 days we alert: that is the usual renewal window (Let's Encrypt renews 30 days before expiry)."
+  - q:
+      fr: "Comment les tests de `http_checks` évitent-ils d'appeler un vrai serveur ?"
+      en: "How do the `http_checks` tests avoid calling a real server?"
+    options:
+      fr:
+        - "Ils utilisent un mock pour remplacer `requests.get`"
+        - "Ils lancent un serveur Apache"
+        - "Ils appellent un vrai site web"
+        - "Ils désactivent le réseau du système"
+      en:
+        - "They use a mock to replace `requests.get`"
+        - "They start an Apache server"
+        - "They call a real website"
+        - "They disable the system network"
+    answer: 0
+    why:
+      fr: "On remplace `requests.get` par un objet simulé : le test est déterministe, instantané et sans réseau."
+      en: "We replace `requests.get` with a mock object: the test is deterministic, instant and network-free."

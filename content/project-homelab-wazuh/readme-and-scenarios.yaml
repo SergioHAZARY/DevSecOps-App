@@ -1,0 +1,445 @@
+description:
+  fr: "Dernière leçon du projet : rédiger le README du homelab Wazuh et valider la détection par des scénarios d'attaque dans le lab (force brute SSH, injection web, altération de fichier) avec alerte, id de règle et technique MITRE attendus, puis nettoyer."
+  en: "Final lesson of the project: write the Wazuh homelab README and validate detection with in-lab attack scenarios (SSH brute force, web injection, file tampering) with the expected alert, rule id and MITRE technique, then clean up."
+duration: 25
+
+intro:
+  fr: |
+    Tout est en place : le SIEM (leçon 2), l'agent et l'application vulnérable (leçon 3), les règles et la
+    réponse active (leçon 4). Il reste à **prouver que ça marche** et à **documenter** le projet pour en
+    faire une pièce de portfolio.
+
+    On ne se contente pas de dire « Wazuh détecte les attaques ». On **le démontre** en jouant trois
+    attaques, **uniquement contre la machine `web-target` de votre lab**, et en vérifiant pour chacune :
+    l'**alerte** attendue, l'**id de règle** déclenché, et la **technique MITRE ATT&CK** correspondante.
+
+    | Scénario | Outil | Règle attendue | MITRE |
+    |---|---|---|---|
+    | Force brute SSH | hydra | 100100 (level 10) | T1110 |
+    | Injection web | curl / sqlmap | 100200 (level 12) | T1190 |
+    | Altération de fichier | édition de `/etc/ssh/sshd_config` | 100300 (level 10) | T1098 |
+
+    Pensez à cette leçon comme à l'**exercice d'alarme incendie** : on déclenche volontairement chaque
+    capteur pour vérifier qu'il sonne. À la fin, on **nettoie** l'environnement.
+
+    > Rappel : ces attaques ne visent que votre propre lab. N'attaquez jamais un système que vous ne
+    > possédez pas.
+  en: |
+    Everything is in place: the SIEM (lesson 2), the agent and the vulnerable app (lesson 3), the rules
+    and active response (lesson 4). What remains is to **prove it works** and to **document** the project
+    to make it a portfolio piece.
+
+    We do not just claim "Wazuh detects attacks". We **demonstrate** it by running three attacks, **only
+    against your lab's `web-target` machine**, and checking for each: the expected **alert**, the triggered
+    **rule id**, and the matching **MITRE ATT&CK technique**.
+
+    | Scenario | Tool | Expected rule | MITRE |
+    |---|---|---|---|
+    | SSH brute force | hydra | 100100 (level 10) | T1110 |
+    | Web injection | curl / sqlmap | 100200 (level 12) | T1190 |
+    | File tampering | editing `/etc/ssh/sshd_config` | 100300 (level 10) | T1098 |
+
+    Think of this lesson as the **fire-drill**: we deliberately trip each sensor to check it rings. At the
+    end, we **clean up** the environment.
+
+    > Reminder: these attacks target only your own lab. Never attack a system you do not own.
+
+sections:
+  - heading:
+      fr: "Un README qui raconte le projet"
+      en: "A README that tells the project's story"
+    body:
+      fr: |
+        Le README est votre vitrine. Un recruteur doit comprendre en une minute *ce que fait* le lab,
+        *comment le lancer* et *ce qu'il détecte*. Structure recommandée :
+
+        - **Titre + accroche** : un homelab de détection prêt à l'emploi.
+        - **Schéma** : les trois machines et les flux (repris de la leçon 1).
+        - **Démarrage** : prérequis, déploiement du manager, enrôlement de l'agent.
+        - **Détections** : le tableau des règles et des techniques MITRE couvertes.
+        - **Scénarios** : les attaques jouées et l'alerte attendue pour chacune.
+        - **Nettoyage** : comment tout arrêter et supprimer.
+
+        Chaque scénario dans le README doit être **rejouable** : une commande d'attaque, puis où lire
+        l'alerte dans le dashboard. C'est la différence entre un projet qui « montre qu'on sait » et une
+        simple capture d'écran.
+      en: |
+        The README is your shop window. A recruiter must understand in a minute *what* the lab does, *how
+        to run it* and *what it detects*. Recommended structure:
+
+        - **Title + hook**: a ready-to-use detection homelab.
+        - **Diagram**: the three machines and the flows (reused from lesson 1).
+        - **Start**: prerequisites, manager deployment, agent enrollment.
+        - **Detections**: the table of rules and MITRE techniques covered.
+        - **Scenarios**: the attacks run and the expected alert for each.
+        - **Cleanup**: how to stop and remove everything.
+
+        Each scenario in the README must be **replayable**: an attack command, then where to read the alert
+        in the dashboard. That is the difference between a project that "shows you can do it" and a mere
+        screenshot.
+  - heading:
+      fr: "Jouer et valider les scénarios"
+      en: "Running and validating the scenarios"
+    body:
+      fr: |
+        Pour chaque scénario, la démarche est identique : **une action offensive dans le lab**, puis **la
+        vérification de l'alerte** dans le dashboard Wazuh (ou via l'archive d'alertes). On note l'id de
+        règle et le niveau pour confirmer que c'est bien **notre** règle qui a parlé.
+
+        - **Force brute SSH** (`hydra`) : plusieurs tentatives de connexion échouées déclenchent la règle
+          **100100**, et la réponse active **bannit l'IP** de l'attaquant au pare-feu (leçon 4).
+        - **Injection web** (`curl` puis `sqlmap`) : une requête contenant `UNION SELECT` ou `' OR '1'='1`
+          déclenche la règle **100200**.
+        - **Altération de fichier** : modifier `/etc/ssh/sshd_config` déclenche l'alerte FIM **100300** en
+          temps réel.
+
+        > Astuce : avant de lancer la vraie attaque, on a déjà validé les règles avec `wazuh-logtest`
+        > (leçon 4). Le scénario confirme la **chaîne complète** : attaque réelle → agent → manager → alerte.
+
+        Après la démonstration, on **remet le lab à zéro** : lever les bannissements, arrêter la stack,
+        supprimer les conteneurs et les volumes si l'on veut repartir propre.
+      en: |
+        For each scenario, the approach is identical: **an offensive action in the lab**, then **checking
+        the alert** in the Wazuh dashboard (or via the alerts archive). We note the rule id and level to
+        confirm it is indeed **our** rule that spoke.
+
+        - **SSH brute force** (`hydra`): several failed login attempts trigger rule **100100**, and the
+          active response **bans the attacker's IP** at the firewall (lesson 4).
+        - **Web injection** (`curl` then `sqlmap`): a request containing `UNION SELECT` or `' OR '1'='1`
+          triggers rule **100200**.
+        - **File tampering**: editing `/etc/ssh/sshd_config` triggers the FIM alert **100300** in real time.
+
+        > Tip: before the real attack, we already validated the rules with `wazuh-logtest` (lesson 4). The
+        > scenario confirms the **full chain**: real attack → agent → manager → alert.
+
+        After the demonstration, we **reset the lab**: lift the bans, stop the stack, remove the containers
+        and volumes if we want a clean slate.
+
+examples:
+  - title:
+      fr: "Le README complet du homelab"
+      en: "The complete homelab README"
+    file: README.md
+    lang: markdown
+    kind: neutral
+    code: |
+      # devsecops-homelab-wazuh
+
+      A self-contained DevSecOps homelab: Wazuh SIEM detecting real attacks against a
+      deliberately vulnerable app (OWASP Juice Shop), with custom detection rules and an
+      automatic firewall response.
+
+      > Lab only. Every attack below targets the lab's `web-target` machine. Never attack
+      > a system you do not own.
+
+      ## Architecture
+
+      | Machine | Role | Address |
+      |---------|------|---------|
+      | wazuh-manager | SIEM: manager + indexer + dashboard (Docker) | 192.0.2.10 |
+      | web-target | Ubuntu: Wazuh agent + NGINX + Juice Shop | 192.0.2.20 |
+      | attacker | Kali (in-lab), runs the test attacks | 192.0.2.30 |
+
+      ## Quick start
+
+      ```bash
+      # On wazuh-manager
+      ./manager/prereqs.sh && ./manager/setup-manager.sh && ./manager/change-passwords.sh
+      # On web-target
+      sudo bash agent/install-agent.sh
+      # Deploy rules + active response, then restart the manager
+      docker cp rules/local_rules.xml single-node-wazuh.manager-1:/var/ossec/etc/rules/
+      docker cp rules/local_decoder.xml single-node-wazuh.manager-1:/var/ossec/etc/decoders/
+      docker restart single-node-wazuh.manager-1
+      ```
+
+      Open `https://192.0.2.10` and accept the self-signed certificate.
+
+      ## Detections
+
+      | Rule | Level | Detects | MITRE |
+      |------|-------|---------|-------|
+      | 100100 | 10 | SSH brute force (8 fails / 60s) + firewall-drop | T1110 |
+      | 100200 | 12 | SQL injection in NGINX requests | T1190 |
+      | 100300 | 10 | FIM: change under /etc/ssh | T1098 |
+
+      ## Validate
+
+      ```bash
+      ./scenarios/ssh-bruteforce.sh      # expect alert 100100 + IP banned
+      ./scenarios/web-attack.sh          # expect alert 100200
+      ./scenarios/file-tamper.sh         # expect alert 100300
+      ```
+
+      ## Cleanup
+
+      ```bash
+      cd wazuh-docker/single-node && docker compose down -v   # remove containers + volumes
+      ```
+    note:
+      fr: "Le README tient sur un écran : architecture, démarrage, tableau des détections (avec id de règle et technique MITRE), validation, nettoyage. Tout est cohérent avec les fichiers des leçons 1 à 4."
+      en: "The README fits on one screen: architecture, start, detection table (with rule id and MITRE technique), validation, cleanup. Everything is consistent with the files from lessons 1 to 4."
+
+  - title:
+      fr: "Scénario 1 : force brute SSH (hydra)"
+      en: "Scenario 1: SSH brute force (hydra)"
+    file: scenarios/ssh-bruteforce.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Run from the attacker machine. Targets ONLY the lab's web-target. Lab use only.
+      set -uo pipefail
+      TARGET="192.0.2.20"
+
+      # Deliberately fail many SSH logins to trip the brute-force rule.
+      # 'rockyou-lab.txt' is a tiny wordlist you create for the lab.
+      hydra -l labuser -P scenarios/rockyou-lab.txt -t 4 "ssh://${TARGET}"
+
+      echo "Now check the Wazuh dashboard > Security events, filter rule.id:100100"
+      echo "Expected: 'SSH brute force' alert (level 10) and the attacker IP firewall-dropped."
+    output: |
+      Hydra starting ...
+      [DATA] attacking ssh://192.0.2.20:22/
+      [ERROR] ... all login attempts failed
+      Now check the Wazuh dashboard > Security events, filter rule.id:100100
+      Expected: 'SSH brute force' alert (level 10) and the attacker IP firewall-dropped.
+    note:
+      fr: "Résultat attendu : alerte **rule.id 100100**, niveau 10, technique **T1110**, et l'IP `192.0.2.30` **bannie** par la réponse active. On confirme le bannissement en vérifiant les règles de pare-feu sur `web-target`."
+      en: "Expected result: alert **rule.id 100100**, level 10, technique **T1110**, and the IP `192.0.2.30` **banned** by the active response. We confirm the ban by checking the firewall rules on `web-target`."
+
+  - title:
+      fr: "Scénario 2 : injection web (curl / sqlmap)"
+      en: "Scenario 2: web injection (curl / sqlmap)"
+    file: scenarios/web-attack.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Run from the attacker machine. Targets ONLY the lab's Juice Shop. Lab use only.
+      set -uo pipefail
+      TARGET="http://192.0.2.20"
+
+      # A simple SQL-injection-looking request is enough to match rule 100200
+      curl -s "${TARGET}/rest/products/search?q=1' OR '1'='1" >/dev/null
+
+      # A deeper automated test (lab only) generates many injection patterns
+      sqlmap -u "${TARGET}/rest/products/search?q=test" --batch --level=1 --risk=1 || true
+
+      echo "Check the Wazuh dashboard > Security events, filter rule.id:100200"
+      echo "Expected: 'Possible SQL injection' alert (level 12)."
+    output: |
+      Check the Wazuh dashboard > Security events, filter rule.id:100200
+      Expected: 'Possible SQL injection' alert (level 12).
+    note:
+      fr: "Résultat attendu : alerte **rule.id 100200**, niveau 12, technique **T1190**. La requête `' OR '1'='1` suffit ; `sqlmap` génère ensuite de nombreux motifs qui remontent tous dans les logs NGINX analysés par Wazuh."
+      en: "Expected result: alert **rule.id 100200**, level 12, technique **T1190**. The `' OR '1'='1` request is enough; `sqlmap` then generates many patterns that all show up in the NGINX logs analyzed by Wazuh."
+
+  - title:
+      fr: "Scénario 3 : altération de fichier (FIM)"
+      en: "Scenario 3: file tampering (FIM)"
+    file: scenarios/file-tamper.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Run ON web-target to simulate an attacker tampering with the SSH config.
+      # Lab only: you are modifying your own lab machine.
+      set -euo pipefail
+
+      # Append a suspicious directive to sshd_config (simulated backdoor change)
+      echo "# tampered-in-lab $(date +%s)" | sudo tee -a /etc/ssh/sshd_config
+
+      echo "Check the Wazuh dashboard > Integrity monitoring, filter rule.id:100300"
+      echo "Expected: 'FIM: critical SSH config file changed' alert (level 10), near real time."
+
+      # Clean up the test change so the lab stays tidy
+      sudo sed -i '/# tampered-in-lab/d' /etc/ssh/sshd_config
+    output: |
+      # tampered-in-lab 1764284400
+      Check the Wazuh dashboard > Integrity monitoring, filter rule.id:100300
+      Expected: 'FIM: critical SSH config file changed' alert (level 10), near real time.
+    note:
+      fr: "Résultat attendu : alerte **rule.id 100300**, niveau 10, technique **T1098**, en quasi temps réel grâce au `realtime` du FIM (leçon 3). On retire immédiatement la ligne de test pour garder le lab propre."
+      en: "Expected result: alert **rule.id 100300**, level 10, technique **T1098**, in near real time thanks to the FIM `realtime` mode (lesson 3). We remove the test line immediately to keep the lab tidy."
+
+  - title:
+      fr: "Lever les bannissements et nettoyer le lab"
+      en: "Lift the bans and clean up the lab"
+    file: scenarios/cleanup.txt
+    lang: text
+    kind: neutral
+    code: |
+      # 1. On web-target: check and remove any lingering firewall-drop ban
+      $ sudo iptables -L -n | grep 192.0.2.30     # see the dropped source
+      $ sudo iptables -D INPUT -s 192.0.2.30 -j DROP   # remove it if still present
+      # (active response removes it automatically after the 600s timeout anyway)
+
+      # 2. Stop and remove the whole Wazuh stack (containers + volumes)
+      $ cd wazuh-docker/single-node
+      $ docker compose down -v
+
+      # 3. Optional: remove the agent from web-target
+      $ sudo apt-get remove --purge -y wazuh-agent
+
+      # 4. Remove the Juice Shop container
+      $ docker rm -f juice-shop
+    note:
+      fr: "Le nettoyage est une bonne habitude : on lève les bannissements (ou on attend le `timeout` de 600 s), on supprime la stack avec `-v` pour effacer aussi les volumes, et on retire l'agent et l'application. Un lab qui se range est un lab qu'on peut relancer proprement."
+      en: "Cleanup is good hygiene: lift the bans (or wait for the 600s `timeout`), remove the stack with `-v` to also wipe the volumes, and remove the agent and the app. A lab that tidies up is a lab you can relaunch cleanly."
+
+mistake:
+  fr: |
+    **Montrer des règles sans jamais déclencher l'alerte en conditions réelles.**
+
+    Une règle qui passe `wazuh-logtest` prouve que la **syntaxe** est bonne, mais pas que la **chaîne
+    complète** fonctionne : l'agent collecte-t-il vraiment le bon log ? L'événement arrive-t-il au manager ?
+    Seul un scénario d'attaque de bout en bout le confirme. À l'inverse, ne jouez **jamais** ces attaques
+    ailleurs que dans votre lab : hydra ou sqlmap contre un système tiers est illégal.
+  en: |
+    **Showing rules without ever triggering the alert in real conditions.**
+
+    A rule that passes `wazuh-logtest` proves the **syntax** is right, but not that the **full chain**
+    works: does the agent actually collect the right log? Does the event reach the manager? Only an
+    end-to-end attack scenario confirms it. Conversely, **never** run these attacks anywhere but your lab:
+    hydra or sqlmap against a third-party system is illegal.
+
+bestPractice:
+  fr: |
+    - **Rédigez un README rejouable** : architecture, démarrage, détections, scénarios, nettoyage.
+    - **Pour chaque scénario, notez l'attendu** : id de règle, niveau et technique MITRE.
+    - **Validez la chaîne complète** (attaque → agent → manager → alerte), pas seulement `wazuh-logtest`.
+    - **Confinez les attaques au lab** : réseau isolé, cible que vous possédez, jamais l'extérieur.
+    - **Nettoyez** : levez les bannissements, `docker compose down -v`, retirez l'agent et l'application.
+  en: |
+    - **Write a replayable README**: architecture, start, detections, scenarios, cleanup.
+    - **For each scenario, record the expected result**: rule id, level and MITRE technique.
+    - **Validate the full chain** (attack → agent → manager → alert), not just `wazuh-logtest`.
+    - **Confine attacks to the lab**: isolated network, a target you own, never the outside.
+    - **Clean up**: lift the bans, `docker compose down -v`, remove the agent and the app.
+
+exercise:
+  statement:
+    fr: |
+      Vous ajoutez un **quatrième scénario** au README : prouver que la **réponse active** fonctionne,
+      c'est-à-dire que l'IP de l'attaquant est bien bloquée après la force brute SSH.
+
+      Écrivez les commandes qui, après avoir lancé `ssh-bruteforce.sh`, vérifient sur `web-target` que
+      l'IP `192.0.2.30` est bannie, puis la débannissent manuellement.
+    en: |
+      You add a **fourth scenario** to the README: prove the **active response** works, i.e. that the
+      attacker's IP is actually blocked after the SSH brute force.
+
+      Write the commands that, after running `ssh-bruteforce.sh`, verify on `web-target` that the IP
+      `192.0.2.30` is banned, then manually unban it.
+  solution:
+    file: verify-active-response.sh
+    lang: bash
+    code: |
+      # Run on web-target, right after the SSH brute-force scenario triggered rule 100100.
+
+      # 1. Confirm the active response added a DROP for the attacker IP
+      sudo iptables -L INPUT -n --line-numbers | grep 192.0.2.30
+      # Expected: a DROP rule with source 192.0.2.30
+
+      # 2. Cross-check in the Wazuh active-response log on the manager
+      docker exec single-node-wazuh.manager-1 \
+        grep firewall-drop /var/ossec/logs/active-responses.log | tail -n 3
+
+      # 3. Manually lift the ban (otherwise it auto-expires after the 600s timeout)
+      sudo iptables -D INPUT -s 192.0.2.30 -j DROP
+    note:
+      fr: "On prouve la réponse active sur **deux** sources : la règle iptables côté `web-target` et le journal `active-responses.log` côté manager. Le débannissement manuel est utile si l'on ne veut pas attendre le `timeout` de 600 s."
+      en: "We prove the active response from **two** sources: the iptables rule on `web-target` and the `active-responses.log` on the manager. The manual unban is useful if you do not want to wait for the 600s `timeout`."
+
+quiz:
+  - q:
+      fr: "Quelle règle et quelle technique MITRE attend-on après une force brute SSH ?"
+      en: "Which rule and MITRE technique do you expect after an SSH brute force?"
+    options:
+      fr:
+        - "Règle 100200, T1190"
+        - "Règle 100100, T1110"
+        - "Règle 100300, T1098"
+        - "Règle 550, T1595"
+      en:
+        - "Rule 100200, T1190"
+        - "Rule 100100, T1110"
+        - "Rule 100300, T1098"
+        - "Rule 550, T1595"
+    answer: 1
+    why:
+      fr: "La règle 100100 corrèle les échecs SSH (T1110, Brute Force) et déclenche la réponse active de bannissement."
+      en: "Rule 100100 correlates SSH failures (T1110, Brute Force) and triggers the active-response ban."
+  - q:
+      fr: "Pourquoi un scénario d'attaque de bout en bout est-il nécessaire malgré `wazuh-logtest` ?"
+      en: "Why is an end-to-end attack scenario needed despite `wazuh-logtest`?"
+    options:
+      fr:
+        - "Parce que `wazuh-logtest` ne teste que la syntaxe, pas la chaîne agent → manager → alerte"
+        - "Parce que `wazuh-logtest` est payant"
+        - "Parce que les règles par défaut sont désactivées"
+        - "Parce que Docker l'exige"
+      en:
+        - "Because `wazuh-logtest` only tests the syntax, not the agent → manager → alert chain"
+        - "Because `wazuh-logtest` is paid"
+        - "Because the default rules are disabled"
+        - "Because Docker requires it"
+    answer: 0
+    why:
+      fr: "`wazuh-logtest` valide décodeur et règle, mais seul un vrai scénario prouve que l'agent collecte et transmet l'événement jusqu'à l'alerte."
+      en: "`wazuh-logtest` validates decoder and rule, but only a real scenario proves the agent collects and forwards the event all the way to the alert."
+  - q:
+      fr: "Contre qui ces scénarios d'attaque doivent-ils être joués ?"
+      en: "Against whom must these attack scenarios be run?"
+    options:
+      fr:
+        - "N'importe quel serveur accessible"
+        - "Uniquement la machine `web-target` de votre propre lab"
+        - "Le site de votre employeur"
+        - "Un serveur public de test au hasard"
+      en:
+        - "Any reachable server"
+        - "Only your own lab's `web-target` machine"
+        - "Your employer's website"
+        - "A random public test server"
+    answer: 1
+    why:
+      fr: "On n'attaque que des systèmes que l'on possède. hydra ou sqlmap contre un tiers est illégal."
+      en: "You only attack systems you own. hydra or sqlmap against a third party is illegal."
+  - q:
+      fr: "Comment supprimer entièrement la stack Wazuh, volumes compris ?"
+      en: "How do you fully remove the Wazuh stack, volumes included?"
+    options:
+      fr:
+        - "docker stop"
+        - "docker compose down -v"
+        - "kill -9"
+        - "systemctl disable wazuh"
+      en:
+        - "docker stop"
+        - "docker compose down -v"
+        - "kill -9"
+        - "systemctl disable wazuh"
+    answer: 1
+    why:
+      fr: "`docker compose down -v` arrête et supprime les conteneurs **et** les volumes, pour repartir d'un lab propre."
+      en: "`docker compose down -v` stops and removes the containers **and** the volumes, for a clean lab."
+  - q:
+      fr: "Comment confirmer que la réponse active a bien banni l'attaquant ?"
+      en: "How do you confirm the active response actually banned the attacker?"
+    options:
+      fr:
+        - "En redémarrant le manager"
+        - "En vérifiant la règle iptables sur la cible et le journal active-responses.log"
+        - "En supprimant l'agent"
+        - "En relançant sqlmap"
+      en:
+        - "By restarting the manager"
+        - "By checking the iptables rule on the target and the active-responses.log"
+        - "By removing the agent"
+        - "By re-running sqlmap"
+    answer: 1
+    why:
+      fr: "Le bannissement se vérifie côté cible (règle DROP iptables) et côté manager (`active-responses.log`), deux preuves cohérentes."
+      en: "The ban is verified on the target (iptables DROP rule) and on the manager (`active-responses.log`), two consistent proofs."

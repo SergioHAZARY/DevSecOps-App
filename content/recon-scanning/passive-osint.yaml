@@ -1,0 +1,360 @@
+description:
+  fr: "Reconnaissance passive et OSINT : whois, DNS, transparence des certificats, Google dorking et theHarvester, sur des domaines que vous possédez."
+  en: "Passive reconnaissance and OSINT: whois, DNS, certificate transparency, Google dorking and theHarvester, on domains you own."
+duration: 20
+
+intro:
+  fr: |
+    La **reconnaissance passive** est la première phase d'un test : collecter de l'information sur une cible
+    **sans jamais la toucher**. On ne lit que des sources publiques (annuaires, DNS, moteurs de recherche), si
+    bien que la cible ne voit rien. C'est de l'**OSINT**, pour *Open Source Intelligence* : du renseignement à
+    partir de sources ouvertes.
+
+    Imaginez un détective qui, avant de sonner à une porte, lit l'annuaire, le cadastre et les journaux : il
+    sait déjà beaucoup avant le moindre contact. L'OSINT, c'est pareil pour un système : combien de serveurs,
+    quels sous-domaines, quelles adresses e-mail circulent publiquement.
+
+    Dans cette leçon, vous allez utiliser `whois`, `dig`, la **transparence des certificats**, le concept de
+    **Google dorking** et l'outil **theHarvester** — uniquement sur des domaines que **vous possédez**
+    (`example.com` sert de valeur fictive). Même passive, la reconnaissance ne se fait que sur **vos** biens ou
+    un périmètre **autorisé par écrit** : agréger des données sur un tiers pour préparer une attaque est
+    illégal.
+  en: |
+    **Passive reconnaissance** is the first phase of a test: gathering information about a target **without ever
+    touching it**. You only read public sources (directories, DNS, search engines), so the target sees nothing.
+    This is **OSINT**, for *Open Source Intelligence*: intelligence from open sources.
+
+    Picture a detective who, before ringing a doorbell, reads the directory, the land registry and the
+    newspapers: they already know a lot before any contact. OSINT is the same for a system: how many servers,
+    which sub-domains, which email addresses circulate publicly.
+
+    In this lesson you will use `whois`, `dig`, **certificate transparency**, the concept of **Google dorking**
+    and the **theHarvester** tool — only on domains **you own** (`example.com` is a placeholder). Even passive,
+    reconnaissance is only done on **your** assets or a scope **authorised in writing**: aggregating data about
+    a third party to prepare an attack is illegal.
+
+sections:
+  - heading:
+      fr: "Whois et DNS : les fondations publiques"
+      en: "Whois and DNS: the public foundations"
+    body:
+      fr: |
+        Deux bases publiques décrivent tout domaine :
+
+        - **Whois** donne les informations d'enregistrement : date de création, registrar, parfois un contact.
+          Beaucoup de données sont aujourd'hui masquées par la protection de la vie privée, mais les dates et
+          le registrar restent visibles.
+        - **DNS** (Domain Name System) traduit les noms en adresses. Les enregistrements publics révèlent
+          beaucoup :
+
+        | Type | Donne | Intérêt pour la recon |
+        |---|---|---|
+        | A / AAAA | Adresse IPv4 / IPv6 | Où est hébergé le service |
+        | MX | Serveurs de mail | Fournisseur de messagerie |
+        | NS | Serveurs de noms | Hébergeur DNS |
+        | TXT | Texte (SPF, DKIM, vérifications) | Services tiers utilisés |
+        | CNAME | Alias | Services externes (CDN, SaaS) |
+
+        L'outil `dig` interroge le DNS. Tout cela est **passif** : interroger le DNS public ne touche pas le
+        serveur de la cible, c'est une requête vers l'infrastructure DNS globale.
+      en: |
+        Two public databases describe any domain:
+
+        - **Whois** gives registration data: creation date, registrar, sometimes a contact. Much of it is now
+          hidden by privacy protection, but the dates and registrar stay visible.
+        - **DNS** (Domain Name System) translates names into addresses. Public records reveal a lot:
+
+        | Type | Gives | Recon value |
+        |---|---|---|
+        | A / AAAA | IPv4 / IPv6 address | Where the service is hosted |
+        | MX | Mail servers | Email provider |
+        | NS | Name servers | DNS host |
+        | TXT | Text (SPF, DKIM, verifications) | Third-party services used |
+        | CNAME | Alias | External services (CDN, SaaS) |
+
+        The `dig` tool queries DNS. All of this is **passive**: querying public DNS does not touch the target's
+        server, it is a request to the global DNS infrastructure.
+  - heading:
+      fr: "Transparence des certificats : trouver les sous-domaines"
+      en: "Certificate transparency: finding sub-domains"
+    body:
+      fr: |
+        Chaque fois qu'un certificat HTTPS est émis pour un nom (par ex. `vpn.example.com`), il est inscrit dans
+        des **journaux de transparence des certificats** (*Certificate Transparency*, CT), publics et
+        consultables. Ces journaux existent pour détecter les certificats frauduleux, mais ils révèlent aussi,
+        au passage, **tous les sous-domaines** pour lesquels un certificat a été émis.
+
+        Des services comme **crt.sh** permettent d'interroger ces journaux. C'est l'une des méthodes les plus
+        efficaces pour **énumérer les sous-domaines** d'un domaine : on y trouve souvent des environnements
+        oubliés (`dev`, `staging`, `old`) qui ne devraient pas être exposés.
+
+        C'est purement passif : on lit un journal public, sans jamais se connecter aux sous-domaines découverts.
+        Côté défense, cela rappelle qu'un sous-domaine « caché » ne l'est jamais : dès qu'il a un certificat, il
+        est listé publiquement.
+      en: |
+        Every time an HTTPS certificate is issued for a name (e.g. `vpn.example.com`), it is recorded in public,
+        searchable **Certificate Transparency** (CT) logs. These logs exist to detect fraudulent certificates,
+        but along the way they also reveal **every sub-domain** for which a certificate was issued.
+
+        Services like **crt.sh** let you query these logs. It is one of the most effective ways to **enumerate
+        the sub-domains** of a domain: you often find forgotten environments (`dev`, `staging`, `old`) that
+        should not be exposed.
+
+        It is purely passive: you read a public log, never connecting to the discovered sub-domains. On the
+        defensive side, it is a reminder that a "hidden" sub-domain never is: as soon as it has a certificate,
+        it is listed publicly.
+  - heading:
+      fr: "Google dorking et theHarvester"
+      en: "Google dorking and theHarvester"
+    body:
+      fr: |
+        Le **Google dorking** (ou *Google hacking*) consiste à utiliser des opérateurs de recherche avancés pour
+        trouver des informations exposées par erreur :
+
+        - `site:example.com` limite à un domaine.
+        - `filetype:pdf site:example.com` cherche des documents.
+        - `intitle:"index of"` trouve des listings de répertoires ouverts.
+        - `inurl:admin` cible des pages d'administration.
+
+        C'est un **concept** de reconnaissance : on interroge un moteur public, on ne pirate rien. Il révèle
+        surtout des fuites involontaires (documents internes indexés, pages de test publiques).
+
+        **theHarvester** automatise la collecte : à partir d'un domaine, il agrège e-mails, sous-domaines et
+        hôtes depuis plusieurs sources (CT, moteurs, DNS). C'est le couteau suisse de l'OSINT passif, à lancer
+        sur **vos** domaines pour voir ce qui fuite publiquement de votre côté.
+      en: |
+        **Google dorking** (or *Google hacking*) means using advanced search operators to find information
+        exposed by mistake:
+
+        - `site:example.com` restricts to one domain.
+        - `filetype:pdf site:example.com` looks for documents.
+        - `intitle:"index of"` finds open directory listings.
+        - `inurl:admin` targets administration pages.
+
+        It is a reconnaissance **concept**: you query a public engine, you hack nothing. It mainly reveals
+        accidental leaks (indexed internal documents, public test pages).
+
+        **theHarvester** automates the collection: from a domain, it aggregates emails, sub-domains and hosts
+        from several sources (CT, engines, DNS). It is the Swiss army knife of passive OSINT, to run on **your**
+        domains to see what leaks publicly on your side.
+
+examples:
+  - title:
+      fr: "Interroger whois et le DNS d'un domaine que vous possédez"
+      en: "Querying whois and DNS of a domain you own"
+    file: whois_dns.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Passive: these read public registries, they do not touch the target host.
+      whois example.com | grep -Ei 'registrar|creation|name server'
+
+      # DNS records with dig. +short prints only the answer.
+      dig +short example.com A        # IPv4 address
+      dig +short example.com MX       # mail servers
+      dig +short example.com TXT      # SPF / verification records
+    output: |
+      Registrar: Example Registrar, Inc.
+      Creation Date: 1995-08-14T04:00:00Z
+      Name Server: ns1.example.com
+      192.0.2.10
+      10 mail.example.com.
+      "v=spf1 include:_spf.example.net -all"
+    note:
+      fr: "Le TXT révèle ici un enregistrement SPF qui mentionne `_spf.example.net` : indice sur le fournisseur de messagerie utilisé. Rien n'a touché la cible : tout vient de bases publiques."
+      en: "The TXT record here reveals an SPF entry mentioning `_spf.example.net`: a hint about the email provider in use. Nothing touched the target: it all comes from public databases."
+  - title:
+      fr: "Énumérer les sous-domaines via la transparence des certificats"
+      en: "Enumerating sub-domains via certificate transparency"
+    file: crtsh.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # crt.sh exposes Certificate Transparency logs as JSON.
+      # We list unique sub-domains that ever got a certificate for example.com.
+      # jq extracts the name_value field; sort -u removes duplicates.
+      curl -s 'https://crt.sh/?q=%25.example.com&output=json' \
+        | jq -r '.[].name_value' \
+        | sort -u
+    output: |
+      example.com
+      dev.example.com
+      shop.example.com
+      staging.example.com
+      vpn.example.com
+    note:
+      fr: "On découvre `dev` et `staging` sans jamais s'y connecter : un journal public suffit. Côté défense, c'est le signal qu'un environnement de test exposé sera trouvé tôt ou tard."
+      en: "We discover `dev` and `staging` without ever connecting to them: a public log is enough. On defence, it is the signal that an exposed test environment will be found sooner or later."
+  - title:
+      fr: "Agréger l'OSINT d'un domaine avec theHarvester"
+      en: "Aggregating a domain's OSINT with theHarvester"
+    file: harvester.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # theHarvester gathers hosts and emails from public sources.
+      # Run ONLY on a domain you own. -d = domain, -b = source(s).
+      theHarvester -d example.com -b crtsh,dnsdumpster
+
+      # Review the output to see what your own organisation leaks publicly,
+      # then reduce that exposure (the goal of the defensive lesson).
+    output: |
+      [*] Target: example.com
+      [*] Hosts found: 4
+      ---------------------
+      dev.example.com:192.0.2.11
+      shop.example.com:192.0.2.12
+      staging.example.com:192.0.2.13
+      vpn.example.com:192.0.2.14
+    note:
+      fr: "theHarvester combine plusieurs sources en une seule sortie exploitable. Utilisé sur vos propres domaines, il mesure votre exposition publique avant qu'un attaquant ne le fasse."
+      en: "theHarvester combines several sources into one usable output. Run on your own domains, it measures your public exposure before an attacker does."
+
+mistake:
+  fr: |
+    **Croire que l'OSINT « passif » autorise à viser n'importe qui.** Lire des sources publiques reste discret,
+    mais agréger systématiquement des données sur une personne ou une organisation tierce pour préparer une
+    intrusion peut relever du harcèlement ou de la préparation d'un délit. L'OSINT de ce module se fait sur
+    **vos** domaines, ou dans un périmètre autorisé. Autre erreur : confondre passif et actif — dès que vous
+    vous **connectez** à un sous-domaine découvert, vous n'êtes plus passif.
+  en: |
+    **Thinking "passive" OSINT lets you target anyone.** Reading public sources stays stealthy, but
+    systematically aggregating data about a third-party person or organisation to prepare an intrusion can
+    amount to harassment or the preparation of an offence. The OSINT in this module is done on **your** domains,
+    or within an authorised scope. Another mistake: confusing passive and active — the moment you **connect** to
+    a discovered sub-domain, you are no longer passive.
+
+bestPractice:
+  fr: |
+    - **Commencez toujours par le passif** : whois, DNS, CT, dorking révèlent beaucoup sans alerter la cible.
+    - **Utilisez la transparence des certificats** pour l'énumération de sous-domaines : efficace et discret.
+    - **Lancez theHarvester sur vos propres domaines** pour mesurer et réduire votre exposition.
+    - **Documentez vos sources** : un constat OSINT doit indiquer d'où vient l'information.
+    - **Restez dans le périmètre** : passif ne veut pas dire « sans limites » ; respectez l'autorisation.
+  en: |
+    - **Always start with the passive**: whois, DNS, CT, dorking reveal a lot without alerting the target.
+    - **Use certificate transparency** for sub-domain enumeration: effective and stealthy.
+    - **Run theHarvester on your own domains** to measure and reduce your exposure.
+    - **Document your sources**: an OSINT finding must say where the information came from.
+    - **Stay in scope**: passive does not mean "no limits"; respect the authorisation.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez lister tous les **sous-domaines** de votre propre domaine `example.com` à partir des journaux
+      de transparence des certificats, puis ne garder que les noms uniques, triés.
+
+      Écrivez la ligne de commande (vous pouvez utiliser `curl`, `jq`, `sort`). Expliquez pourquoi c'est une
+      méthode **passive**.
+    en: |
+      You want to list every **sub-domain** of your own domain `example.com` from certificate transparency
+      logs, keeping only unique names, sorted.
+
+      Write the command line (you may use `curl`, `jq`, `sort`). Explain why this is a **passive** method.
+  solution:
+    file: subdomains.sh
+    lang: bash
+    code: |
+      # Query crt.sh (Certificate Transparency) as JSON, extract the names,
+      # and keep unique sorted entries.
+      curl -s 'https://crt.sh/?q=%25.example.com&output=json' \
+        | jq -r '.[].name_value' \
+        | sort -u
+
+      # Why passive: we read a PUBLIC certificate log. We never connect to the
+      # target or its sub-domains, so the target sees no traffic from us.
+    note:
+      fr: "La méthode est passive car on interroge un journal public (crt.sh) sans jamais contacter les serveurs d'example.com. Se connecter aux sous-domaines trouvés serait, lui, actif."
+      en: "The method is passive because we query a public log (crt.sh) without ever contacting example.com's servers. Connecting to the found sub-domains would be active."
+
+quiz:
+  - q:
+      fr: "Que signifie OSINT ?"
+      en: "What does OSINT stand for?"
+    options:
+      fr:
+        - "Open Source Intelligence"
+        - "Offensive Scanning Internal Network"
+        - "Online Secure Internet"
+        - "Operating System Integration"
+      en:
+        - "Open Source Intelligence"
+        - "Offensive Scanning Internal Network"
+        - "Online Secure Internet"
+        - "Operating System Integration"
+    answer: 0
+    why:
+      fr: "OSINT est le renseignement à partir de sources ouvertes et publiques."
+      en: "OSINT is intelligence gathered from open, public sources."
+  - q:
+      fr: "Pourquoi la reconnaissance passive est-elle discrète ?"
+      en: "Why is passive reconnaissance stealthy?"
+    options:
+      fr:
+        - "Parce qu'elle chiffre le trafic"
+        - "Parce qu'elle ne touche pas la cible, elle lit des sources publiques"
+        - "Parce qu'elle est plus rapide"
+        - "Parce qu'elle utilise un VPN"
+      en:
+        - "Because it encrypts traffic"
+        - "Because it does not touch the target, it reads public sources"
+        - "Because it is faster"
+        - "Because it uses a VPN"
+    answer: 1
+    why:
+      fr: "La reconnaissance passive n'envoie aucun trafic vers la cible : elle exploite des bases publiques, invisibles pour la cible."
+      en: "Passive reconnaissance sends no traffic to the target: it uses public databases, invisible to the target."
+  - q:
+      fr: "Quel enregistrement DNS indique les serveurs de messagerie d'un domaine ?"
+      en: "Which DNS record indicates a domain's mail servers?"
+    options:
+      fr:
+        - "A"
+        - "NS"
+        - "MX"
+        - "CNAME"
+      en:
+        - "A"
+        - "NS"
+        - "MX"
+        - "CNAME"
+    answer: 2
+    why:
+      fr: "L'enregistrement MX (Mail eXchanger) désigne les serveurs qui reçoivent le courrier du domaine."
+      en: "The MX (Mail eXchanger) record names the servers that receive the domain's email."
+  - q:
+      fr: "À quoi servent les journaux de transparence des certificats pour la recon ?"
+      en: "What are certificate transparency logs useful for in recon?"
+    options:
+      fr:
+        - "À chiffrer les e-mails"
+        - "À énumérer les sous-domaines ayant reçu un certificat"
+        - "À bloquer les scanners"
+        - "À accélérer le DNS"
+      en:
+        - "To encrypt emails"
+        - "To enumerate sub-domains that received a certificate"
+        - "To block scanners"
+        - "To speed up DNS"
+    answer: 1
+    why:
+      fr: "Chaque certificat émis est journalisé publiquement, ce qui révèle les noms de sous-domaines, y compris oubliés."
+      en: "Every issued certificate is publicly logged, which reveals sub-domain names, including forgotten ones."
+  - q:
+      fr: "Sur quels domaines pouvez-vous lancer theHarvester dans ce module ?"
+      en: "On which domains may you run theHarvester in this module?"
+    options:
+      fr:
+        - "N'importe quel domaine trouvé sur Internet"
+        - "Les domaines de concurrents"
+        - "Vos propres domaines ou un périmètre autorisé par écrit"
+        - "Les domaines gouvernementaux"
+      en:
+        - "Any domain found on the internet"
+        - "Competitors' domains"
+        - "Your own domains or a scope authorised in writing"
+        - "Government domains"
+    answer: 2
+    why:
+      fr: "Même passif, l'OSINT se limite à vos biens ou à un périmètre autorisé ; cibler un tiers pour préparer une attaque est illégal."
+      en: "Even when passive, OSINT is limited to your assets or an authorised scope; targeting a third party to prepare an attack is illegal."

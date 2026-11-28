@@ -1,0 +1,491 @@
+description:
+  fr: "Construire une API Flask sécurisée : validation des entrées, requêtes paramétrées, en-têtes de sécurité, rate limiting avec Flask-Limiter, secrets en variables d'environnement et debug désactivé."
+  en: "Build a secure Flask API: input validation, parameterized queries, security headers, rate limiting with Flask-Limiter, secrets from environment variables and debug turned off."
+duration: 40
+
+intro:
+  fr: |
+    **Flask** est un micro-framework Python pour créer des API web en quelques lignes. Sa simplicité est un
+    atout… et un piège : il est tout aussi simple d'écrire une API ouverte à l'injection SQL, qui expose ses
+    secrets et laisse le mode debug actif en production.
+
+    Imaginez un comptoir d'accueil. Une version naïve laisse n'importe qui entrer, recopie ce qu'on lui dicte
+    sans vérifier, et garde la clé du coffre scotchée sur le mur. Une version sécurisée vérifie chaque
+    demande, ne colle jamais une saisie dans une requête SQL, et range la clé hors de vue.
+
+    Vous allez écrire deux fois la même petite API « utilisateurs » : d'abord une version vulnérable, puis la
+    même protégée par la validation des entrées, des requêtes paramétrées, des en-têtes de sécurité, une
+    limite de débit (*rate limiting*) et des secrets lus dans l'environnement. Les exemples Flask visent un
+    vrai environnement Python (ils ne tournent pas dans le navigateur).
+  en: |
+    **Flask** is a Python micro-framework for building web APIs in a few lines. Its simplicity is an asset…
+    and a trap: it is just as easy to write an API open to SQL injection, leaking its secrets and leaving
+    debug mode on in production.
+
+    Picture a reception desk. A naive version lets anyone in, copies down whatever it is told without
+    checking, and keeps the vault key taped to the wall. A secure version checks every request, never glues
+    an input into a SQL query, and keeps the key out of sight.
+
+    You will write the same small "users" API twice: first a vulnerable version, then the same one protected
+    by input validation, parameterized queries, security headers, rate limiting and secrets read from the
+    environment. The Flask examples target a real Python environment (they do not run in the browser).
+
+sections:
+  - heading:
+      fr: "Les quatre fautes classiques d'une API Flask"
+      en: "The four classic mistakes of a Flask API"
+    body:
+      fr: |
+        | Faute | Conséquence | Correctif |
+        |---|---|---|
+        | `f"... WHERE id = {uid}"` | Injection SQL | Requête paramétrée `?` |
+        | `app.run(debug=True)` en prod | Console Python exécutable à distance | `debug=False`, serveur WSGI |
+        | `SECRET_KEY = "dev"` dans le code | Secret versionné, sessions forgeables | `os.environ["SECRET_KEY"]` |
+        | Aucune validation du corps JSON | Données corrompues, DoS, *mass assignment* | Schéma + types + bornes |
+
+        Le mode **debug** est le plus dangereux : l'`interactive debugger` de Werkzeug permet d'exécuter du
+        code Python arbitraire depuis le navigateur dès qu'une exception survient. Il ne doit **jamais** être
+        actif en production, et le serveur de développement de Flask (`app.run`) non plus : on utilise
+        **gunicorn** ou **uWSGI**.
+
+        La règle d'or de la validation : **n'autorisez que ce que vous attendez** (liste blanche), et rejetez
+        le reste avec un code `400`. Ne tentez jamais de « nettoyer » une entrée douteuse.
+      en: |
+        | Mistake | Consequence | Fix |
+        |---|---|---|
+        | `f"... WHERE id = {uid}"` | SQL injection | Parameterized query `?` |
+        | `app.run(debug=True)` in prod | Remote-executable Python console | `debug=False`, WSGI server |
+        | `SECRET_KEY = "dev"` in code | Committed secret, forgeable sessions | `os.environ["SECRET_KEY"]` |
+        | No validation of the JSON body | Corrupt data, DoS, mass assignment | Schema + types + bounds |
+
+        **Debug** mode is the most dangerous: Werkzeug's interactive debugger lets anyone run arbitrary Python
+        code from the browser as soon as an exception is raised. It must **never** be on in production, and
+        neither must Flask's development server (`app.run`): you use **gunicorn** or **uWSGI**.
+
+        The golden rule of validation: **allow only what you expect** (allow-list), and reject everything else
+        with a `400`. Never try to "clean" a dubious input.
+  - heading:
+      fr: "En-têtes de sécurité et rate limiting"
+      en: "Security headers and rate limiting"
+    body:
+      fr: |
+        Une API doit poser des **en-têtes de sécurité** sur chaque réponse (via `after_request`), comme
+        `X-Content-Type-Options: nosniff` et une `Content-Security-Policy` stricte, et renvoyer du JSON plutôt
+        que du HTML pour limiter le risque de XSS.
+
+        Le **rate limiting** (limite de débit) empêche un même client d'envoyer trop de requêtes : c'est la
+        première défense contre la force brute sur un login et contre les abus d'API. **Flask-Limiter** le
+        fait en une ligne par route :
+
+        ```python
+        @limiter.limit("5 per minute")
+        def login(): ...
+        ```
+
+        En production, le compteur doit être stocké dans **Redis** (et non en mémoire) pour fonctionner avec
+        plusieurs workers gunicorn. Enfin, les **secrets** (clé de session, URL de base de données, jetons)
+        viennent toujours de variables d'environnement ou d'un coffre, jamais du code source.
+      en: |
+        An API should set **security headers** on every response (via `after_request`), such as
+        `X-Content-Type-Options: nosniff` and a strict `Content-Security-Policy`, and return JSON rather than
+        HTML to limit the XSS risk.
+
+        **Rate limiting** stops a single client from sending too many requests: it is the first defence
+        against brute force on a login and against API abuse. **Flask-Limiter** does it in one line per route:
+
+        ```python
+        @limiter.limit("5 per minute")
+        def login(): ...
+        ```
+
+        In production the counter must be stored in **Redis** (not in memory) so it works across several
+        gunicorn workers. Finally, **secrets** (session key, database URL, tokens) always come from
+        environment variables or a vault, never from the source code.
+
+examples:
+  - title:
+      fr: "API vulnérable : injection SQL, debug actif, secret en dur"
+      en: "Vulnerable API: SQL injection, debug on, hard-coded secret"
+    file: app_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import sqlite3
+      from flask import Flask, request, jsonify
+
+      app = Flask(__name__)
+      # Problem 1: a secret committed to Git; sessions become forgeable
+      app.config["SECRET_KEY"] = "dev-secret-123"
+
+      db = sqlite3.connect(":memory:", check_same_thread=False)
+      db.execute("CREATE TABLE users (id INTEGER, name TEXT)")
+      db.execute("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')")
+
+
+      @app.route("/users")
+      def get_user():
+          uid = request.args.get("id")
+          # Problem 2: user input glued into SQL -> SQL injection
+          rows = db.execute(f"SELECT id, name FROM users WHERE id = {uid}").fetchall()
+          return jsonify(rows)
+
+
+      if __name__ == "__main__":
+          # Problem 3: debug=True exposes a remote Python console on any error
+          app.run(host="0.0.0.0", debug=True)
+    output: |
+      $ curl 'http://localhost:5000/users?id=1'
+      [[1, "alice"]]
+      $ curl 'http://localhost:5000/users?id=0 OR 1=1'
+      [[1, "alice"], [2, "bob"]]
+    note:
+      fr: "`id=0 OR 1=1` renvoie **tous** les utilisateurs : l'injection SQL fonctionne. Le secret est versionné et le mode debug ouvrirait une console Python distante à la moindre exception. L'API « marche » pourtant parfaitement en test."
+      en: "`id=0 OR 1=1` returns **all** users: the SQL injection works. The secret is committed and debug mode would open a remote Python console on the slightest exception. Yet the API 'works' perfectly in testing."
+
+  - title:
+      fr: "API sécurisée : validation, requêtes paramétrées, en-têtes, secrets"
+      en: "Secure API: validation, parameterized queries, headers, secrets"
+    file: app_secure.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+      import sqlite3
+      from flask import Flask, request, jsonify
+
+      app = Flask(__name__)
+      # Fix 1: the secret comes from the environment; the app refuses to start without it
+      app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
+
+      db = sqlite3.connect(":memory:", check_same_thread=False)
+      db.execute("CREATE TABLE users (id INTEGER, name TEXT)")
+      db.execute("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')")
+
+
+      # Fix 2: security headers on every response
+      @app.after_request
+      def set_security_headers(resp):
+          resp.headers["X-Content-Type-Options"] = "nosniff"
+          resp.headers["X-Frame-Options"] = "DENY"
+          resp.headers["Content-Security-Policy"] = "default-src 'none'"
+          return resp
+
+
+      @app.route("/users")
+      def get_user():
+          raw = request.args.get("id", "")
+          # Fix 3: validate the input as a positive integer, reject the rest
+          if not raw.isdigit():
+              return jsonify(error="id must be a positive integer"), 400
+
+          # Fix 4: parameterized query; the value is never interpreted as SQL
+          rows = db.execute(
+              "SELECT id, name FROM users WHERE id = ?", (int(raw),)
+          ).fetchall()
+          return jsonify(rows)
+
+
+      if __name__ == "__main__":
+          # Fix 5: debug stays off; in production run "gunicorn app_secure:app"
+          app.run(host="127.0.0.1", debug=False)
+    output: |
+      $ SECRET_KEY=$(python -c "import secrets;print(secrets.token_hex(32))") python app_secure.py
+      $ curl 'http://127.0.0.1:5000/users?id=1'
+      [[1, "alice"]]
+      $ curl 'http://127.0.0.1:5000/users?id=0 OR 1=1'
+      {"error": "id must be a positive integer"}
+      $ curl -i 'http://127.0.0.1:5000/users?id=1' | grep X-Content-Type
+      X-Content-Type-Options: nosniff
+    note:
+      fr: "La validation `isdigit()` rejette la charge d'injection avec un `400`, la requête paramétrée neutralise toute tentative restante, les en-têtes protègent le client, et le secret vient de l'environnement. Le mode debug est désactivé."
+      en: "The `isdigit()` validation rejects the injection payload with a `400`, the parameterized query neutralises any remaining attempt, the headers protect the client, and the secret comes from the environment. Debug mode is off."
+
+  - title:
+      fr: "Limiter la force brute sur le login avec Flask-Limiter"
+      en: "Rate-limiting brute force on login with Flask-Limiter"
+    file: login.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+      from flask import Flask, request, jsonify
+      from flask_limiter import Limiter
+      from flask_limiter.util import get_remote_address
+
+      app = Flask(__name__)
+      app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
+
+      # In production, point storage_uri at Redis so the counter is shared across workers
+      limiter = Limiter(
+          get_remote_address,
+          app=app,
+          storage_uri=os.environ.get("REDIS_URL", "memory://"),
+      )
+
+
+      @app.post("/login")
+      @limiter.limit("5 per minute")  # at most 5 attempts per minute per IP
+      def login():
+          data = request.get_json(silent=True) or {}
+          user = data.get("username")
+          pwd = data.get("password")
+          if not isinstance(user, str) or not isinstance(pwd, str):
+              return jsonify(error="username and password required"), 400
+          # ... verify the password hash here (argon2/bcrypt) ...
+          return jsonify(status="ok")
+
+
+      @app.errorhandler(429)
+      def ratelimit(_e):
+          # Generic message: do not reveal which account is being targeted
+          return jsonify(error="too many requests, slow down"), 429
+    output: |
+      $ for i in $(seq 1 6); do curl -s -o /dev/null -w "%{http_code}\n" \
+          -X POST localhost:5000/login -H 'Content-Type: application/json' \
+          -d '{"username":"alice","password":"x"}'; done
+      200
+      200
+      200
+      200
+      200
+      429
+    note:
+      fr: "Après 5 tentatives par minute et par IP, la 6e reçoit un `429 Too Many Requests` : la force brute devient inefficace. En production, `storage_uri` pointe vers Redis pour que la limite soit partagée entre tous les workers gunicorn."
+      en: "After 5 attempts per minute per IP, the 6th gets a `429 Too Many Requests`: brute force becomes ineffective. In production, `storage_uri` points to Redis so the limit is shared across all gunicorn workers."
+
+  - title:
+      fr: "Valider un corps JSON par liste blanche de champs et de types"
+      en: "Validating a JSON body by allow-listing fields and types"
+    file: create_user.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, request, jsonify
+
+      app = Flask(__name__)
+
+      ALLOWED_ROLES = {"viewer", "editor"}  # 'admin' is NOT self-assignable
+
+
+      def validate_user(data):
+          """Return (clean_dict, None) or (None, error_message)."""
+          if not isinstance(data, dict):
+              return None, "body must be a JSON object"
+
+          name = data.get("name")
+          if not isinstance(name, str) or not (1 <= len(name) <= 32):
+              return None, "name must be a 1-32 character string"
+
+          role = data.get("role", "viewer")
+          # Allow-list: reject any role we did not explicitly permit (anti mass-assignment)
+          if role not in ALLOWED_ROLES:
+              return None, f"role must be one of {sorted(ALLOWED_ROLES)}"
+
+          # Only known fields are kept; unexpected keys are dropped
+          return {"name": name, "role": role}, None
+
+
+      @app.post("/users")
+      def create_user():
+          clean, err = validate_user(request.get_json(silent=True))
+          if err:
+              return jsonify(error=err), 400
+          # ... persist "clean" with a parameterized query ...
+          return jsonify(created=clean), 201
+    output: |
+      $ curl -s -X POST localhost:5000/users -H 'Content-Type: application/json' \
+          -d '{"name":"carol","role":"editor"}'
+      {"created":{"name":"carol","role":"editor"}}
+      $ curl -s -X POST localhost:5000/users -H 'Content-Type: application/json' \
+          -d '{"name":"mallory","role":"admin","is_superuser":true}'
+      {"error":"role must be one of ['editor', 'viewer']"}
+    note:
+      fr: "La fonction renvoie un dictionnaire ne contenant **que** les champs attendus : le champ `is_superuser` injecté est ignoré et le rôle `admin` est refusé. C'est la défense contre le *mass assignment*, où un attaquant s'octroie des privilèges via des champs non prévus."
+      en: "The function returns a dictionary with **only** the expected fields: the injected `is_superuser` field is ignored and the `admin` role is refused. This is the defence against mass assignment, where an attacker grants themselves privileges through unexpected fields."
+
+mistake:
+  fr: |
+    **Laisser `debug=True` (ou `app.run`) en production.**
+
+    ```python
+    app.run(host="0.0.0.0", debug=True)  # remote Python console on every error
+    ```
+
+    Le debugger interactif de Werkzeug est pratique en développement, mais en production il permet à un
+    visiteur d'exécuter du code Python arbitraire sur le serveur dès qu'une exception se produit : c'est une
+    prise de contrôle totale. De plus, le serveur `app.run` n'est pas conçu pour encaisser du trafic réel.
+    En production : `debug=False`, et un vrai serveur WSGI (`gunicorn -w 4 app:app`). Pilotez ce réglage par
+    une variable d'environnement (`FLASK_DEBUG`) pour qu'il ne soit jamais activé par accident.
+  en: |
+    **Leaving `debug=True` (or `app.run`) in production.**
+
+    ```python
+    app.run(host="0.0.0.0", debug=True)  # remote Python console on every error
+    ```
+
+    Werkzeug's interactive debugger is handy in development, but in production it lets a visitor run arbitrary
+    Python code on the server as soon as an exception occurs: that is a full takeover. On top of that, the
+    `app.run` server is not built to handle real traffic. In production: `debug=False`, and a real WSGI
+    server (`gunicorn -w 4 app:app`). Drive this setting from an environment variable (`FLASK_DEBUG`) so it
+    is never turned on by accident.
+
+bestPractice:
+  fr: |
+    - **Validez chaque entrée par liste blanche** (type, longueur, bornes, valeurs permises) et renvoyez `400`.
+    - **Toujours des requêtes paramétrées** (`?` ou un ORM), jamais de f-string dans une requête SQL.
+    - **`debug=False` en production** et un serveur WSGI (`gunicorn`), jamais `app.run`.
+    - **Secrets dans l'environnement** : `os.environ["SECRET_KEY"]`, l'app refuse de démarrer sans.
+    - **En-têtes de sécurité** sur chaque réponse via `after_request`, et des réponses JSON.
+    - **Rate limiting** avec Flask-Limiter (stockage Redis) sur les routes sensibles comme le login.
+    - **Messages d'erreur génériques** : ne révélez ni la requête SQL, ni l'existence d'un compte.
+  en: |
+    - **Validate every input with an allow-list** (type, length, bounds, permitted values) and return `400`.
+    - **Always parameterized queries** (`?` or an ORM), never an f-string inside a SQL query.
+    - **`debug=False` in production** and a WSGI server (`gunicorn`), never `app.run`.
+    - **Secrets from the environment**: `os.environ["SECRET_KEY"]`, the app refuses to start without it.
+    - **Security headers** on every response via `after_request`, and JSON responses.
+    - **Rate limiting** with Flask-Limiter (Redis storage) on sensitive routes such as login.
+    - **Generic error messages**: never reveal the SQL query nor whether an account exists.
+
+exercise:
+  statement:
+    fr: |
+      Cette route Flask cherche un produit par nom. Elle contient deux failles.
+
+      ```python
+      @app.route("/search")
+      def search():
+          q = request.args.get("q")
+          sql = f"SELECT id, name FROM products WHERE name = '{q}'"
+          return jsonify(db.execute(sql).fetchall())
+      ```
+
+      1. Identifiez les deux problèmes de sécurité.
+      2. Réécrivez la route : validez que `q` est une chaîne de 1 à 50 caractères (sinon `400`) et utilisez
+         une requête paramétrée.
+    en: |
+      This Flask route searches for a product by name. It contains two flaws.
+
+      ```python
+      @app.route("/search")
+      def search():
+          q = request.args.get("q")
+          sql = f"SELECT id, name FROM products WHERE name = '{q}'"
+          return jsonify(db.execute(sql).fetchall())
+      ```
+
+      1. Identify the two security problems.
+      2. Rewrite the route: validate that `q` is a 1-to-50-character string (otherwise `400`) and use a
+         parameterized query.
+  solution:
+    file: search.py
+    lang: python
+    code: |
+      @app.route("/search")
+      def search():
+          q = request.args.get("q", "")
+
+          # 1. Validate the input: length and non-empty, reject the rest
+          if not (1 <= len(q) <= 50):
+              return jsonify(error="q must be 1 to 50 characters"), 400
+
+          # 2. Parameterized query: "q" is passed as data, never as SQL
+          rows = db.execute(
+              "SELECT id, name FROM products WHERE name = ?", (q,)
+          ).fetchall()
+          return jsonify(rows)
+    note:
+      fr: "Problème 1 : injection SQL par f-string (`q = x' OR '1'='1` renvoyait toute la table). Problème 2 : aucune validation de l'entrée. La requête paramétrée `?` et le contrôle de longueur corrigent les deux."
+      en: "Problem 1: SQL injection via f-string (`q = x' OR '1'='1` returned the whole table). Problem 2: no input validation. The parameterized `?` query and the length check fix both."
+
+quiz:
+  - q:
+      fr: "Pourquoi `debug=True` est-il dangereux dans une API Flask en production ?"
+      en: "Why is `debug=True` dangerous in a production Flask API?"
+    options:
+      fr:
+        - "Il ralentit les réponses de 50 %"
+        - "Il permet d'exécuter du code Python à distance via le debugger lors d'une erreur"
+        - "Il désactive les logs"
+        - "Il empêche l'utilisation de Redis"
+      en:
+        - "It slows responses down by 50%"
+        - "It allows remote Python code execution via the debugger on an error"
+        - "It disables logging"
+        - "It prevents the use of Redis"
+    answer: 1
+    why:
+      fr: "Le debugger interactif de Werkzeug exécute du code arbitraire depuis le navigateur dès qu'une exception survient."
+      en: "Werkzeug's interactive debugger runs arbitrary code from the browser whenever an exception occurs."
+  - q:
+      fr: "Quelle est la bonne façon d'éviter l'injection SQL dans une requête Flask ?"
+      en: "What is the right way to avoid SQL injection in a Flask query?"
+    options:
+      fr:
+        - "Utiliser une requête paramétrée avec `?`"
+        - "Mettre la requête dans une f-string"
+        - "Échapper manuellement les apostrophes"
+        - "Passer le mode debug à True"
+      en:
+        - "Use a parameterized query with `?`"
+        - "Put the query in an f-string"
+        - "Manually escape the quotes"
+        - "Set debug mode to True"
+    answer: 0
+    why:
+      fr: "Avec un marqueur `?`, la valeur est transmise comme donnée et n'est jamais interprétée comme du SQL."
+      en: "With a `?` placeholder, the value is sent as data and is never interpreted as SQL."
+  - q:
+      fr: "Où doit se trouver la `SECRET_KEY` d'une application Flask ?"
+      en: "Where should a Flask application's `SECRET_KEY` live?"
+    options:
+      fr:
+        - "Dans le code source, en clair"
+        - "Dans le fichier `README`"
+        - "Dans une variable d'environnement ou un coffre à secrets"
+        - "Dans un cookie côté client"
+      en:
+        - "In the source code, in clear text"
+        - "In the `README` file"
+        - "In an environment variable or a secrets vault"
+        - "In a client-side cookie"
+    answer: 2
+    why:
+      fr: "Un secret dans le code finit versionné dans Git ; il doit venir de l'environnement ou d'un coffre."
+      en: "A secret in the code ends up committed to Git; it must come from the environment or a vault."
+  - q:
+      fr: "À quoi sert Flask-Limiter sur une route de login ?"
+      en: "What is Flask-Limiter for on a login route?"
+    options:
+      fr:
+        - "À chiffrer les mots de passe"
+        - "À valider le format JSON"
+        - "À générer des jetons JWT"
+        - "À limiter le nombre de tentatives par client, contre la force brute"
+      en:
+        - "To hash passwords"
+        - "To validate the JSON format"
+        - "To generate JWT tokens"
+        - "To cap the number of attempts per client, against brute force"
+    answer: 3
+    why:
+      fr: "Le rate limiting renvoie un `429` au-delà d'un quota (par exemple 5/minute par IP), ce qui neutralise la force brute."
+      en: "Rate limiting returns a `429` beyond a quota (for example 5/minute per IP), which defeats brute force."
+  - q:
+      fr: "Comment une fonction de validation protège-t-elle du *mass assignment* ?"
+      en: "How does a validation function protect against mass assignment?"
+    options:
+      fr:
+        - "En ne conservant que les champs attendus et en rejetant les valeurs non autorisées"
+        - "En chiffrant tout le corps de la requête"
+        - "En augmentant la limite de débit"
+        - "En activant le mode debug"
+      en:
+        - "By keeping only the expected fields and rejecting disallowed values"
+        - "By encrypting the whole request body"
+        - "By raising the rate limit"
+        - "By enabling debug mode"
+    answer: 0
+    why:
+      fr: "En reconstruisant un dictionnaire avec seulement les champs prévus, un champ injecté comme `is_superuser` est ignoré."
+      en: "By rebuilding a dictionary with only the intended fields, an injected field like `is_superuser` is ignored."

@@ -1,0 +1,408 @@
+description:
+  fr: "Déployer Falco avec Helm en mode eBPF et Falcosidekick, puis écrire des règles de détection à l'exécution : shell lancé dans un conteneur, écriture sous /etc et connexion sortante inattendue."
+  en: "Deploy Falco with Helm in eBPF mode and Falcosidekick, then write runtime detection rules: a shell spawned in a container, a write under /etc and an unexpected outbound connection."
+duration: 30
+
+intro:
+  fr: |
+    Gatekeeper et Pod Security arrêtent les mauvaises configurations **avant** le démarrage. Mais une fois
+    qu'un conteneur tourne, que se passe-t-il si l'application est piratée et qu'un attaquant **ouvre un
+    shell** à l'intérieur ? L'admission ne voit plus rien : il faut une **alarme à l'exécution**. C'est
+    le rôle de **Falco**.
+
+    Reprenons l'immeuble : Gatekeeper est le portier qui filtre à l'entrée, Falco est le **système
+    d'alarme et de caméras** qui surveille ce qui se passe *à l'intérieur*. Falco observe les **appels
+    système** (via eBPF, une technologie du noyau Linux) et déclenche une alerte quand un comportement
+    correspond à une règle : un shell qui s'ouvre, un fichier système modifié, une connexion réseau
+    anormale.
+
+    **Falcosidekick** complète Falco : il reçoit les alertes et les **route** vers une destination (Slack,
+    un webhook, un fichier, un tableau de bord). Dans ce projet, on l'utilise pour centraliser et visualiser
+    les alertes de notre lab.
+  en: |
+    Gatekeeper and Pod Security stop misconfigurations **before** start-up. But once a container is
+    running, what happens if the application is hacked and an attacker **opens a shell** inside it?
+    Admission no longer sees anything: you need a **runtime alarm**. That is **Falco**.
+
+    Back to the building: Gatekeeper is the doorkeeper filtering at the entrance, Falco is the **alarm and
+    camera system** watching what happens *inside*. Falco observes **system calls** (via eBPF, a Linux
+    kernel technology) and raises an alert when a behaviour matches a rule: a shell opening, a system file
+    modified, an abnormal network connection.
+
+    **Falcosidekick** complements Falco: it receives the alerts and **routes** them to a destination
+    (Slack, a webhook, a file, a dashboard). In this project we use it to centralize and visualize our
+    lab's alerts.
+
+sections:
+  - heading:
+      fr: "Installer Falco en eBPF avec Helm"
+      en: "Install Falco in eBPF mode with Helm"
+    body:
+      fr: |
+        On installe Falco depuis son dépôt Helm officiel, en activant le **driver eBPF moderne** (sans
+        module noyau à compiler) et Falcosidekick :
+
+        ```bash
+        helm repo add falcosecurity https://falcosecurity.github.io/charts
+        helm install falco falcosecurity/falco \
+          --namespace falco --create-namespace \
+          --set driver.kind=modern_ebpf \
+          --set falcosidekick.enabled=true \
+          --set falcosidekick.webui.enabled=true
+        ```
+
+        Falco se déploie en **DaemonSet** : un agent par nœud, car les appels système se surveillent au
+        niveau de chaque machine. Le driver `modern_ebpf` utilise les sondes eBPF CO-RE du noyau, sans
+        compilation : c'est le choix recommandé sur un noyau récent.
+
+        Falco arrive avec des **règles par défaut** déjà très utiles. On va surtout **ajouter les nôtres**,
+        adaptées à notre application, dans un fichier `custom-rules.yaml` chargé via les valeurs Helm.
+      en: |
+        We install Falco from its official Helm repository, enabling the **modern eBPF driver** (no kernel
+        module to compile) and Falcosidekick:
+
+        ```bash
+        helm repo add falcosecurity https://falcosecurity.github.io/charts
+        helm install falco falcosecurity/falco \
+          --namespace falco --create-namespace \
+          --set driver.kind=modern_ebpf \
+          --set falcosidekick.enabled=true \
+          --set falcosidekick.webui.enabled=true
+        ```
+
+        Falco deploys as a **DaemonSet**: one agent per node, because system calls are watched at each
+        machine's level. The `modern_ebpf` driver uses the kernel's CO-RE eBPF probes, with no
+        compilation: the recommended choice on a recent kernel.
+
+        Falco ships with **default rules** that are already very useful. We will mostly **add our own**,
+        tailored to our application, in a `custom-rules.yaml` file loaded through the Helm values.
+  - heading:
+      fr: "Anatomie d'une règle Falco"
+      en: "Anatomy of a Falco rule"
+    body:
+      fr: |
+        Une règle Falco a quatre parties essentielles :
+
+        | Champ | Rôle |
+        |---|---|
+        | `rule` | Le nom de la règle |
+        | `condition` | L'expression qui déclenche l'alerte (sur les appels système) |
+        | `output` | Le message d'alerte, avec des champs dynamiques |
+        | `priority` | La gravité (`WARNING`, `CRITICAL`...) |
+
+        Les **macros** (`container`, `spawned_process`, `open_write`...) sont des morceaux de condition
+        réutilisables fournis par Falco ; les **listes** regroupent des valeurs (binaires de shell,
+        répertoires sensibles). Une condition typique combine ces briques :
+
+        ```yaml
+        condition: spawned_process and container and shell_procs
+        ```
+
+        On va écrire trois règles ciblées : **un shell lancé dans un conteneur**, **une écriture sous
+        `/etc`**, et **une connexion sortante vers une destination inattendue**. Chacune correspond à une
+        étape classique d'une attaque après compromission.
+      en: |
+        A Falco rule has four essential parts:
+
+        | Field | Role |
+        |---|---|
+        | `rule` | The rule name |
+        | `condition` | The expression that triggers the alert (on system calls) |
+        | `output` | The alert message, with dynamic fields |
+        | `priority` | The severity (`WARNING`, `CRITICAL`...) |
+
+        **Macros** (`container`, `spawned_process`, `open_write`...) are reusable condition fragments
+        provided by Falco; **lists** group values (shell binaries, sensitive directories). A typical
+        condition combines these bricks:
+
+        ```yaml
+        condition: spawned_process and container and shell_procs
+        ```
+
+        We will write three targeted rules: **a shell spawned in a container**, **a write under `/etc`**,
+        and **an outbound connection to an unexpected destination**. Each matches a classic step of a
+        post-compromise attack.
+
+examples:
+  - title:
+      fr: "Les valeurs Helm : eBPF + Falcosidekick + chargement des règles"
+      en: "The Helm values: eBPF + Falcosidekick + rule loading"
+    file: falco/values.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      driver:
+        # Modern eBPF: no kernel module to build, works on recent kernels
+        kind: modern_ebpf
+
+      falcosidekick:
+        enabled: true
+        webui:
+          enabled: true # small dashboard to browse the alerts in the lab
+
+      # Load our custom rules file in addition to the default ones
+      customRules:
+        custom-rules.yaml: |-
+          # This block is filled from falco/custom-rules.yaml (next example)
+          # Keep rules here or reference them; both are valid with the Helm chart.
+
+      falco:
+        # Also print alerts as JSON to stdout, easy to read with kubectl logs
+        json_output: true
+        log_level: info
+    note:
+      fr: "`driver.kind=modern_ebpf` évite toute compilation de module noyau. `json_output: true` rend les alertes lisibles par machine (utile pour un SIEM). Les règles personnalisées s'ajoutent aux règles par défaut, elles ne les remplacent pas."
+      en: "`driver.kind=modern_ebpf` avoids any kernel-module compilation. `json_output: true` makes alerts machine-readable (useful for a SIEM). Custom rules add to the default rules, they do not replace them."
+
+  - title:
+      fr: "Règle 1 : un shell lancé dans un conteneur"
+      en: "Rule 1: a shell spawned in a container"
+    file: falco/custom-rules.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # A list of shell binaries we consider suspicious inside a running container
+      - list: lab_shell_binaries
+        items: [bash, sh, zsh, ash, dash, ksh]
+
+      # A hardened container should never spawn an interactive shell at runtime.
+      # An attacker who gets code execution almost always drops into a shell first.
+      - rule: Shell spawned in a lab container
+        desc: Detect a shell process starting inside one of our application containers
+        condition: >
+          spawned_process
+          and container
+          and container.image.repository startswith "registry.example.com/"
+          and proc.name in (lab_shell_binaries)
+        output: >
+          Shell started in container
+          (user=%user.name container=%container.name image=%container.image.repository
+          proc=%proc.cmdline parent=%proc.pname)
+        priority: WARNING
+        tags: [container, shell, mitre_execution]
+    note:
+      fr: "La condition combine des macros Falco (`spawned_process`, `container`) et nos propres critères (image de notre registre, binaire dans la liste). Le champ `output` capture l'utilisateur, le conteneur et la ligne de commande : tout pour enquêter."
+      en: "The condition combines Falco macros (`spawned_process`, `container`) with our own criteria (image from our registry, binary in the list). The `output` field captures the user, container and command line: everything needed to investigate."
+
+  - title:
+      fr: "Règles 2 et 3 : écriture sous /etc et sortie inattendue"
+      en: "Rules 2 and 3: write under /etc and unexpected egress"
+    file: falco/custom-rules.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # A list of host/CIDRs the app is legitimately allowed to reach (example values)
+      - list: lab_allowed_outbound
+        items: ["10.0.0.0/8", "192.168.0.0/16"]
+
+      # Writing under /etc inside a container usually means tampering (new user, cron,
+      # modified sshd config). With a read-only root filesystem this should be impossible.
+      - rule: Write below etc in a lab container
+        desc: Detect a write to /etc inside one of our application containers
+        condition: >
+          open_write
+          and container
+          and container.image.repository startswith "registry.example.com/"
+          and fd.name startswith /etc
+        output: >
+          File below /etc opened for writing in container
+          (file=%fd.name container=%container.name proc=%proc.cmdline)
+        priority: CRITICAL
+        tags: [container, filesystem, mitre_persistence]
+
+      # An outbound connection to an address outside the allowed ranges can be
+      # exfiltration or a reverse shell callback.
+      - rule: Unexpected outbound connection from lab container
+        desc: Detect an egress connection to a destination outside the allowed ranges
+        condition: >
+          outbound
+          and container
+          and container.image.repository startswith "registry.example.com/"
+          and not fd.sip in (lab_allowed_outbound)
+        output: >
+          Unexpected outbound connection
+          (container=%container.name dest=%fd.sip:%fd.sport proc=%proc.cmdline)
+        priority: WARNING
+        tags: [container, network, mitre_exfiltration]
+    note:
+      fr: "Trois tactiques d'attaque couvertes : exécution (shell), persistance (écriture système) et exfiltration (sortie réseau). Les tags `mitre_*` relient chaque règle à une technique MITRE ATT&CK, pratique pour le reporting."
+      en: "Three attack tactics covered: execution (shell), persistence (system write) and exfiltration (network egress). The `mitre_*` tags map each rule to a MITRE ATT&CK technique, handy for reporting."
+
+  - title:
+      fr: "L'alerte produite quand on ouvre un shell dans le Pod"
+      en: "The alert produced when opening a shell in the Pod"
+    file: falco-alert.txt
+    lang: text
+    kind: neutral
+    code: |
+      # Trigger it on purpose in the lab:
+      #   kubectl exec -it deploy/web -n shop -- sh
+      # Then read Falco's alerts:
+      #   kubectl logs -n falco -l app.kubernetes.io/name=falco | grep "Shell started"
+
+      23:14:07.882 Warning Shell started in container
+      (user=root container=web image=registry.example.com/web
+      proc=sh parent=runc) tags=[container, shell, mitre_execution]
+    note:
+      fr: "`kubectl exec ... -- sh` déclenche la règle 1 en quelques millisecondes. L'alerte nomme le conteneur, l'image et le processus parent : on sait immédiatement *quoi* a été lancé et *où*. C'est exactement ce que l'on validera par un scénario d'attaque en leçon 5."
+      en: "`kubectl exec ... -- sh` triggers rule 1 within milliseconds. The alert names the container, image and parent process: you immediately know *what* was launched and *where*. This is exactly what a scenario will validate in lesson 5."
+
+mistake:
+  fr: |
+    **Prendre Falco pour un pare-feu qui bloque les attaques.**
+
+    Falco **détecte et alerte**, il ne bloque pas par lui-même. Si vous croyez qu'installer Falco « empêche »
+    le shell de s'ouvrir, vous êtes découvert. Pour bloquer, il faut agir sur l'alerte : une réponse
+    automatique (via Falcosidekick vers un outil de réponse), le durcissement en amont (système de
+    fichiers en lecture seule, qui *empêche* réellement l'écriture sous `/etc`) et le confinement manuel.
+    Détection et prévention sont deux couches complémentaires.
+  en: |
+    **Mistaking Falco for a firewall that blocks attacks.**
+
+    Falco **detects and alerts**, it does not block by itself. If you believe installing Falco "prevents"
+    the shell from opening, you are exposed. To block, you act on the alert: an automated response (via
+    Falcosidekick to a response tool), upstream hardening (a read-only filesystem, which actually
+    *prevents* writing under `/etc`) and manual containment. Detection and prevention are two
+    complementary layers.
+
+bestPractice:
+  fr: |
+    - **Utilisez le driver eBPF moderne** sur un noyau récent : pas de module à compiler, plus robuste.
+    - **Ajoutez vos règles, gardez les règles par défaut** : elles couvrent déjà de nombreux cas.
+    - **Ciblez vos conteneurs** (`container.image.repository startswith ...`) pour réduire les faux positifs.
+    - **Sortez les alertes en JSON** et routez-les avec Falcosidekick vers un endroit central (SIEM, webhook).
+    - **Taguez avec MITRE ATT&CK** pour relier chaque détection à une technique et faciliter le reporting.
+    - **Rappelez-vous** : Falco détecte ; la prévention (securityContext, NetworkPolicy) reste indispensable.
+  en: |
+    - **Use the modern eBPF driver** on a recent kernel: no module to compile, more robust.
+    - **Add your rules, keep the defaults**: they already cover many cases.
+    - **Target your containers** (`container.image.repository startswith ...`) to reduce false positives.
+    - **Output alerts in JSON** and route them with Falcosidekick to a central place (SIEM, webhook).
+    - **Tag with MITRE ATT&CK** to map each detection to a technique and ease reporting.
+    - **Remember**: Falco detects; prevention (securityContext, NetworkPolicy) remains essential.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez détecter quand quelqu'un lit le fichier des comptes `/etc/shadow` **à l'intérieur** d'un
+      de vos conteneurs (une étape fréquente de collecte d'identifiants).
+
+      Écrivez une règle Falco `Read sensitive shadow file in lab container` de priorité `CRITICAL` qui se
+      déclenche sur une ouverture en lecture de `/etc/shadow` dans un conteneur de votre registre.
+    en: |
+      You want to detect when someone reads the accounts file `/etc/shadow` **inside** one of your
+      containers (a common credential-collection step).
+
+      Write a Falco rule `Read sensitive shadow file in lab container` with `CRITICAL` priority that fires
+      on a read-open of `/etc/shadow` in a container from your registry.
+  solution:
+    file: shadow-read-rule.yaml
+    lang: yaml
+    code: |
+      - rule: Read sensitive shadow file in lab container
+        desc: Detect a read of /etc/shadow inside one of our application containers
+        condition: >
+          open_read
+          and container
+          and container.image.repository startswith "registry.example.com/"
+          and fd.name = /etc/shadow
+        output: >
+          Sensitive file /etc/shadow read in container
+          (user=%user.name container=%container.name proc=%proc.cmdline)
+        priority: CRITICAL
+        tags: [container, filesystem, mitre_credential_access]
+    note:
+      fr: "`open_read` est la macro Falco pour une ouverture en lecture ; `fd.name = /etc/shadow` cible le fichier exact. Le tag `mitre_credential_access` relie la règle à la tactique d'accès aux identifiants d'ATT&CK."
+      en: "`open_read` is the Falco macro for a read-open; `fd.name = /etc/shadow` targets the exact file. The `mitre_credential_access` tag maps the rule to the ATT&CK credential-access tactic."
+
+quiz:
+  - q:
+      fr: "Que fait Falco face à une attaque ?"
+      en: "What does Falco do when faced with an attack?"
+    options:
+      fr:
+        - "Il bloque automatiquement l'appel système"
+        - "Il détecte le comportement et émet une alerte"
+        - "Il supprime le conteneur"
+        - "Il chiffre les fichiers sensibles"
+      en:
+        - "It automatically blocks the system call"
+        - "It detects the behaviour and raises an alert"
+        - "It deletes the container"
+        - "It encrypts sensitive files"
+    answer: 1
+    why:
+      fr: "Falco est un outil de détection à l'exécution : il observe les appels système et alerte. Le blocage relève d'autres couches (durcissement, réponse automatique)."
+      en: "Falco is a runtime detection tool: it observes system calls and alerts. Blocking is the job of other layers (hardening, automated response)."
+  - q:
+      fr: "Pourquoi Falco se déploie-t-il en DaemonSet ?"
+      en: "Why is Falco deployed as a DaemonSet?"
+    options:
+      fr:
+        - "Pour avoir un agent par nœud, car les appels système se surveillent sur chaque machine"
+        - "Pour équilibrer la charge HTTP"
+        - "Parce que Helm l'impose"
+        - "Pour chiffrer le trafic entre nœuds"
+      en:
+        - "To have one agent per node, because system calls are watched on each machine"
+        - "To balance HTTP load"
+        - "Because Helm requires it"
+        - "To encrypt inter-node traffic"
+    answer: 0
+    why:
+      fr: "Les appels système sont locaux à chaque nœud ; un DaemonSet garantit un agent Falco sur chaque machine du cluster."
+      en: "System calls are local to each node; a DaemonSet guarantees a Falco agent on every machine in the cluster."
+  - q:
+      fr: "À quoi sert Falcosidekick ?"
+      en: "What is Falcosidekick for?"
+    options:
+      fr:
+        - "À compiler le driver eBPF"
+        - "À écrire les règles à la place de l'utilisateur"
+        - "À recevoir les alertes de Falco et les router vers une destination (webhook, Slack, UI)"
+        - "À remplacer Gatekeeper"
+      en:
+        - "To compile the eBPF driver"
+        - "To write the rules for the user"
+        - "To receive Falco alerts and route them to a destination (webhook, Slack, UI)"
+        - "To replace Gatekeeper"
+    answer: 2
+    why:
+      fr: "Falcosidekick prend les alertes de Falco et les envoie vers des sorties variées, dont une interface web pour les visualiser."
+      en: "Falcosidekick takes Falco alerts and forwards them to various outputs, including a web UI to visualize them."
+  - q:
+      fr: "Dans une règle Falco, que contient le champ `condition` ?"
+      en: "In a Falco rule, what does the `condition` field contain?"
+    options:
+      fr:
+        - "Le message d'alerte final"
+        - "L'expression (macros, champs, listes) qui déclenche l'alerte"
+        - "La priorité de la règle"
+        - "La liste des nœuds surveillés"
+      en:
+        - "The final alert message"
+        - "The expression (macros, fields, lists) that triggers the alert"
+        - "The rule priority"
+        - "The list of watched nodes"
+    answer: 1
+    why:
+      fr: "`condition` est l'expression booléenne évaluée sur les événements système ; `output` porte le message et `priority` la gravité."
+      en: "`condition` is the boolean expression evaluated on system events; `output` carries the message and `priority` the severity."
+  - q:
+      fr: "Pourquoi cibler `container.image.repository startswith \"registry.example.com/\"` dans les règles ?"
+      en: "Why target `container.image.repository startswith \"registry.example.com/\"` in the rules?"
+    options:
+      fr:
+        - "Pour chiffrer les images"
+        - "Pour réduire les faux positifs en se concentrant sur nos propres conteneurs"
+        - "Parce que Falco ne voit que ce registre"
+        - "Pour accélérer le démarrage de Falco"
+      en:
+        - "To encrypt the images"
+        - "To reduce false positives by focusing on our own containers"
+        - "Because Falco only sees that registry"
+        - "To speed up Falco start-up"
+    answer: 1
+    why:
+      fr: "Restreindre aux images de notre registre évite d'alerter sur des conteneurs système au comportement légitime, et cible le périmètre que l'on maîtrise."
+      en: "Restricting to our registry's images avoids alerting on system containers with legitimate behaviour, and targets the scope we control."

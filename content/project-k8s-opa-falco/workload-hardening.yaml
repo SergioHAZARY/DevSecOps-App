@@ -1,0 +1,484 @@
+description:
+  fr: "Durcir les workloads du cluster : ServiceAccount et RBAC au moindre privilège, NetworkPolicy « default deny » puis règles d'autorisation, et un Deployment avec un securityContext conforme au niveau restricted."
+  en: "Harden the cluster workloads: least-privilege ServiceAccount and RBAC, a 'default deny' NetworkPolicy then allow rules, and a Deployment with a securityContext that meets the restricted level."
+duration: 25
+
+intro:
+  fr: |
+    Le cluster existe et le namespace `shop` applique déjà le niveau `restricted` (leçon 1). Il est temps
+    d'y déployer une application **correctement durcie**. Reprenons l'image de l'immeuble sécurisé : on
+    installe maintenant les **serrures sur chaque porte** (le `securityContext`), on donne à chaque
+    locataire **une seule clé pour sa propre pièce** (RBAC au moindre privilège), et on **ferme tous les
+    couloirs** sauf ceux qui sont nécessaires (NetworkPolicy).
+
+    Trois piliers se complètent ici :
+
+    - **Identité** : chaque application a son propre ServiceAccount avec des droits minimaux.
+    - **Réseau** : par défaut, un Pod peut parler à tous les autres ; on inverse cela avec un « default deny ».
+    - **Exécution** : le conteneur tourne sans root, sans privilèges, en système de fichiers en lecture seule.
+
+    Tout est écrit dans le dossier `workloads/` du dépôt, et chaque manifeste passera le contrôle
+    d'admission `restricted` sans broncher.
+  en: |
+    The cluster exists and the `shop` namespace already enforces the `restricted` level (lesson 1). Time
+    to deploy a **properly hardened** application into it. Back to the secured-building image: we now fit
+    **locks on every door** (the `securityContext`), give each tenant **a single key to their own room**
+    (least-privilege RBAC), and **close every corridor** except the needed ones (NetworkPolicy).
+
+    Three pillars reinforce each other here:
+
+    - **Identity**: each application has its own ServiceAccount with minimal rights.
+    - **Network**: by default a Pod can talk to every other; we flip that with a "default deny".
+    - **Runtime**: the container runs non-root, without privileges, on a read-only filesystem.
+
+    Everything lives in the repo's `workloads/` folder, and each manifest will pass the `restricted`
+    admission control without complaint.
+
+sections:
+  - heading:
+      fr: "Identité : ServiceAccount et RBAC au moindre privilège"
+      en: "Identity: least-privilege ServiceAccount and RBAC"
+    body:
+      fr: |
+        Par défaut, chaque Pod reçoit le ServiceAccount `default` du namespace et un **jeton** monté
+        automatiquement. Si l'application n'appelle pas l'API Kubernetes, ce jeton est une **surface
+        d'attaque inutile** : un attaquant qui prend le Pod peut s'en servir.
+
+        Deux règles :
+
+        1. **Un ServiceAccount dédié par application**, jamais `default`.
+        2. **`automountServiceAccountToken: false`** si l'application n'a pas besoin de parler à l'API.
+
+        Quand des droits sont vraiment nécessaires, on les donne avec un **Role** (limité au namespace) et
+        un **RoleBinding**, en listant exactement les verbes et ressources permis — jamais de joker `*`,
+        jamais `cluster-admin`. On vérifie toujours avec `kubectl auth can-i`.
+      en: |
+        By default every Pod receives the namespace's `default` ServiceAccount and an automatically mounted
+        **token**. If the application does not call the Kubernetes API, that token is a **useless attack
+        surface**: an attacker who takes the Pod can use it.
+
+        Two rules:
+
+        1. **One dedicated ServiceAccount per application**, never `default`.
+        2. **`automountServiceAccountToken: false`** if the application does not need to talk to the API.
+
+        When rights are genuinely needed, grant them with a **Role** (scoped to the namespace) and a
+        **RoleBinding**, listing exactly the allowed verbs and resources — never a `*` wildcard, never
+        `cluster-admin`. Always verify with `kubectl auth can-i`.
+  - heading:
+      fr: "Réseau et exécution : fermer, puis ouvrir juste ce qu'il faut"
+      en: "Network and runtime: close, then open only what is needed"
+    body:
+      fr: |
+        Côté **réseau**, le comportement par défaut de Kubernetes est dangereux : **tout Pod peut joindre
+        tout Pod**, même entre namespaces. On commence donc par une NetworkPolicy qui sélectionne tous les
+        Pods (`podSelector: {}`) et n'autorise **rien** en entrée ni en sortie. Puis on ouvre, flux par
+        flux, ce dont l'application a besoin — sans oublier le **DNS** (port 53), sinon plus aucune
+        résolution de nom ne fonctionne.
+
+        Côté **exécution**, le `securityContext` traduit en pratique le niveau `restricted` :
+
+        | Réglage | Effet |
+        |---|---|
+        | `runAsNonRoot: true` | Interdit l'exécution en root |
+        | `allowPrivilegeEscalation: false` | Empêche de regagner des privilèges |
+        | `readOnlyRootFilesystem: true` | L'attaquant ne peut pas déposer ses outils |
+        | `capabilities.drop: ["ALL"]` | Retire tous les droits spéciaux du noyau |
+        | `seccompProfile: RuntimeDefault` | Filtre les appels système dangereux |
+      en: |
+        On the **network** side, Kubernetes' default behaviour is dangerous: **any Pod can reach any
+        Pod**, even across namespaces. So we start with a NetworkPolicy that selects every Pod
+        (`podSelector: {}`) and allows **nothing** in or out. Then we open, flow by flow, what the
+        application needs — without forgetting **DNS** (port 53), otherwise name resolution stops working.
+
+        On the **runtime** side, the `securityContext` puts the `restricted` level into practice:
+
+        | Setting | Effect |
+        |---|---|
+        | `runAsNonRoot: true` | Forbids running as root |
+        | `allowPrivilegeEscalation: false` | Prevents regaining privileges |
+        | `readOnlyRootFilesystem: true` | The attacker cannot drop their tools |
+        | `capabilities.drop: ["ALL"]` | Removes all special kernel rights |
+        | `seccompProfile: RuntimeDefault` | Filters dangerous system calls |
+
+examples:
+  - title:
+      fr: "ServiceAccount et RBAC au moindre privilège"
+      en: "Least-privilege ServiceAccount and RBAC"
+    file: workloads/rbac.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: web
+        namespace: shop
+      # No token mounted by default at the SA level; the Pod will also opt out
+      automountServiceAccountToken: false
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: web-config-reader
+        namespace: shop
+      rules:
+        # The app only needs to read one kind of object: nothing else is granted
+        - apiGroups: [""]
+          resources: ["configmaps"]
+          verbs: ["get", "list", "watch"] # read-only, no create/delete, no wildcard
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: web-config-reader
+        namespace: shop
+      subjects:
+        - kind: ServiceAccount
+          name: web
+          namespace: shop
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: web-config-reader
+      # Verify: kubectl auth can-i list configmaps -n shop \
+      #   --as=system:serviceaccount:shop:web   -> yes
+      # Verify: kubectl auth can-i get secrets -n shop \
+      #   --as=system:serviceaccount:shop:web   -> no
+    note:
+      fr: "Un **Role** (et non un ClusterRole) limite l'accès au seul namespace `shop`. On n'autorise que la lecture des ConfigMaps : toute autre action, comme lire les Secrets, est refusée."
+      en: "A **Role** (not a ClusterRole) restricts access to the `shop` namespace only. We allow only reading ConfigMaps: any other action, such as reading Secrets, is denied."
+
+  - title:
+      fr: "NetworkPolicy : default deny puis autorisations ciblées"
+      en: "NetworkPolicy: default deny then targeted allows"
+    file: workloads/networkpolicies.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # 1. Default deny: selects every Pod in shop, allows nothing in or out
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-all
+        namespace: shop
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+          - Egress
+      ---
+      # 2. Allow DNS egress to kube-system: without this, nothing resolves any more
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-dns-egress
+        namespace: shop
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Egress
+        egress:
+          - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+            ports:
+              - protocol: UDP
+                port: 53
+              - protocol: TCP
+                port: 53
+      ---
+      # 3. Allow ingress to web Pods only on port 8080, only from inside shop
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: web-allow-ingress
+        namespace: shop
+      spec:
+        podSelector:
+          matchLabels:
+            app: web
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - podSelector: {}
+            ports:
+              - protocol: TCP
+                port: 8080
+    note:
+      fr: "L'ordre compte dans la tête, pas dans le fichier : on **ferme tout**, puis on rouvre le DNS et le port applicatif. L'oubli classique après un default deny en sortie est le DNS — le Pod ne résout plus aucun nom."
+      en: "The order matters in your head, not in the file: **close everything**, then reopen DNS and the app port. The classic omission after an egress default deny is DNS — the Pod can no longer resolve any name."
+
+  - title:
+      fr: "Le Deployment durci (niveau restricted)"
+      en: "The hardened Deployment (restricted level)"
+    file: workloads/web-deployment.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+        namespace: shop
+        labels:
+          app: web
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: web
+        template:
+          metadata:
+            labels:
+              app: web
+          spec:
+            serviceAccountName: web
+            automountServiceAccountToken: false # the web app does not call the K8s API
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 10001
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: web
+                # Pinned minor tag from an allowed registry (no :latest)
+                image: registry.example.com/web:1.4.2
+                ports:
+                  - containerPort: 8080
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    memory: 128Mi
+                volumeMounts:
+                  - name: tmp
+                    mountPath: /tmp
+                readinessProbe:
+                  httpGet:
+                    path: /
+                    port: 8080
+            volumes:
+              # The read-only root filesystem still needs a writable scratch dir
+              - name: tmp
+                emptyDir: {}
+    note:
+      fr: "Ce Pod passe le niveau `restricted` sans modification. Le `emptyDir` sur `/tmp` est l'astuce qui permet un système de fichiers racine en lecture seule tout en laissant un espace temporaire inscriptible."
+      en: "This Pod passes the `restricted` level unchanged. The `emptyDir` on `/tmp` is the trick that allows a read-only root filesystem while still giving a writable scratch space."
+
+  - title:
+      fr: "Contre-exemple : le même Deployment, non durci (refusé)"
+      en: "Counter-example: the same Deployment, unhardened (rejected)"
+    file: workloads/web-deployment-bad.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web-bad
+        namespace: shop
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: web-bad
+        template:
+          metadata:
+            labels:
+              app: web-bad
+          spec:
+            containers:
+              - name: web
+                image: registry.example.com/web:latest # mutable tag
+                securityContext:
+                  privileged: true # full access to the host node
+                  # runs as root, no dropped capabilities, writable root fs
+    output: |
+      Error from server (Forbidden): error when creating "workloads/web-deployment-bad.yaml":
+      pods "web-bad-..." is forbidden: violates PodSecurity "restricted:latest":
+      privileged (container "web" must not set securityContext.privileged=true),
+      allowPrivilegeEscalation != false, unrestricted capabilities, runAsNonRoot != true,
+      seccompProfile
+    note:
+      fr: "À appliquer dans le namespace `shop` pour voir le refus en direct : Pod Security Admission liste **chaque** violation. C'est la preuve que le niveau `restricted` protège sans outil tiers — avant même Gatekeeper (leçon 3)."
+      en: "Apply it in the `shop` namespace to see the rejection live: Pod Security Admission lists **every** violation. It proves the `restricted` level protects without a third-party tool — even before Gatekeeper (lesson 3)."
+
+mistake:
+  fr: |
+    **Oublier d'autoriser le DNS après un « default deny » en sortie.**
+
+    C'est l'erreur qui fait perdre une heure à tout le monde. Vous appliquez `default-deny-all`, tout a
+    l'air bien, puis l'application ne démarre plus : elle n'arrive plus à résoudre le nom d'un service
+    (base de données, API interne). La cause : le trafic DNS (UDP et TCP port 53 vers `kube-system`) est
+    bloqué par le default deny en sortie. Il faut **explicitement** le rouvrir.
+  en: |
+    **Forgetting to allow DNS after an egress "default deny".**
+
+    This is the mistake that costs everyone an hour. You apply `default-deny-all`, everything looks fine,
+    then the application stops starting: it can no longer resolve a service name (database, internal API).
+    The cause: DNS traffic (UDP and TCP port 53 to `kube-system`) is blocked by the egress default deny.
+    You must **explicitly** reopen it.
+
+bestPractice:
+  fr: |
+    - **Un ServiceAccount dédié par application**, et `automountServiceAccountToken: false` si l'API
+      Kubernetes n'est pas appelée.
+    - **RBAC sans joker** : listez verbes et ressources exacts, préférez un Role à un ClusterRole.
+    - **Commencez par un default deny réseau**, puis ouvrez flux par flux, DNS compris.
+    - **Récitez le `securityContext` de mémoire** : `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      `readOnlyRootFilesystem`, `drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+    - **Vérifiez par une commande** : `kubectl auth can-i`, puis appliquez le manifeste non durci pour
+      lire le refus.
+  en: |
+    - **One dedicated ServiceAccount per application**, and `automountServiceAccountToken: false` if the
+      Kubernetes API is not called.
+    - **RBAC without wildcards**: list exact verbs and resources, prefer a Role over a ClusterRole.
+    - **Start with a network default deny**, then open flow by flow, DNS included.
+    - **Recite the `securityContext` from memory**: `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      `readOnlyRootFilesystem`, `drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+    - **Verify with a command**: `kubectl auth can-i`, then apply the unhardened manifest to read the
+      rejection.
+
+exercise:
+  statement:
+    fr: |
+      Après avoir appliqué `default-deny-all` et `allow-dns-egress` dans `shop`, l'application `web` doit
+      pouvoir joindre une base de données `db` (dans le même namespace) sur le port **5432**.
+
+      Écrivez la NetworkPolicy qui **autorise en sortie** les Pods `app: web` à joindre les Pods `app: db`
+      sur le port 5432, sans rien ouvrir d'autre.
+    en: |
+      After applying `default-deny-all` and `allow-dns-egress` in `shop`, the `web` application must be
+      able to reach a `db` database (in the same namespace) on port **5432**.
+
+      Write the NetworkPolicy that **allows egress** from `app: web` Pods to `app: db` Pods on port 5432,
+      without opening anything else.
+  solution:
+    file: web-to-db-egress.yaml
+    lang: yaml
+    code: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: web-allow-db-egress
+        namespace: shop
+      spec:
+        # This policy applies to the web Pods
+        podSelector:
+          matchLabels:
+            app: web
+        policyTypes:
+          - Egress
+        egress:
+          # Only to the db Pods, only on the PostgreSQL port
+          - to:
+              - podSelector:
+                  matchLabels:
+                    app: db
+            ports:
+              - protocol: TCP
+                port: 5432
+    note:
+      fr: "Les politiques sont **additives** : celle-ci s'ajoute à `allow-dns-egress`. Le web peut donc résoudre les noms (DNS) **et** joindre la base sur 5432, mais rien d'autre. La base doit aussi autoriser cet ingress de son côté."
+      en: "Policies are **additive**: this one adds to `allow-dns-egress`. So web can resolve names (DNS) **and** reach the database on 5432, but nothing else. The database must also allow this ingress on its side."
+
+quiz:
+  - q:
+      fr: "Pourquoi mettre `automountServiceAccountToken: false` sur un Pod qui n'appelle pas l'API ?"
+      en: "Why set `automountServiceAccountToken: false` on a Pod that does not call the API?"
+    options:
+      fr:
+        - "Pour accélérer le démarrage du Pod"
+        - "Pour supprimer un jeton inutile qui serait une surface d'attaque en cas de compromission"
+        - "Parce que c'est obligatoire au niveau restricted"
+        - "Pour réduire la taille de l'image"
+      en:
+        - "To speed up Pod start-up"
+        - "To remove a useless token that would be an attack surface if the Pod is compromised"
+        - "Because it is mandatory at the restricted level"
+        - "To reduce the image size"
+    answer: 1
+    why:
+      fr: "Un jeton de ServiceAccount monté sans raison peut être volé par un attaquant qui prend le Pod. Si l'application n'appelle pas l'API, on le retire."
+      en: "A ServiceAccount token mounted for no reason can be stolen by an attacker who takes the Pod. If the application does not call the API, remove it."
+  - q:
+      fr: "Que bloque une NetworkPolicy avec `podSelector: {}`, `policyTypes: [Ingress, Egress]` et aucune règle ?"
+      en: "What does a NetworkPolicy with `podSelector: {}`, `policyTypes: [Ingress, Egress]` and no rules block?"
+    options:
+      fr:
+        - "Tout le trafic entrant et sortant de tous les Pods du namespace"
+        - "Rien, c'est une politique vide"
+        - "Seulement le trafic entre namespaces"
+        - "Seulement le trafic HTTP"
+      en:
+        - "All inbound and outbound traffic for every Pod in the namespace"
+        - "Nothing, it is an empty policy"
+        - "Only cross-namespace traffic"
+        - "Only HTTP traffic"
+    answer: 0
+    why:
+      fr: "Le sélecteur vide cible tous les Pods ; sans règle ingress ni egress, rien n'est autorisé : c'est le « default deny »."
+      en: "The empty selector targets all Pods; with no ingress or egress rule, nothing is allowed: this is the \"default deny\"."
+  - q:
+      fr: "Quel réglage du securityContext empêche un attaquant de déposer ses outils dans le conteneur ?"
+      en: "Which securityContext setting stops an attacker from dropping their tools in the container?"
+    options:
+      fr:
+        - "runAsUser: 10001"
+        - "readOnlyRootFilesystem: true"
+        - "replicas: 2"
+        - "seccompProfile: RuntimeDefault"
+      en:
+        - "runAsUser: 10001"
+        - "readOnlyRootFilesystem: true"
+        - "replicas: 2"
+        - "seccompProfile: RuntimeDefault"
+    answer: 1
+    why:
+      fr: "Un système de fichiers racine en lecture seule empêche d'écrire de nouveaux binaires ; `emptyDir` fournit un espace inscriptible contrôlé pour `/tmp`."
+      en: "A read-only root filesystem prevents writing new binaries; `emptyDir` provides a controlled writable space for `/tmp`."
+  - q:
+      fr: "Après un default deny en sortie, qu'oublie-t-on le plus souvent de rouvrir ?"
+      en: "After an egress default deny, what is most often forgotten to reopen?"
+    options:
+      fr:
+        - "Le port 22 (SSH)"
+        - "Le port 80 (HTTP)"
+        - "Le port 53 (DNS) vers kube-system"
+        - "Le port 443 (HTTPS)"
+      en:
+        - "Port 22 (SSH)"
+        - "Port 80 (HTTP)"
+        - "Port 53 (DNS) to kube-system"
+        - "Port 443 (HTTPS)"
+    answer: 2
+    why:
+      fr: "Sans sortie DNS autorisée, le Pod ne résout plus aucun nom de service et l'application semble « cassée » sans erreur évidente."
+      en: "Without allowed DNS egress, the Pod can no longer resolve any service name and the app looks \"broken\" with no obvious error."
+  - q:
+      fr: "Pourquoi préférer un Role plutôt qu'un ClusterRole pour l'application web ?"
+      en: "Why prefer a Role over a ClusterRole for the web application?"
+    options:
+      fr:
+        - "Un Role est plus rapide à appliquer"
+        - "Un ClusterRole n'existe pas dans Kubernetes"
+        - "Un Role limite les droits au seul namespace, respectant le moindre privilège"
+        - "Un Role est chiffré, pas un ClusterRole"
+      en:
+        - "A Role is faster to apply"
+        - "A ClusterRole does not exist in Kubernetes"
+        - "A Role restricts rights to a single namespace, respecting least privilege"
+        - "A Role is encrypted, a ClusterRole is not"
+    answer: 2
+    why:
+      fr: "Un Role est limité à son namespace. Un ClusterRole donnerait des droits sur tout le cluster, ce qui dépasse le besoin de l'application."
+      en: "A Role is scoped to its namespace. A ClusterRole would grant rights across the whole cluster, exceeding the application's need."

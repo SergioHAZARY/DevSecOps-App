@@ -1,0 +1,524 @@
+description:
+  fr: "Tester ses politiques Rego avec opa test et des fichiers _test.rego, mesurer la couverture, formater avec opa fmt, lint avec Regal et intégrer le tout en CI GitHub Actions."
+  en: "Test Rego policies with opa test and _test.rego files, measure coverage, format with opa fmt, lint with Regal and wire it all into GitHub Actions CI."
+duration: 25
+
+intro:
+  fr: |
+    Une politique de sécurité est du code : si elle n'est pas testée, elle finit par « autoriser tout » le
+    jour où une refactorisation casse une règle, sans que personne ne s'en aperçoive. Pire qu'un bug normal,
+    une politique défaillante échoue en silence : elle laisse passer au lieu de planter.
+
+    L'analogie : les **freins d'une voiture**. On ne les monte pas en espérant qu'ils marchent ; on les
+    teste sur un banc avant de rouler. Rego possède son propre banc d'essai, **`opa test`**, qui exécute
+    des cas écrits en... Rego. On vérifie à la fois qu'une requête légitime est **autorisée** et qu'une
+    requête malveillante est bien **refusée** — ce second test est le plus important.
+
+    Dans cette leçon vous allez écrire des fichiers `*_test.rego` avec le mot-clé `with input as`, mesurer
+    la **couverture**, formater automatiquement avec `opa fmt`, détecter les mauvaises pratiques avec le
+    linter **Regal**, et assembler un *job* GitHub Actions qui lance tout cela à chaque *pull request*.
+  en: |
+    A security policy is code: if it is not tested, it eventually "allows everything" the day a refactor
+    breaks a rule, with nobody noticing. Worse than an ordinary bug, a broken policy fails silently: it
+    lets things through instead of crashing.
+
+    The analogy: a **car's brakes**. You do not fit them hoping they work; you test them on a bench before
+    driving. Rego has its own test bench, **`opa test`**, which runs cases written in... Rego. You check
+    both that a legitimate request is **allowed** and that a malicious one is indeed **denied** — the
+    second test is the most important one.
+
+    In this lesson you will write `*_test.rego` files using the `with input as` keyword, measure
+    **coverage**, auto-format with `opa fmt`, catch bad practices with the **Regal** linter, and assemble
+    a GitHub Actions *job* that runs all of it on every *pull request*.
+
+sections:
+  - heading:
+      fr: "opa test et les fichiers _test.rego"
+      en: "opa test and _test.rego files"
+    body:
+      fr: |
+        `opa test` exécute toute règle dont le nom commence par **`test_`**. Un test réussit si sa règle
+        vaut `true` (et n'est pas `undefined`). On place ces règles dans des fichiers suffixés `_test.rego`,
+        à côté de la politique, dans le même package ou un package `_test` qui l'importe.
+
+        L'outil clé est l'opérateur **`with`**, qui remplace `input` (ou `data`) le temps d'une expression :
+
+        ```rego
+        test_admin_is_allowed if {
+            allow with input as {"user": {"role": "admin"}}
+        }
+
+        test_anonymous_is_denied if {
+            not allow with input as {"user": {"role": "guest"}, "method": "POST", "path": "/admin"}
+        }
+        ```
+
+        On lance `opa test . -v` (le `.` charge le dossier courant, `-v` détaille chaque cas). Règle d'or :
+        **pour chaque règle, au moins un test qui autorise et un test qui refuse**. Le test « refuse » (avec
+        `not`) protège contre la régression la plus dangereuse : une politique qui, après modification,
+        dirait oui à tout.
+      en: |
+        `opa test` runs any rule whose name starts with **`test_`**. A test passes if its rule is `true`
+        (and not `undefined`). You put these rules in files suffixed `_test.rego`, next to the policy, in
+        the same package or in a `_test` package that imports it.
+
+        The key tool is the **`with`** operator, which replaces `input` (or `data`) for one expression:
+
+        ```rego
+        test_admin_is_allowed if {
+            allow with input as {"user": {"role": "admin"}}
+        }
+
+        test_anonymous_is_denied if {
+            not allow with input as {"user": {"role": "guest"}, "method": "POST", "path": "/admin"}
+        }
+        ```
+
+        You run `opa test . -v` (the `.` loads the current directory, `-v` details each case). Golden rule:
+        **for each rule, at least one test that allows and one that denies**. The "deny" test (with `not`)
+        guards against the most dangerous regression: a policy that, after a change, would say yes to
+        everything.
+  - heading:
+      fr: "Couverture, formatage et lint"
+      en: "Coverage, formatting and linting"
+    body:
+      fr: |
+        Trois outils complètent les tests :
+
+        - **Couverture** : `opa test --coverage --format=json .` indique quelles lignes de vos règles ont
+          été exécutées par les tests. Une règle `deny` jamais couverte est une règle dont on ne sait pas si
+          elle marche. Visez une couverture élevée sur les règles de décision.
+        - **Formatage** : `opa fmt -w .` réécrit les fichiers dans le style canonique (indentation,
+          alignement). En CI, `opa fmt --list .` échoue si un fichier n'est pas formaté : fini les débats de
+          style en relecture.
+        - **Lint** : **Regal** est le linter de référence pour Rego (par l'équipe Styra). Il repère les
+          anti-patterns (`input` non vérifié, règles non utilisées, syntaxe v0 oubliée, noms trompeurs) que
+          `opa test` ne voit pas. On l'installe séparément et on lance `regal lint policy/`.
+
+        | Outil | Question à laquelle il répond |
+        |---|---|
+        | `opa test` | « Mes règles donnent-elles la bonne décision ? » |
+        | `opa test --coverage` | « Mes tests exercent-ils vraiment chaque règle ? » |
+        | `opa fmt` | « Le style est-il uniforme ? » |
+        | `regal lint` | « Y a-t-il des pièges ou des mauvaises pratiques ? » |
+      en: |
+        Three tools complete the tests:
+
+        - **Coverage**: `opa test --coverage --format=json .` shows which lines of your rules were executed
+          by the tests. A `deny` rule never covered is a rule you do not know works. Aim for high coverage
+          on decision rules.
+        - **Formatting**: `opa fmt -w .` rewrites files in the canonical style (indentation, alignment). In
+          CI, `opa fmt --list .` fails if a file is not formatted: no more style debates in review.
+        - **Linting**: **Regal** is the reference linter for Rego (by the Styra team). It spots
+          anti-patterns (`input` not checked, unused rules, forgotten v0 syntax, misleading names) that
+          `opa test` does not see. You install it separately and run `regal lint policy/`.
+
+        | Tool | Question it answers |
+        |---|---|
+        | `opa test` | "Do my rules give the right decision?" |
+        | `opa test --coverage` | "Do my tests really exercise each rule?" |
+        | `opa fmt` | "Is the style uniform?" |
+        | `regal lint` | "Are there traps or bad practices?" |
+  - heading:
+      fr: "Intégrer en CI"
+      en: "Wiring it into CI"
+    body:
+      fr: |
+        L'objectif : qu'aucune politique non testée, mal formatée ou signalée par le linter ne soit
+        fusionnée. Un *job* GitHub Actions enchaîne quatre étapes, du plus rapide au plus lent, pour un
+        retour immédiat :
+
+        1. `opa fmt --list .` — échoue si un fichier n'est pas formaté (instantané) ;
+        2. `regal lint policy/` — anti-patterns (quelques secondes) ;
+        3. `opa test . -v` — les tests unitaires de politiques ;
+        4. `conftest test` — les politiques appliquées aux plans/Dockerfiles réels (leçon précédente).
+
+        Deux principes DevSecOps s'appliquent au workflow lui-même : **moindre privilège**
+        (`permissions: contents: read`) et **versions épinglées** des actions et des binaires
+        (`OPA v1.9.0`, `Regal v0.36.0`), pour que la CI d'aujourd'hui donne le même verdict dans six mois.
+        Comme `opa` et `regal` sont des binaires statiques uniques, on les télécharge en une ligne, sans
+        installer de runtime.
+      en: |
+        The goal: no untested, badly formatted or linter-flagged policy gets merged. A GitHub Actions *job*
+        chains four steps, fastest to slowest, for immediate feedback:
+
+        1. `opa fmt --list .` — fails if a file is not formatted (instant);
+        2. `regal lint policy/` — anti-patterns (a few seconds);
+        3. `opa test . -v` — the policy unit tests;
+        4. `conftest test` — the policies applied to real plans/Dockerfiles (previous lesson).
+
+        Two DevSecOps principles apply to the workflow itself: **least privilege**
+        (`permissions: contents: read`) and **pinned versions** of actions and binaries (`OPA v1.9.0`,
+        `Regal v0.36.0`), so that today's CI gives the same verdict in six months. Since `opa` and `regal`
+        are single static binaries, you download them in one line, with no runtime to install.
+
+examples:
+  - title:
+      fr: "La politique à tester"
+      en: "The policy under test"
+    file: authz.rego
+    lang: rego
+    kind: secure
+    code: |
+      package authz
+
+      import rego.v1
+
+      default allow := false
+
+      # Admins may do anything
+      allow if input.user.role == "admin"
+
+      # Everyone may read non-admin paths
+      allow if {
+          input.method == "GET"
+          not startswith(input.path, "/admin")
+      }
+    note:
+      fr: "Cette politique a trois comportements à couvrir : l'autorisation admin, la lecture publique, et le refus par défaut. Chacun mérite au moins un test, dont un test de **refus**."
+      en: "This policy has three behaviours to cover: admin authorization, public read, and deny by default. Each deserves at least one test, including a **deny** test."
+
+  - title:
+      fr: "Les tests : autoriser ET refuser, avec with input as"
+      en: "The tests: allow AND deny, with with input as"
+    file: authz_test.rego
+    lang: rego
+    kind: secure
+    code: |
+      package authz_test
+
+      import rego.v1
+
+      import data.authz
+
+      # Positive case: an admin is allowed
+      test_admin_allowed if {
+          authz.allow with input as {"user": {"role": "admin"}, "method": "DELETE", "path": "/admin"}
+      }
+
+      # Positive case: a GET on a public path is allowed
+      test_public_get_allowed if {
+          authz.allow with input as {"user": {"role": "user"}, "method": "GET", "path": "/profile"}
+      }
+
+      # Negative case (the important one): a non-admin POST to /admin is denied
+      test_user_post_admin_denied if {
+          not authz.allow with input as {"user": {"role": "user"}, "method": "POST", "path": "/admin"}
+      }
+
+      # Negative case: an unknown shape falls back to the secure default
+      test_empty_input_denied if {
+          not authz.allow with input as {}
+      }
+    output: |
+      $ opa test . -v
+      authz_test.rego:
+      data.authz_test.test_admin_allowed: PASS (412µs)
+      data.authz_test.test_public_get_allowed: PASS (233µs)
+      data.authz_test.test_user_post_admin_denied: PASS (198µs)
+      data.authz_test.test_empty_input_denied: PASS (187µs)
+      --------------------------------------------------------------------------------
+      PASS: 4/4
+    note:
+      fr: "`with input as { ... }` injecte une entrée différente à chaque test. Les deux tests `not authz.allow` sont essentiels : ils garantissent que le refus par défaut n'a pas été cassé par une modification."
+      en: "`with input as { ... }` injects a different input into each test. The two `not authz.allow` tests are essential: they guarantee the deny-by-default was not broken by a change."
+
+  - title:
+      fr: "Mesurer la couverture"
+      en: "Measuring coverage"
+    file: coverage.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Run tests and report line coverage as JSON
+      opa test --coverage --format=json . > coverage.json
+
+      # Human-readable percentage with jq
+      opa test --coverage --format=json . | jq '.coverage'
+    output: |
+      # A rule that no test exercises shows up with covered: false lines.
+      $ opa test --coverage --format=json . | jq '.coverage'
+      90.9
+      # authz.rego is almost fully covered; add a test to reach the uncovered branch.
+    note:
+      fr: "La couverture révèle les règles jamais exécutées par les tests : une règle `deny` à 0 % est une protection dont on ignore si elle fonctionne. Visez une couverture élevée sur les règles de décision, pas forcément 100 % partout."
+      en: "Coverage reveals rules never run by tests: a `deny` rule at 0% is a protection you do not know works. Aim for high coverage on decision rules, not necessarily 100% everywhere."
+
+  - title:
+      fr: "Formater et linter avec opa fmt et Regal"
+      en: "Formatting and linting with opa fmt and Regal"
+    file: lint.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Auto-format in place (use --list in CI to fail on unformatted files)
+      opa fmt -w .
+      opa fmt --list .            # prints files that are NOT formatted; empty = OK
+
+      # Install Regal (single static binary) and lint the policies
+      curl -L -o regal https://github.com/StyraInc/regal/releases/download/v0.36.0/regal_Linux_x86_64
+      chmod +x regal && sudo mv regal /usr/local/bin/
+      regal lint policy/
+    output: |
+      $ regal lint policy/
+      Rule:          use-assignment-operator
+      Description:   Prefer := over = for assignment
+      Category:      style
+      Location:      policy/authz.rego:7:1
+      Related:       https://docs.styra.com/regal/rules/style/use-assignment-operator
+
+      1 file linted. 1 violation found.
+    note:
+      fr: "`opa fmt` règle les questions de style ; **Regal** va plus loin et détecte les pièges sémantiques. Ici il conseille `:=` plutôt que `=`. Un code de sortie non nul fait échouer la CI, forçant la correction avant la fusion."
+      en: "`opa fmt` settles style questions; **Regal** goes further and catches semantic traps. Here it advises `:=` over `=`. A non-zero exit code fails CI, forcing the fix before merge."
+
+  - title:
+      fr: "Le job GitHub Actions complet"
+      en: "The complete GitHub Actions job"
+    file: .github/workflows/policy.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: policy
+
+      on: [push, pull_request]
+
+      # Least privilege: this job only needs to read the repository
+      permissions:
+        contents: read
+
+      env:
+        OPA_VERSION: v1.9.0
+        REGAL_VERSION: v0.36.0
+
+      jobs:
+        rego:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            - name: Install OPA and Regal (pinned, single binaries)
+              run: |
+                curl -L -o /usr/local/bin/opa \
+                  https://openpolicyagent.org/downloads/${OPA_VERSION}/opa_linux_amd64_static
+                curl -L -o /usr/local/bin/regal \
+                  https://github.com/StyraInc/regal/releases/download/${REGAL_VERSION}/regal_Linux_x86_64
+                chmod +x /usr/local/bin/opa /usr/local/bin/regal
+
+            # Fastest checks first for immediate feedback
+            - name: Check formatting
+              run: opa fmt --list . && test -z "$(opa fmt --list .)"
+
+            - name: Lint with Regal
+              run: regal lint policy/
+
+            - name: Unit-test the policies with coverage
+              run: opa test . -v --coverage --format=json > coverage.json && opa test . -v
+    output: |
+      Run opa test . -v
+      data.authz_test.test_admin_allowed: PASS (0.4ms)
+      data.authz_test.test_public_get_allowed: PASS (0.2ms)
+      data.authz_test.test_user_post_admin_denied: PASS (0.2ms)
+      data.authz_test.test_empty_input_denied: PASS (0.2ms)
+      PASS: 4/4
+    note:
+      fr: "Le workflow refuse de fusionner une politique non formatée, signalée par Regal ou dont un test échoue. `permissions: contents: read` et les versions épinglées (`OPA_VERSION`, `REGAL_VERSION`) rendent la CI sûre et reproductible."
+      en: "The workflow refuses to merge a policy that is unformatted, flagged by Regal or whose test fails. `permissions: contents: read` and the pinned versions (`OPA_VERSION`, `REGAL_VERSION`) make the CI safe and reproducible."
+
+mistake:
+  fr: |
+    **Ne tester que les cas qui passent.**
+
+    La tentation est d'écrire `test_admin_allowed` et de s'arrêter là. Mais la vulnérabilité la plus grave
+    d'une politique, c'est d'**autoriser ce qu'elle devrait refuser**. Si vous n'avez pas de test
+    `not allow with input as {...malveillant...}`, une refactorisation qui casse le refus par défaut passera
+    inaperçue : tous vos tests « vert » continueront de l'être. Pour chaque règle de décision, écrivez au
+    moins un test positif *et* un test négatif. Et méfiez-vous d'un test qui vaut `undefined` au lieu de
+    `true` : `opa test` le compte comme un échec, mais un test mal écrit peut masquer le vrai comportement
+    — d'où l'intérêt de la couverture pour vérifier que la bonne branche est bien exercée.
+  en: |
+    **Testing only the passing cases.**
+
+    The temptation is to write `test_admin_allowed` and stop there. But a policy's gravest vulnerability is
+    to **allow what it should deny**. If you have no `not allow with input as {...malicious...}` test, a
+    refactor that breaks the deny-by-default will go unnoticed: all your "green" tests stay green. For each
+    decision rule, write at least one positive *and* one negative test. And beware of a test that is
+    `undefined` instead of `true`: `opa test` counts it as a failure, but a badly written test can mask the
+    real behaviour — hence coverage, to confirm the right branch is actually exercised.
+
+bestPractice:
+  fr: |
+    - **Un test positif et un test négatif par règle** : le test de refus protège contre le « oui à tout ».
+    - **`with input as`** pour injecter des entrées précises, sans dépendre d'un fichier externe.
+    - **Mesurez la couverture** (`--coverage`) : une règle `deny` non couverte est une protection non vérifiée.
+    - **`opa fmt --list` en CI** : échec si un fichier n'est pas formaté, zéro débat de style.
+    - **Regal dans le pipeline** pour les anti-patterns que les tests ne voient pas.
+    - **Épinglez les versions** d'OPA, Regal et des actions ; **moindre privilège** sur le workflow (`contents: read`).
+  en: |
+    - **One positive and one negative test per rule**: the deny test guards against "yes to everything".
+    - **`with input as`** to inject precise inputs, with no dependency on an external file.
+    - **Measure coverage** (`--coverage`): an uncovered `deny` rule is an unverified protection.
+    - **`opa fmt --list` in CI**: fail if a file is unformatted, zero style debate.
+    - **Regal in the pipeline** for the anti-patterns tests do not see.
+    - **Pin the versions** of OPA, Regal and the actions; **least privilege** on the workflow (`contents: read`).
+
+exercise:
+  statement:
+    fr: |
+      Reprenez la politique du cours « règles et itération » (package `main`) qui refuse un conteneur
+      privilégié :
+
+      ```rego
+      package main
+      import rego.v1
+      deny contains msg if {
+          some c in input.spec.containers
+          c.securityContext.privileged == true
+          msg := sprintf("container %q must not be privileged", [c.name])
+      }
+      ```
+
+      Écrivez un fichier `main_test.rego` avec **deux** tests : l'un vérifie qu'un pod contenant un
+      conteneur privilégié produit une violation (ensemble `deny` non vide) ; l'autre vérifie qu'un pod avec
+      un seul conteneur non privilégié ne produit **aucune** violation.
+    en: |
+      Take the policy from the "rules and iteration" lesson (package `main`) that rejects a privileged
+      container:
+
+      ```rego
+      package main
+      import rego.v1
+      deny contains msg if {
+          some c in input.spec.containers
+          c.securityContext.privileged == true
+          msg := sprintf("container %q must not be privileged", [c.name])
+      }
+      ```
+
+      Write a `main_test.rego` file with **two** tests: one checks that a pod containing a privileged
+      container yields a violation (non-empty `deny` set); the other checks that a pod with a single
+      non-privileged container yields **no** violation.
+  solution:
+    file: main_test.rego
+    lang: rego
+    code: |
+      package main_test
+
+      import rego.v1
+
+      import data.main
+
+      # Negative security case: a privileged container MUST be denied
+      test_privileged_is_denied if {
+          result := main.deny with input as {
+              "spec": {"containers": [
+                  {"name": "app", "securityContext": {"privileged": true}},
+              ]},
+          }
+          count(result) == 1
+      }
+
+      # Positive case: a safe pod produces no violation
+      test_safe_pod_has_no_violation if {
+          result := main.deny with input as {
+              "spec": {"containers": [
+                  {"name": "app", "securityContext": {"privileged": false}},
+              ]},
+          }
+          count(result) == 0
+      }
+    note:
+      fr: "On capture l'ensemble `deny` dans `result` puis on compte ses éléments : `count == 1` prouve que la violation est levée, `count == 0` prouve que le pod sain passe. Lancez `opa test . -v`."
+      en: "You capture the `deny` set in `result` then count its elements: `count == 1` proves the violation fires, `count == 0` proves the clean pod passes. Run `opa test . -v`."
+
+quiz:
+  - q:
+      fr: "Quel préfixe rend une règle exécutable par `opa test` ?"
+      en: "Which prefix makes a rule runnable by `opa test`?"
+    options:
+      fr:
+        - "`test_`"
+        - "`check_`"
+        - "`spec_`"
+        - "`assert_`"
+      en:
+        - "`test_`"
+        - "`check_`"
+        - "`spec_`"
+        - "`assert_`"
+    answer: 0
+    why:
+      fr: "`opa test` exécute toute règle dont le nom commence par `test_` ; elle réussit si elle vaut `true`."
+      en: "`opa test` runs any rule whose name starts with `test_`; it passes if the rule evaluates to `true`."
+  - q:
+      fr: "À quoi sert `with input as { ... }` dans un test ?"
+      en: "What is `with input as { ... }` for in a test?"
+    options:
+      fr:
+        - "À importer un autre package"
+        - "À remplacer la valeur de `input` le temps de l'expression testée"
+        - "À définir une valeur par défaut"
+        - "À formater le code"
+      en:
+        - "To import another package"
+        - "To replace the value of `input` for the tested expression"
+        - "To define a default value"
+        - "To format the code"
+    answer: 1
+    why:
+      fr: "`with` substitue `input` (ou `data`) par une valeur fournie, permettant de tester une règle avec des entrées précises sans fichier externe."
+      en: "`with` substitutes `input` (or `data`) with a provided value, letting you test a rule against precise inputs with no external file."
+  - q:
+      fr: "Pourquoi un test de type `not allow with input as {...}` est-il crucial ?"
+      en: "Why is a `not allow with input as {...}` test crucial?"
+    options:
+      fr:
+        - "Il accélère l'évaluation"
+        - "Il vérifie que la politique refuse bien ce qu'elle doit refuser, contre la régression « oui à tout »"
+        - "Il est exigé par la syntaxe Rego"
+        - "Il mesure la couverture automatiquement"
+      en:
+        - "It speeds up evaluation"
+        - "It checks that the policy indeed denies what it must, guarding against the \"yes to everything\" regression"
+        - "It is required by Rego syntax"
+        - "It measures coverage automatically"
+    answer: 1
+    why:
+      fr: "La pire faille d'une politique est d'autoriser à tort. Le test de refus garantit qu'une modification n'a pas cassé le refus par défaut."
+      en: "A policy's worst flaw is to allow by mistake. The deny test guarantees that a change has not broken the deny-by-default."
+  - q:
+      fr: "Que fait `opa fmt --list .` en CI ?"
+      en: "What does `opa fmt --list .` do in CI?"
+    options:
+      fr:
+        - "Il reformate les fichiers en place"
+        - "Il exécute les tests"
+        - "Il installe Regal"
+        - "Il liste les fichiers non formatés ; une liste non vide fait échouer le job"
+      en:
+        - "It reformats the files in place"
+        - "It runs the tests"
+        - "It installs Regal"
+        - "It lists unformatted files; a non-empty list fails the job"
+    answer: 3
+    why:
+      fr: "`--list` n'écrit rien mais affiche les fichiers mal formatés ; on fait échouer la CI si la liste n'est pas vide, sans toucher aux fichiers."
+      en: "`--list` writes nothing but prints badly formatted files; CI fails if the list is non-empty, without touching the files."
+  - q:
+      fr: "Quel outil détecte les anti-patterns Rego que `opa test` ne voit pas ?"
+      en: "Which tool catches the Rego anti-patterns that `opa test` does not see?"
+    options:
+      fr:
+        - "`conftest`"
+        - "`terraform validate`"
+        - "Regal"
+        - "`opa eval`"
+      en:
+        - "`conftest`"
+        - "`terraform validate`"
+        - "Regal"
+        - "`opa eval`"
+    answer: 2
+    why:
+      fr: "Regal est le linter dédié à Rego : il signale les mauvaises pratiques, la syntaxe v0 oubliée ou les règles inutilisées, au-delà de la simple exécution des tests."
+      en: "Regal is the dedicated Rego linter: it flags bad practices, forgotten v0 syntax or unused rules, beyond merely running the tests."

@@ -1,0 +1,429 @@
+description:
+  fr: "Première leçon du projet : créer un cluster Kubernetes local multi-nœuds avec kind, un CNI qui applique les NetworkPolicy, la journalisation d'audit et les labels Pod Security, puis poser l'arborescence du dépôt."
+  en: "First lesson of the project: create a local multi-node Kubernetes cluster with kind, a CNI that enforces NetworkPolicies, audit logging and Pod Security labels, then lay out the repository tree."
+duration: 25
+
+intro:
+  fr: |
+    Bienvenue dans le **projet 3** : construire, de A à Z, un **cluster Kubernetes durci** sur votre
+    propre machine, puis prouver qu'il résiste à des attaques simulées. Au fil de 5 leçons, vous allez
+    assembler un dépôt complet : configuration du cluster, workloads durcis, politiques **OPA
+    Gatekeeper**, détection **Falco** à l'exécution, et un README avec des scénarios d'attaque.
+
+    Pensez au cluster comme à un **immeuble sécurisé**. Aujourd'hui, on coule les **fondations** : on
+    construit l'immeuble (le cluster), on installe le système de badges (les labels Pod Security) et on
+    met en place les **caméras de l'entrée** (la journalisation d'audit). Les serrures, les gardiens et
+    les alarmes viendront dans les leçons suivantes.
+
+    `kind` (*Kubernetes IN Docker*) lance un vrai cluster dans des conteneurs Docker : parfait pour
+    apprendre sans payer un cloud. Tout se passe en local, sur votre lab.
+  en: |
+    Welcome to **project 3**: build, from scratch, a **hardened Kubernetes cluster** on your own machine,
+    then prove it withstands simulated attacks. Across 5 lessons you will assemble a complete repository:
+    cluster configuration, hardened workloads, **OPA Gatekeeper** policies, **Falco** runtime detection,
+    and a README with attack scenarios.
+
+    Think of the cluster as a **secured building**. Today we pour the **foundations**: we erect the
+    building (the cluster), install the badge system (the Pod Security labels) and set up the **front-door
+    cameras** (audit logging). Locks, guards and alarms come in the next lessons.
+
+    `kind` (*Kubernetes IN Docker*) runs a real cluster inside Docker containers: perfect for learning
+    without paying for a cloud. Everything stays local, on your lab.
+
+sections:
+  - heading:
+      fr: "Ce que l'on construit et les prérequis"
+      en: "What we build and the prerequisites"
+    body:
+      fr: |
+        Le projet produit un dépôt `hardened-k8s-lab` autonome. Le cluster s'appelle `secure-lab`, avec
+        **un nœud de contrôle et deux nœuds de travail** pour que les NetworkPolicy aient du sens
+        (plusieurs machines, du vrai trafic entre Pods).
+
+        Installez d'abord les outils (versions stables 2026, à adapter) :
+
+        | Outil | Rôle | Vérifier |
+        |---|---|---|
+        | Docker | Fait tourner les nœuds du cluster | `docker --version` |
+        | kind v0.24+ | Crée le cluster dans Docker | `kind --version` |
+        | kubectl v1.31+ | Pilote le cluster | `kubectl version --client` |
+        | Helm v3.16+ | Installe Gatekeeper et Falco | `helm version` |
+
+        Un détail **de sécurité** dès le départ : par défaut, le CNI de kind (`kindnet`) **n'applique
+        pas** les NetworkPolicy. On le désactive pour installer **Calico**, qui les applique réellement.
+        Une politique « default deny » qui n'est pas appliquée donne un faux sentiment de sécurité.
+      en: |
+        The project produces a self-contained `hardened-k8s-lab` repository. The cluster is named
+        `secure-lab`, with **one control-plane node and two worker nodes** so that NetworkPolicies make
+        sense (several machines, real Pod-to-Pod traffic).
+
+        Install the tools first (stable 2026 versions, adjust as needed):
+
+        | Tool | Role | Check |
+        |---|---|---|
+        | Docker | Runs the cluster nodes | `docker --version` |
+        | kind v0.24+ | Creates the cluster in Docker | `kind --version` |
+        | kubectl v1.31+ | Drives the cluster | `kubectl version --client` |
+        | Helm v3.16+ | Installs Gatekeeper and Falco | `helm version` |
+
+        A **security** detail from the start: by default kind's CNI (`kindnet`) **does not enforce**
+        NetworkPolicies. We disable it to install **Calico**, which actually enforces them. A "default
+        deny" policy that is not enforced gives a false sense of security.
+  - heading:
+      fr: "Audit et Pod Security dès la création"
+      en: "Audit and Pod Security from creation"
+    body:
+      fr: |
+        Deux garde-fous se posent au moment de créer le cluster, pas après.
+
+        La **journalisation d'audit** du serveur d'API enregistre *qui* a fait *quoi*. Sans elle, après
+        un incident, on est aveugle. On fournit une politique d'audit et on monte le fichier de log dans
+        le nœud de contrôle via la configuration kind.
+
+        Les **Pod Security Standards** sont le contrôle d'admission intégré de Kubernetes. On étiquette
+        chaque namespace applicatif avec `pod-security.kubernetes.io/enforce=restricted` : l'API **refuse**
+        alors tout Pod qui tourne en root, demande des privilèges ou garde des capabilities dangereuses.
+        C'est gratuit, natif, et cela bloque déjà une grande partie des mauvaises configurations.
+
+        > À la fin de cette leçon, le cluster existe, Calico applique les NetworkPolicy, l'audit tourne et
+        > le namespace `shop` est en mode `restricted`. Les workloads arrivent en leçon 2.
+      en: |
+        Two safeguards are set when the cluster is created, not afterwards.
+
+        The API server's **audit logging** records *who* did *what*. Without it, after an incident you are
+        blind. We provide an audit policy and mount the log file into the control-plane node through the
+        kind configuration.
+
+        The **Pod Security Standards** are Kubernetes' built-in admission control. We label every
+        application namespace with `pod-security.kubernetes.io/enforce=restricted`: the API then
+        **rejects** any Pod that runs as root, requests privileges or keeps dangerous capabilities. It is
+        free, native, and already blocks a large share of misconfigurations.
+
+        > By the end of this lesson the cluster exists, Calico enforces NetworkPolicies, audit is running
+        > and the `shop` namespace is in `restricted` mode. Workloads come in lesson 2.
+
+examples:
+  - title:
+      fr: "Arborescence cible du dépôt"
+      en: "Target repository tree"
+    file: tree.txt
+    lang: text
+    kind: neutral
+    code: |
+      hardened-k8s-lab/
+      ├── README.md                      # lesson 5: overview + attack scenarios
+      ├── cluster/
+      │   ├── kind-config.yaml           # lesson 1: multi-node cluster + audit
+      │   └── audit-policy.yaml          # lesson 1: what the API server logs
+      ├── baseline/
+      │   └── namespaces.yaml            # lesson 1: namespaces + Pod Security labels
+      ├── workloads/
+      │   ├── rbac.yaml                  # lesson 2: least-privilege ServiceAccount
+      │   ├── networkpolicies.yaml       # lesson 2: default-deny + allow rules
+      │   └── web-deployment.yaml        # lesson 2: hardened Deployment + Service
+      ├── gatekeeper/
+      │   ├── templates/                 # lesson 3: ConstraintTemplates (Rego v1)
+      │   └── constraints/               # lesson 3: Constraints
+      ├── falco/
+      │   ├── values.yaml                # lesson 4: Helm values (eBPF + sidekick)
+      │   └── custom-rules.yaml          # lesson 4: custom Falco rules
+      └── scripts/
+          ├── setup.sh                   # lesson 1: create the cluster end to end
+          └── validate.sh                # lesson 5: run the simulated attacks
+    note:
+      fr: "Cette structure reste **stable sur les 5 leçons** : chaque leçon remplit un dossier. Un dépôt bien rangé est le premier signe de professionnalisme en entretien."
+      en: "This structure stays **stable across the 5 lessons**: each lesson fills a folder. A tidy repository is the first sign of professionalism in an interview."
+
+  - title:
+      fr: "La configuration du cluster kind (multi-nœuds + audit)"
+      en: "The kind cluster configuration (multi-node + audit)"
+    file: cluster/kind-config.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      kind: Cluster
+      apiVersion: kind.x-k8s.io/v1alpha4
+      name: secure-lab
+      networking:
+        # Disable the default CNI so we can install Calico, which ENFORCES NetworkPolicy
+        disableDefaultCNI: true
+        podSubnet: "192.168.0.0/16"
+      nodes:
+        - role: control-plane
+          kubeadmConfigPatches:
+            - |
+              kind: ClusterConfiguration
+              apiServer:
+                extraArgs:
+                  # Turn on audit logging: record who did what on the API
+                  audit-policy-file: /etc/kubernetes/audit/audit-policy.yaml
+                  audit-log-path: /var/log/kubernetes/audit.log
+                  audit-log-maxage: "7"
+                extraVolumes:
+                  - name: audit-policy
+                    hostPath: /etc/kubernetes/audit/audit-policy.yaml
+                    mountPath: /etc/kubernetes/audit/audit-policy.yaml
+                    readOnly: true
+                    pathType: File
+                  - name: audit-log
+                    hostPath: /var/log/kubernetes
+                    mountPath: /var/log/kubernetes
+                    pathType: DirectoryOrCreate
+          extraMounts:
+            # Make the audit policy available inside the control-plane node
+            - hostPath: ./cluster/audit-policy.yaml
+              containerPath: /etc/kubernetes/audit/audit-policy.yaml
+        - role: worker
+        - role: worker
+    note:
+      fr: "`disableDefaultCNI: true` est le point clé : sans lui, Calico n'est pas installé et les NetworkPolicy ne sont jamais appliquées. Les deux `worker` donnent un vrai réseau multi-nœuds."
+      en: "`disableDefaultCNI: true` is the key point: without it, Calico is not installed and NetworkPolicies are never enforced. The two `worker` nodes give a real multi-node network."
+
+  - title:
+      fr: "La politique d'audit du serveur d'API"
+      en: "The API server audit policy"
+    file: cluster/audit-policy.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      # Do not log noisy read-only system traffic, keep the log useful
+      omitStages:
+        - "RequestReceived"
+      rules:
+        # Log changes to Secrets and RBAC at the richest level: these matter most
+        - level: RequestResponse
+          resources:
+            - group: ""
+              resources: ["secrets"]
+            - group: "rbac.authorization.k8s.io"
+              resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+        # Log the metadata of every create/update/delete elsewhere
+        - level: Metadata
+          verbs: ["create", "update", "patch", "delete"]
+        # Everything else: minimal metadata, so the log does not explode
+        - level: Metadata
+    note:
+      fr: "On journalise **plus** les ressources sensibles (Secrets, RBAC) et **moins** le reste, pour garder un journal lisible. En leçon 5, ce journal prouvera les mouvements d'un attaquant simulé."
+      en: "We log sensitive resources (Secrets, RBAC) **more** and the rest **less**, to keep the log readable. In lesson 5, this log will reveal a simulated attacker's moves."
+
+  - title:
+      fr: "Les namespaces avec les labels Pod Security"
+      en: "The namespaces with Pod Security labels"
+    file: baseline/namespaces.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: shop
+        labels:
+          # restricted = the strictest built-in level: no root, no privileges, seccomp
+          pod-security.kubernetes.io/enforce: restricted
+          pod-security.kubernetes.io/enforce-version: latest
+          # warn/audit surface violations even when enforce would let them through
+          pod-security.kubernetes.io/warn: restricted
+          pod-security.kubernetes.io/audit: restricted
+      ---
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: attacker
+        labels:
+          # A separate namespace used later to test cross-namespace isolation
+          pod-security.kubernetes.io/enforce: baseline
+    note:
+      fr: "Appliquer `restricted` par un simple label suffit à faire **refuser** un Pod privilégié par l'API, sans aucun outil tiers. Le namespace `attacker` servira à tester l'isolation réseau en leçon 5."
+      en: "Applying `restricted` with a single label is enough to have the API **reject** a privileged Pod, with no third-party tool. The `attacker` namespace will be used to test network isolation in lesson 5."
+
+  - title:
+      fr: "Le script qui monte tout le cluster"
+      en: "The script that brings up the whole cluster"
+    file: scripts/setup.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Create the hardened lab cluster end to end. Run from the repo root.
+      set -euo pipefail
+
+      # 1. Create the multi-node cluster with audit enabled
+      kind create cluster --config cluster/kind-config.yaml
+
+      # 2. Install Calico so NetworkPolicies are actually enforced
+      kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+
+      # 3. Wait for Calico to be ready before continuing
+      kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+
+      # 4. Create the namespaces with Pod Security labels
+      kubectl apply -f baseline/namespaces.yaml
+
+      echo "Cluster 'secure-lab' is up. Namespace 'shop' enforces the restricted level."
+    output: |
+      Creating cluster "secure-lab" ...
+      daemon set "calico-node" successfully rolled out
+      namespace/shop created
+      namespace/attacker created
+      Cluster 'secure-lab' is up. Namespace 'shop' enforces the restricted level.
+    note:
+      fr: "`set -euo pipefail` arrête le script à la première erreur : on ne continue pas sur un cluster à moitié construit. La version de Calico est **épinglée** pour un résultat reproductible."
+      en: "`set -euo pipefail` stops the script at the first error: we do not continue on a half-built cluster. The Calico version is **pinned** for a reproducible result."
+
+mistake:
+  fr: |
+    **Laisser le CNI par défaut et croire que les NetworkPolicy fonctionnent.**
+
+    C'est le piège numéro un de ce projet. Avec `kindnet` (le CNI par défaut de kind), vous pouvez
+    appliquer une NetworkPolicy « default deny » : `kubectl` l'accepte, elle apparaît dans le cluster...
+    mais **aucun trafic n'est bloqué**, car le plugin ne l'implémente pas. On a l'illusion d'être
+    protégé. Il faut un CNI qui applique réellement les politiques, comme Calico ou Cilium.
+  en: |
+    **Keeping the default CNI and believing NetworkPolicies work.**
+
+    This is the number-one trap of this project. With `kindnet` (kind's default CNI) you can apply a
+    "default deny" NetworkPolicy: `kubectl` accepts it, it shows up in the cluster... but **no traffic is
+    blocked**, because the plugin does not implement it. You get the illusion of protection. You need a
+    CNI that actually enforces policies, such as Calico or Cilium.
+
+bestPractice:
+  fr: |
+    - **Activez l'audit à la création**, pas après l'incident : on ne journalise pas rétroactivement.
+    - **Choisissez un CNI qui applique les NetworkPolicy** (Calico, Cilium) et épinglez sa version.
+    - **Étiquetez chaque namespace applicatif** avec Pod Security `enforce=restricted` dès le départ.
+    - **Versionnez la configuration du cluster** (kind-config, audit-policy) dans Git : le cluster doit
+      être reconstructible d'une commande.
+    - **Travaillez toujours en local** : ce lab tourne sur votre machine, jamais sur un cluster de production.
+  en: |
+    - **Enable audit at creation**, not after the incident: you cannot log retroactively.
+    - **Pick a CNI that enforces NetworkPolicies** (Calico, Cilium) and pin its version.
+    - **Label every application namespace** with Pod Security `enforce=restricted` from the start.
+    - **Version the cluster configuration** (kind-config, audit-policy) in Git: the cluster must be
+      rebuildable with a single command.
+    - **Always work locally**: this lab runs on your machine, never on a production cluster.
+
+exercise:
+  statement:
+    fr: |
+      Le cluster `secure-lab` tourne et le namespace `shop` applique le niveau `restricted`.
+
+      Écrivez la commande qui tente de lancer un Pod **privilégié** nommé `pwn` dans `shop`, et dites ce
+      qui doit se passer. Puis donnez la commande qui le lancerait dans le namespace `default` (sans label
+      Pod Security) pour comparer.
+    en: |
+      The `secure-lab` cluster is running and the `shop` namespace enforces the `restricted` level.
+
+      Write the command that tries to launch a **privileged** Pod named `pwn` in `shop`, and say what must
+      happen. Then give the command that would launch it in the `default` namespace (no Pod Security label)
+      for comparison.
+  solution:
+    file: test-psa.sh
+    lang: bash
+    code: |
+      # In the shop namespace, the restricted level rejects a privileged Pod at admission
+      kubectl run pwn --image=busybox -n shop \
+        --overrides='{"spec":{"containers":[{"name":"pwn","image":"busybox","securityContext":{"privileged":true}}]}}'
+      # Expected: Error ... violates PodSecurity "restricted:latest": privileged (...)
+
+      # In default (no Pod Security label) the same Pod is accepted — which is exactly
+      # why we label every application namespace instead of using default.
+      kubectl run pwn --image=busybox -n default \
+        --overrides='{"spec":{"containers":[{"name":"pwn","image":"busybox","securityContext":{"privileged":true}}]}}'
+      # Expected: pod/pwn created
+    note:
+      fr: "La leçon : le niveau `restricted` bloque le Pod privilégié **sans aucun outil tiers**. Le namespace `default` n'étant pas étiqueté, il accepte le même Pod : d'où la règle « jamais d'application dans `default` »."
+      en: "The lesson: the `restricted` level blocks the privileged Pod **with no third-party tool**. Since `default` is not labelled, it accepts the same Pod: hence the rule \"never put applications in `default`\"."
+
+quiz:
+  - q:
+      fr: "Pourquoi désactive-t-on le CNI par défaut de kind dans ce projet ?"
+      en: "Why do we disable kind's default CNI in this project?"
+    options:
+      fr:
+        - "Pour accélérer le démarrage du cluster"
+        - "Parce que kindnet n'applique pas les NetworkPolicy ; on installe Calico qui les applique"
+        - "Parce que Docker l'exige"
+        - "Pour économiser de la mémoire"
+      en:
+        - "To speed up cluster start-up"
+        - "Because kindnet does not enforce NetworkPolicies; we install Calico which does"
+        - "Because Docker requires it"
+        - "To save memory"
+    answer: 1
+    why:
+      fr: "Sans un CNI qui applique les politiques, une NetworkPolicy « default deny » est acceptée mais ne bloque rien. Calico (ou Cilium) les applique réellement."
+      en: "Without a CNI that enforces policies, a \"default deny\" NetworkPolicy is accepted but blocks nothing. Calico (or Cilium) actually enforces them."
+  - q:
+      fr: "Quel label applique le niveau de sécurité de Pod le plus strict à un namespace ?"
+      en: "Which label applies the strictest Pod security level to a namespace?"
+    options:
+      fr:
+        - "pod-security.kubernetes.io/enforce: restricted"
+        - "security: high"
+        - "privileged: \"false\""
+        - "psp: strict"
+      en:
+        - "pod-security.kubernetes.io/enforce: restricted"
+        - "security: high"
+        - "privileged: \"false\""
+        - "psp: strict"
+    answer: 0
+    why:
+      fr: "Pod Security Admission lit ce label standard. `restricted` interdit root, privilèges et capabilities dangereuses."
+      en: "Pod Security Admission reads this standard label. `restricted` forbids root, privileges and dangerous capabilities."
+  - q:
+      fr: "À quoi sert la journalisation d'audit du serveur d'API ?"
+      en: "What is the API server audit logging for?"
+    options:
+      fr:
+        - "À accélérer les requêtes kubectl"
+        - "À chiffrer les Secrets"
+        - "À enregistrer qui a fait quoi sur l'API, pour l'analyse après incident"
+        - "À équilibrer la charge entre les nœuds"
+      en:
+        - "To speed up kubectl requests"
+        - "To encrypt Secrets"
+        - "To record who did what on the API, for post-incident analysis"
+        - "To balance load across nodes"
+    answer: 2
+    why:
+      fr: "L'audit trace les actions sur l'API. Sans lui, après une compromission, on ne peut pas reconstituer ce qui s'est passé."
+      en: "Audit traces API actions. Without it, after a compromise you cannot reconstruct what happened."
+  - q:
+      fr: "Pourquoi le cluster a-t-il deux nœuds de travail plutôt qu'un seul ?"
+      en: "Why does the cluster have two worker nodes rather than one?"
+    options:
+      fr:
+        - "Pour avoir un vrai réseau multi-nœuds où les NetworkPolicy ont du sens"
+        - "Parce que Gatekeeper l'exige"
+        - "Pour doubler la mémoire disponible"
+        - "Parce que Falco ne fonctionne pas sur un seul nœud"
+      en:
+        - "To get a real multi-node network where NetworkPolicies make sense"
+        - "Because Gatekeeper requires it"
+        - "To double the available memory"
+        - "Because Falco does not work on a single node"
+    answer: 0
+    why:
+      fr: "Plusieurs nœuds produisent du vrai trafic inter-Pods à travers le réseau, ce qui rend la segmentation réaliste."
+      en: "Several nodes produce real inter-Pod traffic across the network, which makes segmentation realistic."
+  - q:
+      fr: "Pourquoi épingler la version de Calico dans le script d'installation ?"
+      en: "Why pin the Calico version in the install script?"
+    options:
+      fr:
+        - "Pour que Helm l'accepte"
+        - "Pour un résultat reproductible et éviter qu'une nouvelle version casse le lab"
+        - "Parce que les versions non épinglées sont payantes"
+        - "Pour réduire la taille de l'image"
+      en:
+        - "So that Helm accepts it"
+        - "For a reproducible result and to avoid a new version breaking the lab"
+        - "Because unpinned versions are paid"
+        - "To reduce the image size"
+    answer: 1
+    why:
+      fr: "Épingler la version garantit que `setup.sh` produit le même cluster demain ; une version flottante peut introduire un changement cassant."
+      en: "Pinning the version guarantees `setup.sh` produces the same cluster tomorrow; a floating version could introduce a breaking change."

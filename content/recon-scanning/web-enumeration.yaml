@@ -1,0 +1,341 @@
+description:
+  fr: "Énumération web : répertoires cachés avec feroxbuster et ffuf, vhosts, et identification de technologies avec whatweb, contre votre appli de lab."
+  en: "Web enumeration: hidden directories with feroxbuster and ffuf, vhosts, and technology fingerprinting with whatweb, against your lab app."
+duration: 20
+
+intro:
+  fr: |
+    Une application web montre rarement toutes ses pages. Derrière la page d'accueil se cachent souvent des
+    répertoires d'administration, des fichiers de sauvegarde, des API non documentées. L'**énumération web**
+    consiste à découvrir ces contenus cachés, à repérer les **vhosts** (plusieurs sites sur une même IP) et à
+    identifier les **technologies** utilisées.
+
+    Imaginez un magasin : la vitrine est visible, mais il y a aussi une réserve, un bureau, une porte de
+    service. L'énumération web, c'est tester systématiquement toutes les « portes » d'un site pour dresser son
+    vrai plan.
+
+    Dans cette leçon, vous utiliserez **feroxbuster** et **ffuf** pour le *content discovery* (répertoires et
+    fichiers), **ffuf** encore pour les vhosts, et **whatweb** / **Wappalyzer** pour identifier les technologies.
+    Tout se fait contre **votre application de lab** (`localhost`/`127.0.0.1`, DVWA, Juice Shop) ou une cible
+    **autorisée par écrit**. Bombarder un site tiers de milliers de requêtes sans autorisation est à la fois
+    illégal et facilement détecté.
+  en: |
+    A web application rarely shows all its pages. Behind the home page often hide admin directories, backup
+    files, undocumented APIs. **Web enumeration** means discovering this hidden content, spotting **vhosts**
+    (several sites on one IP) and identifying the **technologies** in use.
+
+    Picture a shop: the window is visible, but there is also a storeroom, an office, a service door. Web
+    enumeration is systematically trying all the "doors" of a site to draw its real floor plan.
+
+    In this lesson you will use **feroxbuster** and **ffuf** for *content discovery* (directories and files),
+    **ffuf** again for vhosts, and **whatweb** / **Wappalyzer** to identify technologies. Everything is done
+    against **your lab application** (`localhost`/`127.0.0.1`, DVWA, Juice Shop) or a target **authorised in
+    writing**. Bombarding a third-party site with thousands of requests without authorisation is both illegal
+    and easily detected.
+
+sections:
+  - heading:
+      fr: "Content discovery : feroxbuster et ffuf"
+      en: "Content discovery: feroxbuster and ffuf"
+    body:
+      fr: |
+        Le *content discovery* teste une **liste de mots** (*wordlist*) contre un site : pour chaque mot, on
+        demande l'URL correspondante et on regarde le code de réponse HTTP. Un `200` ou un `301` révèle une
+        ressource existante ; un `404` signale l'absence.
+
+        | Outil | Particularité |
+        |---|---|
+        | feroxbuster | Récursif par défaut : explore automatiquement les sous-répertoires trouvés |
+        | ffuf | Très rapide et flexible : le mot-clé `FUZZ` se place où on veut dans la requête |
+        | gobuster | Simple et classique, un bon point d'entrée |
+
+        Les wordlists de référence viennent du projet **SecLists** (par ex.
+        `/usr/share/seclists/Discovery/Web-Content/common.txt`). Le choix de la wordlist fait la qualité du
+        résultat : une liste trop courte manque des répertoires, une liste trop longue génère énormément de
+        trafic. On filtre souvent par code de statut pour ne garder que l'intéressant.
+      en: |
+        *Content discovery* tests a **word list** (*wordlist*) against a site: for each word, you request the
+        matching URL and look at the HTTP response code. A `200` or `301` reveals an existing resource; a `404`
+        signals absence.
+
+        | Tool | Distinctive feature |
+        |---|---|
+        | feroxbuster | Recursive by default: automatically explores found sub-directories |
+        | ffuf | Very fast and flexible: the `FUZZ` keyword goes wherever you want in the request |
+        | gobuster | Simple and classic, a good entry point |
+
+        The reference wordlists come from the **SecLists** project (e.g.
+        `/usr/share/seclists/Discovery/Web-Content/common.txt`). The wordlist choice drives the quality of the
+        result: too short a list misses directories, too long a list generates enormous traffic. You often
+        filter by status code to keep only what matters.
+  - heading:
+      fr: "Vhosts : plusieurs sites sur une même IP"
+      en: "Vhosts: several sites on one IP"
+    body:
+      fr: |
+        Un serveur web peut héberger **plusieurs sites** sur une seule adresse IP, en se basant sur l'en-tête
+        HTTP `Host`. Ce sont les **virtual hosts** (vhosts). Le serveur renvoie un contenu différent selon la
+        valeur de `Host`, même si l'IP est la même.
+
+        Pour découvrir des vhosts cachés (par ex. `admin.lab.example.com` qui n'apparaît pas dans le DNS public),
+        on *fuzz* l'en-tête `Host` avec ffuf :
+
+        ```bash
+        ffuf -w vhosts.txt -u http://192.0.2.10/ -H "Host: FUZZ.lab.example.com"
+        ```
+
+        On filtre ensuite par taille de réponse : un vhost qui existe renvoie une page différente (taille
+        différente) d'un vhost inexistant. Cette technique révèle des interfaces internes qu'un scan de ports ou
+        un DNS public ne montrerait pas, car elles ne se distinguent que par l'en-tête `Host`.
+      en: |
+        A web server can host **several sites** on a single IP address, based on the HTTP `Host` header. These
+        are **virtual hosts** (vhosts). The server returns different content depending on the `Host` value, even
+        though the IP is the same.
+
+        To discover hidden vhosts (e.g. `admin.lab.example.com` that does not appear in public DNS), you *fuzz*
+        the `Host` header with ffuf:
+
+        ```bash
+        ffuf -w vhosts.txt -u http://192.0.2.10/ -H "Host: FUZZ.lab.example.com"
+        ```
+
+        You then filter by response size: a vhost that exists returns a different page (different size) from a
+        non-existent one. This technique reveals internal interfaces that a port scan or public DNS would not
+        show, because they differ only by the `Host` header.
+  - heading:
+      fr: "Identifier les technologies : whatweb et Wappalyzer"
+      en: "Identifying technologies: whatweb and Wappalyzer"
+    body:
+      fr: |
+        Savoir **quelles technologies** fait tourner un site oriente la suite du test : un site WordPress ne
+        s'attaque pas comme une API Node.js. Deux outils répandus :
+
+        - **whatweb** : en ligne de commande, il analyse les en-têtes, les scripts, les cookies et les motifs de
+          page pour deviner le serveur web, le langage, le CMS, les frameworks JavaScript, etc.
+        - **Wappalyzer** : extension de navigateur (et CLI) qui affiche les technologies détectées en visitant
+          le site.
+
+        Ces outils sont **peu intrusifs** : ils analysent surtout des réponses normales. Ils révèlent souvent
+        des indices précieux : `X-Powered-By: PHP/8.1`, un cookie `wordpress_logged_in`, un script
+        `/wp-content/...` trahissant WordPress. Côté défense, cela rappelle que chaque en-tête et chaque cookie
+        **parle** : réduire ces signaux (voir la leçon défense) complique la tâche d'un attaquant.
+      en: |
+        Knowing **which technologies** power a site steers the rest of the test: a WordPress site is not
+        attacked like a Node.js API. Two common tools:
+
+        - **whatweb**: a command-line tool that analyses headers, scripts, cookies and page patterns to guess the
+          web server, language, CMS, JavaScript frameworks, and so on.
+        - **Wappalyzer**: a browser extension (and CLI) that shows detected technologies while visiting the site.
+
+        These tools are **lightly intrusive**: they mostly analyse normal responses. They often reveal valuable
+        hints: `X-Powered-By: PHP/8.1`, a `wordpress_logged_in` cookie, a `/wp-content/...` script betraying
+        WordPress. On the defensive side, it is a reminder that every header and cookie **talks**: reducing those
+        signals (see the defence lesson) complicates an attacker's job.
+
+examples:
+  - title:
+      fr: "Découvrir des répertoires cachés avec feroxbuster"
+      en: "Discovering hidden directories with feroxbuster"
+    file: ferox.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Content discovery against YOUR lab app on localhost.
+      # -u target URL, -w wordlist. feroxbuster recurses into found directories.
+      feroxbuster -u http://127.0.0.1:8080 \
+        -w /usr/share/seclists/Discovery/Web-Content/common.txt
+    output: |
+      200      GET      120l      300w     4500c http://127.0.0.1:8080/index.php
+      301      GET        9l       28w      312c http://127.0.0.1:8080/admin
+      200      GET       15l       40w      820c http://127.0.0.1:8080/login.php
+      200      GET        3l        9w      215c http://127.0.0.1:8080/config.bak
+    note:
+      fr: "Le fichier `config.bak` (sauvegarde) et le répertoire `/admin` sont des trouvailles classiques et sensibles. Le code `301` sur `/admin` indique une redirection : un répertoire existe bien là."
+      en: "The `config.bak` (backup) file and the `/admin` directory are classic, sensitive finds. The `301` on `/admin` indicates a redirect: a directory does exist there."
+  - title:
+      fr: "Fuzzer un paramètre ou un chemin avec ffuf"
+      en: "Fuzzing a parameter or a path with ffuf"
+    file: ffuf.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # The FUZZ keyword marks where ffuf injects each word from the wordlist.
+      # -mc 200 keeps only responses with HTTP status 200 (Match Code).
+      ffuf -w /usr/share/seclists/Discovery/Web-Content/common.txt \
+        -u http://127.0.0.1:8080/FUZZ \
+        -mc 200
+    output: |
+      index.php               [Status: 200, Size: 4500, Words: 300, Lines: 120]
+      login.php               [Status: 200, Size: 820, Words: 40, Lines: 15]
+      robots.txt              [Status: 200, Size: 64, Words: 6, Lines: 3]
+      :: Progress: [4700/4700] :: Job [1/1] :: 2100 req/sec
+    note:
+      fr: "Le filtre `-mc 200` ne garde que les ressources existantes, ce qui réduit le bruit. Le débit (2100 req/s) illustre pourquoi le *content discovery* est détectable : c'est très bruyant."
+      en: "The `-mc 200` filter keeps only existing resources, which cuts the noise. The rate (2100 req/s) shows why content discovery is detectable: it is very noisy."
+  - title:
+      fr: "Identifier les technologies avec whatweb"
+      en: "Identifying technologies with whatweb"
+    file: whatweb.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # whatweb fingerprints the stack from headers, cookies and page patterns.
+      # Lightly intrusive: it reads normal responses, no brute force here.
+      whatweb http://127.0.0.1:8080
+    output: |
+      http://127.0.0.1:8080 [200 OK] Apache[2.4.58], Country[RESERVED][ZZ],
+      HTTPServer[Ubuntu Linux][Apache/2.4.58 (Ubuntu)], PHP[8.1.2],
+      X-Powered-By[PHP/8.1.2], Title[Lab App - Login]
+    note:
+      fr: "whatweb révèle Apache 2.4.58, PHP 8.1.2 et le titre de la page en une requête. Chaque détail oriente la suite : ici, une pile Apache/PHP classique."
+      en: "whatweb reveals Apache 2.4.58, PHP 8.1.2 and the page title in one request. Every detail steers what follows: here, a classic Apache/PHP stack."
+
+mistake:
+  fr: |
+    **Lancer un gros *content discovery* (grosse wordlist, débit maximal) contre un site de production tiers.**
+    Des milliers de requêtes en quelques secondes saturent les logs, déclenchent les alertes du WAF, et peuvent
+    ralentir le site. C'est détecté immédiatement et, sans autorisation, c'est illégal. En lab, pensez aussi à
+    **régler le débit** (`-t` pour le nombre de threads) : même votre propre conteneur peut tomber sous un
+    *fuzzing* trop brutal. Énumérez avec méthode, pas à l'aveugle.
+  en: |
+    **Running a big content discovery (large wordlist, maximum rate) against a third-party production site.**
+    Thousands of requests in seconds flood the logs, trip the WAF alerts, and can slow the site down. It is
+    detected immediately and, without authorisation, it is illegal. In the lab too, remember to **tune the
+    rate** (`-t` for the number of threads): even your own container can fall over under too brutal a fuzzing.
+    Enumerate with method, not blindly.
+
+bestPractice:
+  fr: |
+    - **Choisissez la bonne wordlist** (SecLists) : adaptée à la cible, ni trop courte ni démesurée.
+    - **Filtrez par code ou taille de réponse** pour séparer les vraies ressources du bruit.
+    - **Pensez aux vhosts** : un site caché ne se distingue parfois que par l'en-tête `Host`.
+    - **Identifiez la pile technique tôt** (whatweb) : elle oriente tout le reste du test.
+    - **Maîtrisez le débit** et restez dans le périmètre (lab, DVWA/Juice Shop, ou autorisation écrite).
+  en: |
+    - **Pick the right wordlist** (SecLists): suited to the target, neither too short nor oversized.
+    - **Filter by status code or response size** to separate real resources from noise.
+    - **Think about vhosts**: a hidden site is sometimes distinguished only by the `Host` header.
+    - **Fingerprint the stack early** (whatweb): it steers the rest of the test.
+    - **Control the rate** and stay in scope (lab, DVWA/Juice Shop, or written authorisation).
+
+exercise:
+  statement:
+    fr: |
+      Sur votre application de lab `http://127.0.0.1:8080`, vous voulez découvrir les fichiers et répertoires
+      cachés en ne gardant **que** les réponses au statut HTTP 200, avec ffuf et la wordlist
+      `/usr/share/seclists/Discovery/Web-Content/common.txt`.
+
+      Écrivez la commande ffuf, et expliquez le rôle du mot-clé `FUZZ`.
+    en: |
+      On your lab application `http://127.0.0.1:8080`, you want to discover hidden files and directories,
+      keeping **only** responses with HTTP status 200, using ffuf and the wordlist
+      `/usr/share/seclists/Discovery/Web-Content/common.txt`.
+
+      Write the ffuf command, and explain the role of the `FUZZ` keyword.
+  solution:
+    file: discover.sh
+    lang: bash
+    code: |
+      # FUZZ marks where ffuf substitutes each word from the wordlist.
+      # -mc 200 keeps only responses with HTTP status 200.
+      ffuf -w /usr/share/seclists/Discovery/Web-Content/common.txt \
+        -u http://127.0.0.1:8080/FUZZ \
+        -mc 200
+
+      # FUZZ is a placeholder: ffuf replaces it with each line of the wordlist,
+      # so http://127.0.0.1:8080/admin, /login.php, /config, etc. are requested.
+    note:
+      fr: "`FUZZ` est un emplacement que ffuf remplace par chaque mot de la liste. On peut le mettre dans l'URL, un paramètre, ou un en-tête (comme pour les vhosts)."
+      en: "`FUZZ` is a placeholder that ffuf replaces with each word of the list. You can put it in the URL, a parameter, or a header (as for vhosts)."
+
+quiz:
+  - q:
+      fr: "En quoi consiste le *content discovery* web ?"
+      en: "What does web *content discovery* consist of?"
+    options:
+      fr:
+        - "Chiffrer les pages du site"
+        - "Tester une liste de mots pour trouver des fichiers et répertoires cachés"
+        - "Sauvegarder la base de données"
+        - "Mesurer la vitesse du site"
+      en:
+        - "Encrypting the site's pages"
+        - "Testing a wordlist to find hidden files and directories"
+        - "Backing up the database"
+        - "Measuring the site's speed"
+    answer: 1
+    why:
+      fr: "On essaie chaque mot d'une wordlist comme chemin d'URL et on observe le code de réponse pour détecter les ressources existantes."
+      en: "You try each word of a wordlist as a URL path and watch the response code to detect existing resources."
+  - q:
+      fr: "Quelle particularité distingue feroxbuster ?"
+      en: "What feature distinguishes feroxbuster?"
+    options:
+      fr:
+        - "Il chiffre le trafic"
+        - "Il est récursif par défaut et explore les sous-répertoires trouvés"
+        - "Il ne fonctionne qu'en HTTPS"
+        - "Il modifie les fichiers du serveur"
+      en:
+        - "It encrypts the traffic"
+        - "It is recursive by default and explores found sub-directories"
+        - "It only works over HTTPS"
+        - "It modifies the server's files"
+    answer: 1
+    why:
+      fr: "feroxbuster explore automatiquement les répertoires qu'il découvre, en profondeur, sans relancer la commande."
+      en: "feroxbuster automatically explores the directories it discovers, in depth, without re-running the command."
+  - q:
+      fr: "Sur quel en-tête HTTP repose la découverte de vhosts ?"
+      en: "Which HTTP header does vhost discovery rely on?"
+    options:
+      fr:
+        - "User-Agent"
+        - "Host"
+        - "Cookie"
+        - "Referer"
+      en:
+        - "User-Agent"
+        - "Host"
+        - "Cookie"
+        - "Referer"
+    answer: 1
+    why:
+      fr: "Un serveur sert des sites différents selon l'en-tête `Host` ; on le *fuzz* pour trouver des vhosts cachés."
+      en: "A server serves different sites depending on the `Host` header; you fuzz it to find hidden vhosts."
+  - q:
+      fr: "À quoi sert whatweb ?"
+      en: "What is whatweb used for?"
+    options:
+      fr:
+        - "À casser des mots de passe"
+        - "À identifier les technologies d'un site (serveur, langage, CMS)"
+        - "À scanner les ports UDP"
+        - "À envoyer des e-mails"
+      en:
+        - "To crack passwords"
+        - "To identify a site's technologies (server, language, CMS)"
+        - "To scan UDP ports"
+        - "To send emails"
+    answer: 1
+    why:
+      fr: "whatweb analyse en-têtes, cookies et motifs pour deviner la pile technique du site."
+      en: "whatweb analyses headers, cookies and patterns to guess the site's technology stack."
+  - q:
+      fr: "Pourquoi un *content discovery* est-il facilement détecté ?"
+      en: "Why is content discovery easily detected?"
+    options:
+      fr:
+        - "Parce qu'il envoie énormément de requêtes en peu de temps"
+        - "Parce qu'il désactive le site"
+        - "Parce qu'il modifie le DNS"
+        - "Parce qu'il est toujours en HTTPS"
+      en:
+        - "Because it sends a huge number of requests in a short time"
+        - "Because it disables the site"
+        - "Because it modifies DNS"
+        - "Because it is always over HTTPS"
+    answer: 0
+    why:
+      fr: "Des milliers de requêtes saturent les logs et déclenchent les alertes : d'où l'importance d'un périmètre autorisé et d'un débit maîtrisé."
+      en: "Thousands of requests flood the logs and trigger alerts: hence the need for an authorised scope and a controlled rate."

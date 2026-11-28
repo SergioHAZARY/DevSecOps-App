@@ -1,0 +1,513 @@
+description:
+  fr: "Auditer la sécurité d'un compte AWS en Python avec boto3 : buckets S3 publics, Security Groups ouverts à 0.0.0.0/0, utilisateurs IAM sans MFA et clés d'accès trop anciennes."
+  en: "Audit an AWS account's security in Python with boto3: public S3 buckets, Security Groups open to 0.0.0.0/0, IAM users without MFA and overly old access keys."
+duration: 40
+
+intro:
+  fr: |
+    **boto3** est le kit de développement (SDK) officiel d'AWS pour Python : il parle à tous les services
+    (S3, EC2, IAM…) à votre place. Un ingénieur DevSecOps l'utilise pour écrire des **scripts d'audit** qui
+    parcourent un compte et signalent les mauvaises configurations avant qu'un attaquant ne les trouve.
+
+    C'est l'équivalent d'une ronde de sécurité dans un immeuble : on vérifie que les portes sont fermées (les
+    buckets ne sont pas publics), qu'aucune fenêtre ne donne sur la rue (aucun Security Group ouvert au monde
+    entier), et que chaque employé porte son badge (chaque utilisateur IAM a la MFA). Tout cela en
+    **lecture seule** : un audit ne modifie rien.
+
+    Vous allez écrire quatre vérifications réelles avec boto3, en utilisant les **paginateurs** (pour ne rien
+    manquer quand il y a beaucoup de ressources) et des identifiants d'audit en lecture seule. Ces scripts
+    visent un vrai environnement AWS (ils ne tournent pas dans le navigateur).
+  en: |
+    **boto3** is AWS's official software development kit (SDK) for Python: it talks to every service (S3,
+    EC2, IAM…) on your behalf. A DevSecOps engineer uses it to write **audit scripts** that walk through an
+    account and flag misconfigurations before an attacker finds them.
+
+    It is the equivalent of a security round in a building: you check that doors are locked (buckets are not
+    public), that no window opens onto the street (no Security Group open to the whole world), and that every
+    employee wears their badge (every IAM user has MFA). All of this **read-only**: an audit changes nothing.
+
+    You will write four real checks with boto3, using **paginators** (so nothing is missed when there are
+    many resources) and read-only audit credentials. These scripts target a real AWS environment (they do not
+    run in the browser).
+
+sections:
+  - heading:
+      fr: "Clients, paginateurs et moindre privilège"
+      en: "Clients, paginators and least privilege"
+    body:
+      fr: |
+        On crée un **client** par service : `boto3.client("s3")`, `boto3.client("ec2")`,
+        `boto3.client("iam")`. Beaucoup d'appels AWS renvoient des résultats **paginés** : une seule requête
+        ne rend que les 100 ou 1000 premiers éléments. Pour tout parcourir sans écrire soi-même la boucle, on
+        utilise un **paginateur** :
+
+        ```python
+        paginator = iam.get_paginator("list_users")
+        for page in paginator.paginate():
+            for user in page["Users"]:
+                ...
+        ```
+
+        Oublier la pagination est une **faille d'audit** : le script semble vert alors qu'il n'a vu qu'une
+        partie des ressources. Toujours préférer un paginateur à un simple `list_*`.
+
+        Un script d'audit ne doit détenir que des droits de **lecture**. AWS fournit la politique gérée
+        **`SecurityAudit`** ou **`ViewOnlyAccess`** : attachez-la à un rôle d'audit dédié, et faites tourner
+        le script avec ce rôle (idéalement via OIDC en CI, sans clé statique). Jamais de clé d'administrateur
+        dans un script.
+      en: |
+        You create one **client** per service: `boto3.client("s3")`, `boto3.client("ec2")`,
+        `boto3.client("iam")`. Many AWS calls return **paginated** results: a single request only returns the
+        first 100 or 1000 items. To walk through everything without writing the loop yourself, you use a
+        **paginator**:
+
+        ```python
+        paginator = iam.get_paginator("list_users")
+        for page in paginator.paginate():
+            for user in page["Users"]:
+                ...
+        ```
+
+        Forgetting pagination is an **audit flaw**: the script looks green while it only saw part of the
+        resources. Always prefer a paginator over a plain `list_*`.
+
+        An audit script should hold **read-only** permissions. AWS provides the managed policy
+        **`SecurityAudit`** or **`ViewOnlyAccess`**: attach it to a dedicated audit role, and run the script
+        with that role (ideally via OIDC in CI, with no static key). Never put an administrator key in a
+        script.
+  - heading:
+      fr: "Ce que l'on cherche"
+      en: "What we look for"
+    body:
+      fr: |
+        | Contrôle | Risque | Signal recherché |
+        |---|---|---|
+        | Bucket S3 public | Fuite de données | `BlockPublicAcls` désactivé, ou ACL/policy publique |
+        | Security Group `0.0.0.0/0` | Service exposé à Internet (SSH, RDP, bases) | Règle entrante sur un port sensible depuis `0.0.0.0/0` |
+        | Utilisateur IAM sans MFA | Compte vulnérable au vol de mot de passe | `list_mfa_devices` vide alors qu'un mot de passe existe |
+        | Clé d'accès ancienne | Secret jamais tourné, risque de fuite | `CreateDate` de plus de 90 jours |
+
+        Le port **22** (SSH) et le port **3389** (RDP) ouverts à `0.0.0.0/0` sont parmi les erreurs les plus
+        exploitées : des robots balaient Internet en permanence à leur recherche. Une **clé d'accès** qui n'a
+        pas été renouvelée depuis des mois est une bombe à retardement : si elle a fuité un jour, elle est
+        toujours valide. La règle habituelle est une rotation tous les **90 jours** maximum.
+      en: |
+        | Check | Risk | Signal to look for |
+        |---|---|---|
+        | Public S3 bucket | Data leak | `BlockPublicAcls` disabled, or public ACL/policy |
+        | Security Group `0.0.0.0/0` | Service exposed to the Internet (SSH, RDP, databases) | Inbound rule on a sensitive port from `0.0.0.0/0` |
+        | IAM user without MFA | Account vulnerable to password theft | `list_mfa_devices` empty while a password exists |
+        | Old access key | Never-rotated secret, leak risk | `CreateDate` older than 90 days |
+
+        Port **22** (SSH) and port **3389** (RDP) open to `0.0.0.0/0` are among the most exploited mistakes:
+        bots constantly sweep the Internet looking for them. An **access key** that has not been rotated for
+        months is a time bomb: if it ever leaked, it is still valid. The usual rule is rotation every
+        **90 days** at most.
+
+examples:
+  - title:
+      fr: "Détecter les buckets S3 qui ne bloquent pas l'accès public"
+      en: "Detecting S3 buckets that do not block public access"
+    file: audit_s3.py
+    lang: python
+    kind: secure
+    code: |
+      import boto3
+      from botocore.exceptions import ClientError
+
+      s3 = boto3.client("s3")
+
+
+      def public_access_blocked(bucket: str) -> bool:
+          """True only if ALL four public-access-block flags are enabled."""
+          try:
+              cfg = s3.get_public_access_block(Bucket=bucket)
+              b = cfg["PublicAccessBlockConfiguration"]
+              return all([
+                  b["BlockPublicAcls"], b["IgnorePublicAcls"],
+                  b["BlockPublicPolicy"], b["RestrictPublicBuckets"],
+              ])
+          except ClientError as e:
+              # No configuration at all means public access is NOT blocked
+              if e.response["Error"]["Code"] == "NoSuchPublicAccessBlockConfiguration":
+                  return False
+              raise
+
+
+      def main() -> int:
+          findings = []
+          # list_buckets is not paginated, but we still guard against missing keys
+          for bucket in s3.list_buckets().get("Buckets", []):
+              name = bucket["Name"]
+              if not public_access_blocked(name):
+                  findings.append(name)
+
+          for name in findings:
+              print(f"[PUBLIC] s3://{name} does not block public access")
+          print(f"\n{len(findings)} bucket(s) at risk")
+          # Non-zero exit code fails the pipeline when a finding exists
+          return 1 if findings else 0
+
+
+      if __name__ == "__main__":
+          raise SystemExit(main())
+    output: |
+      [PUBLIC] s3://acme-backups-public does not block public access
+      [PUBLIC] s3://acme-website-logs does not block public access
+
+      2 bucket(s) at risk
+    note:
+      fr: "On exige que les **quatre** verrous de `PublicAccessBlockConfiguration` soient actifs. L'absence totale de configuration (`NoSuchPublicAccessBlockConfiguration`) est traitée comme « non bloqué », car c'est précisément le cas dangereux. Le code de sortie `1` fait échouer la CI."
+      en: "We require all **four** `PublicAccessBlockConfiguration` locks to be on. A total absence of configuration (`NoSuchPublicAccessBlockConfiguration`) is treated as 'not blocked', because that is exactly the dangerous case. Exit code `1` fails CI."
+
+  - title:
+      fr: "Security Groups ouverts à 0.0.0.0/0 sur SSH ou RDP"
+      en: "Security Groups open to 0.0.0.0/0 on SSH or RDP"
+    file: audit_sg.py
+    lang: python
+    kind: secure
+    code: |
+      import boto3
+
+      ec2 = boto3.client("ec2")
+
+      # Ports a bot immediately tries when it finds them open to the world
+      SENSITIVE_PORTS = {22: "SSH", 3389: "RDP", 3306: "MySQL", 5432: "PostgreSQL"}
+
+
+      def rule_covers_port(rule, port: int) -> bool:
+          """A rule covers a port if that port is within its from/to range."""
+          # -1 means "all protocols / all ports"
+          if rule.get("IpProtocol") == "-1":
+              return True
+          lo = rule.get("FromPort")
+          hi = rule.get("ToPort")
+          return lo is not None and hi is not None and lo <= port <= hi
+
+
+      def main() -> int:
+          findings = []
+          paginator = ec2.get_paginator("describe_security_groups")
+          for page in paginator.paginate():
+              for sg in page["SecurityGroups"]:
+                  for rule in sg["IpPermissions"]:
+                      # Is any IPv4 range the whole Internet?
+                      open_v4 = any(r["CidrIp"] == "0.0.0.0/0" for r in rule.get("IpRanges", []))
+                      open_v6 = any(r["CidrIpv6"] == "::/0" for r in rule.get("Ipv6Ranges", []))
+                      if not (open_v4 or open_v6):
+                          continue
+                      for port, name in SENSITIVE_PORTS.items():
+                          if rule_covers_port(rule, port):
+                              findings.append((sg["GroupId"], port, name))
+
+          for gid, port, name in findings:
+              print(f"[OPEN] {gid} exposes {name} (port {port}) to the whole Internet")
+          print(f"\n{len(findings)} exposed rule(s)")
+          return 1 if findings else 0
+
+
+      if __name__ == "__main__":
+          raise SystemExit(main())
+    output: |
+      [OPEN] sg-0a1b2c3d4e exposes SSH (port 22) to the whole Internet
+      [OPEN] sg-0a1b2c3d4e exposes PostgreSQL (port 5432) to the whole Internet
+
+      2 exposed rule(s)
+    note:
+      fr: "Le paginateur garantit que **tous** les Security Groups sont examinés. On gère le protocole `-1` (tous ports) et les plages de ports, et on couvre IPv4 (`0.0.0.0/0`) comme IPv6 (`::/0`). Un port de base de données ouvert au monde est une alerte critique."
+      en: "The paginator guarantees **all** Security Groups are examined. We handle the `-1` protocol (all ports) and port ranges, and cover both IPv4 (`0.0.0.0/0`) and IPv6 (`::/0`). A database port open to the world is a critical alert."
+
+  - title:
+      fr: "Utilisateurs IAM avec un mot de passe mais sans MFA"
+      en: "IAM users with a password but no MFA"
+    file: audit_mfa.py
+    lang: python
+    kind: secure
+    code: |
+      import boto3
+      from botocore.exceptions import ClientError
+
+      iam = boto3.client("iam")
+
+
+      def has_console_password(user: str) -> bool:
+          try:
+              iam.get_login_profile(UserName=user)
+              return True
+          except ClientError as e:
+              # No login profile means the user cannot sign in to the console
+              if e.response["Error"]["Code"] == "NoSuchEntity":
+                  return False
+              raise
+
+
+      def main() -> int:
+          findings = []
+          paginator = iam.get_paginator("list_users")
+          for page in paginator.paginate():
+              for user in page["Users"]:
+                  name = user["UserName"]
+                  # A user without console access does not strictly need MFA here
+                  if not has_console_password(name):
+                      continue
+                  devices = iam.list_mfa_devices(UserName=name)["MFADevices"]
+                  if not devices:
+                      findings.append(name)
+
+          for name in findings:
+              print(f"[NO-MFA] {name} can sign in to the console without MFA")
+          print(f"\n{len(findings)} user(s) without MFA")
+          return 1 if findings else 0
+
+
+      if __name__ == "__main__":
+          raise SystemExit(main())
+    output: |
+      [NO-MFA] deploy-bot-legacy can sign in to the console without MFA
+      [NO-MFA] contractor-jane can sign in to the console without MFA
+
+      2 user(s) without MFA
+    note:
+      fr: "On ne signale que les utilisateurs qui ont réellement un accès console (`get_login_profile` réussit) et aucun périphérique MFA. Un mot de passe sans MFA est exactement ce qu'un attaquant exploite après une fuite d'identifiants ou du phishing."
+      en: "We only flag users who actually have console access (`get_login_profile` succeeds) and no MFA device. A password without MFA is exactly what an attacker exploits after a credential leak or phishing."
+
+  - title:
+      fr: "Clés d'accès IAM plus vieilles que 90 jours"
+      en: "IAM access keys older than 90 days"
+    file: audit_keys.py
+    lang: python
+    kind: secure
+    code: |
+      import boto3
+      from datetime import datetime, timezone
+
+      iam = boto3.client("iam")
+
+      MAX_AGE_DAYS = 90
+
+
+      def main() -> int:
+          now = datetime.now(timezone.utc)
+          findings = []
+
+          user_pages = iam.get_paginator("list_users")
+          for page in user_pages.paginate():
+              for user in page["Users"]:
+                  name = user["UserName"]
+                  # Access keys are themselves paginated per user
+                  key_pages = iam.get_paginator("list_access_keys")
+                  for kp in key_pages.paginate(UserName=name):
+                      for key in kp["AccessKeyMetadata"]:
+                          if key["Status"] != "Active":
+                              continue
+                          age = (now - key["CreateDate"]).days
+                          if age > MAX_AGE_DAYS:
+                              findings.append((name, key["AccessKeyId"], age))
+
+          for name, key_id, age in findings:
+              # Show only the last 4 chars of the key id, never the full value
+              print(f"[OLD-KEY] {name} key ...{key_id[-4:]} is {age} days old")
+          print(f"\n{len(findings)} key(s) older than {MAX_AGE_DAYS} days")
+          return 1 if findings else 0
+
+
+      if __name__ == "__main__":
+          raise SystemExit(main())
+    output: |
+      [OLD-KEY] deploy-bot-legacy key ...3EXAMPLE is 412 days old
+      [OLD-KEY] data-pipeline key ...7QEXAMPL is 190 days old
+
+      2 key(s) older than 90 days
+    note:
+      fr: "`CreateDate` est déjà un `datetime` conscient du fuseau (UTC), donc la soustraction donne directement l'âge. On n'affiche que les 4 derniers caractères de l'identifiant de clé : un rapport d'audit ne doit jamais contenir le secret complet. Les clés inactives sont ignorées."
+      en: "`CreateDate` is already a timezone-aware `datetime` (UTC), so the subtraction gives the age directly. We print only the last 4 characters of the key id: an audit report must never contain the full secret. Inactive keys are skipped."
+
+mistake:
+  fr: |
+    **Oublier la pagination et croire que le compte est propre.**
+
+    ```python
+    users = iam.list_users()["Users"]  # only the first 100 users!
+    ```
+
+    Beaucoup d'API AWS tronquent la réponse (`IsTruncated: true`) et renvoient un `Marker`/`NextToken` pour
+    la suite. Si vous appelez `list_users()` directement, vous n'auditez que les 100 premiers utilisateurs :
+    le 101e, qui n'a pas de MFA, passe inaperçu et votre audit affiche « tout va bien ». Utilisez toujours un
+    **paginateur** (`iam.get_paginator("list_users").paginate()`) qui enchaîne les pages pour vous. Un audit
+    incomplet est pire qu'une absence d'audit, car il donne une fausse assurance.
+  en: |
+    **Forgetting pagination and believing the account is clean.**
+
+    ```python
+    users = iam.list_users()["Users"]  # only the first 100 users!
+    ```
+
+    Many AWS APIs truncate the response (`IsTruncated: true`) and return a `Marker`/`NextToken` for the rest.
+    If you call `list_users()` directly, you only audit the first 100 users: the 101st, who has no MFA, goes
+    unnoticed and your audit reports "all good". Always use a **paginator**
+    (`iam.get_paginator("list_users").paginate()`) that chains the pages for you. An incomplete audit is
+    worse than no audit, because it gives false assurance.
+
+bestPractice:
+  fr: |
+    - **Lecture seule** : faites tourner l'audit avec la politique `SecurityAudit` ou `ViewOnlyAccess`, jamais en admin.
+    - **Pas de clé statique** : préférez un rôle assumé via OIDC en CI ; sinon, des identifiants d'audit dédiés.
+    - **Toujours paginer** avec `get_paginator(...).paginate()` : ne jamais rater une ressource.
+    - **Code de sortie non nul** quand une faille est trouvée, pour faire échouer le pipeline.
+    - **Ne journalisez jamais un secret** : masquez les identifiants de clés, ne montrez pas les ARN sensibles en clair si ce n'est pas utile.
+    - **Préférez les outils éprouvés** (Prowler, ScoutSuite, AWS Config) pour un audit large ; vos scripts ciblent des règles précises.
+  en: |
+    - **Read-only**: run the audit with the `SecurityAudit` or `ViewOnlyAccess` policy, never as admin.
+    - **No static key**: prefer an assumed role via OIDC in CI; otherwise, dedicated audit credentials.
+    - **Always paginate** with `get_paginator(...).paginate()`: never miss a resource.
+    - **Non-zero exit code** when a finding exists, to fail the pipeline.
+    - **Never log a secret**: mask key identifiers, do not print sensitive ARNs in clear when not needed.
+    - **Prefer proven tools** (Prowler, ScoutSuite, AWS Config) for broad audits; your scripts target specific rules.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un script boto3 qui liste les **buckets S3 sans chiffrement par défaut**.
+
+      1. Pour chaque bucket, appelez `s3.get_bucket_encryption(Bucket=name)`.
+      2. Si l'appel lève une `ClientError` avec le code `ServerSideEncryptionConfigurationNotFoundError`, le
+         bucket n'a **pas** de chiffrement par défaut : signalez-le.
+      3. Affichez chaque bucket à risque et terminez avec le code de sortie `1` s'il y en a au moins un,
+         `0` sinon.
+    en: |
+      Write a boto3 script that lists **S3 buckets without default encryption**.
+
+      1. For each bucket, call `s3.get_bucket_encryption(Bucket=name)`.
+      2. If the call raises a `ClientError` with the code `ServerSideEncryptionConfigurationNotFoundError`,
+         the bucket has **no** default encryption: flag it.
+      3. Print each bucket at risk and exit with code `1` if there is at least one, `0` otherwise.
+  solution:
+    file: audit_encryption.py
+    lang: python
+    code: |
+      import boto3
+      from botocore.exceptions import ClientError
+
+      s3 = boto3.client("s3")
+
+
+      def has_default_encryption(bucket: str) -> bool:
+          try:
+              s3.get_bucket_encryption(Bucket=bucket)
+              return True
+          except ClientError as e:
+              # This specific code means no default encryption is configured
+              if e.response["Error"]["Code"] == "ServerSideEncryptionConfigurationNotFoundError":
+                  return False
+              raise  # any other error is a real problem, do not hide it
+
+
+      def main() -> int:
+          findings = [
+              b["Name"]
+              for b in s3.list_buckets().get("Buckets", [])
+              if not has_default_encryption(b["Name"])
+          ]
+          for name in findings:
+              print(f"[NO-ENCRYPTION] s3://{name} has no default encryption")
+          print(f"\n{len(findings)} bucket(s) without default encryption")
+          return 1 if findings else 0
+
+
+      if __name__ == "__main__":
+          raise SystemExit(main())
+    note:
+      fr: "On distingue l'erreur « pas de chiffrement » (attendue, donc un *finding*) de toute autre `ClientError` (droits manquants, bucket inexistant) que l'on relève avec `raise`. Cacher une vraie erreur derrière un `except` trop large fausse l'audit."
+      en: "We distinguish the 'no encryption' error (expected, so a finding) from any other `ClientError` (missing permissions, non-existent bucket) which we re-raise. Hiding a real error behind an overly broad `except` corrupts the audit."
+
+quiz:
+  - q:
+      fr: "Pourquoi utiliser un paginateur boto3 plutôt qu'un simple appel `list_users()` ?"
+      en: "Why use a boto3 paginator rather than a plain `list_users()` call?"
+    options:
+      fr:
+        - "Pour chiffrer les réponses"
+        - "Pour parcourir toutes les ressources, pas seulement la première page"
+        - "Pour accélérer l'appel de 10 fois"
+        - "Pour éviter d'avoir à créer un client"
+      en:
+        - "To encrypt the responses"
+        - "To walk through all resources, not just the first page"
+        - "To make the call 10 times faster"
+        - "To avoid creating a client"
+    answer: 1
+    why:
+      fr: "AWS tronque les grandes listes ; sans pagination, on manque les ressources au-delà de la première page et l'audit est incomplet."
+      en: "AWS truncates large lists; without pagination you miss resources beyond the first page and the audit is incomplete."
+  - q:
+      fr: "Quels droits un script d'audit AWS devrait-il posséder ?"
+      en: "What permissions should an AWS audit script hold?"
+    options:
+      fr:
+        - "Des droits d'administrateur complets"
+        - "Le droit de supprimer les ressources non conformes"
+        - "Des droits de lecture seule (SecurityAudit / ViewOnlyAccess)"
+        - "Aucun droit, il s'exécute en anonyme"
+      en:
+        - "Full administrator rights"
+        - "The right to delete non-compliant resources"
+        - "Read-only rights (SecurityAudit / ViewOnlyAccess)"
+        - "No rights, it runs anonymously"
+    answer: 2
+    why:
+      fr: "Un audit ne modifie rien : le moindre privilège impose des droits de lecture seule pour limiter les dégâts en cas de compromission du script."
+      en: "An audit changes nothing: least privilege calls for read-only rights to limit damage if the script is compromised."
+  - q:
+      fr: "Pourquoi un Security Group autorisant le port 22 depuis `0.0.0.0/0` est-il dangereux ?"
+      en: "Why is a Security Group allowing port 22 from `0.0.0.0/0` dangerous?"
+    options:
+      fr:
+        - "Parce que le port 22 est réservé à AWS"
+        - "Parce que SSH ne fonctionne pas sur Internet"
+        - "Parce que cela double la facture réseau"
+        - "Parce que SSH devient exposé au monde entier et ciblé par des robots"
+      en:
+        - "Because port 22 is reserved for AWS"
+        - "Because SSH does not work over the Internet"
+        - "Because it doubles the network bill"
+        - "Because SSH becomes exposed to the whole world and targeted by bots"
+    answer: 3
+    why:
+      fr: "`0.0.0.0/0` signifie « toutes les adresses » ; des robots balaient en continu Internet à la recherche de SSH ou RDP ouverts."
+      en: "`0.0.0.0/0` means 'all addresses'; bots continuously sweep the Internet looking for open SSH or RDP."
+  - q:
+      fr: "Après combien de temps une clé d'accès IAM devrait-elle au plus être renouvelée ?"
+      en: "After how long should an IAM access key at most be rotated?"
+    options:
+      fr:
+        - "Environ 90 jours"
+        - "Jamais, une fois créée elle est permanente"
+        - "Toutes les 10 ans"
+        - "Seulement si elle a déjà fuité"
+      en:
+        - "About 90 days"
+        - "Never, once created it is permanent"
+        - "Every 10 years"
+        - "Only if it has already leaked"
+    answer: 0
+    why:
+      fr: "La rotation régulière (typiquement 90 jours) limite la fenêtre d'exploitation d'une clé qui aurait fuité sans qu'on le sache."
+      en: "Regular rotation (typically 90 days) limits the exploitation window of a key that may have leaked without your knowledge."
+  - q:
+      fr: "Dans un rapport d'audit, comment afficher un identifiant de clé d'accès ?"
+      en: "In an audit report, how should an access key identifier be printed?"
+    options:
+      fr:
+        - "En clair, en entier, pour faciliter le débogage"
+        - "Masqué, par exemple en ne montrant que les 4 derniers caractères"
+        - "Dans un cookie côté client"
+        - "Encodé en base64, ce qui le rend sûr"
+      en:
+        - "In full clear text, to ease debugging"
+        - "Masked, for example showing only the last 4 characters"
+        - "In a client-side cookie"
+        - "Base64-encoded, which makes it safe"
+    answer: 1
+    why:
+      fr: "Un rapport ne doit jamais contenir un secret complet ; afficher les 4 derniers caractères suffit à identifier la clé sans la divulguer."
+      en: "A report must never contain a full secret; showing the last 4 characters is enough to identify the key without disclosing it."

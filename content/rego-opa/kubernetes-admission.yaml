@@ -1,0 +1,530 @@
+description:
+  fr: "Utiliser OPA Gatekeeper pour contrôler l'admission Kubernetes : ConstraintTemplate et Constraint pour interdire les pods privilégiés, exiger le non-root, filtrer les registres et imposer des labels."
+  en: "Use OPA Gatekeeper to control Kubernetes admission: ConstraintTemplate and Constraint to block privileged pods, require non-root, filter registries and enforce labels."
+duration: 30
+
+intro:
+  fr: |
+    Kubernetes accepte par défaut presque tout ce qu'on lui envoie : un pod privilégié, une image tirée
+    d'un registre inconnu, un conteneur qui tourne en `root`. Le **contrôle d'admission** (*admission
+    control*) est le poste de douane placé **avant** que l'objet ne soit écrit dans le cluster : il peut
+    l'accepter, le modifier ou le **rejeter**.
+
+    **OPA Gatekeeper** branche OPA sur ce poste de douane via un *validating admission webhook*. L'analogie :
+    une **douane à l'aéroport**. Le ConstraintTemplate est le règlement douanier (« interdiction des objets
+    tranchants », écrit une fois en Rego) ; le Constraint est son application concrète (« à partir de
+    demain, à tous les terminaux »). Quand un pod non conforme arrive, Gatekeeper le refuse et renvoie le
+    message de la politique à l'utilisateur.
+
+    Dans cette leçon vous allez écrire des ConstraintTemplate en Rego (motif `violation`), les activer avec
+    des Constraint, les paramétrer (registres autorisés, labels obligatoires) et voir le refus renvoyé par
+    `kubectl apply`. C'est l'application directe des règles `deny`/`violation` du cours précédent.
+  en: |
+    By default Kubernetes accepts almost anything you send it: a privileged pod, an image pulled from an
+    unknown registry, a container running as `root`. **Admission control** is the customs post placed
+    **before** the object is written to the cluster: it can accept, mutate or **reject** it.
+
+    **OPA Gatekeeper** plugs OPA into that customs post through a *validating admission webhook*. The
+    analogy: **airport customs**. The ConstraintTemplate is the customs regulation ("no sharp objects",
+    written once in Rego); the Constraint is its concrete enforcement ("from tomorrow, at every terminal").
+    When a non-compliant pod arrives, Gatekeeper rejects it and returns the policy's message to the user.
+
+    In this lesson you will write ConstraintTemplates in Rego (the `violation` pattern), activate them with
+    Constraints, parameterize them (allowed registries, required labels) and see the rejection returned by
+    `kubectl apply`. This is the direct application of the `deny`/`violation` rules from the previous lesson.
+
+sections:
+  - heading:
+      fr: "Gatekeeper : deux objets, ConstraintTemplate et Constraint"
+      en: "Gatekeeper: two objects, ConstraintTemplate and Constraint"
+    body:
+      fr: |
+        Gatekeeper sépare la **règle** de son **application**, ce qui permet de réutiliser une même règle
+        avec des réglages différents :
+
+        | Objet | Rôle | Analogie |
+        |---|---|---|
+        | **ConstraintTemplate** | définit la logique Rego **et** un nouveau type (CRD) de contrainte | le texte de loi |
+        | **Constraint** | instancie le template : où il s'applique, avec quels paramètres | le décret d'application |
+
+        Un ConstraintTemplate contient un bloc `rego` qui doit définir une règle partielle **`violation`**
+        (l'équivalent Gatekeeper du `deny` vu précédemment) renvoyant des objets `{"msg": ...}`. Il déclare
+        aussi, en OpenAPI, le schéma des paramètres acceptés. Une fois le template appliqué, Kubernetes
+        connaît un nouveau *kind* (par exemple `K8sBlockPrivileged`) : chaque Constraint de ce kind active
+        la règle sur un périmètre (`match`) et avec des paramètres.
+      en: |
+        Gatekeeper separates the **rule** from its **enforcement**, which lets you reuse one rule with
+        different settings:
+
+        | Object | Role | Analogy |
+        |---|---|---|
+        | **ConstraintTemplate** | defines the Rego logic **and** a new constraint type (CRD) | the law text |
+        | **Constraint** | instantiates the template: where it applies, with which parameters | the enforcement decree |
+
+        A ConstraintTemplate contains a `rego` block that must define a partial rule **`violation`**
+        (Gatekeeper's equivalent of the `deny` seen earlier) returning `{"msg": ...}` objects. It also
+        declares, in OpenAPI, the schema of the accepted parameters. Once the template is applied,
+        Kubernetes knows a new *kind* (for example `K8sBlockPrivileged`): each Constraint of that kind
+        enables the rule over a scope (`match`) and with parameters.
+  - heading:
+      fr: "L'entrée d'admission : input.review.object"
+      en: "The admission input: input.review.object"
+    body:
+      fr: |
+        Dans une politique Gatekeeper, l'`input` n'est pas le pod brut : c'est une *AdmissionReview*. L'objet
+        soumis se lit sous **`input.review.object`**. Pour un pod, les conteneurs sont donc
+        `input.review.object.spec.containers`. Gatekeeper fournit aussi des bibliothèques utiles, notamment
+        `data.lib.kubernetes` dans certains catalogues, mais on peut tout écrire soi-même.
+
+        Le message renvoyé par `violation` est affiché tel quel à l'utilisateur qui lance `kubectl apply` :
+        il doit être **clair et actionnable** (« container X runs as privileged, set securityContext.privileged
+        to false »). Un bon message réduit les allers-retours avec l'équipe plateforme.
+
+        Gatekeeper applique une contrainte selon son `enforcementAction` :
+
+        - `deny` (défaut) : le pod non conforme est **rejeté** ;
+        - `warn` : il est admis mais un avertissement est renvoyé ;
+        - `dryrun` : rien n'est bloqué, les violations sont seulement comptabilisées (idéal pour déployer
+          une nouvelle règle sans casser la production).
+      en: |
+        In a Gatekeeper policy, `input` is not the raw pod: it is an *AdmissionReview*. The submitted object
+        is read under **`input.review.object`**. For a pod, the containers are therefore
+        `input.review.object.spec.containers`. Gatekeeper also ships useful libraries, notably
+        `data.lib.kubernetes` in some catalogs, but you can write everything yourself.
+
+        The message returned by `violation` is shown as-is to the user who runs `kubectl apply`: it must be
+        **clear and actionable** ("container X runs as privileged, set securityContext.privileged to
+        false"). A good message cuts down the back-and-forth with the platform team.
+
+        Gatekeeper enforces a constraint according to its `enforcementAction`:
+
+        - `deny` (default): the non-compliant pod is **rejected**;
+        - `warn`: it is admitted but a warning is returned;
+        - `dryrun`: nothing is blocked, violations are merely counted (ideal to roll out a new rule without
+          breaking production).
+  - heading:
+      fr: "Les règles de base d'un cluster durci"
+      en: "The baseline rules of a hardened cluster"
+    body:
+      fr: |
+        Quatre contraintes forment un socle de sécurité que l'on retrouve dans presque toutes les
+        organisations, et qui recoupe les *Pod Security Standards* « restricted » :
+
+        1. **Interdire les pods privilégiés** (`securityContext.privileged: true`) : un conteneur privilégié
+           a un accès quasi complet au nœud hôte.
+        2. **Exiger l'exécution non-root** (`runAsNonRoot: true`) : limite l'impact d'une évasion de conteneur.
+        3. **N'autoriser que des registres de confiance** : empêche de tirer `docker.io/n-importe-quoi` ;
+           seules les images de votre registre interne passent.
+        4. **Imposer des labels obligatoires** (`owner`, `cost-center`) : traçabilité et facturation.
+
+        Les deux premières sont des règles sans paramètre (vraies partout) ; les deux dernières se
+        paramètrent (quelle liste de registres ? quels labels ?). C'est précisément pour cela que
+        Gatekeeper sépare template et constraint.
+      en: |
+        Four constraints form a security baseline found in almost every organisation, overlapping the
+        "restricted" *Pod Security Standards*:
+
+        1. **Block privileged pods** (`securityContext.privileged: true`): a privileged container has near
+           full access to the host node.
+        2. **Require non-root** (`runAsNonRoot: true`): limits the impact of a container escape.
+        3. **Allow only trusted registries**: prevents pulling `docker.io/anything`; only images from your
+           internal registry pass.
+        4. **Enforce required labels** (`owner`, `cost-center`): traceability and billing.
+
+        The first two are parameter-free rules (true everywhere); the last two are parameterized (which
+        list of registries? which labels?). This is exactly why Gatekeeper separates template and constraint.
+
+examples:
+  - title:
+      fr: "Vulnérable : un pod privilégié qu'un cluster nu accepte"
+      en: "Vulnerable: a privileged pod a bare cluster accepts"
+    file: bad-pod.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: debug
+        # No owner/cost-center label either
+      spec:
+        containers:
+          - name: tools
+            image: docker.io/library/busybox:latest   # untrusted registry, mutable tag
+            securityContext:
+              privileged: true          # near-root access to the host node
+              # runAsNonRoot not set -> may run as uid 0
+            command: ["sleep", "3600"]
+    output: |
+      # On a cluster WITHOUT Gatekeeper, this is accepted as-is:
+      $ kubectl apply -f bad-pod.yaml
+      pod/debug created
+    note:
+      fr: "Sans contrôle d'admission, ce pod passe : privilégié, potentiellement root, tiré d'un registre public avec un tag `latest` mutable, et sans label de traçabilité. Les contraintes suivantes vont bloquer chacun de ces défauts."
+      en: "With no admission control, this pod goes through: privileged, possibly root, pulled from a public registry with a mutable `latest` tag, and no traceability label. The following constraints will block each of these defects."
+
+  - title:
+      fr: "Sécurisé : ConstraintTemplate interdisant les conteneurs privilégiés"
+      en: "Secure: ConstraintTemplate blocking privileged containers"
+    file: template-privileged.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: templates.gatekeeper.sh/v1
+      kind: ConstraintTemplate
+      metadata:
+        name: k8sblockprivileged
+      spec:
+        crd:
+          spec:
+            names:
+              kind: K8sBlockPrivileged   # the new constraint kind this template creates
+        targets:
+          - target: admission.k8s.gatekeeper.sh
+            rego: |
+              package k8sblockprivileged
+
+              import rego.v1
+
+              # The submitted object is under input.review.object
+              violation contains {"msg": msg} if {
+                  some c in input.review.object.spec.containers
+                  c.securityContext.privileged == true
+                  msg := sprintf("container %q must not run as privileged", [c.name])
+              }
+    note:
+      fr: "Le template déclare un nouveau *kind* `K8sBlockPrivileged` et sa logique Rego. Le motif `violation contains {\"msg\": msg} if` est l'équivalent Gatekeeper du `deny` du cours précédent. `import rego.v1` active la syntaxe moderne."
+      en: "The template declares a new *kind* `K8sBlockPrivileged` and its Rego logic. The `violation contains {\"msg\": msg} if` pattern is Gatekeeper's equivalent of the earlier `deny`. `import rego.v1` enables the modern syntax."
+
+  - title:
+      fr: "Activer la règle avec un Constraint et voir le refus"
+      en: "Enabling the rule with a Constraint and seeing the rejection"
+    file: constraint-privileged.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: constraints.gatekeeper.sh/v1beta1
+      kind: K8sBlockPrivileged       # the kind created by the template above
+      metadata:
+        name: no-privileged-pods
+      spec:
+        enforcementAction: deny      # reject; use "dryrun" to roll out safely first
+        match:
+          kinds:
+            - apiGroups: [""]
+              kinds: ["Pod"]
+          # Exclude Gatekeeper's own namespaces to avoid locking yourself out
+          excludedNamespaces: ["kube-system", "gatekeeper-system"]
+    output: |
+      $ kubectl apply -f constraint-privileged.yaml
+      k8sblockprivileged.constraints.gatekeeper.sh/no-privileged-pods created
+
+      $ kubectl apply -f bad-pod.yaml
+      Error from server (Forbidden): error when creating "bad-pod.yaml":
+      admission webhook "validation.gatekeeper.sh" denied the request:
+      [no-privileged-pods] container "tools" must not run as privileged
+    note:
+      fr: "Le Constraint active le template sur tous les pods, sauf les namespaces système. Le pod privilégié est désormais **rejeté** et l'utilisateur reçoit directement le message de la politique. Commencez en `dryrun` pour mesurer l'impact avant de passer en `deny`."
+      en: "The Constraint enables the template on all pods, except system namespaces. The privileged pod is now **rejected** and the user gets the policy message directly. Start in `dryrun` to measure the impact before switching to `deny`."
+
+  - title:
+      fr: "Paramétré : n'autoriser que des registres de confiance"
+      en: "Parameterized: allowing only trusted registries"
+    file: template-registries.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: templates.gatekeeper.sh/v1
+      kind: ConstraintTemplate
+      metadata:
+        name: k8sallowedregistries
+      spec:
+        crd:
+          spec:
+            names:
+              kind: K8sAllowedRegistries
+            validation:
+              openAPIV3Schema:
+                type: object
+                properties:
+                  registries:                 # parameter: list of allowed prefixes
+                    type: array
+                    items:
+                      type: string
+        targets:
+          - target: admission.k8s.gatekeeper.sh
+            rego: |
+              package k8sallowedregistries
+
+              import rego.v1
+
+              violation contains {"msg": msg} if {
+                  some c in input.review.object.spec.containers
+                  # Deny unless the image starts with one of the allowed prefixes
+                  not registry_allowed(c.image)
+                  msg := sprintf("image %q is not from an allowed registry %v", [c.image, input.parameters.registries])
+              }
+
+              registry_allowed(image) if {
+                  some prefix in input.parameters.registries
+                  startswith(image, prefix)
+              }
+      ---
+      apiVersion: constraints.gatekeeper.sh/v1beta1
+      kind: K8sAllowedRegistries
+      metadata:
+        name: only-internal-registry
+      spec:
+        match:
+          kinds:
+            - apiGroups: [""]
+              kinds: ["Pod"]
+        parameters:
+          registries:
+            - "registry.example.com/"     # your internal registry
+            - "public.ecr.aws/"           # a vetted mirror
+    note:
+      fr: "Le `openAPIV3Schema` déclare le paramètre `registries`, lu en Rego via `input.parameters.registries`. La fonction `registry_allowed` factorise le test de préfixe. `docker.io/library/busybox` ne commençant par aucun préfixe autorisé, le pool est refusé."
+      en: "The `openAPIV3Schema` declares the `registries` parameter, read in Rego via `input.parameters.registries`. The `registry_allowed` function factors the prefix test. Since `docker.io/library/busybox` matches none of the allowed prefixes, the pod is rejected."
+
+  - title:
+      fr: "Imposer des labels et tester hors cluster avec gator"
+      en: "Enforcing labels and testing offline with gator"
+    file: template-labels.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: templates.gatekeeper.sh/v1
+      kind: ConstraintTemplate
+      metadata:
+        name: k8srequiredlabels
+      spec:
+        crd:
+          spec:
+            names:
+              kind: K8sRequiredLabels
+            validation:
+              openAPIV3Schema:
+                type: object
+                properties:
+                  labels:
+                    type: array
+                    items:
+                      type: string
+        targets:
+          - target: admission.k8s.gatekeeper.sh
+            rego: |
+              package k8srequiredlabels
+
+              import rego.v1
+
+              violation contains {"msg": msg} if {
+                  some required in input.parameters.labels
+                  not input.review.object.metadata.labels[required]
+                  msg := sprintf("missing required label %q", [required])
+              }
+      ---
+      apiVersion: constraints.gatekeeper.sh/v1beta1
+      kind: K8sRequiredLabels
+      metadata:
+        name: require-owner-and-cost-center
+      spec:
+        match:
+          kinds:
+            - apiGroups: [""]
+              kinds: ["Pod"]
+        parameters:
+          labels: ["owner", "cost-center"]
+    output: |
+      # gator test evaluates constraints against manifests WITHOUT a live cluster (great for CI)
+      $ gator test --filename=template-labels.yaml --filename=bad-pod.yaml
+      bad-pod.yaml: Pod/debug: [require-owner-and-cost-center] missing required label "owner"
+      bad-pod.yaml: Pod/debug: [require-owner-and-cost-center] missing required label "cost-center"
+    note:
+      fr: "`gator test` (livré avec Gatekeeper) évalue les contraintes contre des manifests, sans cluster : parfait en CI pour attraper un pod non conforme avant même le `git merge`. Les deux labels manquants produisent deux violations."
+      en: "`gator test` (shipped with Gatekeeper) evaluates constraints against manifests, with no cluster: perfect in CI to catch a non-compliant pod before the `git merge`. The two missing labels produce two violations."
+
+mistake:
+  fr: |
+    **Lire `input.spec` au lieu de `input.review.object.spec`.**
+
+    C'est l'erreur numéro un en Gatekeeper. Dans un ConstraintTemplate, l'`input` est une *AdmissionReview*,
+    pas l'objet brut : les conteneurs d'un pod sont sous `input.review.object.spec.containers`. Si vous
+    oubliez `review.object`, votre règle lit `undefined`, ne trouve jamais de violation, et la contrainte
+    **laisse tout passer** sans la moindre erreur visible — un faux sentiment de sécurité. Autre piège :
+    passer directement une nouvelle contrainte en `enforcementAction: deny` sur un cluster peuplé, ce qui
+    peut bloquer des déploiements légitimes. Déployez toujours en `dryrun` d'abord, lisez le rapport de
+    violations, puis basculez en `deny`.
+  en: |
+    **Reading `input.spec` instead of `input.review.object.spec`.**
+
+    This is the number-one Gatekeeper mistake. In a ConstraintTemplate, `input` is an *AdmissionReview*,
+    not the raw object: a pod's containers are under `input.review.object.spec.containers`. If you forget
+    `review.object`, your rule reads `undefined`, never finds a violation, and the constraint **lets
+    everything through** with no visible error — a false sense of security. Another trap: switching a brand
+    new constraint straight to `enforcementAction: deny` on a populated cluster, which can block legitimate
+    deployments. Always roll out in `dryrun` first, read the violation report, then flip to `deny`.
+
+bestPractice:
+  fr: |
+    - **Déployez en `dryrun`, puis `warn`, puis `deny`** : mesurez l'impact d'une règle avant de bloquer.
+    - **Excluez `kube-system` et `gatekeeper-system`** du `match` pour ne pas vous verrouiller hors du cluster.
+    - **Messages actionnables** (`sprintf` avec le nom du conteneur et le réglage à corriger).
+    - **Testez en CI avec `gator test`** : vos contraintes sont vérifiées sans cluster, avant la fusion.
+    - **Réutilisez un template, variez les Constraint** : un `K8sRequiredLabels` sert pour `owner`, `team`, etc.
+    - **Versionnez templates et constraints dans Git** et appliquez-les via GitOps (Argo CD, Flux), jamais à la main.
+  en: |
+    - **Roll out as `dryrun`, then `warn`, then `deny`**: measure a rule's impact before blocking.
+    - **Exclude `kube-system` and `gatekeeper-system`** from `match` so you do not lock yourself out.
+    - **Actionable messages** (`sprintf` with the container name and the setting to fix).
+    - **Test in CI with `gator test`**: your constraints are checked without a cluster, before the merge.
+    - **Reuse a template, vary the Constraints**: one `K8sRequiredLabels` serves `owner`, `team`, etc.
+    - **Version templates and constraints in Git** and apply them via GitOps (Argo CD, Flux), never by hand.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un ConstraintTemplate Gatekeeper `K8sRequireRunAsNonRoot` qui refuse tout pod dont **au moins
+      un** conteneur ne définit pas `securityContext.runAsNonRoot: true`. Le message doit nommer le
+      conteneur fautif. Fournissez aussi le Constraint qui l'applique à tous les pods du cluster.
+
+      Rappel : dans Gatekeeper, l'objet soumis se lit sous `input.review.object`.
+    en: |
+      Write a Gatekeeper ConstraintTemplate `K8sRequireRunAsNonRoot` that rejects any pod where **at least
+      one** container does not set `securityContext.runAsNonRoot: true`. The message must name the offending
+      container. Also provide the Constraint applying it to all pods in the cluster.
+
+      Reminder: in Gatekeeper, the submitted object is read under `input.review.object`.
+  solution:
+    file: require-nonroot.yaml
+    lang: yaml
+    code: |
+      apiVersion: templates.gatekeeper.sh/v1
+      kind: ConstraintTemplate
+      metadata:
+        name: k8srequirerunasnonroot
+      spec:
+        crd:
+          spec:
+            names:
+              kind: K8sRequireRunAsNonRoot
+        targets:
+          - target: admission.k8s.gatekeeper.sh
+            rego: |
+              package k8srequirerunasnonroot
+
+              import rego.v1
+
+              violation contains {"msg": msg} if {
+                  some c in input.review.object.spec.containers
+                  # true only when the field is missing or not exactly true
+                  not c.securityContext.runAsNonRoot == true
+                  msg := sprintf("container %q must set securityContext.runAsNonRoot: true", [c.name])
+              }
+      ---
+      apiVersion: constraints.gatekeeper.sh/v1beta1
+      kind: K8sRequireRunAsNonRoot
+      metadata:
+        name: require-nonroot
+      spec:
+        enforcementAction: deny
+        match:
+          kinds:
+            - apiGroups: [""]
+              kinds: ["Pod"]
+          excludedNamespaces: ["kube-system", "gatekeeper-system"]
+    note:
+      fr: "`not c.securityContext.runAsNonRoot == true` capture les deux cas fautifs : champ absent (`undefined`) et valeur `false`. Testez-le hors cluster avec `gator test --filename=require-nonroot.yaml --filename=bad-pod.yaml`."
+      en: "`not c.securityContext.runAsNonRoot == true` captures both faulty cases: missing field (`undefined`) and value `false`. Test it offline with `gator test --filename=require-nonroot.yaml --filename=bad-pod.yaml`."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre un ConstraintTemplate et un Constraint ?"
+      en: "What is the difference between a ConstraintTemplate and a Constraint?"
+    options:
+      fr:
+        - "Le template définit la logique Rego et un nouveau kind ; le Constraint l'active avec un périmètre et des paramètres"
+        - "Ils sont identiques, l'un est l'alias de l'autre"
+        - "Le Constraint contient le Rego, le template contient les paramètres"
+        - "Le template s'applique aux nœuds, le Constraint aux pods"
+      en:
+        - "The template defines the Rego logic and a new kind; the Constraint enables it with a scope and parameters"
+        - "They are identical, one is an alias of the other"
+        - "The Constraint holds the Rego, the template holds the parameters"
+        - "The template applies to nodes, the Constraint to pods"
+    answer: 0
+    why:
+      fr: "Le template contient la règle Rego et déclare un kind ; chaque Constraint de ce kind décide où la règle s'applique (`match`) et avec quels paramètres."
+      en: "The template holds the Rego rule and declares a kind; each Constraint of that kind decides where the rule applies (`match`) and with which parameters."
+  - q:
+      fr: "Dans une politique Gatekeeper, où se trouve l'objet soumis (le pod) ?"
+      en: "In a Gatekeeper policy, where is the submitted object (the pod) found?"
+    options:
+      fr:
+        - "`input.pod`"
+        - "`input.object`"
+        - "`input.review.object`"
+        - "`data.pod`"
+      en:
+        - "`input.pod`"
+        - "`input.object`"
+        - "`input.review.object`"
+        - "`data.pod`"
+    answer: 2
+    why:
+      fr: "L'`input` est une AdmissionReview ; l'objet concerné est sous `input.review.object`. Oublier `review.object` fait lire `undefined` et la règle ne bloque rien."
+      en: "The `input` is an AdmissionReview; the object is under `input.review.object`. Forgetting `review.object` reads `undefined` and the rule blocks nothing."
+  - q:
+      fr: "Quel nom de règle Gatekeeper attend-il dans le Rego d'un template ?"
+      en: "Which rule name does Gatekeeper expect in a template's Rego?"
+    options:
+      fr:
+        - "`allow`"
+        - "`deny`"
+        - "`violation`"
+        - "`main`"
+      en:
+        - "`allow`"
+        - "`deny`"
+        - "`violation`"
+        - "`main`"
+    answer: 2
+    why:
+      fr: "Gatekeeper collecte les éléments de l'ensemble `violation`, chacun de la forme `{\"msg\": ...}`. C'est l'équivalent du `deny` de Conftest."
+      en: "Gatekeeper collects the elements of the `violation` set, each shaped as `{\"msg\": ...}`. It is the equivalent of Conftest's `deny`."
+  - q:
+      fr: "Comment déployer une nouvelle contrainte sans risquer de bloquer la production ?"
+      en: "How do you roll out a new constraint without risking blocking production?"
+    options:
+      fr:
+        - "En la mettant directement en `enforcementAction: deny`"
+        - "En commençant par `enforcementAction: dryrun` pour compter les violations"
+        - "En la supprimant après installation"
+        - "En désactivant le webhook"
+      en:
+        - "By setting it straight to `enforcementAction: deny`"
+        - "By starting with `enforcementAction: dryrun` to count violations"
+        - "By deleting it after install"
+        - "By disabling the webhook"
+    answer: 1
+    why:
+      fr: "`dryrun` applique la règle sans rien bloquer : on lit le rapport de violations sur le trafic réel, puis on bascule en `deny` une fois sûr."
+      en: "`dryrun` applies the rule without blocking anything: you read the violation report on real traffic, then flip to `deny` once confident."
+  - q:
+      fr: "À quoi sert `gator test` ?"
+      en: "What is `gator test` for?"
+    options:
+      fr:
+        - "À installer Gatekeeper sur le cluster"
+        - "À évaluer templates et constraints contre des manifests sans cluster, par exemple en CI"
+        - "À supprimer les pods non conformes existants"
+        - "À générer un ConstraintTemplate automatiquement"
+      en:
+        - "To install Gatekeeper on the cluster"
+        - "To evaluate templates and constraints against manifests without a cluster, for example in CI"
+        - "To delete existing non-compliant pods"
+        - "To generate a ConstraintTemplate automatically"
+    answer: 1
+    why:
+      fr: "`gator test` évalue localement vos contraintes contre des fichiers YAML : on attrape un pod non conforme en CI, avant la fusion, sans dépendre d'un cluster vivant."
+      en: "`gator test` evaluates your constraints locally against YAML files: you catch a non-compliant pod in CI, before the merge, without depending on a live cluster."

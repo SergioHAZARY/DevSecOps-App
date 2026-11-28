@@ -1,0 +1,388 @@
+description:
+  fr: "Empaqueter l'API dans une image Docker durcie : build multi-stage, utilisateur non-root, image slim, .dockerignore et scan Trivy avant de livrer."
+  en: "Package the API in a hardened Docker image: multi-stage build, non-root user, slim image, .dockerignore and a Trivy scan before shipping."
+duration: 25
+
+intro:
+  fr: |
+    L'API fonctionne sur votre machine. Pour la livrer partout de façon identique, on la met dans une
+    **image Docker** : un colis autonome qui contient l'application et tout ce qu'il lui faut pour tourner.
+
+    Mais une image mal construite est un danger : trop grosse, tournant en **root**, embarquant des outils
+    inutiles. Nous allons bâtir une image **durcie** avec deux techniques clés :
+
+    - le **build multi-stage** : on compile/installe dans une première étape, puis on ne copie que le
+      strict nécessaire dans l'image finale ;
+    - l'**utilisateur non-root** : si l'application est compromise, l'attaquant n'a pas les droits
+      administrateur dans le conteneur.
+
+    Analogie : au lieu de déménager toute l'usine (outils, cartons, poussière), on n'expédie que le
+    produit fini dans un carton propre et scellé. Puis on passe le colis au détecteur (**Trivy**) avant l'envoi.
+  en: |
+    The API runs on your machine. To ship it everywhere identically, we put it in a **Docker image**: a
+    self-contained parcel holding the application and everything it needs to run.
+
+    But a badly built image is a danger: too large, running as **root**, carrying useless tools. We will
+    build a **hardened** image with two key techniques:
+
+    - the **multi-stage build**: we compile/install in a first stage, then copy only the bare minimum
+      into the final image;
+    - the **non-root user**: if the application is compromised, the attacker does not have admin rights
+      inside the container.
+
+    Analogy: instead of moving the whole factory (tools, boxes, dust), we ship only the finished product
+    in a clean, sealed box. Then we run the parcel through a scanner (**Trivy**) before sending it.
+
+sections:
+  - heading:
+      fr: "Le build multi-stage : petite image, moins de risques"
+      en: "The multi-stage build: small image, fewer risks"
+    body:
+      fr: |
+        Un `Dockerfile` multi-stage comporte plusieurs `FROM`. La première étape (**build**) installe les
+        dépendances dans un environnement virtuel. La seconde (**runtime**) repart d'une image propre et
+        **copie uniquement** cet environnement et le code `app/`.
+
+        Résultat : l'image finale ne contient ni compilateur, ni cache pip, ni outils de build. Moins de
+        paquets, c'est moins de CVE possibles et une surface d'attaque réduite. On part d'une image
+        `python:3.12-slim` (Debian minimal) plutôt que de l'image complète, bien plus lourde.
+      en: |
+        A multi-stage `Dockerfile` has several `FROM` instructions. The first stage (**build**) installs
+        dependencies into a virtual environment. The second (**runtime**) starts from a clean image and
+        **copies only** that environment and the `app/` code.
+
+        The result: the final image contains no compiler, no pip cache, no build tools. Fewer packages
+        means fewer possible CVEs and a reduced attack surface. We start from a `python:3.12-slim` image
+        (minimal Debian) rather than the full, much heavier image.
+  - heading:
+      fr: "Ne jamais tourner en root"
+      en: "Never run as root"
+    body:
+      fr: |
+        Par défaut, un conteneur tourne en **root**. Si l'application est piratée, l'attaquant hérite de
+        ces droits et peut tenter de s'échapper du conteneur. La parade est simple : créer un utilisateur
+        sans privilège et passer dessus avec `USER`.
+
+        On ajoute aussi un `HEALTHCHECK` (Docker sait si le conteneur est en bonne santé) et on expose le
+        port **8000**, servi par **gunicorn**, un serveur WSGI de production. Le serveur de développement
+        intégré de Flask (`flask run`) ne doit **jamais** être utilisé en production.
+      en: |
+        By default a container runs as **root**. If the application is hacked, the attacker inherits those
+        rights and can try to escape the container. The defense is simple: create an unprivileged user and
+        switch to it with `USER`.
+
+        We also add a `HEALTHCHECK` (Docker knows whether the container is healthy) and expose port
+        **8000**, served by **gunicorn**, a production WSGI server. Flask's built-in development server
+        (`flask run`) must **never** be used in production.
+  - heading:
+      fr: "Scanner l'image avec Trivy avant de livrer"
+      en: "Scanning the image with Trivy before shipping"
+    body:
+      fr: |
+        Même une image minimale peut contenir un paquet système vulnérable. **Trivy** (d'Aqua Security)
+        scanne l'image et liste les CVE des paquets OS et Python.
+
+        En local, on lance `trivy image`. Dans le pipeline (leçon 4), on fera **échouer** le build si une
+        vulnérabilité `HIGH` ou `CRITICAL` **corrigeable** est trouvée (`--exit-code 1 --ignore-unfixed`).
+        On ignore les CVE sans correctif disponible pour ne pas bloquer sur ce qu'on ne peut pas réparer,
+        tout en gardant la trace.
+      en: |
+        Even a minimal image can contain a vulnerable system package. **Trivy** (by Aqua Security) scans
+        the image and lists the CVEs of OS and Python packages.
+
+        Locally we run `trivy image`. In the pipeline (lesson 4) we will **fail** the build if a
+        **fixable** `HIGH` or `CRITICAL` vulnerability is found (`--exit-code 1 --ignore-unfixed`). We
+        ignore CVEs with no available fix so as not to block on what we cannot repair, while still
+        keeping a record.
+
+examples:
+  - title:
+      fr: "Dockerfile durci : multi-stage et non-root"
+      en: "Hardened Dockerfile: multi-stage and non-root"
+    file: Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # ---- Stage 1: build dependencies into an isolated venv ----
+      FROM python:3.12-slim AS build
+      WORKDIR /app
+      # Create a virtual environment; keep the toolchain in THIS stage only.
+      RUN python -m venv /opt/venv
+      ENV PATH="/opt/venv/bin:$PATH"
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+
+      # ---- Stage 2: minimal runtime, no build tools ----
+      FROM python:3.12-slim AS runtime
+      # Create an unprivileged user; the app will NEVER run as root.
+      RUN useradd --create-home --uid 10001 appuser
+      WORKDIR /app
+      # Copy only the built venv and the application code.
+      COPY --from=build /opt/venv /opt/venv
+      COPY app/ ./app/
+      COPY wsgi.py .
+      ENV PATH="/opt/venv/bin:$PATH" \
+          PYTHONDONTWRITEBYTECODE=1 \
+          PYTHONUNBUFFERED=1 \
+          DATABASE=/home/appuser/items.db
+      USER 10001
+      EXPOSE 8000
+      # Liveness check hitting the /health endpoint from inside the container.
+      HEALTHCHECK --interval=30s --timeout=3s \
+        CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"
+      # Production WSGI server, bound to all interfaces inside the container.
+      CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "wsgi:app"]
+    note:
+      fr: "Deux `FROM` : l'image finale n'embarque ni pip ni cache de build. `USER 10001` fait tourner gunicorn sans privilège. Le port 8000 est cohérent avec le reste du projet."
+      en: "Two `FROM` stages: the final image ships neither pip nor the build cache. `USER 10001` runs gunicorn without privileges. Port 8000 is consistent with the rest of the project."
+
+  - title:
+      fr: "wsgi.py : le point d'entrée de production"
+      en: "wsgi.py: the production entrypoint"
+    file: wsgi.py
+    lang: python
+    kind: secure
+    code: |
+      from app import create_app
+
+      # gunicorn imports this module and looks for the "app" object:
+      #   gunicorn wsgi:app
+      app = create_app()
+
+      if __name__ == "__main__":
+          # Local convenience only; production uses gunicorn, never this.
+          app.run(host="127.0.0.1", port=8000)
+    note:
+      fr: "gunicorn charge `wsgi:app`. Le bloc `__main__` sert uniquement au test local et écoute sur `127.0.0.1`, jamais exposé par défaut."
+      en: "gunicorn loads `wsgi:app`. The `__main__` block is for local testing only and listens on `127.0.0.1`, never exposed by default."
+
+  - title:
+      fr: ".dockerignore : exclure tests, secrets et caches de l'image"
+      en: ".dockerignore: exclude tests, secrets and caches from the image"
+    file: .dockerignore
+    lang: text
+    kind: secure
+    code: |
+      # Keep the build context small and the image clean.
+      .git
+      .github
+      .venv
+      __pycache__
+      *.pyc
+      .pytest_cache
+      tests
+      # Never copy local secrets or databases into the image.
+      .env
+      *.db
+      # Docs are not needed at runtime.
+      *.md
+    note:
+      fr: "Sans `.dockerignore`, un `COPY . .` embarquerait tests, `.git` et un éventuel `.env`. Ici, l'image ne reçoit que `app/` et `wsgi.py`."
+      en: "Without `.dockerignore`, a `COPY . .` would bundle tests, `.git` and any `.env`. Here the image receives only `app/` and `wsgi.py`."
+
+  - title:
+      fr: "Construire, lancer et scanner localement"
+      en: "Build, run and scan locally"
+    file: build.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Build the image
+      docker build -t flask-secure-api:dev .
+
+      # Run it (inject the secret via env, never bake it in the image)
+      docker run -d -p 8000:8000 -e SECRET_KEY=local-dev-secret \
+        --name api flask-secure-api:dev
+
+      # Confirm it answers
+      curl -s http://localhost:8000/health
+
+      # Scan the image: fail on fixable HIGH/CRITICAL only
+      trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+        flask-secure-api:dev
+    output: |
+      {"status":"ok"}
+
+      flask-secure-api:dev (debian 12.8)
+      ==================================
+      Total: 0 (HIGH: 0, CRITICAL: 0)
+    note:
+      fr: "Le secret est injecté au `run`, pas dans l'image. Trivy ne renvoie rien de bloquant ici : l'image slim et à jour ne contient aucune CVE corrigeable HIGH/CRITICAL."
+      en: "The secret is injected at `run`, not baked into the image. Trivy returns nothing blocking here: the slim, up-to-date image contains no fixable HIGH/CRITICAL CVE."
+
+mistake:
+  fr: |
+    **Faire tourner le conteneur en root et copier tout le dépôt.**
+
+    ```dockerfile
+    FROM python:3.12          # image complète, lourde
+    COPY . .                  # embarque tests, .git, éventuels secrets
+    RUN pip install -r requirements.txt
+    CMD ["python", "wsgi.py"] # serveur de dev, en root
+    ```
+
+    Image énorme, droits root, serveur de développement exposé : trois problèmes d'un coup. La version
+    durcie utilise `slim`, un utilisateur non-root, un build multi-stage et gunicorn.
+  en: |
+    **Running the container as root and copying the whole repository.**
+
+    ```dockerfile
+    FROM python:3.12          # full, heavy image
+    COPY . .                  # bundles tests, .git, possible secrets
+    RUN pip install -r requirements.txt
+    CMD ["python", "wsgi.py"] # dev server, as root
+    ```
+
+    Huge image, root rights, exposed development server: three problems at once. The hardened version uses
+    `slim`, a non-root user, a multi-stage build and gunicorn.
+
+bestPractice:
+  fr: |
+    - **Build multi-stage** : les outils de build restent dans l'étape jetable.
+    - **Image de base minimale** (`-slim`, voire distroless) et **versions épinglées**.
+    - **Utilisateur non-root** (`USER`) : jamais de conteneur en root.
+    - **`.dockerignore`** : pas de tests, de `.git` ni de secrets dans l'image.
+    - **Serveur de production** (gunicorn), jamais le serveur de dev de Flask.
+    - **Scanner l'image** (Trivy) et faire échouer sur les CVE HIGH/CRITICAL corrigeables.
+  en: |
+    - **Multi-stage build**: build tools stay in the throwaway stage.
+    - **Minimal base image** (`-slim`, or even distroless) and **pinned versions**.
+    - **Non-root user** (`USER`): never a container running as root.
+    - **`.dockerignore`**: no tests, `.git` or secrets in the image.
+    - **Production server** (gunicorn), never Flask's dev server.
+    - **Scan the image** (Trivy) and fail on fixable HIGH/CRITICAL CVEs.
+
+exercise:
+  statement:
+    fr: |
+      Durcissez encore l'image. Modifiez le `Dockerfile` pour :
+
+      1. ajouter un argument de version `ARG PYTHON_VERSION=3.12` réutilisé dans les deux `FROM` ;
+      2. ajouter l'option `--chown=appuser` lors de la copie du code, pour que les fichiers appartiennent à l'utilisateur non-root ;
+      3. écrire la commande `docker build` **et** `trivy image` qui échoue sur les CVE HIGH/CRITICAL corrigeables.
+    en: |
+      Harden the image further. Modify the `Dockerfile` to:
+
+      1. add a version argument `ARG PYTHON_VERSION=3.12` reused in both `FROM` instructions;
+      2. add the `--chown=appuser` option when copying the code, so files belong to the non-root user;
+      3. write the `docker build` **and** `trivy image` commands that fail on fixable HIGH/CRITICAL CVEs.
+  solution:
+    file: Dockerfile.hardened
+    lang: dockerfile
+    code: |
+      # A single source of truth for the Python version.
+      ARG PYTHON_VERSION=3.12
+
+      FROM python:${PYTHON_VERSION}-slim AS build
+      WORKDIR /app
+      RUN python -m venv /opt/venv
+      ENV PATH="/opt/venv/bin:$PATH"
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+
+      FROM python:${PYTHON_VERSION}-slim AS runtime
+      RUN useradd --create-home --uid 10001 appuser
+      WORKDIR /app
+      COPY --from=build /opt/venv /opt/venv
+      # --chown makes the copied files owned by the unprivileged user.
+      COPY --chown=appuser app/ ./app/
+      COPY --chown=appuser wsgi.py .
+      ENV PATH="/opt/venv/bin:$PATH" DATABASE=/home/appuser/items.db
+      USER 10001
+      EXPOSE 8000
+      CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "wsgi:app"]
+    note:
+      fr: "Commandes : `docker build -t flask-secure-api:dev .` puis `trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 flask-secure-api:dev`. L'`ARG` centralise la version de Python."
+      en: "Commands: `docker build -t flask-secure-api:dev .` then `trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 flask-secure-api:dev`. The `ARG` centralises the Python version."
+
+quiz:
+  - q:
+      fr: "Quel est l'intérêt principal d'un build Docker multi-stage ?"
+      en: "What is the main benefit of a multi-stage Docker build?"
+    options:
+      fr:
+        - "L'image finale ne contient pas les outils de build, donc moins de CVE"
+        - "Le conteneur démarre en root plus facilement"
+        - "On peut utiliser plusieurs langages"
+        - "Les tests s'exécutent automatiquement"
+      en:
+        - "The final image does not contain build tools, so fewer CVEs"
+        - "The container starts as root more easily"
+        - "You can use several languages"
+        - "Tests run automatically"
+    answer: 0
+    why:
+      fr: "On n'expédie que l'application et ses dépendances : ni compilateur, ni cache pip, donc une surface d'attaque réduite."
+      en: "You ship only the application and its dependencies: no compiler, no pip cache, hence a reduced attack surface."
+  - q:
+      fr: "Pourquoi créer un utilisateur non-root avec `USER 10001` ?"
+      en: "Why create a non-root user with `USER 10001`?"
+    options:
+      fr:
+        - "Pour que l'image soit plus petite"
+        - "Pour limiter les droits de l'attaquant si l'application est compromise"
+        - "Pour accélérer gunicorn"
+        - "Parce que Docker refuse root"
+      en:
+        - "To make the image smaller"
+        - "To limit the attacker's rights if the application is compromised"
+        - "To speed up gunicorn"
+        - "Because Docker refuses root"
+    answer: 1
+    why:
+      fr: "Un processus non-root compromis n'a pas les droits administrateur et ne peut pas facilement s'échapper du conteneur."
+      en: "A compromised non-root process has no admin rights and cannot easily escape the container."
+  - q:
+      fr: "Quel serveur lance le conteneur en production ?"
+      en: "Which server runs the container in production?"
+    options:
+      fr:
+        - "Le serveur de développement `flask run`"
+        - "nginx directement"
+        - "gunicorn (serveur WSGI de production)"
+        - "Le module `http.server` de Python"
+      en:
+        - "The `flask run` development server"
+        - "nginx directly"
+        - "gunicorn (production WSGI server)"
+        - "Python's `http.server` module"
+    answer: 2
+    why:
+      fr: "Le `CMD` lance `gunicorn wsgi:app`. Le serveur de développement de Flask ne doit jamais être exposé en production."
+      en: "The `CMD` runs `gunicorn wsgi:app`. Flask's development server must never be exposed in production."
+  - q:
+      fr: "Que fait `trivy image --ignore-unfixed --exit-code 1` ?"
+      en: "What does `trivy image --ignore-unfixed --exit-code 1` do?"
+    options:
+      fr:
+        - "Il supprime l'image si elle est vulnérable"
+        - "Il échoue (code 1) sur les vulnérabilités corrigeables, en ignorant celles sans correctif"
+        - "Il met l'image à jour automatiquement"
+        - "Il ignore toutes les vulnérabilités"
+      en:
+        - "It deletes the image if it is vulnerable"
+        - "It fails (exit 1) on fixable vulnerabilities, ignoring those without a fix"
+        - "It updates the image automatically"
+        - "It ignores all vulnerabilities"
+    answer: 1
+    why:
+      fr: "Le code de sortie 1 fait échouer le pipeline ; `--ignore-unfixed` évite de bloquer sur des CVE sans correctif disponible."
+      en: "Exit code 1 fails the pipeline; `--ignore-unfixed` avoids blocking on CVEs with no available fix."
+  - q:
+      fr: "À quoi sert le fichier `.dockerignore` ?"
+      en: "What is the `.dockerignore` file for?"
+    options:
+      fr:
+        - "À lister les ports exposés"
+        - "À installer les dépendances"
+        - "À signer l'image"
+        - "À exclure tests, `.git` et secrets du contexte de build"
+      en:
+        - "To list the exposed ports"
+        - "To install dependencies"
+        - "To sign the image"
+        - "To exclude tests, `.git` and secrets from the build context"
+    answer: 3
+    why:
+      fr: "`.dockerignore` empêche des fichiers inutiles ou sensibles d'être copiés dans l'image, comme `.git` ou un `.env`."
+      en: "`.dockerignore` prevents useless or sensitive files from being copied into the image, such as `.git` or a `.env`."

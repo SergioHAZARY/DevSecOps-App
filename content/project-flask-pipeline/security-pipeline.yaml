@@ -1,0 +1,449 @@
+description:
+  fr: "Assembler le pipeline GitHub Actions complet : lint et tests, scan de secrets, SAST, SCA, build et scan d'image, DAST, puis SBOM et image signée sur GHCR."
+  en: "Assemble the complete GitHub Actions pipeline: lint and tests, secret scan, SAST, SCA, image build and scan, DAST, then SBOM and a signed image on GHCR."
+duration: 35
+
+intro:
+  fr: |
+    Voici la pièce maîtresse du projet : le **pipeline CI/CD**. À chaque `git push` ou pull request,
+    GitHub Actions va exécuter une série de contrôles de sécurité **avant** d'autoriser la fusion, et ne
+    publier l'image que si tout est vert sur la branche `main`.
+
+    Chaque contrôle est une **porte** (un *gate*) : s'il trouve un problème grave, le pipeline échoue et
+    le code ne passe pas. C'est ce qui transforme de bonnes intentions en **garanties automatiques**.
+
+    Analogie : un aéroport. Votre valise (le code) passe plusieurs scanners successifs — portique à
+    métaux (secrets), rayons X (SAST), contrôle des bagages (dépendances), inspection du colis final
+    (image) et test de la porte d'embarquement (DAST). Un seul contrôle qui sonne, et la valise n'embarque pas.
+  en: |
+    Here is the centrepiece of the project: the **CI/CD pipeline**. On every `git push` or pull request,
+    GitHub Actions runs a series of security checks **before** allowing a merge, and publishes the image
+    only if everything is green on the `main` branch.
+
+    Each check is a **gate**: if it finds a serious issue, the pipeline fails and the code does not pass.
+    This is what turns good intentions into **automatic guarantees**.
+
+    Analogy: an airport. Your suitcase (the code) goes through several scanners in a row — metal detector
+    (secrets), X-ray (SAST), baggage check (dependencies), final parcel inspection (image) and a boarding
+    gate test (DAST). A single alarm, and the suitcase does not board.
+
+sections:
+  - heading:
+      fr: "Permissions minimales et déclenchement"
+      en: "Least-privilege permissions and triggers"
+    body:
+      fr: |
+        La toute première ligne de défense d'un workflow, ce sont ses **permissions**. Par défaut, le
+        `GITHUB_TOKEN` peut avoir des droits d'écriture larges. On impose `permissions: contents: read`
+        au niveau global : les jobs ne peuvent que **lire** le dépôt. Seul le job de publication
+        recevra, localement, les droits d'écriture dont il a besoin (`packages: write`, `id-token: write`).
+
+        Le workflow se déclenche sur les **pull requests** (pour contrôler avant la fusion) et sur les
+        **push vers `main`** (pour publier). Un `job` de publication conditionné par
+        `if: github.ref == 'refs/heads/main'` ne s'exécute donc jamais sur une simple PR.
+      en: |
+        A workflow's very first line of defense is its **permissions**. By default, the `GITHUB_TOKEN` can
+        have broad write rights. We enforce `permissions: contents: read` at the global level: jobs can
+        only **read** the repository. Only the publish job will locally receive the write rights it needs
+        (`packages: write`, `id-token: write`).
+
+        The workflow triggers on **pull requests** (to check before merge) and on **pushes to `main`**
+        (to publish). A publish job gated by `if: github.ref == 'refs/heads/main'` therefore never runs on
+        a plain PR.
+  - heading:
+      fr: "Les portes de sécurité, une par une"
+      en: "The security gates, one by one"
+    body:
+      fr: |
+        | Job | Outil | Ce qu'il bloque | Échec si |
+        |---|---|---|---|
+        | `lint-test` | ruff + pytest | Code cassé ou non testé | Un test échoue |
+        | `secrets` | Gitleaks | Secret en clair dans l'historique | Un secret est trouvé |
+        | `sast` | Bandit + Semgrep | Code dangereux (injection, etc.) | Faille détectée |
+        | `sca` | pip-audit | Dépendance avec CVE connue | CVE trouvée |
+        | `image` | Trivy + ZAP | Image vulnérable, en-têtes manquants | HIGH/CRITICAL ou alerte ZAP |
+        | `release` | SBOM + cosign | — (publie et signe) | Uniquement sur `main` |
+
+        Chaque job tourne en parallèle quand c'est possible. Le job `image` **dépend** des autres
+        (`needs`) : inutile de construire et de scanner une image si le code échoue déjà au lint ou aux secrets.
+      en: |
+        | Job | Tool | What it blocks | Fails if |
+        |---|---|---|---|
+        | `lint-test` | ruff + pytest | Broken or untested code | A test fails |
+        | `secrets` | Gitleaks | Clear-text secret in history | A secret is found |
+        | `sast` | Bandit + Semgrep | Dangerous code (injection, etc.) | A flaw is detected |
+        | `sca` | pip-audit | Dependency with a known CVE | A CVE is found |
+        | `image` | Trivy + ZAP | Vulnerable image, missing headers | HIGH/CRITICAL or ZAP alert |
+        | `release` | SBOM + cosign | — (publishes and signs) | Only on `main` |
+
+        Each job runs in parallel where possible. The `image` job **depends** on the others (`needs`):
+        no point building and scanning an image if the code already fails lint or secret scanning.
+  - heading:
+      fr: "SBOM et image signée : la chaîne d'approvisionnement"
+      en: "SBOM and a signed image: the supply chain"
+    body:
+      fr: |
+        Sur `main`, une fois tous les contrôles verts, le job `release` :
+
+        1. **construit et pousse** l'image vers **GHCR** (GitHub Container Registry) ;
+        2. génère un **SBOM** (*Software Bill of Materials*) : l'inventaire exact des composants de l'image,
+           au format CycloneDX. En cas de nouvelle CVE (type Log4Shell), on sait en secondes si on est touché ;
+        3. **signe** l'image avec **cosign** en mode *keyless* (via OIDC, sans clé privée à stocker). La
+           signature prouve que l'image vient bien de ce pipeline et n'a pas été altérée.
+
+        Ces trois étapes répondent à l'intégrité de la chaîne d'approvisionnement logicielle (OWASP A08,
+        SLSA). On ne se contente plus de livrer : on livre **traçable et vérifiable**.
+      en: |
+        On `main`, once every check is green, the `release` job:
+
+        1. **builds and pushes** the image to **GHCR** (GitHub Container Registry);
+        2. generates an **SBOM** (*Software Bill of Materials*): the exact inventory of the image's
+           components, in CycloneDX format. When a new CVE appears (think Log4Shell), you know in seconds
+           whether you are affected;
+        3. **signs** the image with **cosign** in *keyless* mode (via OIDC, no private key to store). The
+           signature proves the image really comes from this pipeline and was not tampered with.
+
+        These three steps address software supply-chain integrity (OWASP A08, SLSA). We no longer just
+        ship: we ship **traceable and verifiable**.
+
+examples:
+  - title:
+      fr: "Le pipeline complet : ci.yml (contrôles de sécurité)"
+      en: "The complete pipeline: ci.yml (security gates)"
+    file: .github/workflows/ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: ci
+
+      on:
+        push:
+          branches: [main]
+        pull_request:
+
+      # Least privilege by default: jobs can only READ the repository.
+      permissions:
+        contents: read
+
+      jobs:
+        lint-test:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - run: pip install -r requirements-dev.txt
+            - run: ruff check .          # style and common bug patterns
+            - run: pytest -q             # functional + security tests
+
+        secrets:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0           # full history, to scan old commits too
+            - uses: gitleaks/gitleaks-action@v2
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        sast:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - run: pip install bandit==1.8.0 semgrep==1.97.0
+            - run: bandit -r app -lll    # report only high-severity issues
+            - run: semgrep scan --config p/python --error
+
+        sca:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - run: pip install pip-audit==2.7.3
+            - run: pip-audit -r requirements.txt   # fails on known CVEs
+
+        image:
+          runs-on: ubuntu-latest
+          needs: [lint-test, secrets, sast, sca]   # only if the code is clean
+          steps:
+            - uses: actions/checkout@v4
+            - name: Build image
+              run: docker build -t flask-secure-api:ci .
+            - name: Scan image with Trivy
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                image-ref: flask-secure-api:ci
+                severity: HIGH,CRITICAL
+                ignore-unfixed: true
+                exit-code: "1"           # fail on fixable HIGH/CRITICAL
+            - name: Run the container for DAST
+              run: docker run -d -p 8000:8000 -e SECRET_KEY=ci-only --name api flask-secure-api:ci
+            - name: ZAP baseline scan against the running API
+              uses: zaproxy/action-baseline@v0.12.0
+              with:
+                target: http://localhost:8000
+                fail_action: true        # fail on missing security headers, etc.
+    note:
+      fr: "Cinq portes de sécurité. `needs` garantit qu'on ne construit l'image que si le code est propre. Le job `image` scanne l'image (Trivy) **et** teste l'API en fonctionnement (ZAP)."
+      en: "Five security gates. `needs` ensures the image is built only if the code is clean. The `image` job scans the image (Trivy) **and** tests the running API (ZAP)."
+
+  - title:
+      fr: "Le job de publication : SBOM + image signée sur GHCR (main)"
+      en: "The publish job: SBOM + signed image on GHCR (main)"
+    file: .github/workflows/ci.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Append this job to ci.yml. It runs only after every gate is green.
+        release:
+          if: github.ref == 'refs/heads/main'   # never on a pull request
+          runs-on: ubuntu-latest
+          needs: [image]
+          permissions:
+            contents: read
+            packages: write      # push to GHCR
+            id-token: write      # keyless signing with cosign (OIDC)
+          steps:
+            - uses: actions/checkout@v4
+            - uses: docker/login-action@v3
+              with:
+                registry: ghcr.io
+                username: ${{ github.actor }}
+                password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Build and push to GHCR
+              id: push
+              uses: docker/build-push-action@v6
+              with:
+                context: .
+                push: true
+                tags: ghcr.io/${{ github.repository }}:latest
+            - name: Generate a CycloneDX SBOM
+              uses: anchore/sbom-action@v0
+              with:
+                image: ghcr.io/${{ github.repository }}@${{ steps.push.outputs.digest }}
+                format: cyclonedx-json
+                output-file: sbom.cdx.json
+            - name: Install cosign
+              uses: sigstore/cosign-installer@v3
+            - name: Sign the image (keyless, no stored key)
+              run: cosign sign --yes ghcr.io/${{ github.repository }}@${{ steps.push.outputs.digest }}
+    note:
+      fr: "Les droits d'écriture sont accordés **uniquement** à ce job. On signe le **digest** (empreinte immuable), pas le tag `latest` qui peut changer. La signature keyless n'exige aucune clé privée stockée."
+      en: "Write rights are granted **only** to this job. We sign the **digest** (immutable fingerprint), not the mutable `latest` tag. Keyless signing requires no stored private key."
+
+  - title:
+      fr: "La configuration Gitleaks du dépôt"
+      en: "The repository's Gitleaks configuration"
+    file: .gitleaks.toml
+    lang: toml
+    kind: secure
+    code: |
+      title = "flask-secure-api gitleaks config"
+
+      # Start from Gitleaks' built-in ruleset (hundreds of secret patterns).
+      [extend]
+      useDefault = true
+
+      # Avoid false positives on obviously fake values used in tests/docs.
+      [[allowlist]]
+      description = "Ignore test fixtures and example secrets"
+      paths = ['''tests/.*''']
+      regexes = ['''test-only-not-a-real-secret''']
+    note:
+      fr: "`useDefault = true` hérite de centaines de motifs. L'allowlist évite les faux positifs sur les valeurs factices des tests, sans désactiver la détection réelle."
+      en: "`useDefault = true` inherits hundreds of patterns. The allowlist avoids false positives on the fake values in tests, without disabling real detection."
+
+  - title:
+      fr: "Hooks pre-commit : détecter avant même de pousser"
+      en: "Pre-commit hooks: catch issues before you even push"
+    file: .pre-commit-config.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # Run `pre-commit install` once; these checks then run on every commit,
+      # giving feedback locally BEFORE the CI pipeline does.
+      repos:
+        - repo: https://github.com/gitleaks/gitleaks
+          rev: v8.21.2
+          hooks:
+            - id: gitleaks
+        - repo: https://github.com/PyCQA/bandit
+          rev: 1.8.0
+          hooks:
+            - id: bandit
+              args: ["-r", "app"]
+        - repo: https://github.com/astral-sh/ruff-pre-commit
+          rev: v0.8.4
+          hooks:
+            - id: ruff
+    note:
+      fr: "Le pré-commit déplace les contrôles encore plus à gauche (*shift-left*) : le développeur voit l'erreur en local, en quelques secondes, avant même le `git push`."
+      en: "Pre-commit shifts the checks even further left (*shift-left*): the developer sees the error locally, within seconds, before even running `git push`."
+
+mistake:
+  fr: |
+    **Ajouter les scanners mais configurer le pipeline pour qu'il « ne bloque jamais ».**
+
+    Un pipeline qui affiche des alertes mais réussit toujours (`|| true`, `continue-on-error: true`
+    partout, aucun `exit-code`) donne une fausse impression de sécurité. Les alertes s'accumulent,
+    personne ne les lit, et la faille part en production. Un *gate* qui ne bloque rien n'est pas un gate :
+    chaque contrôle critique **doit** pouvoir faire échouer le build.
+  en: |
+    **Adding the scanners but configuring the pipeline so it "never blocks".**
+
+    A pipeline that shows alerts but always succeeds (`|| true`, `continue-on-error: true` everywhere, no
+    `exit-code`) gives a false sense of security. Alerts pile up, nobody reads them, and the flaw reaches
+    production. A gate that blocks nothing is not a gate: each critical check **must** be able to fail
+    the build.
+
+bestPractice:
+  fr: |
+    - **`permissions: contents: read` par défaut**, droits d'écriture accordés job par job.
+    - **Faire échouer** sur les problèmes graves (`exit-code`, `--error`, `fail_action`).
+    - **`needs`** pour ne construire l'image qu'après un code propre.
+    - **Épingler les actions** à une version (`@v4`, `@0.28.0`), jamais `@main`.
+    - **Signer le digest**, pas un tag mutable ; publier un **SBOM**.
+    - **Pré-commit** en local : même contrôles, retour plus rapide (*shift-left*).
+  en: |
+    - **`permissions: contents: read` by default**, write rights granted job by job.
+    - **Fail** on serious issues (`exit-code`, `--error`, `fail_action`).
+    - **`needs`** to build the image only after the code is clean.
+    - **Pin actions** to a version (`@v4`, `@0.28.0`), never `@main`.
+    - **Sign the digest**, not a mutable tag; publish an **SBOM**.
+    - **Pre-commit** locally: same checks, faster feedback (*shift-left*).
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez une **sixième porte** au pipeline : un job `iac-scan` qui analyse le `Dockerfile` avec
+      **Trivy en mode configuration** (`trivy config`).
+
+      Contraintes :
+      - le job tourne sur une pull request comme les autres ;
+      - il doit **échouer** si une mauvaise configuration de sévérité HIGH ou CRITICAL est détectée ;
+      - utilisez l'action officielle `aquasecurity/trivy-action` épinglée à une version.
+    en: |
+      Add a **sixth gate** to the pipeline: an `iac-scan` job that analyses the `Dockerfile` with
+      **Trivy in configuration mode** (`trivy config`).
+
+      Constraints:
+      - the job runs on a pull request like the others;
+      - it must **fail** if a HIGH or CRITICAL misconfiguration is detected;
+      - use the official `aquasecurity/trivy-action` action pinned to a version.
+  solution:
+    file: iac-scan.yml
+    lang: yaml
+    code: |
+      # Append this job to .github/workflows/ci.yml
+        iac-scan:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Scan the Dockerfile for misconfigurations
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: config       # analyse IaC/Dockerfile, not an image
+                scan-ref: Dockerfile
+                severity: HIGH,CRITICAL
+                exit-code: "1"          # fail the pipeline on HIGH/CRITICAL
+    note:
+      fr: "`scan-type: config` fait analyser le Dockerfile (ex. : conteneur en root, image non épinglée). `exit-code: 1` transforme l'alerte en porte bloquante."
+      en: "`scan-type: config` makes Trivy analyse the Dockerfile (e.g. root container, unpinned image). `exit-code: 1` turns the alert into a blocking gate."
+
+quiz:
+  - q:
+      fr: "Pourquoi déclarer `permissions: contents: read` au niveau global du workflow ?"
+      en: "Why declare `permissions: contents: read` at the workflow's global level?"
+    options:
+      fr:
+        - "Pour appliquer le moindre privilège : les jobs ne peuvent que lire le dépôt"
+        - "Pour accélérer les jobs"
+        - "Pour autoriser la publication d'images"
+        - "Parce que c'est obligatoire pour checkout"
+      en:
+        - "To enforce least privilege: jobs can only read the repository"
+        - "To speed up the jobs"
+        - "To allow image publishing"
+        - "Because checkout requires it"
+    answer: 0
+    why:
+      fr: "On réduit les droits par défaut du `GITHUB_TOKEN`. Seul le job de publication reçoit localement `packages: write` et `id-token: write`."
+      en: "It reduces the default rights of the `GITHUB_TOKEN`. Only the publish job locally receives `packages: write` and `id-token: write`."
+  - q:
+      fr: "Pourquoi le job `image` utilise-t-il `needs: [lint-test, secrets, sast, sca]` ?"
+      en: "Why does the `image` job use `needs: [lint-test, secrets, sast, sca]`?"
+    options:
+      fr:
+        - "Pour exécuter ces jobs deux fois"
+        - "Pour ne construire et scanner l'image que si le code est déjà propre"
+        - "Pour partager des secrets entre jobs"
+        - "Pour signer l'image plus vite"
+      en:
+        - "To run those jobs twice"
+        - "To build and scan the image only if the code is already clean"
+        - "To share secrets between jobs"
+        - "To sign the image faster"
+    answer: 1
+    why:
+      fr: "Inutile de construire une image si le code échoue déjà au lint, aux tests, aux secrets ou au SAST : `needs` enchaîne les étapes."
+      en: "No point building an image if the code already fails lint, tests, secrets or SAST: `needs` chains the stages."
+  - q:
+      fr: "Dans le job `release`, pourquoi signe-t-on le **digest** plutôt que le tag `latest` ?"
+      en: "In the `release` job, why sign the **digest** rather than the `latest` tag?"
+    options:
+      fr:
+        - "Parce que cosign refuse les tags"
+        - "Pour signer plusieurs images à la fois"
+        - "Parce que le digest est une empreinte immuable, alors que `latest` peut changer"
+        - "Pour réduire la taille de l'image"
+      en:
+        - "Because cosign refuses tags"
+        - "To sign several images at once"
+        - "Because the digest is an immutable fingerprint, whereas `latest` can change"
+        - "To reduce the image size"
+    answer: 2
+    why:
+      fr: "Un tag mutable peut pointer vers une autre image plus tard ; le digest identifie exactement l'image signée."
+      en: "A mutable tag can later point to a different image; the digest identifies exactly the signed image."
+  - q:
+      fr: "À quoi sert le SBOM généré par le pipeline ?"
+      en: "What is the SBOM generated by the pipeline for?"
+    options:
+      fr:
+        - "À accélérer le build Docker"
+        - "À connaître l'inventaire exact des composants pour réagir vite à une nouvelle CVE"
+        - "À remplacer les tests unitaires"
+        - "À chiffrer l'image"
+      en:
+        - "To speed up the Docker build"
+        - "To know the exact inventory of components in order to react quickly to a new CVE"
+        - "To replace unit tests"
+        - "To encrypt the image"
+    answer: 1
+    why:
+      fr: "Le SBOM liste tous les composants. Quand une CVE sort, on sait immédiatement si l'image est concernée."
+      en: "The SBOM lists every component. When a CVE appears, you immediately know whether the image is affected."
+  - q:
+      fr: "Pourquoi ajouter des hooks pre-commit en plus du pipeline CI ?"
+      en: "Why add pre-commit hooks in addition to the CI pipeline?"
+    options:
+      fr:
+        - "Pour remplacer complètement le pipeline"
+        - "Pour signer les commits"
+        - "Pour déployer l'application"
+        - "Pour donner un retour local au développeur avant même le push (shift-left)"
+      en:
+        - "To completely replace the pipeline"
+        - "To sign commits"
+        - "To deploy the application"
+        - "To give local feedback to the developer before pushing (shift-left)"
+    answer: 3
+    why:
+      fr: "Le pré-commit exécute les mêmes contrôles en local, en quelques secondes : l'erreur est vue avant d'atteindre la CI."
+      en: "Pre-commit runs the same checks locally in seconds: the error is caught before it reaches CI."

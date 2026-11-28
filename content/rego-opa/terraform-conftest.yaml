@@ -1,0 +1,471 @@
+description:
+  fr: "Utiliser Conftest et Rego pour valider un plan Terraform (terraform show -json) et des Dockerfiles avant la fusion, et bloquer les configurations dangereuses en CI."
+  en: "Use Conftest and Rego to validate a Terraform plan (terraform show -json) and Dockerfiles before merge, and block dangerous configurations in CI."
+duration: 30
+
+intro:
+  fr: |
+    Interdire une mauvaise configuration *après* son déploiement coûte cher. **Conftest** déplace le
+    contrôle en amont : c'est un outil qui applique vos politiques Rego à des **fichiers de configuration**
+    (plan Terraform, Dockerfile, manifest Kubernetes, YAML, JSON...) directement dans la CI, avant tout
+    déploiement.
+
+    L'analogie : un **correcteur orthographique pour l'infrastructure**. De même qu'il souligne une faute
+    pendant que vous écrivez, Conftest souligne un bucket public ou un port SSH ouvert pendant la *pull
+    request*, quand la correction ne coûte qu'une ligne. Conftest réutilise exactement le motif du cours
+    précédent : un ensemble `deny` non vide = échec.
+
+    Dans cette leçon vous allez transformer un plan Terraform en JSON (`terraform show -json`), écrire des
+    politiques qui refusent un groupe de sécurité ouvert au monde et un volume non chiffré, faire de même
+    pour des Dockerfiles (tag `latest`, exécution en root), et voir Conftest renvoyer un code de sortie non
+    nul qui fera échouer le pipeline.
+  en: |
+    Blocking a bad configuration *after* it is deployed is expensive. **Conftest** moves the check
+    upstream: it is a tool that applies your Rego policies to **configuration files** (Terraform plan,
+    Dockerfile, Kubernetes manifest, YAML, JSON...) directly in CI, before any deployment.
+
+    The analogy: a **spell-checker for infrastructure**. Just as it underlines a typo while you write,
+    Conftest underlines a public bucket or an open SSH port during the *pull request*, when the fix costs
+    one line. Conftest reuses exactly the pattern from the previous lesson: a non-empty `deny` set = failure.
+
+    In this lesson you will turn a Terraform plan into JSON (`terraform show -json`), write policies that
+    reject a security group open to the world and an unencrypted volume, do the same for Dockerfiles
+    (`latest` tag, running as root), and watch Conftest return a non-zero exit code that fails the pipeline.
+
+sections:
+  - heading:
+      fr: "Conftest : OPA appliqué aux fichiers de configuration"
+      en: "Conftest: OPA applied to configuration files"
+    body:
+      fr: |
+        Conftest est un binaire bâti sur OPA. Il sait **parser** de nombreux formats (HCL, JSON, YAML,
+        Dockerfile, INI...) en un document `input`, puis évalue les règles du dossier `policy/`. Par
+        convention, il cherche le package **`main`** et trois règles partielles :
+
+        | Règle | Effet | Code de sortie |
+        |---|---|---|
+        | `deny` | violation bloquante | Conftest échoue (≠ 0) |
+        | `violation` | idem `deny`, forme objet | Conftest échoue |
+        | `warn` | avertissement non bloquant | Conftest réussit (0) |
+
+        On lance `conftest test fichier.json`. Chaque message de `deny` s'affiche, et si l'ensemble n'est
+        pas vide, la commande renvoie un code non nul — ce qui suffit à faire échouer n'importe quelle CI.
+        La même politique Rego fonctionne en local (avant de committer) et dans le pipeline : c'est le
+        *shift left* appliqué à l'infrastructure.
+      en: |
+        Conftest is a binary built on OPA. It can **parse** many formats (HCL, JSON, YAML, Dockerfile,
+        INI...) into an `input` document, then evaluate the rules in the `policy/` directory. By convention
+        it looks for the **`main`** package and three partial rules:
+
+        | Rule | Effect | Exit code |
+        |---|---|---|
+        | `deny` | blocking violation | Conftest fails (≠ 0) |
+        | `violation` | same as `deny`, object form | Conftest fails |
+        | `warn` | non-blocking warning | Conftest succeeds (0) |
+
+        You run `conftest test file.json`. Each `deny` message is printed, and if the set is not empty the
+        command returns a non-zero code — enough to fail any CI. The same Rego policy works locally (before
+        committing) and in the pipeline: this is *shift left* applied to infrastructure.
+  - heading:
+      fr: "Valider un plan Terraform, pas le code HCL"
+      en: "Validate a Terraform plan, not the HCL code"
+    body:
+      fr: |
+        On pourrait écrire des règles sur les fichiers `.tf`, mais le HCL est ambigu : variables, modules,
+        `for_each` rendent la valeur finale difficile à deviner statiquement. La bonne pratique est
+        d'analyser le **plan résolu**, où tout est calculé :
+
+        ```bash
+        terraform plan -out=tfplan.binary
+        terraform show -json tfplan.binary > plan.json
+        conftest test plan.json
+        ```
+
+        Dans `plan.json`, chaque ressource qui va changer apparaît sous `resource_changes[]`. Les deux
+        champs clés sont `type` (par exemple `aws_s3_bucket`) et `change.after`, qui contient les **valeurs
+        finales** des attributs tels qu'ils seront après `apply`. On parcourt `input.resource_changes`,
+        on filtre sur le `type`, et on inspecte `change.after`.
+
+        Un détail de sécurité : auditez le plan **résolu**, jamais le code non résolu, car une valeur
+        sensible peut venir d'une variable. En contrepartie, un `plan.json` peut contenir des secrets
+        (mots de passe générés, etc.) : traitez-le comme un artefact sensible, ne le publiez pas.
+      en: |
+        You could write rules against the `.tf` files, but HCL is ambiguous: variables, modules and
+        `for_each` make the final value hard to guess statically. The good practice is to analyse the
+        **resolved plan**, where everything is computed:
+
+        ```bash
+        terraform plan -out=tfplan.binary
+        terraform show -json tfplan.binary > plan.json
+        conftest test plan.json
+        ```
+
+        In `plan.json`, each resource that will change appears under `resource_changes[]`. The two key
+        fields are `type` (for example `aws_s3_bucket`) and `change.after`, which holds the **final
+        values** of the attributes as they will be after `apply`. You iterate over
+        `input.resource_changes`, filter on `type`, and inspect `change.after`.
+
+        A security detail: audit the **resolved** plan, never the unresolved code, because a sensitive
+        value may come from a variable. In return, a `plan.json` can contain secrets (generated passwords,
+        etc.): treat it as a sensitive artifact and do not publish it.
+  - heading:
+      fr: "Valider les Dockerfiles"
+      en: "Validate Dockerfiles"
+    body:
+      fr: |
+        Conftest sait aussi parser un **Dockerfile** (`conftest test --parser dockerfile Dockerfile`).
+        L'`input` devient une **liste d'instructions**, chacune de la forme `{"Cmd": "from", "Value":
+        ["alpine:3.20"]}`. On itère donc sur `input` et on filtre sur `Cmd` (toujours en minuscules) :
+
+        ```rego
+        deny contains msg if {
+            some instruction in input
+            instruction.Cmd == "from"
+            endswith(instruction.Value[0], ":latest")   # mutable tag
+            msg := "do not use the :latest tag, pin a version"
+        }
+        ```
+
+        Les contrôles classiques sur une image : interdire le tag `latest` (non reproductible), exiger une
+        instruction `USER` non-root (sinon le conteneur tourne en root), éviter `ADD` au profit de `COPY`,
+        et bannir les secrets passés en `ARG`/`ENV`. Ces règles attrapent les erreurs les plus courantes
+        bien avant que l'image ne soit construite et poussée.
+      en: |
+        Conftest can also parse a **Dockerfile** (`conftest test --parser dockerfile Dockerfile`). The
+        `input` becomes a **list of instructions**, each shaped as `{"Cmd": "from", "Value":
+        ["alpine:3.20"]}`. So you iterate over `input` and filter on `Cmd` (always lowercase):
+
+        ```rego
+        deny contains msg if {
+            some instruction in input
+            instruction.Cmd == "from"
+            endswith(instruction.Value[0], ":latest")   # mutable tag
+            msg := "do not use the :latest tag, pin a version"
+        }
+        ```
+
+        The classic checks on an image: forbid the `latest` tag (not reproducible), require a non-root
+        `USER` instruction (otherwise the container runs as root), avoid `ADD` in favour of `COPY`, and ban
+        secrets passed via `ARG`/`ENV`. These rules catch the most common mistakes well before the image is
+        built and pushed.
+
+examples:
+  - title:
+      fr: "Le flux de travail : du plan au verdict Conftest"
+      en: "The workflow: from plan to Conftest verdict"
+    file: run.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # 1. Produce a resolved, machine-readable plan
+      terraform plan -out=tfplan.binary
+      terraform show -json tfplan.binary > plan.json
+
+      # 2. Evaluate it against the policies in ./policy
+      conftest test plan.json --policy ./policy
+
+      # 3. Also check the Dockerfile with the dedicated parser
+      conftest test --parser dockerfile Dockerfile --policy ./policy
+
+      # In CI, a non-zero exit code here fails the job automatically.
+      # Pin the Conftest version in the pipeline image for reproducible results.
+    note:
+      fr: "Le secret du *shift left* tient en trois commandes : produire un plan résolu, le passer à Conftest, laisser le code de sortie piloter la CI. La même suite se lance en local avant de committer."
+      en: "The secret of *shift left* fits in three commands: produce a resolved plan, pass it to Conftest, let the exit code drive CI. The same sequence runs locally before committing."
+
+  - title:
+      fr: "Politique : refuser un volume non chiffré et un SSH ouvert au monde"
+      en: "Policy: reject an unencrypted volume and SSH open to the world"
+    file: terraform.rego
+    lang: rego
+    kind: secure
+    code: |
+      package main
+
+      import rego.v1
+
+      # Deny any EBS volume that is not encrypted at rest
+      deny contains msg if {
+          some rc in input.resource_changes
+          rc.type == "aws_ebs_volume"
+          rc.change.after.encrypted != true
+          msg := sprintf("aws_ebs_volume %q must be encrypted", [rc.address])
+      }
+
+      # Deny a security group that exposes SSH (22) to the whole internet
+      deny contains msg if {
+          some rc in input.resource_changes
+          rc.type == "aws_security_group"
+          some rule in rc.change.after.ingress
+          rule.from_port <= 22
+          rule.to_port >= 22
+          "0.0.0.0/0" in rule.cidr_blocks
+          msg := sprintf("security group %q must not open port 22 to 0.0.0.0/0", [rc.address])
+      }
+    note:
+      fr: "On parcourt `input.resource_changes`, on filtre sur `type`, puis on lit les valeurs finales dans `change.after`. Le test `from_port <= 22 <= to_port` attrape aussi une plage de ports englobant SSH, pas seulement `22-22`."
+      en: "You walk `input.resource_changes`, filter on `type`, then read the final values in `change.after`. The `from_port <= 22 <= to_port` test also catches a port range that encloses SSH, not just `22-22`."
+
+  - title:
+      fr: "L'entrée (extrait de plan.json) et le verdict"
+      en: "The input (plan.json excerpt) and the verdict"
+    file: plan.json
+    lang: json
+    kind: vulnerable
+    code: |
+      {
+        "resource_changes": [
+          {
+            "address": "aws_ebs_volume.data",
+            "type": "aws_ebs_volume",
+            "change": { "after": { "size": 20, "encrypted": false } }
+          },
+          {
+            "address": "aws_security_group.web",
+            "type": "aws_security_group",
+            "change": {
+              "after": {
+                "ingress": [
+                  { "from_port": 22, "to_port": 22, "cidr_blocks": ["0.0.0.0/0"] }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    output: |
+      $ conftest test plan.json --policy ./policy
+      FAIL - plan.json - main - aws_ebs_volume "aws_ebs_volume.data" must be encrypted
+      FAIL - plan.json - main - security group "aws_security_group.web" must not open port 22 to 0.0.0.0/0
+
+      2 tests, 0 passed, 0 warnings, 2 failures
+      $ echo $?
+      1
+    note:
+      fr: "Les deux violations sont listées et le code de sortie vaut 1 : la CI échoue. Corriger (`encrypted = true`, restreindre le CIDR) rend l'ensemble `deny` vide, et Conftest renverra 0."
+      en: "Both violations are listed and the exit code is 1: CI fails. Fixing them (`encrypted = true`, restrict the CIDR) empties the `deny` set, and Conftest will return 0."
+
+  - title:
+      fr: "Politique : durcir les Dockerfiles"
+      en: "Policy: hardening Dockerfiles"
+    file: dockerfile.rego
+    lang: rego
+    kind: secure
+    code: |
+      package main
+
+      import rego.v1
+
+      # No mutable :latest tag in a FROM: builds must be reproducible
+      deny contains msg if {
+          some instruction in input
+          instruction.Cmd == "from"
+          endswith(instruction.Value[0], ":latest")
+          msg := sprintf("FROM %q uses the mutable :latest tag", [instruction.Value[0]])
+      }
+
+      # A Dockerfile with no USER instruction runs the container as root
+      deny contains msg if {
+          users := [i | some i in input; i.Cmd == "user"]
+          count(users) == 0
+          msg := "no USER instruction: the container would run as root"
+      }
+
+      # Prefer COPY over ADD (ADD can fetch URLs and auto-extract archives)
+      deny contains msg if {
+          some instruction in input
+          instruction.Cmd == "add"
+          msg := "use COPY instead of ADD for local files"
+      }
+    note:
+      fr: "Pour un Dockerfile, `input` est la liste des instructions. La deuxième règle utilise une compréhension pour compter les instructions `USER` : zéro signifie exécution en root. `instruction.Cmd` est toujours en minuscules."
+      en: "For a Dockerfile, `input` is the list of instructions. The second rule uses a comprehension to count `USER` instructions: zero means running as root. `instruction.Cmd` is always lowercase."
+
+  - title:
+      fr: "Un Dockerfile vulnérable passé au crible"
+      en: "A vulnerable Dockerfile under scrutiny"
+    file: Dockerfile
+    lang: dockerfile
+    kind: vulnerable
+    code: |
+      # Three problems this policy will catch
+      FROM node:latest
+      ADD ./app /app
+      WORKDIR /app
+      RUN npm ci --omit=dev
+      # No USER instruction: the process stays root
+      CMD ["node", "server.js"]
+    output: |
+      $ conftest test --parser dockerfile Dockerfile --policy ./policy
+      FAIL - Dockerfile - main - FROM "node:latest" uses the mutable :latest tag
+      FAIL - Dockerfile - main - no USER instruction: the container would run as root
+      FAIL - Dockerfile - main - use COPY instead of ADD for local files
+
+      3 tests, 0 passed, 0 warnings, 3 failures
+    note:
+      fr: "Les trois défauts sont signalés d'un coup. La version corrigée épinglerait `FROM node:22.11-alpine`, remplacerait `ADD` par `COPY`, et ajouterait `USER node` avant le `CMD`. Conftest renverrait alors 0."
+      en: "All three defects are flagged at once. The fixed version would pin `FROM node:22.11-alpine`, replace `ADD` with `COPY`, and add `USER node` before the `CMD`. Conftest would then return 0."
+
+mistake:
+  fr: |
+    **Écrire des règles sur les fichiers `.tf` bruts plutôt que sur le plan JSON.**
+
+    Analyser directement le HCL semble plus simple, mais une valeur sensible peut venir d'une variable,
+    d'un `local`, d'un module ou d'un `for_each` : la règle « le CIDR n'est pas `0.0.0.0/0` » passe à côté
+    quand le CIDR est `var.allowed_cidr`. En auditant `terraform show -json`, vous travaillez sur les
+    **valeurs finales résolues**, celles qui seront réellement créées. Deux corollaires : un attribut
+    *connu seulement après apply* apparaît sous `change.after_unknown` et non `change.after` (prévoyez ce
+    cas), et le `plan.json` peut contenir des secrets — ne le publiez pas comme artefact public.
+  en: |
+    **Writing rules against the raw `.tf` files instead of the plan JSON.**
+
+    Parsing HCL directly looks simpler, but a sensitive value can come from a variable, a `local`, a
+    module or a `for_each`: the rule "the CIDR is not `0.0.0.0/0`" misses the case where the CIDR is
+    `var.allowed_cidr`. By auditing `terraform show -json`, you work on the **resolved final values**, the
+    ones that will actually be created. Two corollaries: an attribute *known only after apply* appears
+    under `change.after_unknown`, not `change.after` (handle that case), and `plan.json` can contain
+    secrets — do not publish it as a public artifact.
+
+bestPractice:
+  fr: |
+    - **Auditez le plan résolu** (`terraform show -json`), jamais le HCL brut : valeurs finales fiables.
+    - **Package `main`, règles `deny`/`violation`** : Conftest les reconnaît par convention.
+    - **Un code de sortie ≠ 0 fait échouer la CI** : laissez Conftest piloter le pipeline, ne masquez pas l'erreur.
+    - **Épinglez la version de Conftest** dans l'image CI pour des verdicts reproductibles.
+    - **Testez vos politiques** avec `conftest verify` et des fichiers `*_test.rego` (voir leçon suivante).
+    - **Messages actionnables** mentionnant l'adresse de la ressource ou l'instruction fautive.
+  en: |
+    - **Audit the resolved plan** (`terraform show -json`), never raw HCL: reliable final values.
+    - **Package `main`, `deny`/`violation` rules**: Conftest recognises them by convention.
+    - **A non-zero exit code fails CI**: let Conftest drive the pipeline, do not swallow the error.
+    - **Pin the Conftest version** in the CI image for reproducible verdicts.
+    - **Test your policies** with `conftest verify` and `*_test.rego` files (see the next lesson).
+    - **Actionable messages** mentioning the resource address or the offending instruction.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez une politique Conftest (package `main`, Rego v1) pour un plan Terraform qui **refuse** tout
+      bucket S3 public. Dans `plan.json`, les ressources sont sous `input.resource_changes`. Refusez une
+      ressource de type `aws_s3_bucket_public_access_block` dont l'un des quatre champs
+      (`block_public_acls`, `block_public_policy`, `ignore_public_acls`, `restrict_public_buckets`) dans
+      `change.after` vaut `false`. Le message doit citer l'adresse de la ressource.
+    en: |
+      Write a Conftest policy (package `main`, Rego v1) for a Terraform plan that **rejects** any public S3
+      bucket. In `plan.json`, resources are under `input.resource_changes`. Reject an
+      `aws_s3_bucket_public_access_block` resource where any of the four fields (`block_public_acls`,
+      `block_public_policy`, `ignore_public_acls`, `restrict_public_buckets`) in `change.after` is `false`.
+      The message must cite the resource address.
+  solution:
+    file: s3_public.rego
+    lang: rego
+    code: |
+      package main
+
+      import rego.v1
+
+      # The four flags that must all be true to keep a bucket private
+      required := ["block_public_acls", "block_public_policy", "ignore_public_acls", "restrict_public_buckets"]
+
+      deny contains msg if {
+          some rc in input.resource_changes
+          rc.type == "aws_s3_bucket_public_access_block"
+          some field in required
+          rc.change.after[field] == false     # any flag turned off makes the bucket reachable
+          msg := sprintf("%s: %s must be true to keep the bucket private", [rc.address, field])
+      }
+    note:
+      fr: "`some field in required` itère sur les quatre drapeaux ; dès qu'un seul vaut `false`, un message est ajouté. Un bloc où un champ serait absent (`undefined`) ne déclenche pas la règle : exigez donc aussi leur présence si votre contexte le demande."
+      en: "`some field in required` iterates over the four flags; as soon as one is `false`, a message is added. A block where a field is missing (`undefined`) does not trigger the rule: require their presence too if your context demands it."
+
+quiz:
+  - q:
+      fr: "Pourquoi valider `terraform show -json` plutôt que les fichiers `.tf` ?"
+      en: "Why validate `terraform show -json` rather than the `.tf` files?"
+    options:
+      fr:
+        - "Parce que le plan JSON contient les valeurs finales résolues (variables, modules compris)"
+        - "Parce que Conftest ne sait pas lire le HCL"
+        - "Parce que le JSON est chiffré"
+        - "Parce que les fichiers `.tf` sont trop volumineux"
+      en:
+        - "Because the plan JSON holds the resolved final values (variables, modules included)"
+        - "Because Conftest cannot read HCL"
+        - "Because JSON is encrypted"
+        - "Because `.tf` files are too large"
+    answer: 0
+    why:
+      fr: "Le plan résolu calcule les valeurs issues de variables, locals et modules : la règle voit la configuration réellement appliquée, pas une expression non résolue."
+      en: "The resolved plan computes values coming from variables, locals and modules: the rule sees the configuration that will actually be applied, not an unresolved expression."
+  - q:
+      fr: "Dans un plan JSON, où se trouvent les valeurs finales d'une ressource ?"
+      en: "In a plan JSON, where are a resource's final values?"
+    options:
+      fr:
+        - "`input.resources[].values`"
+        - "`input.resource_changes[].change.after`"
+        - "`input.planned[].state`"
+        - "`input.after`"
+      en:
+        - "`input.resources[].values`"
+        - "`input.resource_changes[].change.after`"
+        - "`input.planned[].state`"
+        - "`input.after`"
+    answer: 1
+    why:
+      fr: "Chaque ressource modifiée est sous `resource_changes`, avec son type et `change.after`, qui contient les attributs tels qu'ils seront après `apply`."
+      en: "Each changed resource is under `resource_changes`, with its type and `change.after`, which holds the attributes as they will be after `apply`."
+  - q:
+      fr: "Quelle règle Conftest fait échouer le pipeline (code de sortie non nul) ?"
+      en: "Which Conftest rule fails the pipeline (non-zero exit code)?"
+    options:
+      fr:
+        - "`warn`"
+        - "`info`"
+        - "`deny`"
+        - "`note`"
+      en:
+        - "`warn`"
+        - "`info`"
+        - "`deny`"
+        - "`note`"
+    answer: 2
+    why:
+      fr: "`deny` (et `violation`) produisent un échec bloquant ; `warn` affiche un avertissement mais laisse le code de sortie à 0."
+      en: "`deny` (and `violation`) produce a blocking failure; `warn` prints a warning but leaves the exit code at 0."
+  - q:
+      fr: "Pour un Dockerfile analysé par Conftest, que contient `input` ?"
+      en: "For a Dockerfile parsed by Conftest, what does `input` contain?"
+    options:
+      fr:
+        - "Le texte brut du Dockerfile"
+        - "Une liste d'instructions, chacune avec `Cmd` et `Value`"
+        - "L'image construite"
+        - "Les couches du système de fichiers"
+      en:
+        - "The raw Dockerfile text"
+        - "A list of instructions, each with `Cmd` and `Value`"
+        - "The built image"
+        - "The filesystem layers"
+    answer: 1
+    why:
+      fr: "Le parser Dockerfile produit un tableau d'instructions `{\"Cmd\": \"from\", \"Value\": [...]}` ; on itère dessus et on filtre sur `Cmd` (en minuscules)."
+      en: "The Dockerfile parser produces an array of `{\"Cmd\": \"from\", \"Value\": [...]}` instructions; you iterate over it and filter on `Cmd` (lowercase)."
+  - q:
+      fr: "Quel risque de sécurité faut-il garder à l'esprit avec `plan.json` ?"
+      en: "Which security risk should you keep in mind with `plan.json`?"
+    options:
+      fr:
+        - "Il ne peut pas être lu par Conftest"
+        - "Il efface le state Terraform"
+        - "Il désactive le chiffrement du backend"
+        - "Il peut contenir des valeurs sensibles (secrets générés) : ne pas le publier"
+      en:
+        - "It cannot be read by Conftest"
+        - "It erases the Terraform state"
+        - "It disables backend encryption"
+        - "It can contain sensitive values (generated secrets): do not publish it"
+    answer: 3
+    why:
+      fr: "Le plan résolu inclut les valeurs calculées, y compris d'éventuels secrets. Traitez `plan.json` comme un artefact sensible et ne l'exposez pas publiquement."
+      en: "The resolved plan includes computed values, including possible secrets. Treat `plan.json` as a sensitive artifact and do not expose it publicly."

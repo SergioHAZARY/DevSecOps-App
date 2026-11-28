@@ -1,0 +1,395 @@
+description:
+  fr: "Connecter une machine surveillée à Wazuh : enrôler l'agent Linux via WAZUH_MANAGER, déployer une application vulnérable (Juice Shop) derrière NGINX, puis configurer la collecte des logs et la surveillance d'intégrité des fichiers."
+  en: "Connect a monitored machine to Wazuh: enroll the Linux agent via WAZUH_MANAGER, deploy a vulnerable app (Juice Shop) behind NGINX, then configure log collection and file integrity monitoring."
+duration: 30
+
+intro:
+  fr: |
+    Le SIEM tourne (leçon 2), mais il ne voit encore **rien** : aucune machine ne lui envoie de données.
+    On va maintenant **brancher les caméras**. Sur la machine `web-target`, on installe l'**agent Wazuh**,
+    qui collecte les journaux et surveille les fichiers, puis on lui donne quelque chose à surveiller :
+    une **application volontairement vulnérable**, OWASP **Juice Shop**, placée derrière **NGINX**.
+
+    Pourquoi une application vulnérable ? Pour avoir des attaques **réalistes** à détecter en leçon 5,
+    sans jamais toucher à un vrai système. Juice Shop est conçue pour l'entraînement : elle vit dans un
+    conteneur, dans votre lab, et c'est votre seule cible autorisée.
+
+    Deux mécanismes de collecte nous intéressent :
+
+    - **`<localfile>`** : Wazuh lit en continu un fichier journal (ici les logs d'accès NGINX).
+    - **`<syscheck>`** (FIM, *File Integrity Monitoring*) : Wazuh surveille un dossier et alerte si un
+      fichier est créé, modifié ou supprimé.
+  en: |
+    The SIEM is running (lesson 2), but it still sees **nothing**: no machine is sending it data. Now we
+    **plug in the cameras**. On the `web-target` machine we install the **Wazuh agent**, which collects
+    logs and watches files, then we give it something to watch: a **deliberately vulnerable application**,
+    OWASP **Juice Shop**, placed behind **NGINX**.
+
+    Why a vulnerable application? To have **realistic** attacks to detect in lesson 5, without ever
+    touching a real system. Juice Shop is built for training: it lives in a container, in your lab, and it
+    is your only authorized target.
+
+    Two collection mechanisms matter to us:
+
+    - **`<localfile>`**: Wazuh continuously reads a log file (here the NGINX access logs).
+    - **`<syscheck>`** (FIM, *File Integrity Monitoring*): Wazuh watches a folder and alerts if a file is
+      created, modified or deleted.
+
+sections:
+  - heading:
+      fr: "Enrôler l'agent Linux"
+      en: "Enroll the Linux agent"
+    body:
+      fr: |
+        L'agent Wazuh est un petit service installé sur la machine à surveiller. Il s'**enrôle** auprès du
+        manager (il s'y déclare, reçoit une clé), puis envoie ses événements.
+
+        La variable d'environnement **`WAZUH_MANAGER`** indique à l'installateur où se trouve le manager.
+        C'est la manière la plus simple d'automatiser : on l'exporte avant d'installer le paquet, et
+        l'agent se configure tout seul avec la bonne adresse.
+
+        ```bash
+        # Tell the installer which manager to register with, then install the agent
+        WAZUH_MANAGER="192.0.2.10" apt-get install wazuh-agent
+        systemctl enable --now wazuh-agent
+        ```
+
+        Après démarrage, l'agent apparaît dans le dashboard (section *Agents*) avec le statut **Active**.
+        Si le statut reste *Never connected*, c'est presque toujours un problème de **réseau** (ports 1514
+        / 1515 bloqués) ou d'**adresse du manager** mal renseignée.
+      en: |
+        The Wazuh agent is a small service installed on the machine to monitor. It **enrolls** with the
+        manager (declares itself, receives a key), then sends its events.
+
+        The environment variable **`WAZUH_MANAGER`** tells the installer where the manager is. It is the
+        simplest way to automate: export it before installing the package, and the agent configures itself
+        with the right address.
+
+        ```bash
+        # Tell the installer which manager to register with, then install the agent
+        WAZUH_MANAGER="192.0.2.10" apt-get install wazuh-agent
+        systemctl enable --now wazuh-agent
+        ```
+
+        After it starts, the agent appears in the dashboard (*Agents* section) with the **Active** status.
+        If the status stays *Never connected*, it is almost always a **network** problem (ports 1514 / 1515
+        blocked) or a mistyped **manager address**.
+  - heading:
+      fr: "Donner à l'agent quelque chose à surveiller"
+      en: "Give the agent something to watch"
+    body:
+      fr: |
+        L'agent lit sa configuration dans `/var/ossec/etc/ossec.conf`. On y ajoute deux choses.
+
+        D'abord, **`<localfile>`** pour collecter les logs d'accès de NGINX : chaque requête HTTP vers
+        l'application y est consignée, ce qui permettra de détecter les attaques web (injections, scans).
+
+        Ensuite, **`<syscheck>`** pour surveiller un dossier sensible, par exemple `/etc` ou le répertoire
+        web de l'application. En mode `realtime`, Wazuh alerte **instantanément** sur toute modification.
+
+        | Mécanisme | Ce qu'il surveille | Attaque détectée |
+        |---|---|---|
+        | `<localfile>` NGINX | Les requêtes HTTP | Injection SQL, scan, force brute web |
+        | `<syscheck>` /etc | Les fichiers système | Altération, porte dérobée, nouveau compte |
+        | `<localfile>` auth.log | Les connexions SSH | Force brute SSH |
+
+        NGINX joue le rôle de **reverse proxy** devant Juice Shop : il reçoit le trafic sur le port 80 et
+        le transmet au conteneur. Ses logs d'accès deviennent notre principale source d'événements web.
+      en: |
+        The agent reads its configuration from `/var/ossec/etc/ossec.conf`. We add two things there.
+
+        First, **`<localfile>`** to collect NGINX access logs: every HTTP request to the application is
+        recorded there, which will let us detect web attacks (injections, scans).
+
+        Then, **`<syscheck>`** to watch a sensitive folder, for example `/etc` or the application's web
+        directory. In `realtime` mode, Wazuh alerts **instantly** on any change.
+
+        | Mechanism | What it watches | Detected attack |
+        |---|---|---|
+        | `<localfile>` NGINX | HTTP requests | SQL injection, scanning, web brute force |
+        | `<syscheck>` /etc | System files | Tampering, backdoor, new account |
+        | `<localfile>` auth.log | SSH logins | SSH brute force |
+
+        NGINX acts as a **reverse proxy** in front of Juice Shop: it receives traffic on port 80 and
+        forwards it to the container. Its access logs become our main source of web events.
+
+examples:
+  - title:
+      fr: "Installer et enrôler l'agent Wazuh"
+      en: "Install and enroll the Wazuh agent"
+    file: agent/install-agent.sh
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Install the Wazuh agent on web-target and register it with the manager.
+      # Steps valid at time of writing (2026) — confirm on the official Wazuh docs.
+      set -euo pipefail
+
+      MANAGER_IP="192.0.2.10"
+
+      # 1. Add the official Wazuh APT repository and key (see official docs for current URLs)
+      curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH \
+        | sudo gpg --dearmor -o /usr/share/keyrings/wazuh.gpg
+      echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" \
+        | sudo tee /etc/apt/sources.list.d/wazuh.list
+      sudo apt-get update
+
+      # 2. WAZUH_MANAGER makes the agent auto-register with our manager
+      sudo WAZUH_MANAGER="${MANAGER_IP}" apt-get install -y wazuh-agent
+
+      # 3. Enable and start the agent service
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now wazuh-agent
+
+      echo "Agent installed. Check the dashboard: it should show 'Active' within a minute."
+    output: |
+      Setting up wazuh-agent ...
+      Created symlink /etc/systemd/system/multi-user.target.wants/wazuh-agent.service
+      Agent installed. Check the dashboard: it should show 'Active' within a minute.
+    note:
+      fr: "`WAZUH_MANAGER=\"192.0.2.10\"` fourni à l'installation inscrit automatiquement la bonne adresse dans `ossec.conf` : pas d'édition manuelle. On vérifie ensuite le statut *Active* dans le dashboard."
+      en: "`WAZUH_MANAGER=\"192.0.2.10\"` passed at install time automatically writes the right address into `ossec.conf`: no manual editing. We then check the *Active* status in the dashboard."
+
+  - title:
+      fr: "Juice Shop derrière NGINX (reverse proxy)"
+      en: "Juice Shop behind NGINX (reverse proxy)"
+    file: agent/nginx-juice.conf
+    lang: nginx
+    kind: neutral
+    code: |
+      # NGINX reverse proxy in front of the OWASP Juice Shop training app.
+      # Juice Shop runs in a container on 127.0.0.1:3000 (lab only, never on the internet).
+
+      # Access log format includes the client IP and request: the source of our web events
+      log_format webattack '$remote_addr - [$time_local] "$request" $status "$http_user_agent"';
+
+      server {
+          listen 80;
+          server_name web-target.lab;
+
+          # Wazuh reads this file via <localfile> to detect web attacks
+          access_log /var/log/nginx/juice-access.log webattack;
+          error_log  /var/log/nginx/juice-error.log;
+
+          location / {
+              proxy_pass http://127.0.0.1:3000;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+          }
+      }
+    note:
+      fr: "NGINX écrit chaque requête dans `juice-access.log` avec l'IP source et l'URL : c'est exactement ce que Wazuh analysera pour repérer une injection SQL ou un scan. L'application reste sur `127.0.0.1`, jamais exposée."
+      en: "NGINX writes each request into `juice-access.log` with the source IP and URL: exactly what Wazuh will analyze to spot a SQL injection or a scan. The app stays on `127.0.0.1`, never exposed."
+
+  - title:
+      fr: "Collecte des logs et surveillance d'intégrité (ossec.conf)"
+      en: "Log collection and integrity monitoring (ossec.conf)"
+    file: agent/ossec-localfile.conf
+    lang: xml
+    kind: secure
+    code: |
+      <!-- Add these blocks inside <ossec_config> in /var/ossec/etc/ossec.conf -->
+
+      <!-- Collect the NGINX access log: every HTTP request becomes a Wazuh event -->
+      <localfile>
+        <log_format>syslog</log_format>
+        <location>/var/log/nginx/juice-access.log</location>
+      </localfile>
+
+      <!-- Collect SSH authentication events to detect brute force (lesson 4) -->
+      <localfile>
+        <log_format>syslog</log_format>
+        <location>/var/log/auth.log</location>
+      </localfile>
+
+      <!-- File Integrity Monitoring: alert in real time on any change under /etc -->
+      <syscheck>
+        <disabled>no</disabled>
+        <directories check_all="yes" realtime="yes">/etc</directories>
+        <!-- Also watch the app's web root for tampering / web shells -->
+        <directories check_all="yes" realtime="yes">/var/www/juice</directories>
+        <!-- Ignore noisy files that change constantly to avoid false positives -->
+        <ignore>/etc/mtab</ignore>
+        <ignore>/etc/hosts.deny</ignore>
+      </syscheck>
+    note:
+      fr: "Deux `<localfile>` (NGINX et SSH) alimentent la détection des attaques ; `<syscheck>` en `realtime` alerte dès qu'un fichier de `/etc` change. Les `<ignore>` réduisent le bruit des fichiers qui changent sans arrêt."
+      en: "Two `<localfile>` blocks (NGINX and SSH) feed attack detection; `<syscheck>` in `realtime` alerts the moment a file in `/etc` changes. The `<ignore>` entries cut the noise from files that change constantly."
+
+  - title:
+      fr: "Vérifier que l'agent remonte bien des événements"
+      en: "Check the agent is actually sending events"
+    file: agent/verify.txt
+    lang: text
+    kind: neutral
+    code: |
+      # On web-target: confirm the agent is connected to the manager
+      $ sudo /var/ossec/bin/agent_control -i 001 2>/dev/null || sudo systemctl status wazuh-agent --no-pager
+      wazuh-agent.service - Wazuh agent
+         Active: active (running)
+
+      # On the manager: list agents and their status
+      $ docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l
+      Wazuh agent_control. List of available agents:
+         ID: 001, Name: web-target, IP: 192.0.2.20, Active
+
+      # Generate a web event and confirm it reaches the manager archives
+      $ curl -s http://192.0.2.20/ >/dev/null   # from the attacker machine, lab only
+      # Then on the manager, the request shows up in the alerts/archives for agent 001
+    note:
+      fr: "On valide la chaîne complète : agent *Active*, puis une simple requête `curl` depuis l'attaquant doit apparaître côté manager. Si rien ne remonte, on vérifie d'abord le pare-feu (ports 1514/1515) et l'horloge."
+      en: "We validate the full chain: agent *Active*, then a simple `curl` from the attacker should appear on the manager. If nothing comes through, check the firewall first (ports 1514/1515) and the clock."
+
+mistake:
+  fr: |
+    **Croire que l'agent surveille tout automatiquement.**
+
+    Installer l'agent ne suffit pas : par défaut, il remonte quelques journaux système, mais **pas** vos
+    logs applicatifs. Si vous oubliez le bloc `<localfile>` pointant vers le log d'accès de NGINX, aucune
+    attaque web ne sera jamais détectée — le SIEM ne « voit » que ce qu'on lui dit de lire. De même, la
+    surveillance d'intégrité (`<syscheck>`) ne couvre que les dossiers que vous déclarez explicitement.
+  en: |
+    **Believing the agent monitors everything automatically.**
+
+    Installing the agent is not enough: by default it reports a few system logs, but **not** your
+    application logs. If you forget the `<localfile>` block pointing at the NGINX access log, no web attack
+    will ever be detected — the SIEM only "sees" what you tell it to read. Likewise, integrity monitoring
+    (`<syscheck>`) covers only the folders you explicitly declare.
+
+bestPractice:
+  fr: |
+    - **Automatisez l'enrôlement** avec `WAZUH_MANAGER` à l'installation : pas d'édition manuelle fragile.
+    - **Déclarez explicitement vos sources** `<localfile>` (NGINX, auth.log) : l'agent ne devine rien.
+    - **Activez le FIM en `realtime`** sur les dossiers sensibles, avec des `<ignore>` pour le bruit.
+    - **Vérifiez le statut *Active*** dans le dashboard avant de passer à la détection.
+    - **Gardez l'application vulnérable sur `127.0.0.1`** et dans le lab : c'est une cible d'entraînement,
+      jamais exposée.
+  en: |
+    - **Automate enrollment** with `WAZUH_MANAGER` at install time: no fragile manual editing.
+    - **Explicitly declare your sources** `<localfile>` (NGINX, auth.log): the agent guesses nothing.
+    - **Enable FIM in `realtime`** on sensitive folders, with `<ignore>` entries for the noise.
+    - **Check the *Active* status** in the dashboard before moving to detection.
+    - **Keep the vulnerable app on `127.0.0.1`** and inside the lab: it is a training target, never
+      exposed.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez que Wazuh surveille en temps réel le dossier de configuration SSH `/etc/ssh` sur
+      `web-target`, pour être alerté si `sshd_config` est modifié (une porte dérobée classique).
+
+      Écrivez le bloc `<syscheck>` à ajouter dans `ossec.conf`, en surveillant `/etc/ssh` en `realtime` et
+      en vérifiant les sommes de contrôle.
+    en: |
+      You want Wazuh to monitor the SSH configuration folder `/etc/ssh` on `web-target` in real time, so
+      you are alerted if `sshd_config` is modified (a classic backdoor).
+
+      Write the `<syscheck>` block to add to `ossec.conf`, watching `/etc/ssh` in `realtime` and checking
+      checksums.
+  solution:
+    file: ssh-fim.xml
+    lang: xml
+    code: |
+      <!-- Add inside <ossec_config>. Alerts in real time on any change under /etc/ssh. -->
+      <syscheck>
+        <disabled>no</disabled>
+        <!-- check_all=yes verifies size, permissions, owner and content checksums -->
+        <directories check_all="yes" realtime="yes" report_changes="yes">/etc/ssh</directories>
+      </syscheck>
+      <!-- After editing, restart the agent: sudo systemctl restart wazuh-agent -->
+    note:
+      fr: "`check_all=\"yes\"` vérifie taille, droits, propriétaire **et** somme de contrôle du contenu ; `report_changes=\"yes\"` montre *ce qui* a changé dans le fichier. Une modification de `sshd_config` déclenchera alors une alerte FIM."
+      en: "`check_all=\"yes\"` verifies size, permissions, owner **and** content checksum; `report_changes=\"yes\"` shows *what* changed in the file. A change to `sshd_config` then triggers a FIM alert."
+
+quiz:
+  - q:
+      fr: "À quoi sert la variable `WAZUH_MANAGER` lors de l'installation de l'agent ?"
+      en: "What is the `WAZUH_MANAGER` variable used for when installing the agent?"
+    options:
+      fr:
+        - "À définir le mot de passe de l'agent"
+        - "À indiquer l'adresse du manager pour que l'agent s'enrôle automatiquement"
+        - "À choisir la version de Wazuh"
+        - "À activer le chiffrement des logs"
+      en:
+        - "To set the agent's password"
+        - "To tell the agent the manager's address so it auto-enrolls"
+        - "To choose the Wazuh version"
+        - "To enable log encryption"
+    answer: 1
+    why:
+      fr: "`WAZUH_MANAGER` renseigne l'adresse du manager dans la configuration de l'agent au moment de l'installation, évitant une édition manuelle."
+      en: "`WAZUH_MANAGER` writes the manager address into the agent's configuration at install time, avoiding manual editing."
+  - q:
+      fr: "Quel bloc de configuration fait lire un fichier journal par l'agent ?"
+      en: "Which configuration block makes the agent read a log file?"
+    options:
+      fr:
+        - "<syscheck>"
+        - "<active-response>"
+        - "<localfile>"
+        - "<rootcheck>"
+      en:
+        - "<syscheck>"
+        - "<active-response>"
+        - "<localfile>"
+        - "<rootcheck>"
+    answer: 2
+    why:
+      fr: "`<localfile>` indique un fichier (log NGINX, auth.log) que l'agent lit en continu et transmet au manager."
+      en: "`<localfile>` points to a file (NGINX log, auth.log) that the agent continuously reads and forwards to the manager."
+  - q:
+      fr: "Que surveille `<syscheck>` ?"
+      en: "What does `<syscheck>` monitor?"
+    options:
+      fr:
+        - "L'intégrité des fichiers : création, modification ou suppression"
+        - "La charge CPU"
+        - "Les connexions réseau sortantes"
+        - "La version des paquets installés"
+      en:
+        - "File integrity: creation, modification or deletion"
+        - "CPU load"
+        - "Outbound network connections"
+        - "The version of installed packages"
+    answer: 0
+    why:
+      fr: "Syscheck est le moteur FIM de Wazuh : il détecte tout changement sur les fichiers des dossiers déclarés, en temps réel si configuré."
+      en: "Syscheck is Wazuh's FIM engine: it detects any change to files in the declared folders, in real time if configured."
+  - q:
+      fr: "Pourquoi placer Juice Shop sur `127.0.0.1` derrière NGINX ?"
+      en: "Why place Juice Shop on `127.0.0.1` behind NGINX?"
+    options:
+      fr:
+        - "Pour la rendre plus rapide"
+        - "Pour que NGINX journalise le trafic et que l'application reste non exposée au réseau extérieur"
+        - "Parce que Wazuh l'exige"
+        - "Pour chiffrer la base de données"
+      en:
+        - "To make it faster"
+        - "So NGINX logs the traffic and the app stays unexposed to the outside network"
+        - "Because Wazuh requires it"
+        - "To encrypt the database"
+    answer: 1
+    why:
+      fr: "NGINX en reverse proxy produit les logs d'accès analysés par Wazuh, et garder l'application sur `127.0.0.1` évite de l'exposer hors du lab."
+      en: "NGINX as a reverse proxy produces the access logs analyzed by Wazuh, and keeping the app on `127.0.0.1` avoids exposing it outside the lab."
+  - q:
+      fr: "L'agent reste en statut *Never connected*. Quelle est la cause la plus probable ?"
+      en: "The agent stays in *Never connected* status. What is the most likely cause?"
+    options:
+      fr:
+        - "Le dashboard est en panne"
+        - "L'indexer manque de mémoire"
+        - "Un problème réseau (ports 1514/1515) ou une mauvaise adresse de manager"
+        - "Juice Shop n'est pas démarré"
+      en:
+        - "The dashboard is down"
+        - "The indexer is out of memory"
+        - "A network problem (ports 1514/1515) or a wrong manager address"
+        - "Juice Shop is not started"
+    answer: 2
+    why:
+      fr: "L'agent s'enrôle sur 1515 et pousse sur 1514 ; si ces ports sont bloqués ou l'adresse est fausse, il ne se connecte jamais."
+      en: "The agent enrolls on 1515 and pushes on 1514; if those ports are blocked or the address is wrong, it never connects."

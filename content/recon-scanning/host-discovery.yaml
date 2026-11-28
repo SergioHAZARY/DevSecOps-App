@@ -1,0 +1,366 @@
+description:
+  fr: "Découvrir les hôtes vivants et les ports ouverts avec Nmap : ping sweep, scan ARP et balayage de ports sur votre sous-réseau de lab."
+  en: "Discover live hosts and open ports with Nmap: ping sweep, ARP scan and port scanning on your lab subnet."
+duration: 20
+
+intro:
+  fr: |
+    Après la reconnaissance passive, on passe à l'**actif** : on envoie des paquets pour savoir **quelles
+    machines sont allumées** et **quels ports sont ouverts**. C'est la phase de **scan**, et l'outil de
+    référence est **Nmap** (*Network Mapper*).
+
+    Imaginez que vous arriviez dans un immeuble inconnu : d'abord vous repérez quels appartements sont occupés
+    (hôtes vivants), puis vous regardez quelles portes et fenêtres existent (ports). Un port ouvert, c'est une
+    porte par laquelle un service écoute.
+
+    Dans cette leçon, vous allez faire un **ping sweep** (`nmap -sn`) pour lister les hôtes vivants, comprendre
+    le **scan ARP** sur un réseau local, puis balayer les **ports** d'une cible de lab. Attention : scanner
+    génère du trafic visible et détectable. On ne scanne que **son propre sous-réseau de lab**
+    (`192.0.2.0/24` est une plage fictive), **scanme.nmap.org** (cible officielle de Nmap) ou un périmètre
+    **autorisé par écrit**. Scanner un réseau tiers sans autorisation est illégal.
+  en: |
+    After passive reconnaissance, you move to the **active** phase: you send packets to learn **which machines
+    are powered on** and **which ports are open**. This is the **scanning** phase, and the reference tool is
+    **Nmap** (*Network Mapper*).
+
+    Picture arriving in an unknown building: first you spot which flats are occupied (live hosts), then you look
+    at which doors and windows exist (ports). An open port is a door through which a service listens.
+
+    In this lesson you will run a **ping sweep** (`nmap -sn`) to list live hosts, understand the **ARP scan** on
+    a local network, then scan the **ports** of a lab target. Caution: scanning generates visible, detectable
+    traffic. You only scan **your own lab subnet** (`192.0.2.0/24` is a placeholder range), **scanme.nmap.org**
+    (Nmap's official target) or a scope **authorised in writing**. Scanning a third-party network without
+    authorisation is illegal.
+
+sections:
+  - heading:
+      fr: "Hôtes vivants : le ping sweep (-sn)"
+      en: "Live hosts: the ping sweep (-sn)"
+    body:
+      fr: |
+        La première question est : *quelles machines répondent ?* Le **ping sweep** envoie de petites sondes à
+        toute une plage d'adresses et liste celles qui répondent. Avec Nmap :
+
+        ```bash
+        nmap -sn 192.0.2.0/24
+        ```
+
+        L'option `-sn` (*no port scan*) demande à Nmap de faire **uniquement** la découverte d'hôtes, sans
+        scanner les ports. Selon le contexte, Nmap combine plusieurs techniques : requêtes ICMP echo, TCP sur
+        les ports 80/443, et surtout **ARP** sur le réseau local.
+
+        Le résultat est une liste d'IP vivantes, point de départ de tout le reste. Scanner un `/24` (256
+        adresses) prend quelques secondes. Sur un réseau que vous ne connaissez pas encore, c'est la carte de
+        base : qui est là.
+      en: |
+        The first question is: *which machines reply?* The **ping sweep** sends small probes to a whole range of
+        addresses and lists those that answer. With Nmap:
+
+        ```bash
+        nmap -sn 192.0.2.0/24
+        ```
+
+        The `-sn` option (*no port scan*) asks Nmap to do **only** host discovery, without scanning ports.
+        Depending on context, Nmap combines several techniques: ICMP echo requests, TCP to ports 80/443, and
+        above all **ARP** on the local network.
+
+        The result is a list of live IPs, the starting point for everything else. Scanning a `/24` (256
+        addresses) takes a few seconds. On a network you do not yet know, it is the base map: who is there.
+  - heading:
+      fr: "ARP : la découverte fiable en réseau local"
+      en: "ARP: reliable discovery on a local network"
+    body:
+      fr: |
+        Sur un **réseau local** (même segment Ethernet/Wi-Fi), la méthode la plus fiable n'est pas le ping ICMP
+        — souvent filtré par les pare-feu — mais l'**ARP** (*Address Resolution Protocol*). ARP est le protocole
+        qui associe une adresse IP à une adresse matérielle (MAC) ; une machine ne peut pas l'ignorer sans
+        devenir injoignable sur le réseau local.
+
+        C'est pourquoi, quand la cible est sur le **même sous-réseau** que vous, Nmap utilise automatiquement
+        l'ARP pour `-sn`, et c'est quasi infaillible : même un hôte qui ignore les pings répond à l'ARP.
+
+        | Méthode | Portée | Fiabilité | Remarque |
+        |---|---|---|---|
+        | ICMP echo (ping) | Routable | Moyenne | Souvent bloqué par pare-feu |
+        | TCP SYN 80/443 | Routable | Bonne | Détecte les hôtes derrière pare-feu |
+        | ARP | Réseau local seulement | Très élevée | Impossible à filtrer sur le segment |
+
+        À retenir : en local, pensez **ARP** ; au-delà d'un routeur, l'ARP ne passe plus, on repasse à ICMP/TCP.
+      en: |
+        On a **local network** (same Ethernet/Wi-Fi segment), the most reliable method is not ICMP ping — often
+        filtered by firewalls — but **ARP** (*Address Resolution Protocol*). ARP is the protocol that maps an IP
+        address to a hardware (MAC) address; a machine cannot ignore it without becoming unreachable on the
+        local network.
+
+        That is why, when the target is on the **same subnet** as you, Nmap automatically uses ARP for `-sn`,
+        and it is almost infallible: even a host that ignores pings answers ARP.
+
+        | Method | Reach | Reliability | Note |
+        |---|---|---|---|
+        | ICMP echo (ping) | Routable | Medium | Often blocked by firewalls |
+        | TCP SYN 80/443 | Routable | Good | Detects hosts behind a firewall |
+        | ARP | Local network only | Very high | Impossible to filter on the segment |
+
+        Remember: locally, think **ARP**; beyond a router, ARP no longer passes, and you fall back to ICMP/TCP.
+  - heading:
+      fr: "Balayer les ports d'un hôte"
+      en: "Scanning a host's ports"
+    body:
+      fr: |
+        Une fois un hôte identifié, on regarde ses **ports**. Chaque port TCP/UDP ouvert correspond à un service
+        qui écoute. Le scan par défaut de Nmap teste les 1000 ports les plus courants :
+
+        ```bash
+        nmap 192.0.2.10
+        ```
+
+        Options utiles :
+
+        - `-p-` : scanner **tous** les 65535 ports (plus lent, mais exhaustif).
+        - `-p 22,80,443` : cibler des ports précis.
+        - `-sS` : scan **SYN** (demi-ouvert), rapide et discret (nécessite les privilèges root).
+        - `-T4` : accélérer le rythme (à éviter sur un réseau fragile).
+        - `--open` : n'afficher que les ports ouverts.
+
+        Un port peut être **open** (un service répond), **closed** (rien n'écoute) ou **filtered** (un pare-feu
+        bloque, Nmap n'a pas de réponse claire). Distinguer ces trois états est essentiel : *filtered* signale
+        souvent un pare-feu, une information en soi.
+      en: |
+        Once a host is identified, you look at its **ports**. Each open TCP/UDP port corresponds to a listening
+        service. Nmap's default scan tests the 1000 most common ports:
+
+        ```bash
+        nmap 192.0.2.10
+        ```
+
+        Useful options:
+
+        - `-p-`: scan **all** 65535 ports (slower, but exhaustive).
+        - `-p 22,80,443`: target specific ports.
+        - `-sS`: **SYN** scan (half-open), fast and stealthy (needs root privileges).
+        - `-T4`: speed up the pace (avoid on a fragile network).
+        - `--open`: show only open ports.
+
+        A port can be **open** (a service replies), **closed** (nothing listens) or **filtered** (a firewall
+        blocks, Nmap gets no clear reply). Distinguishing these three states is essential: *filtered* often
+        signals a firewall, which is information in itself.
+
+examples:
+  - title:
+      fr: "Ping sweep sur votre sous-réseau de lab"
+      en: "Ping sweep on your lab subnet"
+    file: ping_sweep.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # -sn: host discovery only, no port scan. Scan YOUR lab subnet only.
+      # On a local segment, Nmap uses ARP automatically: very reliable.
+      sudo nmap -sn 192.0.2.0/24
+    output: |
+      Starting Nmap 7.94 ( https://nmap.org )
+      Nmap scan report for 192.0.2.1
+      Host is up (0.00035s latency).
+      Nmap scan report for 192.0.2.10
+      Host is up (0.00041s latency).
+      Nmap scan report for 192.0.2.20
+      Host is up (0.00052s latency).
+      Nmap done: 256 IP addresses (3 hosts up) scanned in 2.14 seconds
+    note:
+      fr: "Trois hôtes répondent sur 256 adresses. C'est la carte de départ : on sait maintenant sur quelles IP concentrer les scans de ports, sans bruit inutile sur les adresses vides."
+      en: "Three hosts reply out of 256 addresses. This is the starting map: we now know which IPs to focus port scans on, with no needless noise on empty addresses."
+  - title:
+      fr: "Scan de ports standard d'une cible de lab"
+      en: "Standard port scan of a lab target"
+    file: port_scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Default scan of the 1000 most common TCP ports on a lab host.
+      # --open shows only ports that are open, for a cleaner result.
+      nmap --open 192.0.2.10
+    output: |
+      Nmap scan report for 192.0.2.10
+      Host is up (0.00040s latency).
+      Not shown: 996 closed tcp ports (conn-refused)
+      PORT     STATE SERVICE
+      22/tcp   open  ssh
+      80/tcp   open  http
+      139/tcp  open  netbios-ssn
+      445/tcp  open  microsoft-ds
+    note:
+      fr: "Quatre ports ouverts : SSH, HTTP et le partage de fichiers SMB (139/445). Chaque port ouvert est une surface à étudier ensuite ; SMB exposé est souvent une piste prioritaire."
+      en: "Four open ports: SSH, HTTP and SMB file sharing (139/445). Each open port is a surface to study next; exposed SMB is often a priority lead."
+  - title:
+      fr: "Scan complet et rapide de scanme.nmap.org"
+      en: "Full, fast scan of scanme.nmap.org"
+    file: scanme.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # scanme.nmap.org is Nmap's OFFICIAL target, explicitly allowed for testing.
+      # -p- scans all 65535 ports; -T4 speeds things up; --open hides closed ports.
+      nmap -p- -T4 --open scanme.nmap.org
+    output: |
+      Nmap scan report for scanme.nmap.org (45.33.32.156)
+      Host is up (0.17s latency).
+      Not shown: 65530 closed tcp ports (conn-refused)
+      PORT      STATE SERVICE
+      22/tcp    open  ssh
+      80/tcp    open  http
+      9929/tcp  open  nping-echo
+      31337/tcp open  Elite
+    note:
+      fr: "scanme.nmap.org est la seule cible publique réelle qu'on peut scanner librement : Nmap la met à disposition pour s'entraîner. `-p-` révèle des ports hauts (9929, 31337) qu'un scan par défaut manquerait."
+      en: "scanme.nmap.org is the one real public target you can freely scan: Nmap provides it for practice. `-p-` reveals high ports (9929, 31337) that a default scan would miss."
+
+mistake:
+  fr: |
+    **Lancer un scan agressif (`-T5`, `-p-`) sur une cible de production ou non autorisée.** Un balayage
+    complet envoie des milliers de paquets : c'est bruyant, détecté par les systèmes de défense, et peut
+    déstabiliser des équipements fragiles (imprimantes, objets connectés). Pire, scanner une IP hors périmètre
+    est illégal. Vérifiez **toujours** que la cible est dans votre lab, est scanme.nmap.org, ou fait partie d'un
+    périmètre autorisé avant d'appuyer sur Entrée.
+  en: |
+    **Running an aggressive scan (`-T5`, `-p-`) on a production or unauthorised target.** A full sweep sends
+    thousands of packets: it is noisy, detected by defensive systems, and can destabilise fragile equipment
+    (printers, IoT devices). Worse, scanning an out-of-scope IP is illegal. **Always** verify the target is in
+    your lab, is scanme.nmap.org, or is part of an authorised scope before pressing Enter.
+
+bestPractice:
+  fr: |
+    - **Découverte d'abord** (`-sn`), scan de ports ensuite : ne balayez que les hôtes réellement vivants.
+    - **En réseau local, comptez sur l'ARP** : fiable même face aux hôtes qui ignorent le ping.
+    - **Comprenez open/closed/filtered** : *filtered* révèle un pare-feu, une information précieuse.
+    - **Adaptez le rythme** (`-T3`/`-T4`) à la fragilité de la cible ; évitez `-T5` hors lab.
+    - **Vérifiez le périmètre avant chaque scan** : lab, scanme.nmap.org, ou autorisation écrite uniquement.
+  en: |
+    - **Discovery first** (`-sn`), port scan next: only sweep the hosts that are actually alive.
+    - **On a local network, rely on ARP**: reliable even against hosts that ignore ping.
+    - **Understand open/closed/filtered**: *filtered* reveals a firewall, valuable information.
+    - **Match the pace** (`-T3`/`-T4`) to the target's fragility; avoid `-T5` outside the lab.
+    - **Check the scope before every scan**: lab, scanme.nmap.org, or written authorisation only.
+
+exercise:
+  statement:
+    fr: |
+      Vous administrez le sous-réseau de lab `192.0.2.0/24`. Vous voulez :
+
+      1. lister d'abord les hôtes vivants, **sans** scanner les ports ;
+      2. puis scanner **tous** les ports TCP de l'hôte `192.0.2.20`, en n'affichant que les ports ouverts.
+
+      Écrivez les deux commandes Nmap.
+    en: |
+      You administer the lab subnet `192.0.2.0/24`. You want to:
+
+      1. first list the live hosts, **without** scanning ports;
+      2. then scan **all** TCP ports of host `192.0.2.20`, showing only the open ones.
+
+      Write the two Nmap commands.
+  solution:
+    file: scan.sh
+    lang: bash
+    code: |
+      # 1. Host discovery only (ping sweep). ARP is used on the local segment.
+      sudo nmap -sn 192.0.2.0/24
+
+      # 2. Full TCP port scan of one host; --open hides closed/filtered ports.
+      nmap -p- --open 192.0.2.20
+
+      # Discovery first avoids wasting time scanning ports on dead addresses.
+    note:
+      fr: "`-sn` répond à « qui est là », `-p-` à « quelles portes sont ouvertes ». Faire la découverte avant le scan de ports évite de scanner des adresses vides."
+      en: "`-sn` answers \"who is there\", `-p-` answers \"which doors are open\". Discovery before the port scan avoids scanning empty addresses."
+
+quiz:
+  - q:
+      fr: "Que fait l'option `-sn` de Nmap ?"
+      en: "What does Nmap's `-sn` option do?"
+    options:
+      fr:
+        - "Elle scanne tous les ports"
+        - "Elle fait uniquement la découverte d'hôtes, sans scan de ports"
+        - "Elle détecte les versions de service"
+        - "Elle désactive le DNS"
+      en:
+        - "It scans all ports"
+        - "It does host discovery only, with no port scan"
+        - "It detects service versions"
+        - "It disables DNS"
+    answer: 1
+    why:
+      fr: "`-sn` (ping sweep) identifie les hôtes vivants sans scanner leurs ports."
+      en: "`-sn` (ping sweep) identifies live hosts without scanning their ports."
+  - q:
+      fr: "Pourquoi l'ARP est-il très fiable en réseau local ?"
+      en: "Why is ARP very reliable on a local network?"
+    options:
+      fr:
+        - "Parce qu'il est chiffré"
+        - "Parce qu'une machine ne peut pas l'ignorer sans devenir injoignable localement"
+        - "Parce qu'il traverse les routeurs"
+        - "Parce qu'il utilise le port 443"
+      en:
+        - "Because it is encrypted"
+        - "Because a machine cannot ignore it without becoming locally unreachable"
+        - "Because it crosses routers"
+        - "Because it uses port 443"
+    answer: 1
+    why:
+      fr: "ARP associe IP et MAC sur le segment local ; l'ignorer rend la machine injoignable, donc elle répond toujours."
+      en: "ARP maps IP to MAC on the local segment; ignoring it makes the machine unreachable, so it always replies."
+  - q:
+      fr: "Que signifie l'état `filtered` d'un port dans Nmap ?"
+      en: "What does a port's `filtered` state mean in Nmap?"
+    options:
+      fr:
+        - "Un service répond normalement"
+        - "Le port est définitivement fermé"
+        - "Un pare-feu bloque et Nmap n'a pas de réponse claire"
+        - "Le port est chiffré"
+      en:
+        - "A service replies normally"
+        - "The port is definitely closed"
+        - "A firewall blocks and Nmap gets no clear reply"
+        - "The port is encrypted"
+    answer: 2
+    why:
+      fr: "`filtered` indique qu'un filtre (pare-feu) empêche Nmap de déterminer l'état réel : signe d'une défense."
+      en: "`filtered` means a filter (firewall) stops Nmap from determining the real state: a sign of a defence."
+  - q:
+      fr: "Quelle cible publique réelle pouvez-vous scanner librement pour vous entraîner ?"
+      en: "Which real public target can you freely scan to practise?"
+    options:
+      fr:
+        - "scanme.nmap.org"
+        - "L'IP de votre fournisseur d'accès"
+        - "Un serveur d'une administration"
+        - "Le site d'un concurrent"
+      en:
+        - "scanme.nmap.org"
+        - "Your internet provider's IP"
+        - "A government agency server"
+        - "A competitor's website"
+    answer: 0
+    why:
+      fr: "Nmap met scanme.nmap.org à disposition explicitement pour l'entraînement ; les autres exigent une autorisation."
+      en: "Nmap provides scanme.nmap.org explicitly for practice; the others require authorisation."
+  - q:
+      fr: "Pourquoi faire la découverte d'hôtes avant le scan de ports ?"
+      en: "Why do host discovery before the port scan?"
+    options:
+      fr:
+        - "Pour chiffrer le trafic"
+        - "Pour ne scanner les ports que des hôtes réellement vivants"
+        - "Pour désactiver le pare-feu"
+        - "Parce que la loi l'impose"
+      en:
+        - "To encrypt the traffic"
+        - "To port-scan only the hosts that are actually alive"
+        - "To disable the firewall"
+        - "Because the law requires it"
+    answer: 1
+    why:
+      fr: "Découvrir d'abord les hôtes vivants évite de gaspiller du temps et du bruit à scanner des adresses vides."
+      en: "Discovering live hosts first avoids wasting time and noise scanning empty addresses."
+
+widgets: [cidr-calculator]

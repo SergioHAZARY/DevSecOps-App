@@ -1,0 +1,496 @@
+description:
+  fr: "Maîtriser les règles partielles, l'itération avec some/in, le quantificateur every, les compréhensions et les fonctions pour écrire des politiques expressives."
+  en: "Master partial rules, iteration with some/in, the every quantifier, comprehensions and functions to write expressive policies."
+duration: 25
+
+intro:
+  fr: |
+    Une politique réelle ne répond pas par un simple oui/non : elle **parcourt des listes** (tous les
+    conteneurs d'un pod, toutes les règles d'un groupe de sécurité) et **collecte les problèmes** trouvés.
+    Pour cela, Rego offre deux outils qui déroutent au début : les **règles partielles** (qui construisent
+    un ensemble de messages) et l'**itération** (`some`, `in`, `every`, compréhensions).
+
+    L'analogie : un **inspecteur qui remplit une fiche de contrôle**. Il ne dit pas juste « recalé » ; il
+    coche chaque défaut (« frein usé », « pneu lisse ») et rend la liste complète. En Rego, cette fiche est
+    un ensemble `deny` : chaque violation ajoute une ligne, et le pipeline échoue si l'ensemble n'est pas vide.
+
+    Dans cette leçon vous allez passer du booléen `allow` au motif professionnel `deny contains msg if ...`,
+    apprendre à itérer sans boucle `for`, et vérifier qu'une propriété est vraie pour **tous** les éléments
+    avec `every`. C'est le vocabulaire que Gatekeeper et Conftest utilisent dans les leçons suivantes.
+  en: |
+    A real policy does not answer with a plain yes/no: it **walks through lists** (all the containers of a
+    pod, all the rules of a security group) and **collects the problems** it finds. For that, Rego offers
+    two tools that are confusing at first: **partial rules** (which build a set of messages) and
+    **iteration** (`some`, `in`, `every`, comprehensions).
+
+    The analogy: an **inspector filling in a checklist**. They do not just say "failed"; they tick every
+    defect ("worn brake", "bald tyre") and hand back the complete list. In Rego, that checklist is a `deny`
+    set: each violation adds a line, and the pipeline fails if the set is not empty.
+
+    In this lesson you will move from the boolean `allow` to the professional pattern
+    `deny contains msg if ...`, learn to iterate without a `for` loop, and check that a property holds for
+    **all** elements with `every`. This is the vocabulary that Gatekeeper and Conftest use in later lessons.
+
+sections:
+  - heading:
+      fr: "Règles partielles : construire un ensemble de refus"
+      en: "Partial rules: building a set of denials"
+    body:
+      fr: |
+        Une règle **complète** définit une seule valeur (`allow` vaut `true` ou `false`). Une règle
+        **partielle** construit une **collection** : chaque fois que sa condition est satisfaite, elle y
+        ajoute un élément. Le motif standard d'une politique de sécurité est un ensemble de messages nommé
+        `deny` ou `violation` :
+
+        ```rego
+        package main
+        import rego.v1
+
+        deny contains msg if {
+            input.user == "root"
+            msg := "running as root is forbidden"
+        }
+        ```
+
+        `contains` indique que `deny` est un **ensemble** (*set*). La variable `msg` est construite à
+        l'intérieur, puis ajoutée. S'il y a plusieurs raisons de refuser, on écrit plusieurs règles `deny`
+        et l'ensemble les réunit toutes. La décision finale est simple : **`deny` vide = conforme**.
+        Conftest et Gatekeeper reposent exactement sur ce motif.
+      en: |
+        A **complete** rule defines a single value (`allow` is `true` or `false`). A **partial** rule
+        builds a **collection**: each time its condition holds, it adds an element. The standard pattern of
+        a security policy is a set of messages named `deny` or `violation`:
+
+        ```rego
+        package main
+        import rego.v1
+
+        deny contains msg if {
+            input.user == "root"
+            msg := "running as root is forbidden"
+        }
+        ```
+
+        `contains` marks `deny` as a **set**. The `msg` variable is built inside, then added. If there are
+        several reasons to refuse, you write several `deny` rules and the set unions them all. The final
+        decision is simple: **empty `deny` = compliant**. Conftest and Gatekeeper rely on exactly this
+        pattern.
+  - heading:
+      fr: "Itérer : some, in et les compréhensions"
+      en: "Iterating: some, in and comprehensions"
+    body:
+      fr: |
+        Rego n'a pas de boucle `for`. On parcourt une collection en **déclarant une variable** qui prend
+        successivement chaque valeur, et toute la règle est réévaluée pour chacune :
+
+        ```rego
+        # "some c in ..." binds c to each container, one at a time
+        deny contains msg if {
+            some c in input.spec.containers
+            c.securityContext.privileged == true
+            msg := sprintf("container %q is privileged", [c.name])
+        }
+        ```
+
+        `some x in coll` itère sur les valeurs ; `some i, x in coll` donne aussi l'indice ou la clé.
+        L'opérateur `in` teste l'appartenance : `"admin" in input.roles`. Les **compréhensions** construisent
+        une nouvelle collection à partir d'une autre :
+
+        | Forme | Construit | Exemple |
+        |---|---|---|
+        | `[x | ...]` | une liste | `[c.name | some c in input.spec.containers]` |
+        | `{x | ...}` | un ensemble | `{p | some p in input.ports}` |
+        | `{k: v | ...}` | un objet | `{c.name: c.image | some c in input.spec.containers}` |
+
+        Une compréhension est l'outil idéal pour répondre « combien » (`count([...])`) ou « lesquels »
+        sans écrire de boucle explicite.
+      en: |
+        Rego has no `for` loop. You walk a collection by **declaring a variable** that takes each value in
+        turn, and the whole rule is re-evaluated for each one:
+
+        ```rego
+        # "some c in ..." binds c to each container, one at a time
+        deny contains msg if {
+            some c in input.spec.containers
+            c.securityContext.privileged == true
+            msg := sprintf("container %q is privileged", [c.name])
+        }
+        ```
+
+        `some x in coll` iterates over values; `some i, x in coll` also gives the index or key. The `in`
+        operator tests membership: `"admin" in input.roles`. **Comprehensions** build a new collection from
+        another:
+
+        | Form | Builds | Example |
+        |---|---|---|
+        | `[x | ...]` | a list | `[c.name | some c in input.spec.containers]` |
+        | `{x | ...}` | a set | `{p | some p in input.ports}` |
+        | `{k: v | ...}` | an object | `{c.name: c.image | some c in input.spec.containers}` |
+
+        A comprehension is the ideal tool to answer "how many" (`count([...])`) or "which ones" without
+        writing an explicit loop.
+  - heading:
+      fr: "every : vérifier une propriété pour tous les éléments"
+      en: "every: checking a property for all elements"
+    body:
+      fr: |
+        `some` dit « il existe un élément tel que... ». Son miroir est `every` : « **tous** les éléments
+        vérifient... ». C'est exactement ce qu'il faut pour une exigence de sécurité du type « chaque
+        conteneur doit définir une limite mémoire » :
+
+        ```rego
+        all_limited if {
+            every c in input.spec.containers {
+                c.resources.limits.memory  # must exist for every container
+            }
+        }
+        ```
+
+        Attention à un piège de logique : écrire `deny` avec `some ... not ...` et écrire `all_ok` avec
+        `every` ne sont pas interchangeables sur une **liste vide**. `every x in [] { ... }` est **vrai**
+        (vacuité), tandis qu'un `some x in []` ne trouve rien et la règle est `undefined`. Pour une
+        politique, on raisonne presque toujours « refuser dès qu'il existe un élément fautif » : on itère
+        avec `some`, on teste la condition fautive, on ajoute un message. On garde `every` pour exprimer
+        proprement une garantie positive.
+
+        Enfin, les **fonctions** factorisent une condition réutilisée : `is_privileged(c) if
+        c.securityContext.privileged`. Elles prennent des arguments, renvoient une valeur (ou `true` si le
+        corps est satisfait) et rendent les règles lisibles.
+      en: |
+        `some` says "there exists an element such that...". Its mirror is `every`: "**all** elements
+        satisfy...". That is exactly what you need for a security requirement like "each container must set
+        a memory limit":
+
+        ```rego
+        all_limited if {
+            every c in input.spec.containers {
+                c.resources.limits.memory  # must exist for every container
+            }
+        }
+        ```
+
+        Mind a logic trap: writing `deny` with `some ... not ...` and writing `all_ok` with `every` are not
+        interchangeable on an **empty list**. `every x in [] { ... }` is **true** (vacuously), whereas a
+        `some x in []` finds nothing and the rule is `undefined`. For a policy, you almost always reason
+        "deny as soon as there is a faulty element": iterate with `some`, test the faulty condition, add a
+        message. Keep `every` to express a positive guarantee cleanly.
+
+        Finally, **functions** factor out a reused condition: `is_privileged(c) if
+        c.securityContext.privileged`. They take arguments, return a value (or `true` if the body holds)
+        and make rules readable.
+
+examples:
+  - title:
+      fr: "Le motif professionnel : un ensemble deny qui itère"
+      en: "The professional pattern: a deny set that iterates"
+    file: pod.rego
+    lang: rego
+    kind: secure
+    code: |
+      package main
+
+      import rego.v1
+
+      # One deny rule per security requirement. Each adds a message when violated.
+
+      deny contains msg if {
+          some c in input.spec.containers
+          c.securityContext.privileged == true
+          msg := sprintf("container %q must not be privileged", [c.name])
+      }
+
+      deny contains msg if {
+          some c in input.spec.containers
+          not c.securityContext.runAsNonRoot
+          msg := sprintf("container %q must set runAsNonRoot: true", [c.name])
+      }
+
+      deny contains msg if {
+          some c in input.spec.containers
+          not c.resources.limits.memory
+          msg := sprintf("container %q must declare a memory limit", [c.name])
+      }
+    note:
+      fr: "Trois règles indépendantes alimentent le **même** ensemble `deny`. Un pod peut donc déclencher plusieurs messages à la fois. `sprintf` insère le nom du conteneur fautif pour un message actionnable."
+      en: "Three independent rules feed the **same** `deny` set. A pod can therefore trigger several messages at once. `sprintf` inserts the offending container name for an actionable message."
+
+  - title:
+      fr: "L'entrée testée et le résultat de opa eval"
+      en: "The tested input and the opa eval result"
+    file: input.json
+    lang: json
+    kind: vulnerable
+    code: |
+      {
+        "spec": {
+          "containers": [
+            {
+              "name": "api",
+              "image": "api:1.4",
+              "securityContext": { "privileged": true },
+              "resources": {}
+            },
+            {
+              "name": "sidecar",
+              "image": "proxy:2.0",
+              "securityContext": { "runAsNonRoot": true },
+              "resources": { "limits": { "memory": "128Mi" } }
+            }
+          ]
+        }
+      }
+    output: |
+      $ opa eval -d pod.rego -i input.json 'data.main.deny' --format pretty
+      [
+        "container \"api\" must not be privileged",
+        "container \"api\" must set runAsNonRoot: true",
+        "container \"api\" must declare a memory limit"
+      ]
+
+      # The "sidecar" container is compliant, so it adds no message.
+      # deny is non-empty -> this pod would be rejected.
+    note:
+      fr: "L'ensemble `deny` final liste précisément les trois défauts du conteneur `api`, tandis que `sidecar` conforme n'ajoute rien. C'est la « fiche de contrôle » : un refus non vide signifie non conforme."
+      en: "The final `deny` set lists exactly the three defects of the `api` container, while the compliant `sidecar` adds nothing. This is the \"checklist\": a non-empty denial means non-compliant."
+
+  - title:
+      fr: "Compréhensions et fonctions : compter et nommer"
+      en: "Comprehensions and functions: counting and naming"
+    file: analyze.rego
+    lang: rego
+    kind: neutral
+    code: |
+      package analyze
+
+      import rego.v1
+
+      # A function: reusable, readable condition
+      privileged(c) if c.securityContext.privileged == true
+
+      # Set comprehension: names of every privileged container
+      privileged_names := {c.name | some c in input.spec.containers; privileged(c)}
+
+      # Object comprehension: map each container name to its image
+      images := {c.name: c.image | some c in input.spec.containers}
+
+      # Use count() over a comprehension to answer "how many"
+      privileged_count := count(privileged_names)
+    output: |
+      $ opa eval -d analyze.rego -i input.json 'data.analyze' --format pretty
+      {
+        "images": { "api": "api:1.4", "sidecar": "proxy:2.0" },
+        "privileged_count": 1,
+        "privileged_names": [ "api" ]
+      }
+    note:
+      fr: "Le `;` sépare plusieurs expressions sur une ligne de compréhension. Une fonction comme `privileged(c)` se réutilise dans plusieurs règles, évitant de recopier la condition et ses futurs correctifs."
+      en: "The `;` separates several expressions on one comprehension line. A function like `privileged(c)` is reused across rules, avoiding copy-paste of the condition and its future fixes."
+
+  - title:
+      fr: "every : exiger une garantie positive sur tous les éléments"
+      en: "every: requiring a positive guarantee on all elements"
+    file: guarantee.rego
+    lang: rego
+    kind: secure
+    code: |
+      package guarantee
+
+      import rego.v1
+
+      default all_containers_safe := false
+
+      # True only if EVERY container meets all three conditions
+      all_containers_safe if {
+          every c in input.spec.containers {
+              not c.securityContext.privileged
+              c.securityContext.runAsNonRoot == true
+              c.resources.limits.memory
+          }
+      }
+    output: |
+      # With the earlier input (api is privileged), the guarantee fails:
+      $ opa eval -d guarantee.rego -i input.json 'data.guarantee.all_containers_safe' --format pretty
+      false
+    note:
+      fr: "`every c in ... { ... }` échoue dès qu'un seul conteneur ne remplit pas une condition. À l'inverse d'un ensemble `deny`, cette règle renvoie un unique booléen : pratique pour une décision globale, mais sans détail sur le fautif."
+      en: "`every c in ... { ... }` fails as soon as a single container misses a condition. Unlike a `deny` set, this rule returns a single boolean: handy for a global decision, but with no detail on the culprit."
+
+mistake:
+  fr: |
+    **Confondre `some` et `every`, et se tromper sur la liste vide.**
+
+    Deux pièges reviennent sans cesse. D'abord, croire qu'une règle `deny` écrite avec `some` « ne trouve
+    rien » équivaut à « tout va bien » : si la clé itérée n'existe pas (`input.spec.containers` absent),
+    la règle est `undefined`, pas conforme — vérifiez la présence du champ. Ensuite, `every x in [] { ... }`
+    vaut **vrai** par vacuité : une garantie du type « tous les conteneurs sont chiffrés » est
+    trivialement satisfaite par un pod sans conteneur. Pour les règles de sécurité, préférez le motif
+    « itérer avec `some`, détecter le cas fautif, ajouter un message » qui, lui, ne se laisse pas berner.
+  en: |
+    **Confusing `some` and `every`, and getting the empty list wrong.**
+
+    Two traps keep coming back. First, assuming that a `deny` rule written with `some` that "finds
+    nothing" means "all good": if the iterated key is missing (`input.spec.containers` absent), the rule
+    is `undefined`, not compliant — check the field exists. Second, `every x in [] { ... }` is **true**
+    vacuously: a guarantee like "all containers are encrypted" is trivially satisfied by a pod with no
+    container. For security rules, prefer the "iterate with `some`, detect the faulty case, add a message"
+    pattern, which is not fooled that way.
+
+bestPractice:
+  fr: |
+    - **Motif `deny contains msg if ...`** : une règle par exigence, toutes alimentent le même ensemble.
+    - **Messages actionnables** : `sprintf("container %q ...", [c.name])` nomme l'élément fautif.
+    - **Itérer avec `some ... in`** plutôt qu'avec l'ancienne syntaxe `[_]`, plus lisible et explicite.
+    - **Factoriser en fonctions** les conditions réutilisées (`is_privileged(c)`), testées une seule fois.
+    - **Se méfier des champs absents** : tester `input.spec.containers` avant d'itérer, sinon la règle est `undefined`.
+    - **`count()` sur une compréhension** pour les seuils (« au plus 0 conteneur privilégié »).
+  en: |
+    - **Pattern `deny contains msg if ...`**: one rule per requirement, all feeding the same set.
+    - **Actionable messages**: `sprintf("container %q ...", [c.name])` names the offending element.
+    - **Iterate with `some ... in`** rather than the old `[_]` syntax, more readable and explicit.
+    - **Factor reused conditions into functions** (`is_privileged(c)`), tested once.
+    - **Beware of missing fields**: test `input.spec.containers` before iterating, or the rule is `undefined`.
+    - **`count()` over a comprehension** for thresholds ("at most 0 privileged container").
+
+exercise:
+  statement:
+    fr: |
+      Une entrée décrit un groupe de sécurité réseau :
+
+      ```json
+      {
+        "ingress": [
+          { "port": 443, "cidr": "0.0.0.0/0" },
+          { "port": 22,  "cidr": "0.0.0.0/0" },
+          { "port": 22,  "cidr": "10.0.0.0/8" }
+        ]
+      }
+      ```
+
+      Écrivez une politique Rego v1 (package `network`) avec un ensemble `deny` qui ajoute un message
+      **pour chaque** règle d'entrée ouvrant le port 22 (SSH) à `0.0.0.0/0`. Le message doit mentionner le
+      port. Le port 443 ouvert à tous et le port 22 restreint à `10.0.0.0/8` ne doivent **pas** déclencher d'alerte.
+    en: |
+      An input describes a network security group:
+
+      ```json
+      {
+        "ingress": [
+          { "port": 443, "cidr": "0.0.0.0/0" },
+          { "port": 22,  "cidr": "0.0.0.0/0" },
+          { "port": 22,  "cidr": "10.0.0.0/8" }
+        ]
+      }
+      ```
+
+      Write a Rego v1 policy (package `network`) with a `deny` set that adds a message **for each** ingress
+      rule opening port 22 (SSH) to `0.0.0.0/0`. The message must mention the port. Port 443 open to all
+      and port 22 restricted to `10.0.0.0/8` must **not** raise an alert.
+  solution:
+    file: network.rego
+    lang: rego
+    code: |
+      package network
+
+      import rego.v1
+
+      deny contains msg if {
+          some rule in input.ingress
+          rule.port == 22            # SSH
+          rule.cidr == "0.0.0.0/0"   # open to the entire internet
+          msg := sprintf("port %d must not be open to 0.0.0.0/0", [rule.port])
+      }
+    note:
+      fr: "`opa eval -d network.rego -i input.json 'data.network.deny' --format pretty` renvoie `[\"port 22 must not be open to 0.0.0.0/0\"]` : une seule des trois règles d'entrée remplit les deux conditions."
+      en: "`opa eval -d network.rego -i input.json 'data.network.deny' --format pretty` returns `[\"port 22 must not be open to 0.0.0.0/0\"]`: only one of the three ingress rules meets both conditions."
+
+quiz:
+  - q:
+      fr: "À quoi sert le mot-clé `contains` dans `deny contains msg if ...` ?"
+      en: "What does the `contains` keyword do in `deny contains msg if ...`?"
+    options:
+      fr:
+        - "Il vérifie qu'une chaîne contient une sous-chaîne"
+        - "Il déclare `deny` comme un ensemble auquel la règle ajoute des éléments"
+        - "Il importe un autre package"
+        - "Il remplace `default`"
+      en:
+        - "It checks that a string contains a substring"
+        - "It declares `deny` as a set to which the rule adds elements"
+        - "It imports another package"
+        - "It replaces `default`"
+    answer: 1
+    why:
+      fr: "`contains` fait de `deny` une règle partielle construisant un ensemble ; chaque satisfaction de la condition y ajoute le message `msg`."
+      en: "`contains` makes `deny` a partial rule building a set; each time the condition holds, it adds the `msg` message."
+  - q:
+      fr: "Comment itérer sur chaque élément de `input.spec.containers` en Rego v1 ?"
+      en: "How do you iterate over each element of `input.spec.containers` in Rego v1?"
+    options:
+      fr:
+        - "`for c in input.spec.containers`"
+        - "`some c in input.spec.containers`"
+        - "`foreach(input.spec.containers)`"
+        - "`loop c := input.spec.containers`"
+      en:
+        - "`for c in input.spec.containers`"
+        - "`some c in input.spec.containers`"
+        - "`foreach(input.spec.containers)`"
+        - "`loop c := input.spec.containers`"
+    answer: 1
+    why:
+      fr: "Rego n'a pas de boucle : `some c in coll` lie `c` à chaque élément et la règle est réévaluée pour chacun."
+      en: "Rego has no loop: `some c in coll` binds `c` to each element and the rule is re-evaluated for each one."
+  - q:
+      fr: "Que vaut `every x in [] { x > 0 }` (liste vide) ?"
+      en: "What is the value of `every x in [] { x > 0 }` (empty list)?"
+    options:
+      fr:
+        - "`true`, par vacuité : il n'existe aucun contre-exemple"
+        - "`false`, car la liste est vide"
+        - "`undefined`"
+        - "Une erreur d'exécution"
+      en:
+        - "`true`, vacuously: there is no counter-example"
+        - "`false`, because the list is empty"
+        - "`undefined`"
+        - "A runtime error"
+    answer: 0
+    why:
+      fr: "`every` est vrai s'il n'existe aucun élément violant la condition ; sur une liste vide, aucun ne la viole, donc la règle est vraie. C'est un piège pour les garanties de sécurité."
+      en: "`every` is true if no element violates the condition; on an empty list none does, so the rule is true. This is a trap for security guarantees."
+  - q:
+      fr: "Quelle expression construit l'ensemble des noms des conteneurs ?"
+      en: "Which expression builds the set of container names?"
+    options:
+      fr:
+        - "`[c.name for c in input.spec.containers]`"
+        - "`{c.name | some c in input.spec.containers}`"
+        - "`map(input.spec.containers, name)`"
+        - "`input.spec.containers.name`"
+      en:
+        - "`[c.name for c in input.spec.containers]`"
+        - "`{c.name | some c in input.spec.containers}`"
+        - "`map(input.spec.containers, name)`"
+        - "`input.spec.containers.name`"
+    answer: 1
+    why:
+      fr: "`{ expr | générateur }` est une compréhension d'ensemble : elle collecte `c.name` pour chaque conteneur itéré par `some`."
+      en: "`{ expr | generator }` is a set comprehension: it collects `c.name` for each container iterated by `some`."
+  - q:
+      fr: "Comment une politique de type Conftest décide-t-elle qu'une entrée est non conforme ?"
+      en: "How does a Conftest-style policy decide that an input is non-compliant?"
+    options:
+      fr:
+        - "Quand `allow` vaut `true`"
+        - "Quand une exception est levée"
+        - "Quand l'ensemble `deny` n'est pas vide"
+        - "Quand `input` est vide"
+      en:
+        - "When `allow` is `true`"
+        - "When an exception is thrown"
+        - "When the `deny` set is not empty"
+        - "When `input` is empty"
+    answer: 2
+    why:
+      fr: "Le motif standard : chaque violation ajoute un message à `deny`. Un ensemble `deny` non vide signifie « non conforme » et fait échouer le contrôle."
+      en: "The standard pattern: each violation adds a message to `deny`. A non-empty `deny` set means \"non-compliant\" and fails the check."

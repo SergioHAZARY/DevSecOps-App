@@ -1,0 +1,467 @@
+description:
+  fr: "Installer OPA Gatekeeper avec Helm et écrire des politiques en Rego v1 : interdire les conteneurs privilégiés et le tag latest, exiger des labels, limiter les registres autorisés et imposer des limites de ressources."
+  en: "Install OPA Gatekeeper with Helm and write policies in Rego v1: forbid privileged containers and the latest tag, require labels, restrict allowed registries and enforce resource limits."
+duration: 30
+
+intro:
+  fr: |
+    Pod Security Admission (leçon 1) bloque déjà les Pods dangereux, mais il ne sait faire que quelques
+    contrôles figés. Pour des règles **sur mesure** — « seules les images de notre registre sont
+    autorisées », « chaque workload doit porter un label `owner` » — il faut un contrôleur d'admission
+    programmable. C'est le rôle d'**OPA Gatekeeper**.
+
+    OPA (*Open Policy Agent*) est un moteur de politiques ; **Rego** est son langage. Gatekeeper branche
+    OPA sur l'API Kubernetes : chaque création de Pod passe devant vos règles **avant** d'être écrite.
+
+    L'analogie : Gatekeeper est le **portier** de l'immeuble avec un règlement intérieur que *vous*
+    écrivez. Deux pièces vont ensemble : le **ConstraintTemplate** définit la règle (le texte Rego), et
+    le **Constraint** l'active sur un type de ressource (le « applique cette règle aux Pods »). On écrit
+    le Rego en **version 1** (syntaxe `contains` / `if`), la forme stable et recommandée en 2026.
+  en: |
+    Pod Security Admission (lesson 1) already blocks dangerous Pods, but it can only do a few fixed
+    checks. For **custom** rules — "only images from our registry are allowed", "every workload must carry
+    an `owner` label" — you need a programmable admission controller. That is **OPA Gatekeeper**.
+
+    OPA (*Open Policy Agent*) is a policy engine; **Rego** is its language. Gatekeeper wires OPA into the
+    Kubernetes API: every Pod creation passes your rules **before** it is written.
+
+    The analogy: Gatekeeper is the building's **doorkeeper** with house rules that *you* write. Two pieces
+    go together: the **ConstraintTemplate** defines the rule (the Rego text), and the **Constraint**
+    activates it on a resource kind ("apply this rule to Pods"). We write the Rego in **version 1**
+    (`contains` / `if` syntax), the stable and recommended form in 2026.
+
+sections:
+  - heading:
+      fr: "Installer Gatekeeper et comprendre les deux objets"
+      en: "Install Gatekeeper and understand the two objects"
+    body:
+      fr: |
+        On installe Gatekeeper avec Helm, depuis son dépôt officiel :
+
+        ```bash
+        helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
+        helm install gatekeeper gatekeeper/gatekeeper \
+          --namespace gatekeeper-system --create-namespace
+        ```
+
+        Ensuite, chaque politique se compose de **deux** manifestes :
+
+        | Objet | Rôle | Analogie |
+        |---|---|---|
+        | `ConstraintTemplate` | Définit la règle en Rego et son schéma de paramètres | Le texte de loi |
+        | `Constraint` | Active la règle, choisit les ressources visées et les paramètres | La décision d'appliquer la loi |
+
+        Un même ConstraintTemplate peut être réutilisé par plusieurs Constraints avec des paramètres
+        différents (par exemple des listes de registres différentes selon le namespace).
+      en: |
+        We install Gatekeeper with Helm, from its official repository:
+
+        ```bash
+        helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
+        helm install gatekeeper gatekeeper/gatekeeper \
+          --namespace gatekeeper-system --create-namespace
+        ```
+
+        Then each policy is made of **two** manifests:
+
+        | Object | Role | Analogy |
+        |---|---|---|
+        | `ConstraintTemplate` | Defines the rule in Rego and its parameter schema | The text of the law |
+        | `Constraint` | Activates the rule, selects the targeted resources and parameters | The decision to apply the law |
+
+        The same ConstraintTemplate can be reused by several Constraints with different parameters (for
+        example different registry lists per namespace).
+  - heading:
+      fr: "Écrire une règle Rego v1 qui refuse"
+      en: "Writing a Rego v1 rule that denies"
+    body:
+      fr: |
+        Une politique Gatekeeper fonctionne par **violations** : la règle produit des messages `violation`
+        ; s'il y en a au moins un, la requête est refusée. En Rego v1, on écrit :
+
+        ```rego
+        package k8snoprivileged
+
+        import future.keywords.contains
+        import future.keywords.if
+
+        violation contains {"msg": msg} if {
+          c := input.review.object.spec.containers[_]
+          c.securityContext.privileged == true
+          msg := sprintf("container %q must not run privileged", [c.name])
+        }
+        ```
+
+        Points clés : `input.review.object` est la ressource examinée (le Pod) ; `[_]` itère sur la liste
+        des conteneurs ; dès qu'une condition est vraie, un message est ajouté à l'ensemble `violation`.
+
+        Dans ce projet, on écrit cinq politiques utiles : **pas de conteneur privilégié**, **pas de tag
+        `latest`**, **labels obligatoires**, **registres autorisés uniquement**, **limites de ressources
+        obligatoires**. Chacune suit le même squelette.
+      en: |
+        A Gatekeeper policy works by **violations**: the rule produces `violation` messages; if there is at
+        least one, the request is rejected. In Rego v1 you write:
+
+        ```rego
+        package k8snoprivileged
+
+        import future.keywords.contains
+        import future.keywords.if
+
+        violation contains {"msg": msg} if {
+          c := input.review.object.spec.containers[_]
+          c.securityContext.privileged == true
+          msg := sprintf("container %q must not run privileged", [c.name])
+        }
+        ```
+
+        Key points: `input.review.object` is the examined resource (the Pod); `[_]` iterates over the
+        container list; as soon as a condition is true, a message is added to the `violation` set.
+
+        In this project we write five useful policies: **no privileged container**, **no `latest` tag**,
+        **required labels**, **allowed registries only**, **required resource limits**. Each follows the
+        same skeleton.
+
+examples:
+  - title:
+      fr: "ConstraintTemplate : registres autorisés + pas de latest (Rego v1)"
+      en: "ConstraintTemplate: allowed registries + no latest (Rego v1)"
+    file: gatekeeper/templates/allowed-registries.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: templates.gatekeeper.sh/v1
+      kind: ConstraintTemplate
+      metadata:
+        name: k8sallowedregistries
+      spec:
+        crd:
+          spec:
+            names:
+              kind: K8sAllowedRegistries
+            validation:
+              openAPIV3Schema:
+                type: object
+                properties:
+                  registries:
+                    type: array
+                    items:
+                      type: string
+        targets:
+          - target: admission.k8s.gatekeeper.sh
+            rego: |
+              package k8sallowedregistries
+
+              import future.keywords.contains
+              import future.keywords.if
+              import future.keywords.in
+
+              # Deny any image that does not start with an allowed registry prefix
+              violation contains {"msg": msg} if {
+                c := input.review.object.spec.containers[_]
+                not allowed(c.image)
+                msg := sprintf("image %q is not from an allowed registry %v", [c.image, input.parameters.registries])
+              }
+
+              # Deny the mutable :latest tag (or no tag at all)
+              violation contains {"msg": msg} if {
+                c := input.review.object.spec.containers[_]
+                endswith(c.image, ":latest")
+                msg := sprintf("image %q uses the mutable tag :latest", [c.image])
+              }
+
+              allowed(image) if {
+                some reg in input.parameters.registries
+                startswith(image, reg)
+              }
+    note:
+      fr: "Un seul template porte deux règles complémentaires : l'image vient d'un registre autorisé **et** n'utilise pas `:latest`. Le schéma `openAPIV3Schema` déclare le paramètre `registries` que le Constraint fournira."
+      en: "A single template carries two complementary rules: the image comes from an allowed registry **and** does not use `:latest`. The `openAPIV3Schema` declares the `registries` parameter that the Constraint will provide."
+
+  - title:
+      fr: "ConstraintTemplate : labels requis et limites de ressources"
+      en: "ConstraintTemplate: required labels and resource limits"
+    file: gatekeeper/templates/required-config.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: templates.gatekeeper.sh/v1
+      kind: ConstraintTemplate
+      metadata:
+        name: k8srequiredconfig
+      spec:
+        crd:
+          spec:
+            names:
+              kind: K8sRequiredConfig
+            validation:
+              openAPIV3Schema:
+                type: object
+                properties:
+                  labels:
+                    type: array
+                    items:
+                      type: string
+        targets:
+          - target: admission.k8s.gatekeeper.sh
+            rego: |
+              package k8srequiredconfig
+
+              import future.keywords.contains
+              import future.keywords.if
+              import future.keywords.in
+
+              # Require each label listed in parameters to be present on the object
+              violation contains {"msg": msg} if {
+                some required in input.parameters.labels
+                not input.review.object.metadata.labels[required]
+                msg := sprintf("missing required label: %q", [required])
+              }
+
+              # Require a memory limit on every container (prevents node exhaustion)
+              violation contains {"msg": msg} if {
+                c := input.review.object.spec.containers[_]
+                not c.resources.limits.memory
+                msg := sprintf("container %q must set resources.limits.memory", [c.name])
+              }
+    note:
+      fr: "On impose deux bonnes pratiques d'un coup : un label obligatoire (traçabilité du propriétaire) et une limite mémoire (un conteneur emballé ne doit pas tuer le nœud). `some ... in` est la forme Rego v1 d'itération."
+      en: "We enforce two best practices at once: a required label (owner traceability) and a memory limit (a runaway container must not kill the node). `some ... in` is the Rego v1 iteration form."
+
+  - title:
+      fr: "Les Constraints : activer les règles sur les Pods"
+      en: "The Constraints: activate the rules on Pods"
+    file: gatekeeper/constraints/constraints.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: constraints.gatekeeper.sh/v1beta1
+      kind: K8sAllowedRegistries
+      metadata:
+        name: only-internal-registry
+      spec:
+        enforcementAction: deny # reject non-compliant Pods (use "warn" to only warn)
+        match:
+          kinds:
+            - apiGroups: [""]
+              kinds: ["Pod"]
+          namespaces: ["shop"] # scope the rule to the application namespace
+        parameters:
+          registries:
+            - "registry.example.com/"
+      ---
+      apiVersion: constraints.gatekeeper.sh/v1beta1
+      kind: K8sRequiredConfig
+      metadata:
+        name: require-owner-and-limits
+      spec:
+        enforcementAction: deny
+        match:
+          kinds:
+            - apiGroups: [""]
+              kinds: ["Pod"]
+          namespaces: ["shop"]
+        parameters:
+          labels: ["app", "owner"]
+    note:
+      fr: "Le Constraint relie la règle aux **Pods du namespace `shop`** et fournit les paramètres : registre `registry.example.com/` autorisé, labels `app` et `owner` obligatoires. `enforcementAction: deny` fait échouer la création ; `warn` ou `dryrun` permettent un déploiement progressif."
+      en: "The Constraint ties the rule to **Pods in the `shop` namespace** and provides the parameters: registry `registry.example.com/` allowed, labels `app` and `owner` required. `enforcementAction: deny` fails creation; `warn` or `dryrun` allow a gradual rollout."
+
+  - title:
+      fr: "Un manifeste refusé et le message de refus exact"
+      en: "A rejected manifest and the exact denial message"
+    file: gatekeeper/test-rejected-pod.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # Apply this in the shop namespace once the Constraints are active
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: bad-pod
+        namespace: shop
+        labels:
+          app: demo
+          # 'owner' label is missing -> K8sRequiredConfig violation
+      spec:
+        containers:
+          - name: app
+            image: docker.io/library/nginx:latest # wrong registry AND :latest tag
+    output: |
+      $ kubectl apply -f gatekeeper/test-rejected-pod.yaml
+      Error from server (Forbidden): error when creating "gatekeeper/test-rejected-pod.yaml":
+      admission webhook "validation.gatekeeper.sh" denied the request:
+      [only-internal-registry] image "docker.io/library/nginx:latest" is not from an allowed registry ["registry.example.com/"]
+      [only-internal-registry] image "docker.io/library/nginx:latest" uses the mutable tag :latest
+      [require-owner-and-limits] missing required label: "owner"
+      [require-owner-and-limits] container "app" must set resources.limits.memory
+    note:
+      fr: "Gatekeeper liste **toutes** les violations d'un coup, en nommant la Constraint responsable entre crochets. C'est un retour parfait pour le développeur : il voit exactement quoi corriger, sans deviner."
+      en: "Gatekeeper lists **all** violations at once, naming the responsible Constraint in brackets. It is a perfect feedback for the developer: they see exactly what to fix, without guessing."
+
+mistake:
+  fr: |
+    **Tester ses politiques directement en `deny` sur tout le cluster.**
+
+    Si vous activez une nouvelle Constraint en `enforcementAction: deny` sans vérifier l'existant, vous
+    pouvez **bloquer des déploiements légitimes** et casser la production — y compris des Pods système.
+    La bonne démarche : déployer d'abord en `warn` ou `dryrun`, consulter les violations remontées sur
+    les ressources existantes (`kubectl get k8sallowedregistries -o yaml`), corriger, puis passer en `deny`.
+  en: |
+    **Testing your policies straight in `deny` across the whole cluster.**
+
+    If you enable a new Constraint in `enforcementAction: deny` without checking what already exists, you
+    can **block legitimate deployments** and break production — including system Pods. The right approach:
+    roll out first in `warn` or `dryrun`, review the violations reported on existing resources
+    (`kubectl get k8sallowedregistries -o yaml`), fix them, then switch to `deny`.
+
+bestPractice:
+  fr: |
+    - **Séparez template et constraint** : un ConstraintTemplate réutilisable, un Constraint par contexte.
+    - **Écrivez le Rego en version 1** (`import future.keywords`, `contains`, `if`) : c'est la forme stable.
+    - **Déployez progressivement** : `dryrun` → `warn` → `deny`, en surveillant les violations.
+    - **Ciblez par namespace** dans le `match` pour ne pas toucher les composants système.
+    - **Combinez avec Pod Security Admission** : PSA pour les contrôles standards, Gatekeeper pour les
+      règles métier (registres, labels, limites).
+  en: |
+    - **Separate template and constraint**: one reusable ConstraintTemplate, one Constraint per context.
+    - **Write Rego in version 1** (`import future.keywords`, `contains`, `if`): it is the stable form.
+    - **Roll out gradually**: `dryrun` → `warn` → `deny`, watching the violations.
+    - **Scope by namespace** in the `match` so you do not touch system components.
+    - **Combine with Pod Security Admission**: PSA for standard checks, Gatekeeper for business rules
+      (registries, labels, limits).
+
+exercise:
+  statement:
+    fr: |
+      L'équipe veut une politique Gatekeeper qui **interdit les conteneurs privilégiés** dans le namespace
+      `shop`.
+
+      Écrivez le ConstraintTemplate `K8sNoPrivileged` (en Rego v1) qui ajoute une violation dès qu'un
+      conteneur a `securityContext.privileged: true`. Vous pouvez supposer que le Constraint existe déjà.
+    en: |
+      The team wants a Gatekeeper policy that **forbids privileged containers** in the `shop` namespace.
+
+      Write the `K8sNoPrivileged` ConstraintTemplate (in Rego v1) that adds a violation whenever a
+      container has `securityContext.privileged: true`. You may assume the Constraint already exists.
+  solution:
+    file: no-privileged-template.yaml
+    lang: yaml
+    code: |
+      apiVersion: templates.gatekeeper.sh/v1
+      kind: ConstraintTemplate
+      metadata:
+        name: k8snoprivileged
+      spec:
+        crd:
+          spec:
+            names:
+              kind: K8sNoPrivileged
+        targets:
+          - target: admission.k8s.gatekeeper.sh
+            rego: |
+              package k8snoprivileged
+
+              import future.keywords.contains
+              import future.keywords.if
+
+              violation contains {"msg": msg} if {
+                c := input.review.object.spec.containers[_]
+                c.securityContext.privileged == true
+                msg := sprintf("container %q must not run as privileged", [c.name])
+              }
+    note:
+      fr: "La règle itère sur les conteneurs (`[_]`), teste `privileged == true` et émet un message. Pod Security Admission couvre déjà ce cas au niveau `restricted` : Gatekeeper le double ici pour les namespaces non étiquetés et pour l'exemple."
+      en: "The rule iterates over containers (`[_]`), tests `privileged == true` and emits a message. Pod Security Admission already covers this at the `restricted` level: Gatekeeper duplicates it here for non-labelled namespaces and for the example."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre un ConstraintTemplate et un Constraint ?"
+      en: "What is the difference between a ConstraintTemplate and a Constraint?"
+    options:
+      fr:
+        - "Le template définit la règle en Rego ; le Constraint l'active sur des ressources avec des paramètres"
+        - "Ce sont deux noms pour le même objet"
+        - "Le Constraint contient le Rego ; le template choisit les ressources"
+        - "Le template est pour Pod Security, le Constraint pour Falco"
+      en:
+        - "The template defines the rule in Rego; the Constraint activates it on resources with parameters"
+        - "They are two names for the same object"
+        - "The Constraint holds the Rego; the template selects resources"
+        - "The template is for Pod Security, the Constraint for Falco"
+    answer: 0
+    why:
+      fr: "Le ConstraintTemplate porte le code Rego et le schéma de paramètres ; le Constraint l'instancie sur un type de ressource avec des valeurs concrètes."
+      en: "The ConstraintTemplate carries the Rego code and the parameter schema; the Constraint instantiates it on a resource kind with concrete values."
+  - q:
+      fr: "En Rego v1, comment une règle de politique Gatekeeper signale-t-elle un problème ?"
+      en: "In Rego v1, how does a Gatekeeper policy rule report a problem?"
+    options:
+      fr:
+        - "En levant une exception"
+        - "En ajoutant un objet à l'ensemble `violation`"
+        - "En retournant `false`"
+        - "En écrivant dans les logs"
+      en:
+        - "By raising an exception"
+        - "By adding an object to the `violation` set"
+        - "By returning `false`"
+        - "By writing to the logs"
+    answer: 1
+    why:
+      fr: "Gatekeeper collecte les objets de l'ensemble `violation`. S'il y en a au moins un, la requête est refusée avec les messages correspondants."
+      en: "Gatekeeper collects the objects of the `violation` set. If there is at least one, the request is rejected with the matching messages."
+  - q:
+      fr: "Comment déployer une nouvelle politique sans risquer de bloquer la production ?"
+      en: "How do you roll out a new policy without risking blocking production?"
+    options:
+      fr:
+        - "En l'appliquant directement en deny sur tout le cluster"
+        - "En la testant d'abord en warn ou dryrun, puis en passant en deny"
+        - "En désactivant Gatekeeper"
+        - "En supprimant Pod Security Admission"
+      en:
+        - "By applying it straight in deny across the whole cluster"
+        - "By testing it first in warn or dryrun, then switching to deny"
+        - "By disabling Gatekeeper"
+        - "By removing Pod Security Admission"
+    answer: 1
+    why:
+      fr: "`warn`/`dryrun` remontent les violations sans bloquer, le temps de corriger l'existant ; on passe en `deny` seulement quand tout est conforme."
+      en: "`warn`/`dryrun` report violations without blocking, time to fix existing resources; you switch to `deny` only when everything is compliant."
+  - q:
+      fr: "Pourquoi interdire le tag `:latest` avec une politique ?"
+      en: "Why forbid the `:latest` tag with a policy?"
+    options:
+      fr:
+        - "Parce que `latest` est payant"
+        - "Parce que Kubernetes ne sait pas tirer `latest`"
+        - "Parce que `latest` est toujours vulnérable"
+        - "Parce que c'est un pointeur mutable : l'image réellement exécutée peut changer sans contrôle"
+      en:
+        - "Because `latest` is paid"
+        - "Because Kubernetes cannot pull `latest`"
+        - "Because `latest` is always vulnerable"
+        - "Because it is a mutable pointer: the image actually run can change without control"
+    answer: 3
+    why:
+      fr: "`latest` peut désigner une autre image demain, ce qui casse la reproductibilité et ouvre la porte à une substitution. On fige un tag précis, voire un digest."
+      en: "`latest` may point to another image tomorrow, breaking reproducibility and enabling substitution. Pin a precise tag, or even a digest."
+  - q:
+      fr: "Dans le `match` d'un Constraint, à quoi sert le champ `namespaces`?"
+      en: "In a Constraint's `match`, what is the `namespaces` field for?"
+    options:
+      fr:
+        - "À chiffrer les ressources du namespace"
+        - "À créer les namespaces manquants"
+        - "À limiter la portée de la règle aux namespaces indiqués, pour épargner les composants système"
+        - "À équilibrer la charge entre namespaces"
+      en:
+        - "To encrypt the namespace's resources"
+        - "To create missing namespaces"
+        - "To scope the rule to the listed namespaces, sparing system components"
+        - "To balance load across namespaces"
+    answer: 2
+    why:
+      fr: "Cibler `shop` évite d'appliquer la règle aux Pods de `kube-system` ou `gatekeeper-system`, qui pourraient légitimement ne pas la respecter."
+      en: "Targeting `shop` avoids applying the rule to Pods in `kube-system` or `gatekeeper-system`, which might legitimately not comply."

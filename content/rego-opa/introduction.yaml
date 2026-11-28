@@ -1,0 +1,428 @@
+description:
+  fr: "Découvrir Open Policy Agent et le langage Rego pour écrire des règles de sécurité en tant que code, décidées en dehors de l'application."
+  en: "Discover Open Policy Agent and the Rego language to write security rules as code, decided outside the application."
+duration: 20
+
+intro:
+  fr: |
+    **OPA** (*Open Policy Agent*, prononcé « o-pa ») est un moteur de décision : on lui envoie un document
+    JSON décrivant une situation (« l'utilisateur alice veut supprimer le bucket X »), et il répond
+    *autorisé* ou *refusé* selon des règles que vous avez écrites. Ces règles s'écrivent dans un petit
+    langage dédié, **Rego**.
+
+    L'analogie est celle d'un **videur à l'entrée d'un club**. Le code de votre application, c'est la fête
+    à l'intérieur : elle ne devrait pas avoir à vérifier elle-même chaque carte d'identité. Le videur (OPA)
+    connaît les règles d'entrée, les applique de façon uniforme pour toutes les portes, et on peut changer
+    ces règles sans reconstruire le club. On parle de **découplage** entre la décision (la politique) et
+    l'application (le code).
+
+    Dans cette leçon vous allez installer OPA, écrire votre première politique en Rego v1 (la syntaxe
+    moderne, avec `if` et `import rego.v1`), lui fournir un `input.json` et lire la décision rendue par
+    `opa eval`. C'est la base de tout le cours : Kubernetes, Terraform et la CI viendront ensuite.
+  en: |
+    **OPA** (*Open Policy Agent*, said "oh-pa") is a decision engine: you send it a JSON document
+    describing a situation ("user alice wants to delete bucket X") and it answers *allowed* or *denied*
+    according to rules you have written. Those rules are expressed in a small dedicated language, **Rego**.
+
+    The analogy is a **bouncer at a club door**. Your application code is the party inside: it should not
+    have to check every ID card itself. The bouncer (OPA) knows the entry rules, applies them uniformly at
+    every door, and you can change those rules without rebuilding the club. This is called **decoupling**
+    the decision (the policy) from the application (the code).
+
+    In this lesson you will install OPA, write your first policy in Rego v1 (the modern syntax, with `if`
+    and `import rego.v1`), feed it an `input.json` and read the decision returned by `opa eval`. This is
+    the foundation of the whole course: Kubernetes, Terraform and CI come next.
+
+sections:
+  - heading:
+      fr: "Pourquoi sortir la politique du code ?"
+      en: "Why take the policy out of the code?"
+    body:
+      fr: |
+        Tant qu'une règle d'autorisation est écrite en `if/else` dans l'application, elle est invisible,
+        testée au hasard, et dupliquée dans chaque service (l'API, le portail, le job batch...). Le jour où
+        la règle change, il faut retrouver et modifier dix endroits, puis redéployer.
+
+        **Policy as Code** renverse le problème : la règle devient un fichier `.rego` versionné dans Git,
+        relu, testé, et interrogé par tous les services via une interface unique. OPA sépare trois choses :
+
+        | Rôle | Qui le fournit | Exemple |
+        |---|---|---|
+        | **input** | le service qui pose la question | « méthode POST, chemin /admin, rôle user » |
+        | **data** | des données externes chargées dans OPA | la liste des rôles, les registres autorisés |
+        | **policy** | vos règles en Rego | « refuser POST /admin si le rôle n'est pas admin » |
+
+        OPA est un binaire unique, écrit en Go, sans dépendance. On l'utilise de trois façons : en
+        bibliothèque, en **serveur** (`opa run -s`) interrogé en HTTP, ou en **ligne de commande**
+        (`opa eval`, `conftest`) dans un pipeline CI — c'est cette dernière que nous privilégions.
+      en: |
+        As long as an authorization rule is written as `if/else` inside the application, it is invisible,
+        tested by luck, and duplicated in every service (the API, the portal, the batch job...). The day
+        the rule changes, you must find and edit ten places, then redeploy.
+
+        **Policy as Code** flips the problem: the rule becomes a `.rego` file versioned in Git, reviewed,
+        tested, and queried by every service through a single interface. OPA separates three things:
+
+        | Role | Who provides it | Example |
+        |---|---|---|
+        | **input** | the service asking the question | "POST method, /admin path, role user" |
+        | **data** | external data loaded into OPA | the list of roles, the allowed registries |
+        | **policy** | your rules in Rego | "deny POST /admin if the role is not admin" |
+
+        OPA is a single binary, written in Go, with no dependency. It is used in three ways: as a library,
+        as a **server** (`opa run -s`) queried over HTTP, or on the **command line** (`opa eval`,
+        `conftest`) inside a CI pipeline — the last one is what we favour.
+  - heading:
+      fr: "Le modèle de document : input, data et le résultat"
+      en: "The document model: input, data and the result"
+    body:
+      fr: |
+        Tout en Rego est un **document** JSON. Votre politique lit deux documents globaux :
+
+        - `input` : le JSON que l'appelant fournit à chaque requête ;
+        - `data` : l'union de tous les fichiers de données et de toutes les règles chargés.
+
+        Une politique commence toujours par un `package` qui lui donne un chemin dans `data` (un `package
+        authz` est interrogeable via `data.authz`). On y écrit des **règles** qui définissent des valeurs.
+        La règle la plus simple est un booléen :
+
+        ```rego
+        package authz
+        import rego.v1
+
+        default allow := false        # secure default: deny unless proven otherwise
+
+        allow if input.user == "admin" # becomes true only when the condition holds
+        ```
+
+        `default allow := false` est le réflexe de sécurité fondamental : **refuser par défaut**. Sans lui,
+        une règle non satisfaite vaudrait `undefined` (ni vrai ni faux), ce qui casse les décisions de type
+        « autorise si vrai ».
+      en: |
+        Everything in Rego is a JSON **document**. Your policy reads two global documents:
+
+        - `input`: the JSON the caller provides on each request;
+        - `data`: the union of every data file and every rule that is loaded.
+
+        A policy always starts with a `package` that gives it a path inside `data` (a `package authz` is
+        queried via `data.authz`). In it you write **rules** that define values. The simplest rule is a
+        boolean:
+
+        ```rego
+        package authz
+        import rego.v1
+
+        default allow := false        # secure default: deny unless proven otherwise
+
+        allow if input.user == "admin" # becomes true only when the condition holds
+        ```
+
+        `default allow := false` is the fundamental security reflex: **deny by default**. Without it, an
+        unsatisfied rule would be `undefined` (neither true nor false), which breaks "allow if true"
+        decisions.
+  - heading:
+      fr: "Rego v1 : la syntaxe moderne (OPA 1.x)"
+      en: "Rego v1: the modern syntax (OPA 1.x)"
+    body:
+      fr: |
+        Depuis OPA 1.0 (fin 2024), la syntaxe **Rego v1** est la norme. Si vous lisez de vieux exemples,
+        méfiez-vous : ils omettent souvent les mots-clés `if` et `contains`, désormais obligatoires.
+
+        | Avant (Rego v0) | Maintenant (Rego v1) |
+        |---|---|
+        | `allow { ... }` | `allow if { ... }` |
+        | `deny[msg] { ... }` | `deny contains msg if { ... }` |
+        | `x = input.a[_]` | `some x in input.a` |
+        | (pas d'équivalent clair) | `every x in input.a { ... }` |
+
+        Sur une version récente d'OPA la v1 est active d'office ; sur une version 0.x on la demande avec
+        `import rego.v1` en haut du fichier. **Mettez toujours `import rego.v1`** : le fichier reste correct
+        sur les deux générations, et l'intention est explicite. Les quatre mots-clés à retenir sont `if`
+        (condition d'une règle), `contains` (règle qui construit un ensemble), `in` (appartenance) et
+        `every` (vérifier une propriété pour tous les éléments).
+      en: |
+        Since OPA 1.0 (late 2024), the **Rego v1** syntax is the norm. If you read old examples, beware:
+        they often omit the `if` and `contains` keywords, which are now mandatory.
+
+        | Before (Rego v0) | Now (Rego v1) |
+        |---|---|
+        | `allow { ... }` | `allow if { ... }` |
+        | `deny[msg] { ... }` | `deny contains msg if { ... }` |
+        | `x = input.a[_]` | `some x in input.a` |
+        | (no clear equivalent) | `every x in input.a { ... }` |
+
+        On a recent OPA, v1 is on by default; on a 0.x version you ask for it with `import rego.v1` at the
+        top of the file. **Always add `import rego.v1`**: the file stays correct on both generations, and
+        the intent is explicit. The four keywords to remember are `if` (a rule's condition), `contains` (a
+        rule that builds a set), `in` (membership) and `every` (check a property for all elements).
+
+examples:
+  - title:
+      fr: "Anti-pattern : la règle d'autorisation noyée dans le code"
+      en: "Anti-pattern: the authorization rule buried in the code"
+    file: handler.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # The policy is scattered inside the application: invisible, untested, duplicated.
+      def handle(request):
+          user = request["user"]
+          path = request["path"]
+
+          # Rule hard-coded here, and copy-pasted in three other services
+          if path.startswith("/admin") and user["role"] != "admin":
+              return 403
+          # A second developer later adds an exception nobody reviews
+          if user["name"] == "deploy-bot":
+              return 200  # bypasses every check above
+          return 200
+    note:
+      fr: "La règle d'accès vit dans le code : impossible de l'auditer d'un coup d'œil, et l'exception `deploy-bot` ouvre une porte dérobée que personne ne verra en relecture. Déplacer cette logique dans OPA la rend visible, testable et partagée."
+      en: "The access rule lives in the code: impossible to audit at a glance, and the `deploy-bot` exception opens a backdoor nobody will notice in review. Moving this logic into OPA makes it visible, testable and shared."
+
+  - title:
+      fr: "Sécurisé : la même règle en Rego v1, refus par défaut"
+      en: "Secure: the same rule in Rego v1, deny by default"
+    file: authz.rego
+    lang: rego
+    kind: secure
+    code: |
+      package authz
+
+      import rego.v1
+
+      # Deny by default: no decision is granted unless a rule below proves it
+      default allow := false
+
+      # Admins may do anything
+      allow if input.user.role == "admin"
+
+      # Anyone may read non-admin paths
+      allow if {
+          input.method == "GET"
+          not startswith(input.path, "/admin")
+      }
+    note:
+      fr: "Deux règles `allow` nommées pareil forment un **OU logique** : l'accès est accordé si l'une au moins est vraie. Le `default allow := false` garantit qu'une requête non prévue est refusée, sans porte dérobée cachée."
+      en: "Two `allow` rules with the same name form a **logical OR**: access is granted if at least one is true. The `default allow := false` guarantees that an unforeseen request is denied, with no hidden backdoor."
+
+  - title:
+      fr: "L'entrée et la décision : input.json puis opa eval"
+      en: "The input and the decision: input.json then opa eval"
+    file: input.json
+    lang: json
+    kind: neutral
+    code: |
+      {
+        "user": { "name": "bob", "role": "user" },
+        "method": "POST",
+        "path": "/admin/users"
+      }
+    output: |
+      # Query the policy from the previous example with this input
+      $ opa eval -d authz.rego -i input.json 'data.authz.allow' --format pretty
+      false
+
+      # bob is not admin and POSTs to /admin -> no allow rule matches -> default wins
+      # Try a GET on /profile and the second rule makes it true:
+      $ opa eval -d authz.rego \
+          -i <(echo '{"user":{"role":"user"},"method":"GET","path":"/profile"}') \
+          'data.authz.allow' --format pretty
+      true
+    note:
+      fr: "`opa eval -d <politique> -i <input> '<requête>'` est la commande de base. La requête `data.authz.allow` désigne la règle `allow` du package `authz`. `--format pretty` affiche la valeur brute plutôt qu'un objet JSON verbeux."
+      en: "`opa eval -d <policy> -i <input> '<query>'` is the core command. The query `data.authz.allow` points to the `allow` rule of the `authz` package. `--format pretty` prints the raw value instead of a verbose JSON object."
+
+  - title:
+      fr: "Installer OPA et vérifier son installation"
+      en: "Installing OPA and checking the install"
+    file: install.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Linux (x86_64): download the single static binary, verify, install
+      curl -L -o opa https://openpolicyagent.org/downloads/v1.9.0/opa_linux_amd64_static
+      chmod +x opa
+      sudo mv opa /usr/local/bin/
+
+      # macOS (Homebrew) or Windows (winget) alternatives:
+      #   brew install opa
+      #   winget install OpenPolicyAgent.OPA
+
+      opa version          # confirm the binary runs
+      opa fmt authz.rego   # format a policy to the canonical style
+    output: |
+      $ opa version
+      Version: 1.9.0
+      Go Version: go1.24.3
+      Platform: linux/amd64
+    note:
+      fr: "OPA est un binaire statique unique : pas de runtime à installer, idéal pour un conteneur de CI. Épinglez une version précise (`v1.9.0`) plutôt que `latest` pour que vos règles se comportent de la même façon aujourd'hui et demain."
+      en: "OPA is a single static binary: no runtime to install, ideal for a CI container. Pin an exact version (`v1.9.0`) rather than `latest` so your rules behave the same today and tomorrow."
+
+mistake:
+  fr: |
+    **Oublier `default allow := false` et croire qu'une règle absente « refuse ».**
+
+    En Rego, une règle dont la condition n'est pas satisfaite ne vaut pas `false` : elle vaut `undefined`.
+    Si votre service traduit « pas `true` » en « refusé », tout va bien ; mais beaucoup de code teste
+    explicitement `result == false` ou lit un champ qui n'existe pas et le considère comme autorisé. Sans
+    `default allow := false`, une requête imprévue renvoie `undefined` et peut être interprétée comme une
+    autorisation. Déclarez toujours une valeur par défaut sûre pour chaque décision.
+  en: |
+    **Forgetting `default allow := false` and assuming a missing rule "denies".**
+
+    In Rego, a rule whose condition is not satisfied is not `false`: it is `undefined`. If your service
+    turns "not `true`" into "denied", fine; but a lot of code tests `result == false` explicitly, or reads
+    a field that does not exist and treats it as allowed. Without `default allow := false`, an unforeseen
+    request returns `undefined` and may be read as an authorization. Always declare a safe default value
+    for every decision.
+
+bestPractice:
+  fr: |
+    - **Refus par défaut** : chaque décision commence par `default allow := false` (ou `default deny := true`).
+    - **Toujours `import rego.v1`** : vos fichiers restent valides sur OPA 0.x comme 1.x, l'intention est claire.
+    - **Un package par domaine** : `authz`, `kubernetes.admission`, `terraform.aws` — interrogeables séparément.
+    - **Épinglez la version d'OPA** dans la CI (`v1.9.0`), jamais `latest`, pour des décisions reproductibles.
+    - **Données externes dans `data`, pas en dur** : la liste des rôles ou des registres se charge en `data`,
+      elle n'est pas recopiée dans la logique.
+  en: |
+    - **Deny by default**: every decision starts with `default allow := false` (or `default deny := true`).
+    - **Always `import rego.v1`**: your files stay valid on OPA 0.x and 1.x, and the intent is explicit.
+    - **One package per domain**: `authz`, `kubernetes.admission`, `terraform.aws` — queried separately.
+    - **Pin the OPA version** in CI (`v1.9.0`), never `latest`, for reproducible decisions.
+    - **External data in `data`, not hard-coded**: the list of roles or registries is loaded as `data`,
+      not copied into the logic.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez une politique Rego v1 dans le package `pipeline` qui décide si un déploiement est autorisé.
+
+      1. Refusez par défaut.
+      2. Autorisez (`allow`) si `input.environment` vaut `"staging"` (tout le monde peut déployer en staging).
+      3. Autorisez aussi si `input.environment` vaut `"production"` **et** `input.approved` vaut `true`.
+      4. Donnez un `input.json` pour une demande en production non approuvée et la commande `opa eval`
+         attendue, avec son résultat.
+    en: |
+      Write a Rego v1 policy in the `pipeline` package that decides whether a deployment is allowed.
+
+      1. Deny by default.
+      2. Allow (`allow`) if `input.environment` is `"staging"` (anyone may deploy to staging).
+      3. Also allow if `input.environment` is `"production"` **and** `input.approved` is `true`.
+      4. Give an `input.json` for an unapproved production request and the expected `opa eval` command,
+         with its result.
+  solution:
+    file: deploy.rego
+    lang: rego
+    code: |
+      package pipeline
+
+      import rego.v1
+
+      # Secure default: no deployment is allowed unless a rule proves it
+      default allow := false
+
+      # Staging is open to everyone
+      allow if input.environment == "staging"
+
+      # Production requires an explicit approval flag
+      allow if {
+          input.environment == "production"
+          input.approved == true
+      }
+    note:
+      fr: "Avec `input.json` = `{\"environment\":\"production\",\"approved\":false}`, la commande `opa eval -d deploy.rego -i input.json 'data.pipeline.allow' --format pretty` affiche `false` : aucune règle `allow` n'est satisfaite, le défaut s'applique."
+      en: "With `input.json` = `{\"environment\":\"production\",\"approved\":false}`, the command `opa eval -d deploy.rego -i input.json 'data.pipeline.allow' --format pretty` prints `false`: no `allow` rule holds, so the default applies."
+
+quiz:
+  - q:
+      fr: "Dans le modèle OPA, que contient le document `input` ?"
+      en: "In the OPA model, what does the `input` document contain?"
+    options:
+      fr:
+        - "Les règles Rego compilées"
+        - "La question posée par l'appelant, en JSON, pour une requête donnée"
+        - "La configuration du serveur OPA"
+        - "L'historique de toutes les décisions passées"
+      en:
+        - "The compiled Rego rules"
+        - "The caller's question, as JSON, for a given request"
+        - "The OPA server configuration"
+        - "The history of all past decisions"
+    answer: 1
+    why:
+      fr: "`input` est le document JSON fourni par le service à chaque requête ; les règles vivent dans la politique et les données de référence dans `data`."
+      en: "`input` is the JSON document provided by the service on each request; the rules live in the policy and reference data in `data`."
+  - q:
+      fr: "Pourquoi écrire `default allow := false` en tête d'une politique ?"
+      en: "Why write `default allow := false` at the top of a policy?"
+    options:
+      fr:
+        - "Pour accélérer l'évaluation"
+        - "Pour refuser par défaut : sans règle satisfaite, la décision est un refus, pas `undefined`"
+        - "Parce que Rego l'exige syntaxiquement"
+        - "Pour journaliser toutes les requêtes"
+      en:
+        - "To speed up evaluation"
+        - "To deny by default: with no rule satisfied, the decision is a denial, not `undefined`"
+        - "Because Rego requires it syntactically"
+        - "To log every request"
+    answer: 1
+    why:
+      fr: "Sans valeur par défaut, une règle non satisfaite vaut `undefined`, ce qui peut être mal interprété comme une autorisation. Le refus par défaut est le réflexe de sécurité de base."
+      en: "Without a default, an unsatisfied rule is `undefined`, which can be misread as an authorization. Deny by default is the basic security reflex."
+  - q:
+      fr: "En Rego v1, comment déclare-t-on la condition d'une règle booléenne ?"
+      en: "In Rego v1, how do you declare the condition of a boolean rule?"
+    options:
+      fr:
+        - "`allow { ... }`"
+        - "`allow => { ... }`"
+        - "`allow if { ... }`"
+        - "`allow: { ... }`"
+      en:
+        - "`allow { ... }`"
+        - "`allow => { ... }`"
+        - "`allow if { ... }`"
+        - "`allow: { ... }`"
+    answer: 2
+    why:
+      fr: "Le mot-clé `if` est obligatoire en Rego v1. L'ancienne forme `allow { ... }` sans `if` n'est plus acceptée sous OPA 1.x."
+      en: "The `if` keyword is mandatory in Rego v1. The old form `allow { ... }` without `if` is no longer accepted under OPA 1.x."
+  - q:
+      fr: "Que signifie le fait que deux règles portent le même nom `allow` ?"
+      en: "What does it mean when two rules share the same name `allow`?"
+    options:
+      fr:
+        - "C'est une erreur de compilation"
+        - "La seconde écrase la première"
+        - "Elles forment un OU logique : `allow` est vrai si l'une au moins l'est"
+        - "Elles doivent toutes être vraies en même temps"
+      en:
+        - "It is a compilation error"
+        - "The second overrides the first"
+        - "They form a logical OR: `allow` is true if at least one of them is"
+        - "They must all be true at the same time"
+    answer: 2
+    why:
+      fr: "Des règles complètes de même nom sont combinées par un OU : c'est la façon idiomatique d'exprimer « autorise si cas A ou cas B »."
+      en: "Complete rules sharing a name are combined with an OR: it is the idiomatic way to express \"allow if case A or case B\"."
+  - q:
+      fr: "Quelle commande évalue la règle `allow` du package `authz` avec un fichier d'entrée ?"
+      en: "Which command evaluates the `allow` rule of the `authz` package against an input file?"
+    options:
+      fr:
+        - "`opa eval -d authz.rego -i input.json 'data.authz.allow'`"
+        - "`opa run authz.rego --input input.json`"
+        - "`opa check authz.rego input.json`"
+        - "`rego eval authz.allow input.json`"
+      en:
+        - "`opa eval -d authz.rego -i input.json 'data.authz.allow'`"
+        - "`opa run authz.rego --input input.json`"
+        - "`opa check authz.rego input.json`"
+        - "`rego eval authz.allow input.json`"
+    answer: 0
+    why:
+      fr: "`opa eval` prend la politique avec `-d`, l'entrée avec `-i`, et la requête `data.<package>.<règle>` en argument. `opa check` ne fait que vérifier la syntaxe."
+      en: "`opa eval` takes the policy with `-d`, the input with `-i`, and the query `data.<package>.<rule>` as an argument. `opa check` only verifies syntax."
