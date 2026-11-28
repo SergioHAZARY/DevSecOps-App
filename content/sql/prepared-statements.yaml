@@ -1,0 +1,499 @@
+description:
+  fr: "Maîtriser les requêtes préparées, la défense de référence contre l'injection SQL, dans quatre langages : Python, Node.js (pg et mysql2), PHP (PDO) et Java (PreparedStatement)."
+  en: "Master prepared statements, the reference defence against SQL injection, in four languages: Python, Node.js (pg and mysql2), PHP (PDO) and Java (PreparedStatement)."
+duration: 35
+
+intro:
+  fr: |
+    Vous savez maintenant qu'une injection SQL vient du mélange entre **donnée** et **commande**. La solution
+    universelle est la **requête préparée** (*prepared statement*), aussi appelée **requête paramétrée** : on
+    envoie à la base la structure de la requête (avec des trous) et les valeurs **séparément**. La base ne
+    confond plus jamais une donnée avec une instruction.
+
+    L'image : au lieu de dicter une phrase complète à un employé (qui pourrait recopier une consigne cachée),
+    vous lui donnez un **formulaire à trous** officiel, puis vous remplissez les trous. La structure est figée
+    d'avance ; ce que vous écrivez dans les cases ne peut jamais en changer le sens.
+
+    Cette leçon est une **boîte à outils pratique** : la même défense, écrite dans les quatre langages les plus
+    courants en DevSecOps. Vous verrez la syntaxe exacte des marqueurs (`?`, `$1`, `:nom`) et le point commun à
+    tous : **la valeur est toujours passée à part de la requête**. Un bonus important : au-delà de la sécurité,
+    les requêtes préparées sont aussi plus **rapides** quand on les réutilise, car la base compile la requête
+    une seule fois.
+  en: |
+    You now know that a SQL injection comes from mixing **data** and **command**. The universal solution is the
+    **prepared statement**, also called a **parameterized query**: you send the database the query structure
+    (with holes) and the values **separately**. The database never again confuses a value with an instruction.
+
+    The image: instead of dictating a full sentence to a clerk (who might copy a hidden instruction), you hand
+    them an official **fill-in-the-blanks form**, then fill the blanks. The structure is fixed in advance; what
+    you write in the boxes can never change its meaning.
+
+    This lesson is a **practical toolbox**: the same defence, written in the four languages most common in
+    DevSecOps. You will see the exact placeholder syntax (`?`, `$1`, `:name`) and the point they all share:
+    **the value is always passed apart from the query**. An important bonus: beyond security, prepared
+    statements are also **faster** when reused, because the database compiles the query only once.
+
+sections:
+  - heading:
+      fr: "Le principe commun à tous les langages"
+      en: "The principle common to every language"
+    body:
+      fr: |
+        Quel que soit le langage, une requête préparée suit toujours deux temps :
+
+        1. **Préparer** la requête avec des **marqueurs** à la place des valeurs.
+        2. **Exécuter** en fournissant les valeurs dans un canal distinct (une liste, un tableau, un tableau
+           associatif).
+
+        Les marqueurs changent selon la base, mais l'idée est identique :
+
+        | Langage / pilote | Marqueur | Exemple |
+        |---|---|---|
+        | Python (sqlite3) | `?` | `cur.execute(sql, (name,))` |
+        | Python (psycopg) | `%s` | `cur.execute(sql, (name,))` |
+        | Node.js (pg, PostgreSQL) | `$1`, `$2` | `client.query(sql, [name])` |
+        | Node.js (mysql2) | `?` | `conn.execute(sql, [name])` |
+        | PHP (PDO) | `?` ou `:nom` | `$stmt->execute([$name])` |
+        | Java (JDBC) | `?` | `ps.setString(1, name)` |
+
+        Le point à retenir absolument : le marqueur n'est **pas** un simple `+` déguisé. La valeur ne vient
+        **jamais** s'insérer dans le texte SQL ; elle est transmise par un canal à part et traitée comme une
+        donnée pure. C'est cette séparation, assurée par le pilote de base de données, qui rend l'injection
+        impossible — pas la syntaxe du marqueur elle-même.
+      en: |
+        Whatever the language, a prepared statement always follows two steps:
+
+        1. **Prepare** the query with **placeholders** in place of the values.
+        2. **Execute** by supplying the values through a separate channel (a list, an array, an associative
+           array).
+
+        The placeholders change by database, but the idea is identical:
+
+        | Language / driver | Placeholder | Example |
+        |---|---|---|
+        | Python (sqlite3) | `?` | `cur.execute(sql, (name,))` |
+        | Python (psycopg) | `%s` | `cur.execute(sql, (name,))` |
+        | Node.js (pg, PostgreSQL) | `$1`, `$2` | `client.query(sql, [name])` |
+        | Node.js (mysql2) | `?` | `conn.execute(sql, [name])` |
+        | PHP (PDO) | `?` or `:name` | `$stmt->execute([$name])` |
+        | Java (JDBC) | `?` | `ps.setString(1, name)` |
+
+        The key point to grasp: the placeholder is **not** a disguised `+`. The value **never** gets inserted
+        into the SQL text; it is passed through a separate channel and treated as pure data. It is this
+        separation, enforced by the database driver, that makes injection impossible — not the placeholder
+        syntax itself.
+  - heading:
+      fr: "Marqueurs positionnels et nommés"
+      en: "Positional and named placeholders"
+    body:
+      fr: |
+        Il existe deux familles de marqueurs. Les **positionnels** (`?`, `$1`, `%s`) sont remplacés dans
+        l'ordre des valeurs fournies. Les **nommés** (`:nom`, `@nom`) sont remplacés par correspondance de nom,
+        ce qui améliore la lisibilité quand il y a beaucoup de paramètres.
+
+        ```php
+        // PHP PDO, named placeholders: clearer with many parameters.
+        $sql = "INSERT INTO users (username, role, active) VALUES (:u, :r, :a)";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([':u' => $name, ':r' => $role, ':a' => 1]);
+        ```
+
+        Avec les marqueurs positionnels, **l'ordre compte** : la première valeur remplace le premier `?`. Une
+        erreur fréquente est d'inverser deux valeurs ; les marqueurs nommés évitent ce piège.
+
+        Deux limites importantes, valables dans tous les langages :
+
+        - Un marqueur ne vaut que pour une **valeur**, jamais pour un **identifiant** (nom de table, de colonne)
+          ni pour un mot-clé SQL. `SELECT * FROM ?` est invalide. Pour un nom de colonne dynamique (tri), on
+          valide par liste blanche, comme vu dans la leçon précédente.
+        - Ne construisez pas une liste `IN (...)` en concaténant : générez autant de marqueurs que de valeurs
+          (`IN (?, ?, ?)`) et passez les valeurs correspondantes.
+      en: |
+        There are two families of placeholders. **Positional** ones (`?`, `$1`, `%s`) are replaced in the order
+        of the supplied values. **Named** ones (`:name`, `@name`) are replaced by name matching, which improves
+        readability when there are many parameters.
+
+        ```php
+        // PHP PDO, named placeholders: clearer with many parameters.
+        $sql = "INSERT INTO users (username, role, active) VALUES (:u, :r, :a)";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([':u' => $name, ':r' => $role, ':a' => 1]);
+        ```
+
+        With positional placeholders, **order matters**: the first value replaces the first `?`. A frequent
+        mistake is swapping two values; named placeholders avoid that trap.
+
+        Two important limits, valid in every language:
+
+        - A placeholder only stands for a **value**, never for an **identifier** (table or column name) nor a
+          SQL keyword. `SELECT * FROM ?` is invalid. For a dynamic column name (sorting), you validate with an
+          allow-list, as seen in the previous lesson.
+        - Do not build an `IN (...)` list by concatenation: generate as many placeholders as values
+          (`IN (?, ?, ?)`) and pass the matching values.
+  - heading:
+      fr: "Bonnes pratiques transverses"
+      en: "Cross-cutting good practices"
+    body:
+      fr: |
+        Au-delà de la syntaxe, quelques règles font la différence entre un code qui « semble » sûr et un code
+        réellement robuste.
+
+        **Ne désactivez jamais la préparation côté serveur.** Certains pilotes proposent une émulation qui, mal
+        configurée, revient à de la concaténation. En PDO par exemple, on force la vraie préparation :
+
+        ```php
+        $pdo = new PDO($dsn, $user, $pass, [
+            PDO::ATTR_EMULATE_PREPARES   => false,   // real server-side prepares
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        ]);
+        ```
+
+        **Utilisez `execute` plutôt que `query` avec des valeurs.** En mysql2 (Node) et en JDBC, c'est
+        `execute`/`PreparedStatement` qui garantit la séparation ; les méthodes qui prennent une chaîne SQL
+        brute n'offrent aucune protection si on y concatène.
+
+        **Combinez avec le moindre privilège.** Même parfaitement paramétré, un code qui se connecte à la base
+        avec un compte tout-puissant reste risqué : donnez à l'application un compte limité aux opérations
+        qu'elle effectue réellement (sujet de la leçon sur les privilèges).
+
+        **Gardez un message d'erreur générique.** Ne renvoyez jamais le message d'erreur SQL brut à
+        l'utilisateur : il révèle la structure de la base et guide l'attaquant. Journalisez le détail côté
+        serveur, affichez un message neutre côté client.
+      en: |
+        Beyond syntax, a few rules make the difference between code that "looks" safe and code that is truly
+        robust.
+
+        **Never disable server-side preparation.** Some drivers offer an emulation that, misconfigured, falls
+        back to concatenation. In PDO for example, you force real preparation:
+
+        ```php
+        $pdo = new PDO($dsn, $user, $pass, [
+            PDO::ATTR_EMULATE_PREPARES   => false,   // real server-side prepares
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        ]);
+        ```
+
+        **Use `execute` rather than `query` with values.** In mysql2 (Node) and JDBC, it is
+        `execute`/`PreparedStatement` that guarantees separation; methods taking a raw SQL string offer no
+        protection if you concatenate into them.
+
+        **Combine with least privilege.** Even perfectly parameterized, code that connects to the database with
+        an all-powerful account remains risky: give the application an account limited to the operations it
+        actually performs (the subject of the privileges lesson).
+
+        **Keep a generic error message.** Never return the raw SQL error message to the user: it reveals the
+        database structure and guides the attacker. Log the detail server-side, show a neutral message
+        client-side.
+
+examples:
+  - title:
+      fr: "Python : sqlite3 et psycopg"
+      en: "Python: sqlite3 and psycopg"
+    file: prepared.py
+    lang: python
+    kind: secure
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.execute("CREATE TABLE users (username TEXT, role TEXT)")
+      db.executemany(
+          "INSERT INTO users VALUES (?, ?)",            # ? placeholders, values apart
+          [("alice", "admin"), ("bob", "user")],
+      )
+
+      def find_user(name):
+          # The value travels in the tuple, never inside the SQL string.
+          return db.execute(
+              "SELECT role FROM users WHERE username = ?", (name,)
+          ).fetchone()
+
+      print("alice :", find_user("alice"))
+      print("attack:", find_user("alice' OR '1'='1"))   # treated as a literal name
+
+      # With PostgreSQL (psycopg) the placeholder is %s, same idea:
+      #   cur.execute("SELECT role FROM users WHERE username = %s", (name,))
+    output: |
+      alice : ('admin',)
+      attack: None
+    note:
+      fr: "En sqlite3 le marqueur est `?`, en psycopg (PostgreSQL) c'est `%s` : dans les deux cas la valeur est passée en second argument, jamais dans la chaîne. L'attaque renvoie `None` car le nom est cherché littéralement."
+      en: "In sqlite3 the placeholder is `?`, in psycopg (PostgreSQL) it is `%s`: in both cases the value is passed as the second argument, never in the string. The attack returns `None` because the name is looked up literally."
+
+  - title:
+      fr: "Node.js : pg (PostgreSQL) et mysql2"
+      en: "Node.js: pg (PostgreSQL) and mysql2"
+    file: prepared.js
+    lang: javascript
+    kind: secure
+    code: |
+      // --- PostgreSQL with the 'pg' driver: numbered placeholders $1, $2 ---
+      import pg from "pg";
+
+      const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+      await client.connect();
+
+      async function findUser(name) {
+        // The value array is the second argument; $1 is never string-concatenated.
+        const res = await client.query(
+          "SELECT role FROM users WHERE username = $1",
+          [name],
+        );
+        return res.rows;
+      }
+
+      // --- MySQL with the 'mysql2' driver: ? placeholders, use execute() ---
+      import mysql from "mysql2/promise";
+
+      const conn = await mysql.createConnection({ uri: process.env.DATABASE_URL });
+
+      async function findUserMysql(name) {
+        // execute() prepares the statement; the value stays data, not SQL.
+        const [rows] = await conn.execute(
+          "SELECT role FROM users WHERE username = ?",
+          [name],
+        );
+        return rows;
+      }
+    output: |
+      // findUser("alice' OR '1'='1") returns [] : the string is a literal username,
+      // matches nothing, and the injection has no effect.
+    note:
+      fr: "Avec `pg` (PostgreSQL) les marqueurs sont numérotés `$1`, `$2` ; avec `mysql2` c'est `?` et on utilise `execute()`. Dans les deux cas, les valeurs passent dans un tableau séparé, jamais concaténées dans le SQL."
+      en: "With `pg` (PostgreSQL) the placeholders are numbered `$1`, `$2`; with `mysql2` it is `?` and you use `execute()`. In both cases the values pass in a separate array, never concatenated into the SQL."
+
+  - title:
+      fr: "PHP : PDO avec marqueurs nommés"
+      en: "PHP: PDO with named placeholders"
+    file: prepared.php
+    lang: php
+    kind: secure
+    code: |
+      <?php
+      // Force real prepares and exceptions: no silent emulation fallback.
+      $pdo = new PDO(
+          "mysql:host=localhost;dbname=app;charset=utf8mb4",
+          "app_user",
+          getenv("DB_PASSWORD"),              // secret from the environment
+          [
+              PDO::ATTR_EMULATE_PREPARES => false,
+              PDO::ATTR_ERRMODE          => PDO::ERRMODE_EXCEPTION,
+          ]
+      );
+
+      function findUser(PDO $pdo, string $name): array {
+          // Named placeholder :u; the value is bound separately on execute().
+          $stmt = $pdo->prepare("SELECT role FROM users WHERE username = :u");
+          $stmt->execute([":u" => $name]);
+          return $stmt->fetchAll(PDO::FETCH_ASSOC);
+      }
+
+      // Even with "alice' OR '1'='1", :u is a literal username: no injection.
+      print_r(findUser($pdo, $_GET["name"] ?? ""));
+    output: |
+      Array
+      (
+      )
+    note:
+      fr: "`ATTR_EMULATE_PREPARES => false` impose une vraie préparation côté serveur. Le marqueur nommé `:u` reçoit sa valeur via `execute()`. Le mot de passe de la base vient de l'environnement, jamais codé en dur dans le fichier."
+      en: "`ATTR_EMULATE_PREPARES => false` forces real server-side preparation. The named placeholder `:u` receives its value via `execute()`. The database password comes from the environment, never hard-coded in the file."
+
+  - title:
+      fr: "Java : PreparedStatement (JDBC)"
+      en: "Java: PreparedStatement (JDBC)"
+    file: Prepared.java
+    lang: java
+    kind: secure
+    code: |
+      import java.sql.Connection;
+      import java.sql.DriverManager;
+      import java.sql.PreparedStatement;
+      import java.sql.ResultSet;
+
+      public class Prepared {
+          static String findRole(String name) throws Exception {
+              String url = System.getenv("JDBC_URL");
+              String sql = "SELECT role FROM users WHERE username = ?";  // ? placeholder
+
+              try (Connection c = DriverManager.getConnection(url);
+                   PreparedStatement ps = c.prepareStatement(sql)) {
+                  // setString binds the value as data, typed and escaped by the driver.
+                  ps.setString(1, name);                // 1 = first ? (1-indexed)
+                  try (ResultSet rs = ps.executeQuery()) {
+                      return rs.next() ? rs.getString("role") : null;
+                  }
+              }
+          }
+
+          public static void main(String[] args) throws Exception {
+              // "alice' OR '1'='1" is bound as a literal username -> no match.
+              System.out.println(findRole("alice' OR '1'='1"));
+          }
+      }
+    output: |
+      null
+    note:
+      fr: "`PreparedStatement` + `setString(1, name)` lie la valeur au premier `?` (indexé à partir de 1). Le pilote JDBC traite la valeur comme une donnée typée : l'attaque est cherchée comme un nom littéral et renvoie `null`. Évitez `Statement` avec du SQL concaténé."
+      en: "`PreparedStatement` + `setString(1, name)` binds the value to the first `?` (1-indexed). The JDBC driver treats the value as typed data: the attack is looked up as a literal name and returns `null`. Avoid `Statement` with concatenated SQL."
+
+mistake:
+  fr: |
+    **Croire qu'utiliser un marqueur suffit, tout en le concaténant quand même.**
+
+    Une confusion fréquente : écrire `cur.execute("... WHERE id = " + str(user_id))` en pensant que « c'est une
+    requête préparée parce qu'on utilise `execute` ». Ce n'est pas le cas : la valeur est déjà dans la chaîne,
+    collée par concaténation, avant que le pilote ne la voie. La règle est que la valeur doit être passée en
+    **argument séparé** (`cur.execute(sql, (user_id,))`), jamais insérée dans le texte. Autres pièges du même
+    ordre : laisser l'émulation de préparation activée (PDO), utiliser une méthode `query` brute au lieu de
+    `execute`, ou tenter de paramétrer un nom de table (impossible : utilisez une liste blanche).
+  en: |
+    **Thinking that using a placeholder is enough, while still concatenating it.**
+
+    A frequent confusion: writing `cur.execute("... WHERE id = " + str(user_id))` believing "it is a prepared
+    statement because we use `execute`". It is not: the value is already in the string, pasted by
+    concatenation, before the driver ever sees it. The rule is that the value must be passed as a **separate
+    argument** (`cur.execute(sql, (user_id,))`), never inserted into the text. Other traps of the same kind:
+    leaving prepare emulation enabled (PDO), using a raw `query` method instead of `execute`, or trying to
+    parameterize a table name (impossible: use an allow-list).
+
+bestPractice:
+  fr: |
+    - **Passez toujours les valeurs en argument séparé** de la requête : `(sql, params)`, jamais dans le texte.
+    - **Utilisez `execute`/`PreparedStatement`**, pas une méthode qui prend du SQL brut concaténé.
+    - **Désactivez l'émulation** quand elle existe (PDO `ATTR_EMULATE_PREPARES => false`) pour une vraie
+      préparation côté serveur.
+    - **Validez par liste blanche** les identifiants qui ne peuvent pas être des marqueurs (noms de table, de
+      colonne, sens du tri).
+    - **Générez les marqueurs d'un `IN (...)`** (`?, ?, ?`) autant qu'il y a de valeurs ; ne concaténez jamais
+      la liste.
+    - **Ajoutez le moindre privilège** sur le compte de base et des **messages d'erreur génériques** côté
+      utilisateur.
+  en: |
+    - **Always pass values as a separate argument** of the query: `(sql, params)`, never in the text.
+    - **Use `execute`/`PreparedStatement`**, not a method taking raw concatenated SQL.
+    - **Disable emulation** where it exists (PDO `ATTR_EMULATE_PREPARES => false`) for real server-side
+      preparation.
+    - **Validate with an allow-list** the identifiers that cannot be placeholders (table, column names, sort
+      direction).
+    - **Generate the placeholders of an `IN (...)`** (`?, ?, ?`) as many as there are values; never
+      concatenate the list.
+    - **Add least privilege** on the database account and **generic error messages** on the user side.
+
+exercise:
+  statement:
+    fr: |
+      Le code Python ci-dessous est censé utiliser une requête préparée, mais il reste vulnérable à
+      l'injection :
+
+      ```python
+      def delete_user(db, user_id):
+          db.execute("DELETE FROM users WHERE id = " + str(user_id))
+      ```
+
+      1. Expliquez pourquoi, malgré l'appel à `execute`, ce code **n'est pas** une requête préparée.
+      2. Corrigez-le en une vraie requête paramétrée.
+    en: |
+      The Python code below is meant to use a prepared statement, but it remains vulnerable to injection:
+
+      ```python
+      def delete_user(db, user_id):
+          db.execute("DELETE FROM users WHERE id = " + str(user_id))
+      ```
+
+      1. Explain why, despite the `execute` call, this code **is not** a prepared statement.
+      2. Fix it into a real parameterized query.
+  solution:
+    file: delete_fixed.py
+    lang: python
+    code: |
+      def delete_user(db, user_id):
+          # Real parameterized query: the value goes in the params tuple,
+          # NOT concatenated into the SQL string. The driver keeps it as data.
+          db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    note:
+      fr: "Le code d'origine concatène `user_id` dans la chaîne **avant** que le pilote ne la voie : utiliser `execute` ne change rien, la valeur est déjà du SQL. La correction passe `user_id` dans le tuple `(user_id,)`, séparé de la requête. Avec `1 OR 1=1`, l'ancien code supprimait toute la table ; le nouveau cherche l'id littéral."
+      en: "The original code concatenates `user_id` into the string **before** the driver sees it: using `execute` changes nothing, the value is already SQL. The fix passes `user_id` in the tuple `(user_id,)`, separate from the query. With `1 OR 1=1`, the old code deleted the whole table; the new one looks up the literal id."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qui rend une requête réellement « préparée » et sûre ?"
+      en: "What makes a query truly 'prepared' and safe?"
+    options:
+      fr:
+        - "Le fait d'appeler une méthode nommée execute"
+        - "Le fait de passer les valeurs dans un canal séparé de la requête"
+        - "Le fait d'écrire le SQL en majuscules"
+        - "Le fait de limiter la longueur de la requête"
+      en:
+        - "Calling a method named execute"
+        - "Passing the values through a channel separate from the query"
+        - "Writing the SQL in uppercase"
+        - "Limiting the query length"
+    answer: 1
+    why:
+      fr: "La sécurité vient de la séparation : la valeur est transmise à part et jamais interprétée comme du SQL. Appeler `execute` tout en concaténant ne protège pas."
+      en: "Safety comes from separation: the value is passed apart and never interpreted as SQL. Calling `execute` while concatenating does not protect."
+  - q:
+      fr: "Quel marqueur le pilote PostgreSQL `pg` (Node.js) utilise-t-il ?"
+      en: "Which placeholder does the PostgreSQL `pg` driver (Node.js) use?"
+    options:
+      fr: ["?", "$1, $2", ":nom", "%s"]
+      en: ["?", "$1, $2", ":name", "%s"]
+    answer: 1
+    why:
+      fr: "Avec `pg`, les marqueurs sont numérotés `$1`, `$2`… et les valeurs sont passées dans un tableau. `mysql2` utilise `?`, PDO `?` ou `:nom`, psycopg `%s`."
+      en: "With `pg`, placeholders are numbered `$1`, `$2`… and values are passed in an array. `mysql2` uses `?`, PDO `?` or `:name`, psycopg `%s`."
+  - q:
+      fr: "Peut-on utiliser un marqueur pour un nom de table ou de colonne ?"
+      en: "Can you use a placeholder for a table or column name?"
+    options:
+      fr:
+        - "Oui, c'est l'usage principal"
+        - "Non : un marqueur ne vaut que pour une valeur ; un identifiant se valide par liste blanche"
+        - "Oui, mais seulement en Java"
+        - "Non, il faut le chiffrer"
+      en:
+        - "Yes, it is the main use"
+        - "No: a placeholder only stands for a value; an identifier is validated with an allow-list"
+        - "Yes, but only in Java"
+        - "No, you must encrypt it"
+    answer: 1
+    why:
+      fr: "Les marqueurs remplacent des valeurs, pas des identifiants ni des mots-clés. Un nom de table ou de colonne dynamique doit être comparé à une liste blanche fixe."
+      en: "Placeholders replace values, not identifiers or keywords. A dynamic table or column name must be checked against a fixed allow-list."
+  - q:
+      fr: "En PDO, pourquoi mettre `ATTR_EMULATE_PREPARES => false` ?"
+      en: "In PDO, why set `ATTR_EMULATE_PREPARES => false`?"
+    options:
+      fr:
+        - "Pour accélérer l'affichage"
+        - "Pour forcer une vraie préparation côté serveur au lieu d'une émulation"
+        - "Pour chiffrer la connexion"
+        - "Pour autoriser la concaténation"
+      en:
+        - "To speed up display"
+        - "To force real server-side preparation instead of emulation"
+        - "To encrypt the connection"
+        - "To allow concatenation"
+    answer: 1
+    why:
+      fr: "L'émulation construit la requête côté client et, mal configurée, peut revenir à de la concaténation. La désactiver garantit une préparation réelle côté serveur."
+      en: "Emulation builds the query client-side and, misconfigured, can fall back to concatenation. Disabling it guarantees real server-side preparation."
+  - q:
+      fr: "En Java JDBC, quelle méthode lie une valeur au premier marqueur `?` ?"
+      en: "In Java JDBC, which method binds a value to the first `?` placeholder?"
+    options:
+      fr:
+        - "`ps.setString(1, name)`"
+        - "`ps.concat(name)`"
+        - "`ps.append(name)`"
+        - "`Statement.run(name)`"
+      en:
+        - "`ps.setString(1, name)`"
+        - "`ps.concat(name)`"
+        - "`ps.append(name)`"
+        - "`Statement.run(name)`"
+    answer: 0
+    why:
+      fr: "`PreparedStatement.setString(1, name)` lie `name` au premier `?` (indexé à partir de 1), comme donnée typée. `Statement` avec du SQL concaténé n'offre aucune protection."
+      en: "`PreparedStatement.setString(1, name)` binds `name` to the first `?` (1-indexed) as typed data. `Statement` with concatenated SQL offers no protection."

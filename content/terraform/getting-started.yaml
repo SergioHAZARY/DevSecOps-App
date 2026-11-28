@@ -1,0 +1,442 @@
+description:
+  fr: "Installer Terraform (ou OpenTofu), comprendre le cycle init / plan / apply / destroy et créer sa première ressource AWS de façon déclarative."
+  en: "Install Terraform (or OpenTofu), understand the init / plan / apply / destroy cycle and create your first AWS resource declaratively."
+duration: 20
+
+intro:
+  fr: |
+    **Terraform** est un outil d'*Infrastructure as Code* (IaC) : au lieu de cliquer dans une console cloud,
+    vous **décrivez** l'infrastructure voulue dans des fichiers texte, et Terraform se charge de la créer,
+    la modifier ou la détruire pour atteindre cet état. Le langage de description est HCL, vu dans le cours
+    précédent ; ici nous apprenons l'**outil** lui-même.
+
+    L'analogie : une **liste de courses**. Vous n'expliquez pas au magasin *comment* ranger les rayons ;
+    vous écrivez *ce que vous voulez* (« 2 litres de lait, 1 pain »), et le magasin compare à votre panier
+    actuel pour n'ajouter que ce qui manque. Terraform fait pareil : il compare votre description à l'état
+    réel du cloud et calcule la différence. C'est une approche **déclarative**, pas une suite d'ordres.
+
+    Dans cette leçon vous allez installer Terraform (ou son équivalent libre OpenTofu), écrire un premier
+    fichier `main.tf`, puis dérouler le cycle fondamental : `init`, `plan`, `apply`, `destroy`. À la fin,
+    vous saurez créer et supprimer une ressource AWS en toute maîtrise.
+  en: |
+    **Terraform** is an *Infrastructure as Code* (IaC) tool: instead of clicking in a cloud console, you
+    **describe** the infrastructure you want in text files, and Terraform creates, changes or destroys it
+    to reach that state. The description language is HCL, seen in the previous course; here we learn the
+    **tool** itself.
+
+    The analogy: a **shopping list**. You do not tell the shop *how* to stock the shelves; you write *what
+    you want* ("2 litres of milk, 1 loaf"), and the shop compares it to your current basket to add only
+    what is missing. Terraform does the same: it compares your description to the real state of the cloud
+    and computes the difference. This is a **declarative** approach, not a sequence of orders.
+
+    In this lesson you will install Terraform (or its open-source equivalent OpenTofu), write a first
+    `main.tf` file, then run the fundamental cycle: `init`, `plan`, `apply`, `destroy`. By the end you will
+    be able to create and delete an AWS resource with full control.
+
+sections:
+  - heading:
+      fr: "Installer Terraform ou OpenTofu"
+      en: "Installing Terraform or OpenTofu"
+    body:
+      fr: |
+        Terraform est un binaire unique, édité par HashiCorp. Depuis 2023, sa licence est la *Business
+        Source License* (BSL) ; en réaction, la communauté a créé **OpenTofu**, un fork **open source**
+        (sous la Linux Foundation) compatible avec le même langage et les mêmes providers. Les commandes
+        sont identiques : il suffit de remplacer `terraform` par `tofu`. Ce cours fonctionne avec les deux.
+
+        | Outil | Commande | Licence | Remarque |
+        |---|---|---|---|
+        | Terraform | `terraform` | BSL (HashiCorp) | Le plus répandu |
+        | OpenTofu | `tofu` | MPL 2.0 (open source) | Compatible, piloté par la communauté |
+
+        Installez une **version précise** et vérifiez-la :
+
+        ```bash
+        terraform version   # or: tofu version
+        ```
+
+        Épinglez la version dans votre projet (fichier `.terraform-version` pour l'outil `tenv`/`tfenv`) :
+        une équipe qui utilise la même version évite les différences de comportement et de format de state.
+      en: |
+        Terraform is a single binary, published by HashiCorp. Since 2023 its license is the *Business
+        Source License* (BSL); in reaction, the community created **OpenTofu**, an **open-source** fork
+        (under the Linux Foundation) compatible with the same language and providers. The commands are
+        identical: just replace `terraform` with `tofu`. This course works with both.
+
+        | Tool | Command | License | Note |
+        |---|---|---|---|
+        | Terraform | `terraform` | BSL (HashiCorp) | The most widespread |
+        | OpenTofu | `tofu` | MPL 2.0 (open source) | Compatible, community-driven |
+
+        Install a **specific version** and check it:
+
+        ```bash
+        terraform version   # or: tofu version
+        ```
+
+        Pin the version in your project (a `.terraform-version` file for the `tenv`/`tfenv` tool): a team
+        on the same version avoids differences in behaviour and in state format.
+  - heading:
+      fr: "Le cycle init, plan, apply, destroy"
+      en: "The init, plan, apply, destroy cycle"
+    body:
+      fr: |
+        Quatre commandes forment la boucle de base de tout projet Terraform :
+
+        1. **`terraform init`** : initialise le dossier. Terraform lit les `required_providers`, télécharge
+           les plugins (le provider AWS, par exemple) dans `.terraform/` et configure le backend (où est
+           stocké le state). À lancer une fois, puis à nouveau après avoir changé de provider ou de backend.
+        2. **`terraform plan`** : calcule la différence entre votre code et l'état réel, et affiche ce qui
+           serait créé (`+`), modifié (`~`) ou détruit (`-`). **Il ne change rien** : c'est une prévisualisation.
+        3. **`terraform apply`** : exécute le plan après confirmation. Utilisez `terraform plan -out=tfplan`
+           puis `terraform apply tfplan` pour appliquer exactement ce qui a été revu — essentiel en CI.
+        4. **`terraform destroy`** : supprime tout ce que la configuration gère. Pratique pour un lab, à
+           manier avec prudence ailleurs.
+
+        Deux commandes d'hygiène complètent le tout : `terraform fmt` (reformate le code au style canonique)
+        et `terraform validate` (vérifie la cohérence interne sans contacter le cloud).
+      en: |
+        Four commands form the core loop of every Terraform project:
+
+        1. **`terraform init`**: initialises the directory. Terraform reads `required_providers`, downloads
+           the plugins (the AWS provider, say) into `.terraform/` and configures the backend (where the
+           state is stored). Run once, then again after changing provider or backend.
+        2. **`terraform plan`**: computes the difference between your code and reality, and shows what would
+           be created (`+`), changed (`~`) or destroyed (`-`). **It changes nothing**: it is a preview.
+        3. **`terraform apply`**: executes the plan after confirmation. Use `terraform plan -out=tfplan`
+           then `terraform apply tfplan` to apply exactly what was reviewed — essential in CI.
+        4. **`terraform destroy`**: deletes everything the configuration manages. Handy for a lab, handle
+           with care elsewhere.
+
+        Two hygiene commands round it out: `terraform fmt` (reformats the code to the canonical style) and
+        `terraform validate` (checks internal consistency without contacting the cloud).
+  - heading:
+      fr: "Déclaratif : décrire l'état voulu, pas les étapes"
+      en: "Declarative: describe the desired state, not the steps"
+    body:
+      fr: |
+        La force de Terraform est l'**idempotence** : appliquer deux fois la même configuration ne crée pas
+        deux ressources. La première fois, `apply` crée ce qui manque ; la deuxième, le plan annonce « rien
+        à faire » car l'état réel correspond déjà à la description.
+
+        Pour tenir cette promesse, Terraform mémorise ce qu'il a créé dans un **fichier de state**
+        (`terraform.tfstate`). C'est sa « liste de ce que j'ai déjà acheté ». Il est donc **crucial** et
+        **sensible** : nous y consacrons la leçon suivante, puis une leçon entière à le stocker de façon sûre
+        et partagée.
+
+        Conséquence pratique : ne modifiez **jamais** à la main, dans la console cloud, une ressource gérée
+        par Terraform. Le state ne serait plus synchronisé avec la réalité (on parle de *drift*), et le
+        prochain `plan` proposerait des changements déroutants. La règle d'or : **toute modification passe
+        par le code**.
+      en: |
+        Terraform's strength is **idempotence**: applying the same configuration twice does not create two
+        resources. The first time, `apply` creates what is missing; the second, the plan says "nothing to
+        do" because reality already matches the description.
+
+        To keep that promise, Terraform remembers what it created in a **state file**
+        (`terraform.tfstate`). It is its "list of what I already bought". It is therefore **crucial** and
+        **sensitive**: the next lesson is devoted to it, and a whole later lesson to storing it safely and
+        shared.
+
+        Practical consequence: **never** change a Terraform-managed resource by hand in the cloud console.
+        The state would no longer match reality (this is called *drift*), and the next `plan` would propose
+        confusing changes. The golden rule: **every change goes through the code**.
+
+examples:
+  - title:
+      fr: "Un premier fichier main.tf"
+      en: "A first main.tf file"
+    file: main.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      # Declare which providers this configuration needs, with a pinned version
+      terraform {
+        required_version = ">= 1.9"
+
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = "~> 6.0" # allow 6.x, refuse 7.0 (which may break things)
+          }
+        }
+      }
+
+      # Configure the AWS provider: the region to work in
+      provider "aws" {
+        region = "eu-west-3" # Paris
+      }
+
+      # Our first resource: a private S3 bucket
+      resource "aws_s3_bucket" "first" {
+        bucket = "devsecops-demo-first-bucket-42"
+
+        tags = {
+          ManagedBy = "Terraform"
+          Lesson    = "getting-started"
+        }
+      }
+    note:
+      fr: "Trois blocs : `terraform` (versions), `provider` (la région AWS) et `resource` (ce qu'on crée). Le nom du bucket S3 doit être unique au monde : changez le suffixe. On durcira ce bucket (chiffrement, blocage public) dans les leçons suivantes."
+      en: "Three blocks: `terraform` (versions), `provider` (the AWS region) and `resource` (what we create). An S3 bucket name must be globally unique: change the suffix. We will harden this bucket (encryption, public access block) in later lessons."
+
+  - title:
+      fr: "init puis plan : prévisualiser sans rien créer"
+      en: "init then plan: preview without creating anything"
+    file: plan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Download the AWS provider and set up the working directory
+      terraform init
+
+      # Preview the changes: nothing is created yet
+      terraform plan
+    output: |
+      $ terraform init
+      Initializing provider plugins...
+      - Installing hashicorp/aws v6.4.0...
+      Terraform has been successfully initialized!
+
+      $ terraform plan
+      Terraform will perform the following actions:
+        # aws_s3_bucket.first will be created
+        + resource "aws_s3_bucket" "first" {
+            + bucket = "devsecops-demo-first-bucket-42"
+            + id     = (known after apply)
+          }
+      Plan: 1 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "`init` télécharge le provider ; `plan` montre le `+` (création) sans rien appliquer. `(known after apply)` signale une valeur qu'AWS n'attribuera qu'à la création. Relisez toujours un plan avant d'appliquer."
+      en: "`init` downloads the provider; `plan` shows the `+` (creation) without applying anything. `(known after apply)` marks a value AWS assigns only at creation. Always read a plan before applying."
+
+  - title:
+      fr: "apply puis destroy : créer, puis tout nettoyer"
+      en: "apply then destroy: create, then clean everything up"
+    file: apply.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Create the resources (asks for confirmation; -auto-approve skips it in a lab)
+      terraform apply
+
+      # ... later, tear the lab down to avoid paying for unused resources
+      terraform destroy
+    output: |
+      $ terraform apply
+      Plan: 1 to add, 0 to change, 0 to destroy.
+      Do you want to perform these actions? yes
+      aws_s3_bucket.first: Creating...
+      aws_s3_bucket.first: Creation complete after 2s [id=devsecops-demo-first-bucket-42]
+      Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+      # A second apply with no code change is idempotent:
+      $ terraform apply
+      No changes. Your infrastructure matches the configuration.
+    note:
+      fr: "Après `apply`, un fichier `terraform.tfstate` apparaît : c'est la mémoire de Terraform. Le second `apply` ne recrée rien (idempotence). `destroy` supprime la ressource : indispensable dans un lab pour ne pas payer inutilement."
+      en: "After `apply`, a `terraform.tfstate` file appears: it is Terraform's memory. The second `apply` recreates nothing (idempotence). `destroy` removes the resource: essential in a lab to avoid needless billing."
+
+  - title:
+      fr: "Vérifier et formater avant de committer"
+      en: "Validate and format before committing"
+    file: check.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Rewrite files to the canonical style (indentation, alignment)
+      terraform fmt
+
+      # Check internal consistency (types, references) WITHOUT contacting the cloud
+      terraform validate
+
+      # A .gitignore so you never commit state or downloaded providers
+      cat > .gitignore <<'EOF'
+      .terraform/
+      *.tfstate
+      *.tfstate.*
+      *.tfvars
+      EOF
+    output: |
+      $ terraform validate
+      Success! The configuration is valid.
+    note:
+      fr: "`fmt` et `validate` s'exécutent sans le cloud, parfaits en pré-commit et en CI. Le `.gitignore` est une protection de sécurité : il empêche de pousser le state (qui contient des données sensibles) et les fichiers `.tfvars` (qui peuvent contenir des secrets)."
+      en: "`fmt` and `validate` run without the cloud, perfect in pre-commit and CI. The `.gitignore` is a security guard: it prevents pushing the state (which holds sensitive data) and `.tfvars` files (which may hold secrets)."
+
+mistake:
+  fr: |
+    **Modifier à la main une ressource gérée par Terraform.**
+
+    Il est tentant d'aller « juste cocher une case » dans la console AWS pour aller vite. Mais Terraform
+    compare votre code à son fichier de state, pas à la réalité en direct : votre changement manuel crée un
+    *drift*. Au prochain `plan`, Terraform voudra « corriger » la ressource pour la ramener à ce que dit le
+    code, annulant votre modification — ou, pire, proposant des changements incompréhensibles. Deux autres
+    erreurs de débutant : lancer `apply` sans lire le `plan` (on peut détruire une base de données par
+    inadvertance), et committer le fichier `terraform.tfstate` dans Git (il contient des valeurs sensibles).
+  en: |
+    **Changing a Terraform-managed resource by hand.**
+
+    It is tempting to "just tick a box" in the AWS console to save time. But Terraform compares your code to
+    its state file, not to live reality: your manual change creates *drift*. On the next `plan`, Terraform
+    will want to "fix" the resource back to what the code says, undoing your change — or worse, proposing
+    baffling changes. Two other beginner mistakes: running `apply` without reading the `plan` (you can
+    destroy a database by accident), and committing the `terraform.tfstate` file to Git (it holds sensitive
+    values).
+
+bestPractice:
+  fr: |
+    - **Toujours lire le `plan`** avant un `apply` ; en CI, `plan -out=tfplan` puis `apply tfplan`.
+    - **Épinglez la version** de Terraform/OpenTofu et des providers pour des résultats reproductibles.
+    - **Toute modification passe par le code** : jamais de changement manuel dans la console (drift).
+    - **`.gitignore`** : jamais de `.terraform/`, de `*.tfstate`, ni de `*.tfvars` dans Git.
+    - **`terraform fmt` et `validate`** en pré-commit et en CI, pour un code propre et cohérent.
+    - **`destroy` dans un lab** pour ne pas payer de ressources oubliées.
+  en: |
+    - **Always read the `plan`** before an `apply`; in CI, `plan -out=tfplan` then `apply tfplan`.
+    - **Pin the version** of Terraform/OpenTofu and of providers for reproducible results.
+    - **Every change goes through the code**: never a manual change in the console (drift).
+    - **`.gitignore`**: never `.terraform/`, `*.tfstate`, nor `*.tfvars` in Git.
+    - **`terraform fmt` and `validate`** in pre-commit and CI, for clean and consistent code.
+    - **`destroy` in a lab** so you do not pay for forgotten resources.
+
+exercise:
+  statement:
+    fr: |
+      Créez un projet Terraform minimal qui provisionne un *security group* AWS vide nommé `lab-sg`.
+
+      1. Déclarez le bloc `terraform` avec le provider `hashicorp/aws` épinglé en `~> 6.0`.
+      2. Configurez le provider sur la région `eu-west-3`.
+      3. Déclarez une ressource `aws_security_group` nommée `lab` avec `name = "lab-sg"` et une description.
+      4. Indiquez l'ordre des commandes à lancer pour prévisualiser puis créer la ressource.
+    en: |
+      Create a minimal Terraform project that provisions an empty AWS *security group* named `lab-sg`.
+
+      1. Declare the `terraform` block with the `hashicorp/aws` provider pinned to `~> 6.0`.
+      2. Configure the provider for the `eu-west-3` region.
+      3. Declare an `aws_security_group` resource named `lab` with `name = "lab-sg"` and a description.
+      4. State the order of commands to preview then create the resource.
+  solution:
+    file: main.tf
+    lang: hcl
+    code: |
+      terraform {
+        required_version = ">= 1.9"
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = "~> 6.0"
+          }
+        }
+      }
+
+      provider "aws" {
+        region = "eu-west-3"
+      }
+
+      resource "aws_security_group" "lab" {
+        name        = "lab-sg"
+        description = "Empty security group for the lab"
+        # No ingress rule yet: deny-all is the safe default
+      }
+
+      # Commands, in order:
+      #   terraform init     # download the AWS provider
+      #   terraform plan     # preview: 1 to add
+      #   terraform apply    # create after confirmation
+      #   terraform destroy  # clean up the lab
+    note:
+      fr: "Un *security group* sans règle `ingress` n'autorise aucune entrée : c'est le comportement sûr par défaut. On ajoutera des règles plus tard. L'ordre `init` → `plan` → `apply` → `destroy` est le socle de tout projet."
+      en: "A security group with no `ingress` rule allows no inbound traffic: this is the safe default. Rules come later. The `init` → `plan` → `apply` → `destroy` order is the backbone of every project."
+
+quiz:
+  - q:
+      fr: "Que fait `terraform plan` ?"
+      en: "What does `terraform plan` do?"
+    options:
+      fr:
+        - "Il crée immédiatement les ressources"
+        - "Il affiche la différence entre le code et l'état réel, sans rien modifier"
+        - "Il supprime le fichier de state"
+        - "Il télécharge les providers"
+      en:
+        - "It immediately creates the resources"
+        - "It shows the difference between the code and reality, changing nothing"
+        - "It deletes the state file"
+        - "It downloads the providers"
+    answer: 1
+    why:
+      fr: "`plan` est une prévisualisation : il calcule et affiche les créations, modifications et suppressions, mais n'applique aucun changement. C'est `apply` qui exécute."
+      en: "`plan` is a preview: it computes and displays creations, changes and deletions, but applies nothing. `apply` is what executes."
+  - q:
+      fr: "Quelle commande télécharge les providers et initialise le backend ?"
+      en: "Which command downloads the providers and initialises the backend?"
+    options:
+      fr:
+        - "`terraform init`"
+        - "`terraform apply`"
+        - "`terraform get`"
+        - "`terraform start`"
+      en:
+        - "`terraform init`"
+        - "`terraform apply`"
+        - "`terraform get`"
+        - "`terraform start`"
+    answer: 0
+    why:
+      fr: "`init` lit les `required_providers`, installe les plugins dans `.terraform/` et configure le backend. On le relance après tout changement de provider ou de backend."
+      en: "`init` reads `required_providers`, installs the plugins into `.terraform/` and configures the backend. Rerun it after any provider or backend change."
+  - q:
+      fr: "Qu'est-ce que le *drift* ?"
+      en: "What is *drift*?"
+    options:
+      fr:
+        - "Une erreur de syntaxe HCL"
+        - "L'écart entre l'état réel et le state, causé par un changement manuel"
+        - "Un type de variable"
+        - "Une commande de Terraform"
+      en:
+        - "An HCL syntax error"
+        - "The gap between reality and the state, caused by a manual change"
+        - "A variable type"
+        - "A Terraform command"
+    answer: 1
+    why:
+      fr: "Le drift survient quand on modifie une ressource hors de Terraform : le state ne correspond plus au réel, et le prochain `plan` proposera des changements inattendus."
+      en: "Drift happens when a resource is changed outside Terraform: the state no longer matches reality, and the next `plan` proposes unexpected changes."
+  - q:
+      fr: "Pourquoi OpenTofu existe-t-il ?"
+      en: "Why does OpenTofu exist?"
+    options:
+      fr:
+        - "C'est une version payante de Terraform"
+        - "C'est un fork open source de Terraform après le passage de ce dernier sous licence BSL"
+        - "C'est un langage différent de HCL"
+        - "C'est un outil réservé à Azure"
+      en:
+        - "It is a paid version of Terraform"
+        - "It is an open-source fork of Terraform after the latter moved to the BSL license"
+        - "It is a different language from HCL"
+        - "It is a tool only for Azure"
+    answer: 1
+    why:
+      fr: "OpenTofu est un fork communautaire, open source, né du changement de licence de Terraform ; il est compatible (même HCL, mêmes providers, commande `tofu`)."
+      en: "OpenTofu is a community, open-source fork born from Terraform's license change; it is compatible (same HCL, same providers, `tofu` command)."
+  - q:
+      fr: "Pourquoi ne pas committer `terraform.tfstate` dans Git ?"
+      en: "Why not commit `terraform.tfstate` to Git?"
+    options:
+      fr:
+        - "Parce qu'il est trop volumineux"
+        - "Parce que Git ne lit pas le JSON"
+        - "Il n'y a aucun problème à le committer"
+        - "Parce qu'il contient des valeurs sensibles et doit rester protégé"
+      en:
+        - "Because it is too large"
+        - "Because Git cannot read JSON"
+        - "There is no problem committing it"
+        - "Because it holds sensitive values and must stay protected"
+    answer: 3
+    why:
+      fr: "Le state peut contenir des secrets et des données sensibles en clair ; le pousser dans Git les exposerait. On le stocke dans un backend distant sécurisé (leçon dédiée)."
+      en: "The state can hold secrets and sensitive data in clear; pushing it to Git would expose them. It belongs in a secure remote backend (dedicated lesson)."

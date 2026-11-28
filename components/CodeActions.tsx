@@ -63,14 +63,14 @@ export function CodeActions({ lang, file, t, closeLabel, expectedLabel }: CodeAc
 
   return (
     <div ref={ref} className="ml-auto flex shrink-0 items-center gap-1.5">
-      <Button variant="code" size="sm" onClick={tryIt} aria-label={t.tryItYourself}>
+      <Button variant="code" size="sm" onClick={tryIt} aria-label={t.tryItYourself} className="h-9 sm:h-8">
         <Play aria-hidden="true" />
         <span className="hidden sm:inline">{t.tryItYourself}</span>
         <span className="sm:hidden" aria-hidden="true">{t.tryIt}</span>
       </Button>
-      <Button variant="code" size="sm" onClick={copy} aria-label={t.copyCode}>
+      <Button variant="code" size="sm" onClick={copy} aria-label={t.copyCode} className="h-9 sm:h-8">
         {copied ? <Check className="text-emerald-400" aria-hidden="true" /> : <Copy aria-hidden="true" />}
-        <span aria-live="polite">{copied ? t.copied : t.copy}</span>
+        <span className="max-[380px]:sr-only" aria-live="polite">{copied ? t.copied : t.copy}</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>

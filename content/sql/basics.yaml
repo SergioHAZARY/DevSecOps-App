@@ -1,0 +1,506 @@
+description:
+  fr: "Débuter en SQL avec un jeu de données de sécurité : créer des tables, puis lire, ajouter, modifier et supprimer des lignes avec SELECT, INSERT, UPDATE et DELETE."
+  en: "Start SQL with a security dataset: create tables, then read, add, change and delete rows with SELECT, INSERT, UPDATE and DELETE."
+duration: 30
+
+intro:
+  fr: |
+    **SQL** (*Structured Query Language*) est le langage universel des bases de données relationnelles :
+    PostgreSQL, MySQL, SQLite, SQL Server. Dès qu'une application stocke des utilisateurs, des commandes ou
+    des journaux, il y a du SQL derrière. Pour un ingénieur DevSecOps, savoir lire et écrire du SQL est
+    indispensable : auditer des comptes, chercher des traces d'attaque, comprendre une injection.
+
+    Une base de données, c'est un **classeur de tableurs**. Chaque **table** est une feuille avec des
+    **colonnes** (nom, rôle, date) et des **lignes** (un utilisateur par ligne). SQL est la façon de parler à
+    ce classeur : *« montre-moi les administrateurs »*, *« ajoute cet utilisateur »*, *« supprime ce compte »*.
+
+    Cette leçon ne suppose **aucune** connaissance. Tous les exemples s'exécutent **directement dans la page**
+    avec le bouton **Run** : ils créent leurs propres tables (en SQLite), insèrent des données, puis les
+    interrogent. Vous apprendrez les quatre opérations fondamentales — **SELECT** (lire), **INSERT**
+    (ajouter), **UPDATE** (modifier), **DELETE** (supprimer) — sur un jeu de données de sécurité : des comptes
+    utilisateurs et leurs rôles.
+  en: |
+    **SQL** (*Structured Query Language*) is the universal language of relational databases: PostgreSQL,
+    MySQL, SQLite, SQL Server. As soon as an application stores users, orders or logs, there is SQL behind it.
+    For a DevSecOps engineer, reading and writing SQL is essential: auditing accounts, hunting for attack
+    traces, understanding an injection.
+
+    A database is a **binder of spreadsheets**. Each **table** is a sheet with **columns** (name, role, date)
+    and **rows** (one user per row). SQL is how you talk to this binder: *"show me the administrators"*, *"add
+    this user"*, *"delete this account"*.
+
+    This lesson assumes **no** prior knowledge. Every example runs **right in the page** with the **Run**
+    button: they create their own tables (in SQLite), insert data, then query it. You will learn the four
+    fundamental operations — **SELECT** (read), **INSERT** (add), **UPDATE** (change), **DELETE** (delete) —
+    on a security dataset: user accounts and their roles.
+
+sections:
+  - heading:
+      fr: "Créer une table et insérer des données"
+      en: "Creating a table and inserting data"
+    body:
+      fr: |
+        Avant d'interroger des données, il faut une **table**. `CREATE TABLE` définit les colonnes et leur
+        **type** (texte, entier, date). `INSERT INTO` ajoute des lignes :
+
+        ```sql
+        CREATE TABLE users (
+            id       INTEGER PRIMARY KEY,   -- unique identifier of each row
+            username TEXT NOT NULL,         -- NOT NULL: this column cannot be empty
+            role     TEXT NOT NULL,
+            active   INTEGER DEFAULT 1      -- 1 = enabled, 0 = disabled
+        );
+
+        INSERT INTO users (username, role, active) VALUES
+            ('alice', 'admin', 1),
+            ('bob',   'user',  1),
+            ('carol', 'user',  0);
+        ```
+
+        Points clés : la **clé primaire** (`PRIMARY KEY`) identifie chaque ligne de façon unique ; `NOT NULL`
+        interdit une valeur vide ; `DEFAULT` fournit une valeur par défaut. Les chaînes de texte se mettent
+        entre **apostrophes simples** `'...'` (jamais des guillemets doubles en SQL standard), et chaque
+        instruction se termine par un **point-virgule** `;`.
+
+        En SQL, une convention de lisibilité : les mots-clés (`SELECT`, `FROM`, `WHERE`) s'écrivent souvent en
+        majuscules, les noms de tables et de colonnes en minuscules. Les commentaires commencent par `--`.
+      en: |
+        Before querying data, you need a **table**. `CREATE TABLE` defines the columns and their **type**
+        (text, integer, date). `INSERT INTO` adds rows:
+
+        ```sql
+        CREATE TABLE users (
+            id       INTEGER PRIMARY KEY,   -- unique identifier of each row
+            username TEXT NOT NULL,         -- NOT NULL: this column cannot be empty
+            role     TEXT NOT NULL,
+            active   INTEGER DEFAULT 1      -- 1 = enabled, 0 = disabled
+        );
+
+        INSERT INTO users (username, role, active) VALUES
+            ('alice', 'admin', 1),
+            ('bob',   'user',  1),
+            ('carol', 'user',  0);
+        ```
+
+        Key points: the **primary key** (`PRIMARY KEY`) uniquely identifies each row; `NOT NULL` forbids an
+        empty value; `DEFAULT` provides a default. Text strings go in **single quotes** `'...'` (never double
+        quotes in standard SQL), and each statement ends with a **semicolon** `;`.
+
+        A readability convention in SQL: keywords (`SELECT`, `FROM`, `WHERE`) are often written in uppercase,
+        table and column names in lowercase. Comments start with `--`.
+  - heading:
+      fr: "Lire avec SELECT, filtrer avec WHERE"
+      en: "Reading with SELECT, filtering with WHERE"
+    body:
+      fr: |
+        `SELECT` lit des données. On choisit les colonnes, la table (`FROM`), et on filtre les lignes avec
+        `WHERE` :
+
+        ```sql
+        SELECT username, role FROM users;                 -- chosen columns, all rows
+        SELECT * FROM users WHERE role = 'admin';          -- * = all columns, filtered
+        SELECT username FROM users WHERE active = 0;        -- disabled accounts
+        SELECT * FROM users ORDER BY username ASC;          -- sort A to Z
+        ```
+
+        | Clause | Rôle |
+        |---|---|
+        | `SELECT col1, col2` | les colonnes à afficher (`*` = toutes) |
+        | `FROM table` | la table source |
+        | `WHERE condition` | filtre les lignes |
+        | `ORDER BY col` | trie (`ASC` croissant, `DESC` décroissant) |
+        | `LIMIT n` | ne garde que n lignes |
+
+        Les opérateurs de `WHERE` : `=`, `!=` (ou `<>`), `<`, `>`, `<=`, `>=`, et les mots-clés `AND`, `OR`,
+        `NOT`. `LIKE` permet une recherche par motif : `WHERE username LIKE 'a%'` trouve les noms commençant
+        par `a` (`%` = n'importe quelle suite de caractères). `IN` teste l'appartenance :
+        `WHERE role IN ('admin', 'root')`. Pour un audit, `SELECT` est l'outil de base : lister les comptes
+        actifs, les administrateurs, les comptes jamais utilisés.
+      en: |
+        `SELECT` reads data. You pick the columns, the table (`FROM`), and filter the rows with `WHERE`:
+
+        ```sql
+        SELECT username, role FROM users;                 -- chosen columns, all rows
+        SELECT * FROM users WHERE role = 'admin';          -- * = all columns, filtered
+        SELECT username FROM users WHERE active = 0;        -- disabled accounts
+        SELECT * FROM users ORDER BY username ASC;          -- sort A to Z
+        ```
+
+        | Clause | Role |
+        |---|---|
+        | `SELECT col1, col2` | the columns to display (`*` = all) |
+        | `FROM table` | the source table |
+        | `WHERE condition` | filters the rows |
+        | `ORDER BY col` | sorts (`ASC` ascending, `DESC` descending) |
+        | `LIMIT n` | keeps only n rows |
+
+        The `WHERE` operators: `=`, `!=` (or `<>`), `<`, `>`, `<=`, `>=`, and the keywords `AND`, `OR`, `NOT`.
+        `LIKE` enables pattern search: `WHERE username LIKE 'a%'` finds names starting with `a` (`%` = any
+        sequence of characters). `IN` tests membership: `WHERE role IN ('admin', 'root')`. For an audit,
+        `SELECT` is the basic tool: listing active accounts, administrators, never-used accounts.
+  - heading:
+      fr: "Modifier (UPDATE) et supprimer (DELETE) : attention au WHERE"
+      en: "Updating (UPDATE) and deleting (DELETE): mind the WHERE"
+    body:
+      fr: |
+        `UPDATE` modifie des lignes existantes, `DELETE` les supprime. Les deux acceptent un `WHERE` qui
+        **désigne les lignes concernées** :
+
+        ```sql
+        UPDATE users SET active = 0 WHERE username = 'bob';   -- disable one account
+        DELETE FROM users WHERE active = 0;                    -- remove disabled accounts
+        ```
+
+        Le danger absolu : **oublier le `WHERE`**. `UPDATE users SET role = 'user';` met **tous** les comptes
+        en simple utilisateur. `DELETE FROM users;` **vide toute la table**. Sans `WHERE`, l'opération
+        s'applique à chaque ligne, sans confirmation ni retour en arrière.
+
+        Trois réflexes de sécurité :
+
+        1. **Toujours écrire le `WHERE` d'abord**, avant même le `SET` ou le `DELETE`.
+        2. **Tester avec un `SELECT`** : remplacez mentalement `DELETE FROM users` par
+           `SELECT * FROM users` avec le même `WHERE` pour voir exactement les lignes visées.
+        3. **Travailler dans une transaction** (`BEGIN; ... COMMIT;` ou `ROLLBACK;`) pour pouvoir annuler sur
+           une base réelle.
+
+        Ces opérations qui modifient les données (`INSERT`, `UPDATE`, `DELETE`) demandent des **droits**
+        supérieurs à une simple lecture : c'est le sujet de la leçon sur les privilèges.
+      en: |
+        `UPDATE` changes existing rows, `DELETE` removes them. Both accept a `WHERE` that **targets the
+        affected rows**:
+
+        ```sql
+        UPDATE users SET active = 0 WHERE username = 'bob';   -- disable one account
+        DELETE FROM users WHERE active = 0;                    -- remove disabled accounts
+        ```
+
+        The absolute danger: **forgetting the `WHERE`**. `UPDATE users SET role = 'user';` sets **every**
+        account to plain user. `DELETE FROM users;` **empties the whole table**. Without `WHERE`, the operation
+        applies to every row, with no confirmation and no undo.
+
+        Three safety reflexes:
+
+        1. **Always write the `WHERE` first**, before even the `SET` or the `DELETE`.
+        2. **Test with a `SELECT`**: mentally replace `DELETE FROM users` with `SELECT * FROM users` using the
+           same `WHERE` to see exactly the targeted rows.
+        3. **Work inside a transaction** (`BEGIN; ... COMMIT;` or `ROLLBACK;`) so you can undo on a real
+           database.
+
+        These data-changing operations (`INSERT`, `UPDATE`, `DELETE`) require higher **privileges** than a
+        simple read: that is the subject of the privileges lesson.
+
+examples:
+  - title:
+      fr: "Créer la table et lister les comptes"
+      en: "Creating the table and listing accounts"
+    file: create-select.sql
+    lang: sql
+    kind: neutral
+    code: |
+      -- Self-contained: creates the table, inserts data, then reads it.
+      CREATE TABLE users (
+          id       INTEGER PRIMARY KEY,
+          username TEXT NOT NULL,
+          role     TEXT NOT NULL,
+          active   INTEGER DEFAULT 1
+      );
+
+      INSERT INTO users (username, role, active) VALUES
+          ('alice', 'admin', 1),
+          ('bob',   'user',  1),
+          ('carol', 'user',  0),
+          ('dave',  'admin', 1);
+
+      -- Read all columns of every row.
+      SELECT * FROM users;
+    output: |
+      id  username  role   active
+      --  --------  -----  ------
+      1   alice     admin  1
+      2   bob       user   1
+      3   carol     user   0
+      4   dave      admin  1
+    note:
+      fr: "Cet exemple est autonome : appuyez sur **Run** pour créer la table, insérer quatre comptes et tout afficher. La clé primaire `id` est remplie automatiquement. C'est la base que les exemples suivants réutilisent."
+      en: "This example is self-contained: press **Run** to create the table, insert four accounts and show everything. The `id` primary key is filled automatically. It is the base the next examples reuse."
+
+  - title:
+      fr: "Filtrer : trouver les administrateurs actifs"
+      en: "Filtering: finding active administrators"
+    file: where-filter.sql
+    lang: sql
+    kind: neutral
+    code: |
+      CREATE TABLE users (
+          id INTEGER PRIMARY KEY, username TEXT, role TEXT, active INTEGER
+      );
+      INSERT INTO users (username, role, active) VALUES
+          ('alice', 'admin', 1), ('bob', 'user', 1),
+          ('carol', 'user', 0), ('dave', 'admin', 1);
+
+      -- WHERE with AND: admins that are still enabled (a classic audit query).
+      SELECT username, role
+      FROM users
+      WHERE role = 'admin' AND active = 1
+      ORDER BY username;
+    output: |
+      username  role
+      --------  -----
+      alice     admin
+      dave      admin
+    note:
+      fr: "`WHERE role = 'admin' AND active = 1` combine deux conditions. C'est exactement la requête d'un audit : « quels comptes administrateurs sont encore actifs ? ». `ORDER BY` trie le résultat par nom."
+      en: "`WHERE role = 'admin' AND active = 1` combines two conditions. It is exactly an audit query: 'which admin accounts are still active?'. `ORDER BY` sorts the result by name."
+
+  - title:
+      fr: "Ajouter et modifier des comptes"
+      en: "Adding and updating accounts"
+    file: insert-update.sql
+    lang: sql
+    kind: neutral
+    code: |
+      CREATE TABLE users (
+          id INTEGER PRIMARY KEY, username TEXT, role TEXT, active INTEGER
+      );
+      INSERT INTO users (username, role, active) VALUES
+          ('alice', 'admin', 1), ('bob', 'user', 1);
+
+      -- Add a new account.
+      INSERT INTO users (username, role, active) VALUES ('erin', 'user', 1);
+
+      -- Disable one specific account: note the WHERE targets a single row.
+      UPDATE users SET active = 0 WHERE username = 'bob';
+
+      -- Verify the result.
+      SELECT username, role, active FROM users ORDER BY id;
+    output: |
+      username  role   active
+      --------  -----  ------
+      alice     admin  1
+      bob       user   0
+      erin      user   1
+    note:
+      fr: "`INSERT` ajoute `erin`, `UPDATE ... WHERE username = 'bob'` désactive uniquement bob. Le `WHERE` est ce qui limite la modification à une seule ligne : sans lui, tous les comptes auraient `active = 0`."
+      en: "`INSERT` adds `erin`, `UPDATE ... WHERE username = 'bob'` disables only bob. The `WHERE` is what limits the change to a single row: without it, every account would have `active = 0`."
+
+  - title:
+      fr: "Version dangereuse : DELETE sans WHERE"
+      en: "Dangerous version: DELETE without WHERE"
+    file: delete-danger.sql
+    lang: sql
+    kind: vulnerable
+    code: |
+      CREATE TABLE users (
+          id INTEGER PRIMARY KEY, username TEXT, role TEXT, active INTEGER
+      );
+      INSERT INTO users (username, role, active) VALUES
+          ('alice', 'admin', 1), ('bob', 'user', 0), ('carol', 'user', 0);
+
+      -- DANGER: the intent was "delete disabled accounts", but the WHERE is missing.
+      -- This empties the ENTIRE table, including the admin.
+      DELETE FROM users;
+
+      -- Nothing is left.
+      SELECT COUNT(*) AS remaining FROM users;
+    output: |
+      remaining
+      ---------
+      0
+    note:
+      fr: "L'intention était de supprimer les comptes désactivés (`WHERE active = 0`), mais le `WHERE` manque : toute la table est vidée, y compris l'administrateur. C'est l'erreur la plus coûteuse en SQL, sans retour en arrière hors transaction."
+      en: "The intent was to delete the disabled accounts (`WHERE active = 0`), but the `WHERE` is missing: the whole table is emptied, including the admin. This is the most expensive SQL mistake, with no undo outside a transaction."
+
+  - title:
+      fr: "Version sûre : tester avec SELECT, puis supprimer"
+      en: "Safe version: test with SELECT, then delete"
+    file: delete-safe.sql
+    lang: sql
+    kind: secure
+    code: |
+      CREATE TABLE users (
+          id INTEGER PRIMARY KEY, username TEXT, role TEXT, active INTEGER
+      );
+      INSERT INTO users (username, role, active) VALUES
+          ('alice', 'admin', 1), ('bob', 'user', 0), ('carol', 'user', 0);
+
+      -- Step 1: SELECT with the intended WHERE to preview the affected rows.
+      SELECT username FROM users WHERE active = 0;
+
+      -- Step 2: once confirmed, DELETE with the SAME WHERE.
+      DELETE FROM users WHERE active = 0;
+
+      -- Only the active admin remains.
+      SELECT username, role FROM users;
+    output: |
+      username
+      --------
+      bob
+      carol
+
+      username  role
+      --------  -----
+      alice     admin
+    note:
+      fr: "On prévisualise d'abord les lignes visées avec un `SELECT` portant le même `WHERE`, puis on supprime. Ce réflexe « SELECT avant DELETE » évite la catastrophe de l'exemple précédent : on ne supprime que ce qu'on a vu."
+      en: "You first preview the targeted rows with a `SELECT` carrying the same `WHERE`, then delete. This 'SELECT before DELETE' reflex avoids the previous example's disaster: you only delete what you saw."
+
+mistake:
+  fr: |
+    **Lancer un `UPDATE` ou un `DELETE` sans clause `WHERE`.**
+
+    C'est l'erreur qui détruit des données en une seconde. `DELETE FROM users;` vide toute la table ;
+    `UPDATE users SET role = 'admin';` donne les pleins droits à tout le monde. Sans `WHERE`, l'opération
+    s'applique à **chaque** ligne. Les parades : écrire le `WHERE` en premier, prévisualiser les lignes avec un
+    `SELECT` portant la même condition, et travailler dans une transaction (`BEGIN; ... ROLLBACK;` pour
+    annuler). Autre piège classique : utiliser des guillemets doubles pour une chaîne de texte ; en SQL
+    standard, les chaînes se mettent entre apostrophes simples `'texte'`.
+  en: |
+    **Running an `UPDATE` or `DELETE` without a `WHERE` clause.**
+
+    This is the mistake that destroys data in a second. `DELETE FROM users;` empties the whole table;
+    `UPDATE users SET role = 'admin';` grants full rights to everyone. Without `WHERE`, the operation applies
+    to **every** row. The fixes: write the `WHERE` first, preview the rows with a `SELECT` carrying the same
+    condition, and work inside a transaction (`BEGIN; ... ROLLBACK;` to undo). Another classic trap: using
+    double quotes for a text string; in standard SQL, strings go in single quotes `'text'`.
+
+bestPractice:
+  fr: |
+    - **Écrivez toujours le `WHERE`** d'un `UPDATE` ou `DELETE` en premier, et vérifiez-le avant d'exécuter.
+    - **Prévisualisez avec `SELECT`** : la même requête en lecture montre exactement les lignes qui seront
+      modifiées ou supprimées.
+    - **Utilisez des transactions** (`BEGIN; ... COMMIT;` ou `ROLLBACK;`) sur une base réelle pour pouvoir
+      annuler.
+    - **Mettez les chaînes entre apostrophes simples** `'...'`, et terminez chaque instruction par `;`.
+    - **Déclarez `NOT NULL` et une clé primaire** dès la création des tables : des données propres sont des
+      données plus sûres.
+    - **Préférez des colonnes explicites** dans `INSERT` (`INSERT INTO t (a, b) ...`) plutôt que de compter sur
+      l'ordre des colonnes.
+  en: |
+    - **Always write the `WHERE`** of an `UPDATE` or `DELETE` first, and check it before running.
+    - **Preview with `SELECT`**: the same query as a read shows exactly the rows that will be changed or
+      deleted.
+    - **Use transactions** (`BEGIN; ... COMMIT;` or `ROLLBACK;`) on a real database so you can undo.
+    - **Put strings in single quotes** `'...'`, and end each statement with `;`.
+    - **Declare `NOT NULL` and a primary key** when creating tables: clean data is safer data.
+    - **Prefer explicit columns** in `INSERT` (`INSERT INTO t (a, b) ...`) rather than relying on column
+      order.
+
+exercise:
+  statement:
+    fr: |
+      En repartant de la table `users` (colonnes `id`, `username`, `role`, `active`), écrivez un script SQL
+      autonome qui :
+
+      1. crée la table et insère au moins quatre comptes, dont deux `admin` et un compte désactivé ;
+      2. **promeut** le compte `bob` au rôle `admin` avec un `UPDATE` ciblé ;
+      3. affiche enfin la liste des comptes `admin` **actifs**, triés par nom.
+
+      Pensez à cibler précisément chaque `UPDATE` avec un `WHERE`.
+    en: |
+      Starting from the `users` table (columns `id`, `username`, `role`, `active`), write a self-contained SQL
+      script that:
+
+      1. creates the table and inserts at least four accounts, including two `admin`s and one disabled
+         account;
+      2. **promotes** the `bob` account to the `admin` role with a targeted `UPDATE`;
+      3. finally displays the list of **active** `admin` accounts, sorted by name.
+
+      Remember to target each `UPDATE` precisely with a `WHERE`.
+  solution:
+    file: promote.sql
+    lang: sql
+    code: |
+      CREATE TABLE users (
+          id INTEGER PRIMARY KEY, username TEXT, role TEXT, active INTEGER
+      );
+      INSERT INTO users (username, role, active) VALUES
+          ('alice', 'admin', 1), ('bob', 'user', 1),
+          ('carol', 'user', 0), ('dave', 'admin', 1);
+
+      -- Promote only bob: the WHERE limits the change to one row.
+      UPDATE users SET role = 'admin' WHERE username = 'bob';
+
+      -- Active administrators, sorted by name.
+      SELECT username, role
+      FROM users
+      WHERE role = 'admin' AND active = 1
+      ORDER BY username;
+    note:
+      fr: "`UPDATE ... WHERE username = 'bob'` ne touche qu'une ligne. La requête finale combine deux conditions (`role` et `active`) : alice, bob et dave sont admins, mais tous les trois sont actifs, donc tous apparaissent, triés par nom."
+      en: "`UPDATE ... WHERE username = 'bob'` touches a single row. The final query combines two conditions (`role` and `active`): alice, bob and dave are admins, and all three are active, so all appear, sorted by name."
+
+quiz:
+  - q:
+      fr: "Quelle instruction SQL sert à lire des données ?"
+      en: "Which SQL statement is used to read data?"
+    options:
+      fr: ["READ", "SELECT", "GET", "SHOW"]
+      en: ["READ", "SELECT", "GET", "SHOW"]
+    answer: 1
+    why:
+      fr: "`SELECT` lit des lignes dans une table. `INSERT` ajoute, `UPDATE` modifie, `DELETE` supprime : ce sont les quatre opérations de base."
+      en: "`SELECT` reads rows from a table. `INSERT` adds, `UPDATE` changes, `DELETE` removes: the four basic operations."
+  - q:
+      fr: "Que se passe-t-il si on exécute `DELETE FROM users;` sans clause `WHERE` ?"
+      en: "What happens if you run `DELETE FROM users;` with no `WHERE` clause?"
+    options:
+      fr:
+        - "Rien, SQL refuse la commande"
+        - "Seule la première ligne est supprimée"
+        - "Toutes les lignes de la table sont supprimées"
+        - "La table est renommée"
+      en:
+        - "Nothing, SQL refuses the command"
+        - "Only the first row is deleted"
+        - "Every row in the table is deleted"
+        - "The table is renamed"
+    answer: 2
+    why:
+      fr: "Sans `WHERE`, `DELETE` s'applique à toutes les lignes : la table est entièrement vidée, sans confirmation ni retour en arrière hors transaction."
+      en: "Without `WHERE`, `DELETE` applies to every row: the table is entirely emptied, with no confirmation and no undo outside a transaction."
+  - q:
+      fr: "Comment écrire une chaîne de texte en SQL standard ?"
+      en: "How do you write a text string in standard SQL?"
+    options:
+      fr:
+        - "Entre apostrophes simples : 'alice'"
+        - "Entre guillemets doubles : \"alice\""
+        - "Entre crochets : [alice]"
+        - "Sans délimiteur : alice"
+      en:
+        - "In single quotes: 'alice'"
+        - "In double quotes: \"alice\""
+        - "In square brackets: [alice]"
+        - "With no delimiter: alice"
+    answer: 0
+    why:
+      fr: "En SQL standard, les chaînes se mettent entre apostrophes simples. Les guillemets doubles désignent plutôt des identifiants (noms de colonnes), ce qui prête à confusion."
+      en: "In standard SQL, strings go in single quotes. Double quotes rather denote identifiers (column names), which is a source of confusion."
+  - q:
+      fr: "Quelle clause filtre les lignes d'un `SELECT` ?"
+      en: "Which clause filters the rows of a `SELECT`?"
+    options:
+      fr: ["ORDER BY", "GROUP BY", "WHERE", "LIMIT"]
+      en: ["ORDER BY", "GROUP BY", "WHERE", "LIMIT"]
+    answer: 2
+    why:
+      fr: "`WHERE` sélectionne les lignes qui respectent une condition. `ORDER BY` trie, `LIMIT` restreint le nombre de lignes, `GROUP BY` regroupe pour agréger."
+      en: "`WHERE` selects the rows matching a condition. `ORDER BY` sorts, `LIMIT` restricts the number of rows, `GROUP BY` groups for aggregation."
+  - q:
+      fr: "Quel réflexe évite de supprimer les mauvaises lignes avec `DELETE` ?"
+      en: "Which reflex avoids deleting the wrong rows with `DELETE`?"
+    options:
+      fr:
+        - "Exécuter `DELETE` deux fois"
+        - "Prévisualiser avec un `SELECT` portant le même `WHERE`"
+        - "Supprimer la table puis la recréer"
+        - "Désactiver la clé primaire"
+      en:
+        - "Running `DELETE` twice"
+        - "Previewing with a `SELECT` carrying the same `WHERE`"
+        - "Dropping the table then recreating it"
+        - "Disabling the primary key"
+    answer: 1
+    why:
+      fr: "Un `SELECT` avec la même condition montre exactement les lignes qui seront supprimées. On ne lance le `DELETE` qu'après avoir confirmé le périmètre, idéalement dans une transaction."
+      en: "A `SELECT` with the same condition shows exactly the rows that will be deleted. You only run the `DELETE` after confirming the scope, ideally inside a transaction."

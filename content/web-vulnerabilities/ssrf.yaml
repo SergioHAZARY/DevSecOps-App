@@ -1,0 +1,500 @@
+description:
+  fr: "SSRF : forcer un serveur à émettre des requêtes internes, et s'en protéger par liste d'autorisation en Python, Node.js, PHP et Java."
+  en: "SSRF: forcing a server to make internal requests, and defending with an allow-list in Python, Node.js, PHP and Java."
+duration: 30
+
+intro:
+  fr: |
+    Une faille **SSRF** (*Server-Side Request Forgery*, falsification de requête côté serveur) permet à un
+    attaquant de faire **émettre une requête réseau par votre serveur**, vers une destination qu'il choisit.
+    Comme c'est le serveur qui part en reconnaissance, il atteint des ressources internes invisibles depuis
+    Internet : bases de données, panneaux d'administration, et surtout le **service de métadonnées du cloud**.
+
+    Imaginez un majordome à qui vous dites « va chercher le document à cette adresse ». S'il obéit sans
+    réfléchir, un escroc lui donne l'adresse du coffre-fort de la maison au lieu d'une adresse postale. Le
+    majordome, qui a les clés, rapporte le contenu du coffre. Le SSRF, c'est exactement cela : votre serveur,
+    digne de confiance sur le réseau interne, est détourné pour lire ce qu'un visiteur ne devrait jamais voir.
+
+    Dans cette leçon, vous verrez l'attaque emblématique contre `http://169.254.169.254/` (métadonnées cloud),
+    puis la défense par **liste d'autorisation** et résolution DNS contrôlée, en Python, Node.js, PHP et Java.
+  en: |
+    An **SSRF** flaw (*Server-Side Request Forgery*) lets an attacker make **your server issue a network
+    request** to a destination they choose. Because the server is the one doing the fetching, it can reach
+    internal resources invisible from the Internet: databases, admin panels, and above all the **cloud
+    metadata service**.
+
+    Picture a butler you tell "go fetch the document at this address". If he obeys without thinking, a con
+    artist gives him the address of the house safe instead of a postal address. The butler, who holds the
+    keys, brings back the safe's contents. SSRF is exactly that: your server, trusted on the internal
+    network, is hijacked to read what a visitor should never see.
+
+    In this lesson you will see the signature attack against `http://169.254.169.254/` (cloud metadata), then
+    the defense by **allow-list** and controlled DNS resolution, in Python, Node.js, PHP and Java.
+
+sections:
+  - heading:
+      fr: "Comment l'attaque fonctionne"
+      en: "How the attack works"
+    body:
+      fr: |
+        Toute fonctionnalité qui prend une **URL fournie par l'utilisateur** et va la chercher est un candidat
+        au SSRF : aperçu de lien, import d'image par URL, webhook, convertisseur de document, proxy.
+
+        ```text
+        POST /fetch-avatar
+        url=http://169.254.169.254/latest/meta-data/iam/security-credentials/
+        ```
+
+        Sur AWS (IMDSv1), cette adresse **non routable** renvoie les identifiants temporaires du rôle de la
+        machine : l'attaquant obtient des clés cloud. Les cibles classiques :
+
+        | Cible | Exemple d'URL | Gain pour l'attaquant |
+        |---|---|---|
+        | Métadonnées cloud | `http://169.254.169.254/` | Identifiants IAM, jetons |
+        | Services internes | `http://10.0.0.5:8080/admin` | Accès à une console privée |
+        | Localhost | `http://127.0.0.1:6379/` | Redis, bases sans mot de passe |
+        | Fichiers locaux | `file:///etc/passwd` | Lecture de fichiers (selon le client HTTP) |
+
+        À tester uniquement sur **votre** environnement. Le contournement favori des attaquants : une URL qui
+        **passe** le filtre puis **redirige** vers `169.254.169.254`, ou un nom DNS qui résout vers une IP
+        interne (*DNS rebinding*).
+      en: |
+        Any feature that takes a **user-supplied URL** and fetches it is an SSRF candidate: link preview,
+        image import by URL, webhook, document converter, proxy.
+
+        ```text
+        POST /fetch-avatar
+        url=http://169.254.169.254/latest/meta-data/iam/security-credentials/
+        ```
+
+        On AWS (IMDSv1), this **non-routable** address returns the machine role's temporary credentials: the
+        attacker gets cloud keys. The classic targets:
+
+        | Target | Example URL | Attacker's gain |
+        |---|---|---|
+        | Cloud metadata | `http://169.254.169.254/` | IAM credentials, tokens |
+        | Internal services | `http://10.0.0.5:8080/admin` | Access to a private console |
+        | Localhost | `http://127.0.0.1:6379/` | Redis, password-less databases |
+        | Local files | `file:///etc/passwd` | File reads (depending on the HTTP client) |
+
+        Test only against **your own** environment. The attackers' favourite bypass: a URL that **passes** the
+        filter then **redirects** to `169.254.169.254`, or a DNS name resolving to an internal IP
+        (*DNS rebinding*).
+  - heading:
+      fr: "La défense : liste d'autorisation, pas liste de blocage"
+      en: "The defense: allow-list, not block-list"
+    body:
+      fr: |
+        Tenter de **bloquer** les mauvaises adresses (`127.0.0.1`, `169.254.169.254`) échoue toujours : les
+        encodages (`0x7f.0.0.1`, `2130706433`, IPv6 `[::1]`), les redirections et le DNS rebinding passent au
+        travers. La seule approche fiable est une **liste d'autorisation** :
+
+        1. N'accepter que les schémas `https` (et `http` si nécessaire) : **jamais** `file:`, `gopher:`, `ftp:`.
+        2. Autoriser uniquement des **domaines connus** (`api.partner.example`), si le besoin le permet.
+        3. **Résoudre le nom en IP**, puis vérifier que l'IP n'est **ni privée, ni loopback, ni link-local,
+           ni réservée** (`ipaddress.ip_address(...).is_private`, etc.), et se connecter à **cette** IP.
+        4. **Interdire les redirections**, ou revalider chaque saut.
+        5. Mettre un **timeout** et limiter la taille de la réponse.
+
+        | Plage à refuser | Exemple | Pourquoi |
+        |---|---|---|
+        | Loopback | `127.0.0.0/8`, `::1` | Services locaux |
+        | Privée | `10/8`, `172.16/12`, `192.168/16` | Réseau interne |
+        | Link-local | `169.254.0.0/16` | Métadonnées cloud |
+
+        En complément, sur AWS, **imposer IMDSv2** (jeton obligatoire) neutralise l'accès naïf aux métadonnées.
+      en: |
+        Trying to **block** bad addresses (`127.0.0.1`, `169.254.169.254`) always fails: encodings
+        (`0x7f.0.0.1`, `2130706433`, IPv6 `[::1]`), redirects and DNS rebinding slip through. The only
+        reliable approach is an **allow-list**:
+
+        1. Accept only the `https` scheme (and `http` if needed): **never** `file:`, `gopher:`, `ftp:`.
+        2. Allow only **known domains** (`api.partner.example`) where the need permits.
+        3. **Resolve the name to an IP**, then check the IP is **not private, loopback, link-local or
+           reserved** (`ipaddress.ip_address(...).is_private`, etc.), and connect to **that** IP.
+        4. **Forbid redirects**, or re-validate each hop.
+        5. Set a **timeout** and cap the response size.
+
+        | Range to refuse | Example | Why |
+        |---|---|---|
+        | Loopback | `127.0.0.0/8`, `::1` | Local services |
+        | Private | `10/8`, `172.16/12`, `192.168/16` | Internal network |
+        | Link-local | `169.254.0.0/16` | Cloud metadata |
+
+        As a complement, on AWS, **enforcing IMDSv2** (mandatory token) neutralises naive metadata access.
+  - heading:
+      fr: "Détection dans le pipeline DevSecOps"
+      en: "Detection in the DevSecOps pipeline"
+    body:
+      fr: |
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST | Semgrep, CodeQL (`py/ssrf`, `js/request-forgery`) | Une URL utilisateur qui atteint un client HTTP sans validation |
+        | DAST | OWASP ZAP, Burp (collaborateur out-of-band) | Le serveur qui contacte une adresse contrôlée par le testeur |
+        | IaC / Cloud | Trivy, Checkov, Prowler | Une instance AWS qui autorise encore IMDSv1 |
+        | Réseau | Egress filtering, mesh | Bloque les connexions sortantes non prévues |
+
+        La défense en profondeur côté infrastructure est importante : même avec un code validé, un
+        **filtrage du trafic sortant** (egress) empêche le serveur d'atteindre `169.254.169.254` ou le réseau
+        interne, limitant l'impact d'un SSRF résiduel.
+      en: |
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | SAST | Semgrep, CodeQL (`py/ssrf`, `js/request-forgery`) | A user URL reaching an HTTP client without validation |
+        | DAST | OWASP ZAP, Burp (out-of-band collaborator) | The server contacting an address the tester controls |
+        | IaC / Cloud | Trivy, Checkov, Prowler | An AWS instance still allowing IMDSv1 |
+        | Network | Egress filtering, mesh | Blocks unexpected outbound connections |
+
+        Infrastructure-side defense in depth matters: even with validated code, **egress filtering** stops the
+        server from reaching `169.254.169.254` or the internal network, limiting the impact of a residual
+        SSRF.
+
+examples:
+  - title:
+      fr: "Python (requests) - vulnérable : aperçu d'URL naïf"
+      en: "Python (requests) - vulnerable: naive URL preview"
+    file: fetch_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      # Real environment: pip install Flask requests
+      from flask import Flask, request
+      import requests
+
+      app = Flask(__name__)
+
+      @app.get("/preview")
+      def preview():
+          # VULNERABLE: the server fetches any URL the user sends.
+          # ?url=http://169.254.169.254/latest/meta-data/ leaks cloud credentials.
+          url = request.args["url"]
+          resp = requests.get(url)  # no scheme check, no IP check, follows redirects
+          return resp.text
+    note:
+      fr: "N'importe quelle URL est récupérée par le serveur, y compris `http://169.254.169.254/` ou `http://127.0.0.1:6379/`. C'est le SSRF dans sa forme la plus pure."
+      en: "Any URL is fetched by the server, including `http://169.254.169.254/` or `http://127.0.0.1:6379/`. This is SSRF in its purest form."
+
+  - title:
+      fr: "Python - corrigé : liste d'autorisation avec ipaddress"
+      en: "Python - fixed: allow-list with ipaddress"
+    file: fetch_fixed.py
+    lang: python
+    kind: secure
+    code: |
+      import ipaddress
+      import socket
+
+      ALLOWED_SCHEMES = {"https"}
+      BLOCKED_METADATA = "169.254.169.254"
+
+      def resolve_public_ip(host: str) -> str:
+          # Resolve the hostname ourselves so we validate the REAL destination IP,
+          # not a name that could rebind to an internal address later.
+          ip = socket.gethostbyname(host)
+          addr = ipaddress.ip_address(ip)
+          if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+              raise ValueError(f"blocked internal address: {ip}")
+          if ip == BLOCKED_METADATA:
+              raise ValueError("blocked cloud metadata endpoint")
+          return ip
+
+      def is_safe_url(url: str) -> bool:
+          from urllib.parse import urlparse
+          parsed = urlparse(url)
+          if parsed.scheme not in ALLOWED_SCHEMES:   # no file:, gopher:, ftp:
+              return False
+          try:
+              resolve_public_ip(parsed.hostname or "")
+          except (ValueError, OSError):
+              return False
+          return True
+
+      for candidate in [
+          "https://api.example.com/avatar.png",
+          "http://169.254.169.254/latest/meta-data/",
+          "file:///etc/passwd",
+          "https://127.0.0.1/admin",
+      ]:
+          print(f"{is_safe_url(candidate)!s:5} {candidate}")
+    output: |
+      True  https://api.example.com/avatar.png
+      False http://169.254.169.254/latest/meta-data/
+      False file:///etc/passwd
+      False https://127.0.0.1/admin
+    note:
+      fr: "Cliquez sur Run. On valide le **schéma** puis l'**IP résolue** : les adresses privées, loopback, link-local et les métadonnées sont refusées. En production, on se connecte ensuite à l'IP validée et on interdit les redirections."
+      en: "Press Run. We validate the **scheme** then the **resolved IP**: private, loopback, link-local and metadata addresses are refused. In production you then connect to the validated IP and forbid redirects."
+
+  - title:
+      fr: "Node.js - corrigé : validation d'IP et redirections interdites"
+      en: "Node.js - fixed: IP validation and no redirects"
+    file: fetch.js
+    lang: javascript
+    kind: secure
+    code: |
+      // Real environment: Node 18+ (global fetch), npm i ip-address optional
+      const dns = require("node:dns/promises");
+      const net = require("node:net");
+
+      async function isSafeUrl(raw) {
+        let url;
+        try {
+          url = new URL(raw);
+        } catch {
+          return false;
+        }
+        if (url.protocol !== "https:") return false;         // allow-list the scheme
+
+        const { address } = await dns.lookup(url.hostname);  // resolve to an IP
+        if (net.isIP(address) === 0) return false;
+        // Reject private, loopback and link-local ranges (incl. cloud metadata)
+        if (
+          address.startsWith("10.") ||
+          address.startsWith("192.168.") ||
+          address.startsWith("127.") ||
+          address.startsWith("169.254.") ||            // 169.254.169.254 metadata
+          /^172\.(1[6-9]|2\d|3[01])\./.test(address)
+        ) {
+          return false;
+        }
+        return true;
+      }
+
+      async function safeFetch(raw) {
+        if (!(await isSafeUrl(raw))) throw new Error("blocked URL");
+        // redirect: "error" -> a 3xx to an internal address cannot bypass the check
+        return fetch(raw, { redirect: "error", signal: AbortSignal.timeout(5000) });
+      }
+
+      isSafeUrl("http://169.254.169.254/").then((ok) => console.log("metadata allowed?", ok));
+    output: |
+      metadata allowed? false
+    note:
+      fr: "`redirect: \"error\"` est la clé : sans cela, une URL autorisée pourrait rediriger vers `169.254.169.254`. Le `timeout` limite les attaques par lenteur et le balayage de ports internes."
+      en: "`redirect: \"error\"` is the key: without it, an allowed URL could redirect to `169.254.169.254`. The `timeout` limits slow attacks and internal port scanning."
+
+  - title:
+      fr: "PHP et Java - valider avant de récupérer"
+      en: "PHP and Java - validate before fetching"
+    file: fetch.php
+    lang: php
+    kind: secure
+    code: |
+      <?php
+      declare(strict_types=1);
+
+      function isSafeUrl(string $url): bool {
+          $parts = parse_url($url);
+          if (($parts['scheme'] ?? '') !== 'https') {   // allow-list the scheme
+              return false;
+          }
+          $host = $parts['host'] ?? '';
+          $ip = gethostbyname($host);                   // resolve to an IP
+          // FILTER_FLAG_NO_PRIV_RANGE + NO_RES_RANGE reject private/reserved IPs,
+          // including 10/8, 192.168/16, 127/8 and 169.254/16 (cloud metadata).
+          return (bool) filter_var(
+              $ip,
+              FILTER_VALIDATE_IP,
+              FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+          );
+      }
+
+      // In Java (Spring), the same idea:
+      //   InetAddress addr = InetAddress.getByName(uri.getHost());
+      //   if (addr.isSiteLocalAddress() || addr.isLoopbackAddress()
+      //       || addr.isLinkLocalAddress()) throw new SecurityException("blocked");
+      //   // then use a client configured with .followRedirects(NEVER)
+
+      var_dump(isSafeUrl("https://api.example.com/x"));   // true
+      var_dump(isSafeUrl("http://169.254.169.254/"));     // false (scheme + range)
+    output: |
+      bool(true)
+      bool(false)
+    note:
+      fr: "En PHP, `FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE` refuse les plages internes. En Java, `isSiteLocalAddress()`, `isLoopbackAddress()` et `isLinkLocalAddress()` jouent le même rôle, avec un client sans redirection."
+      en: "In PHP, `FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE` refuses internal ranges. In Java, `isSiteLocalAddress()`, `isLoopbackAddress()` and `isLinkLocalAddress()` do the same, with a no-redirect client."
+
+mistake:
+  fr: |
+    **Filtrer par liste de blocage de chaînes, au lieu de valider l'IP résolue.**
+
+    Interdire la chaîne `127.0.0.1` ou `169.254.169.254` ne sert à rien : l'attaquant écrit `http://0x7f.0.0.1`,
+    `http://2130706433`, `http://[::1]`, un nom de domaine qui pointe vers une IP interne, ou une URL qui
+    **redirige** vers la cible. Il faut **résoudre le nom en IP**, vérifier que cette IP n'est pas interne, se
+    connecter à cette IP précise et **interdire les redirections**. Oublier le schéma est une autre erreur :
+    `file:///etc/passwd` lit un fichier local si le client HTTP le permet.
+  en: |
+    **Filtering by a string block-list instead of validating the resolved IP.**
+
+    Blocking the string `127.0.0.1` or `169.254.169.254` is useless: the attacker writes `http://0x7f.0.0.1`,
+    `http://2130706433`, `http://[::1]`, a domain name pointing to an internal IP, or a URL that **redirects**
+    to the target. You must **resolve the name to an IP**, check that IP is not internal, connect to that
+    exact IP and **forbid redirects**. Forgetting the scheme is another mistake: `file:///etc/passwd` reads a
+    local file if the HTTP client allows it.
+
+bestPractice:
+  fr: |
+    - **Liste d'autorisation** de schémas (`https`) et, si possible, de domaines ; jamais une liste de blocage.
+    - **Résoudre puis valider l'IP** (`is_private`, `is_loopback`, `is_link_local`, `is_reserved`) avant de se connecter.
+    - **Interdire les redirections** ou revalider chaque saut, pour contrer le contournement par 3xx.
+    - **Timeout et taille maximale** de réponse sur chaque requête sortante.
+    - **Imposer IMDSv2** sur AWS et **filtrer le trafic sortant** (egress) en défense en profondeur.
+    - **SAST (CodeQL/Semgrep) et DAST (ZAP)** en CI pour repérer les URL utilisateur non validées.
+  en: |
+    - **Allow-list** of schemes (`https`) and, where possible, of domains; never a block-list.
+    - **Resolve then validate the IP** (`is_private`, `is_loopback`, `is_link_local`, `is_reserved`) before connecting.
+    - **Forbid redirects** or re-validate each hop, to defeat the 3xx bypass.
+    - **Timeout and maximum size** on every outbound request.
+    - **Enforce IMDSv2** on AWS and **filter egress traffic** as defense in depth.
+    - **SAST (CodeQL/Semgrep) and DAST (ZAP)** in CI to find unvalidated user URLs.
+
+exercise:
+  statement:
+    fr: |
+      Un service d'import d'images contient cette fonction, censée « bloquer les adresses dangereuses » :
+
+      ```python
+      def fetch_image(url):
+          if "127.0.0.1" in url or "169.254" in url:
+              raise ValueError("blocked")
+          return requests.get(url, allow_redirects=True).content
+      ```
+
+      1. Donnez trois façons de contourner ce filtre de chaînes.
+      2. Réécrivez la validation pour qu'elle résiste : schéma autorisé, IP résolue vérifiée, pas de redirection.
+    en: |
+      An image-import service contains this function, meant to "block dangerous addresses":
+
+      ```python
+      def fetch_image(url):
+          if "127.0.0.1" in url or "169.254" in url:
+              raise ValueError("blocked")
+          return requests.get(url, allow_redirects=True).content
+      ```
+
+      1. Give three ways to bypass this string filter.
+      2. Rewrite the validation so it holds: allowed scheme, resolved IP checked, no redirects.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import ipaddress
+      import socket
+      from urllib.parse import urlparse
+
+      # Bypasses of the string filter:
+      #  - http://2130706433/        (127.0.0.1 as a decimal integer)
+      #  - http://[::1]/             (IPv6 loopback)
+      #  - http://metadata.evil.example/  (a domain that resolves to 169.254.169.254)
+      #  - a URL that passes the check then 302-redirects to 169.254.169.254
+
+      def validated_ip(url: str) -> str:
+          parsed = urlparse(url)
+          if parsed.scheme != "https":                 # allow-list the scheme
+              raise ValueError("scheme not allowed")
+          ip = socket.gethostbyname(parsed.hostname or "")
+          addr = ipaddress.ip_address(ip)
+          if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+              raise ValueError("internal address blocked")
+          return ip
+
+      def fetch_image(url: str) -> bytes:
+          validated_ip(url)
+          # allow_redirects=False stops a 3xx hop to an internal address
+          import requests
+          return requests.get(url, allow_redirects=False, timeout=5).content
+    note:
+      fr: "On valide le schéma puis l'IP réellement résolue (pas la chaîne), et on coupe les redirections. Les formats décimal, IPv6 et les domaines rebindés sont tous couverts par la vérification sur l'IP."
+      en: "We validate the scheme then the actually-resolved IP (not the string), and cut off redirects. Decimal, IPv6 and rebound domains are all covered by the IP check."
+
+quiz:
+  - q:
+      fr: "Quelle est l'adresse cible emblématique d'une attaque SSRF dans le cloud ?"
+      en: "What is the signature target address of a cloud SSRF attack?"
+    options:
+      fr:
+        - "`8.8.8.8`"
+        - "`169.254.169.254`"
+        - "`192.0.2.1`"
+        - "`255.255.255.255`"
+      en:
+        - "`8.8.8.8`"
+        - "`169.254.169.254`"
+        - "`192.0.2.1`"
+        - "`255.255.255.255`"
+    answer: 1
+    why:
+      fr: "`169.254.169.254` est le service de métadonnées (AWS, GCP, Azure) : en IMDSv1, il renvoie les identifiants du rôle de l'instance."
+      en: "`169.254.169.254` is the metadata service (AWS, GCP, Azure): under IMDSv1 it returns the instance role's credentials."
+  - q:
+      fr: "Pourquoi une liste de blocage de chaînes est-elle inefficace contre le SSRF ?"
+      en: "Why is a string block-list ineffective against SSRF?"
+    options:
+      fr:
+        - "Parce que les encodages, l'IPv6, les domaines et les redirections la contournent"
+        - "Parce qu'elle ralentit trop le serveur"
+        - "Parce qu'elle bloque aussi les URL légitimes"
+        - "Parce qu'elle n'est pas compatible HTTPS"
+      en:
+        - "Because encodings, IPv6, domains and redirects bypass it"
+        - "Because it slows the server down too much"
+        - "Because it also blocks legitimate URLs"
+        - "Because it is not compatible with HTTPS"
+    answer: 0
+    why:
+      fr: "`2130706433`, `[::1]`, un domaine qui résout en interne ou une redirection 3xx échappent tous à un filtre textuel."
+      en: "`2130706433`, `[::1]`, a domain resolving internally or a 3xx redirect all evade a textual filter."
+  - q:
+      fr: "Que faut-il valider pour se connecter en sécurité à une URL fournie par l'utilisateur ?"
+      en: "What must you validate to safely connect to a user-supplied URL?"
+    options:
+      fr:
+        - "La longueur de l'URL"
+        - "La présence du mot `admin` dans le chemin"
+        - "Le schéma, puis l'IP résolue (pas privée/loopback/link-local)"
+        - "Le navigateur de l'utilisateur"
+      en:
+        - "The length of the URL"
+        - "The presence of the word `admin` in the path"
+        - "The scheme, then the resolved IP (not private/loopback/link-local)"
+        - "The user's browser"
+    answer: 2
+    why:
+      fr: "On n'autorise que `https`, on résout le nom en IP et on vérifie que cette IP n'est pas interne avant de s'y connecter."
+      en: "You allow only `https`, resolve the name to an IP and check that IP is not internal before connecting to it."
+  - q:
+      fr: "Pourquoi interdire les redirections lors d'une récupération d'URL ?"
+      en: "Why forbid redirects when fetching a URL?"
+    options:
+      fr:
+        - "Pour accélérer la requête"
+        - "Pour respecter le protocole HTTP/2"
+        - "Pour réduire la consommation mémoire"
+        - "Parce qu'une URL validée peut rediriger vers une adresse interne"
+      en:
+        - "To speed up the request"
+        - "To comply with the HTTP/2 protocol"
+        - "To reduce memory usage"
+        - "Because a validated URL can redirect to an internal address"
+    answer: 3
+    why:
+      fr: "Sans blocage, un serveur distant peut répondre par un 3xx vers `169.254.169.254` et contourner la validation initiale."
+      en: "Without blocking, a remote server can answer with a 3xx to `169.254.169.254` and bypass the initial validation."
+  - q:
+      fr: "Quelle mesure d'infrastructure limite l'impact d'un SSRF résiduel sur AWS ?"
+      en: "Which infrastructure measure limits the impact of a residual SSRF on AWS?"
+    options:
+      fr:
+        - "Imposer IMDSv2 et filtrer le trafic sortant"
+        - "Augmenter la taille de l'instance"
+        - "Activer les journaux d'accès S3"
+        - "Utiliser un nom de domaine plus court"
+      en:
+        - "Enforce IMDSv2 and filter egress traffic"
+        - "Increase the instance size"
+        - "Enable S3 access logs"
+        - "Use a shorter domain name"
+    answer: 0
+    why:
+      fr: "IMDSv2 exige un jeton que le SSRF naïf ne possède pas, et le filtrage egress empêche le serveur d'atteindre les métadonnées ou le réseau interne."
+      en: "IMDSv2 requires a token the naive SSRF lacks, and egress filtering stops the server reaching the metadata or internal network."

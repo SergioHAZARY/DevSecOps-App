@@ -1,0 +1,487 @@
+description:
+  fr: "Appliquer le moindre privilège dans PostgreSQL : rôles, GRANT et REVOKE, séparation des comptes applicatifs et sécurité au niveau des lignes (RLS), avec les équivalents MySQL."
+  en: "Apply least privilege in PostgreSQL: roles, GRANT and REVOKE, separation of application accounts and row-level security (RLS), with MySQL equivalents."
+duration: 35
+
+intro:
+  fr: |
+    La requête préparée protège contre l'injection, mais que se passe-t-il si une faille passe quand même ?
+    La réponse tient dans le **moindre privilège** : si le compte que l'application utilise pour parler à la
+    base n'a **que** les droits strictement nécessaires, les dégâts d'une compromission sont limités. Un compte
+    en lecture seule ne peut pas supprimer de table, même exploité.
+
+    L'image : dans un hôtel, le personnel reçoit des **cartes d'accès différentes**. La femme de chambre ouvre
+    les chambres mais pas le coffre ni la comptabilité ; le réceptionniste gère les réservations mais ne touche
+    pas à la maintenance. Donner à chacun la carte la plus restreinte possible limite ce qu'un badge volé
+    permet de faire. En base de données, ces cartes sont les **rôles** et leurs **privilèges**.
+
+    Cette leçon se concentre sur **PostgreSQL**, la base la plus utilisée en DevSecOps, avec les équivalents
+    **MySQL** signalés. Vous apprendrez à créer des rôles, à accorder (`GRANT`) et retirer (`REVOKE`) des
+    droits précis, à séparer les comptes (migration, lecture seule, application), et à aller plus loin avec la
+    **sécurité au niveau des lignes** (RLS) qui restreint non plus les tables, mais les **lignes** qu'un rôle
+    peut voir.
+  en: |
+    Prepared statements protect against injection, but what if a flaw gets through anyway? The answer lies in
+    **least privilege**: if the account the application uses to talk to the database has **only** the strictly
+    necessary rights, the damage of a compromise is limited. A read-only account cannot drop a table, even if
+    abused.
+
+    The image: in a hotel, staff receive **different access cards**. The housekeeper opens rooms but not the
+    safe or the accounts; the receptionist handles bookings but does not touch maintenance. Giving everyone the
+    most restricted card possible limits what a stolen badge allows. In a database, these cards are the
+    **roles** and their **privileges**.
+
+    This lesson focuses on **PostgreSQL**, the most used database in DevSecOps, with **MySQL** equivalents
+    noted. You will learn to create roles, to grant (`GRANT`) and revoke (`REVOKE`) precise rights, to separate
+    accounts (migration, read-only, application), and to go further with **row-level security** (RLS) that
+    restricts not tables, but the **rows** a role can see.
+
+sections:
+  - heading:
+      fr: "Rôles, GRANT et REVOKE"
+      en: "Roles, GRANT and REVOKE"
+    body:
+      fr: |
+        Dans PostgreSQL, tout acteur est un **rôle** : un rôle peut représenter un utilisateur (avec
+        `LOGIN`) ou un groupe de droits. On crée un rôle, puis on lui **accorde** des privilèges avec `GRANT`
+        et on les **retire** avec `REVOKE`.
+
+        ```sql
+        -- An application login with no special attributes (least privilege by default)
+        CREATE ROLE app_user LOGIN PASSWORD 'changeme-in-vault';
+
+        -- Grant only what the app needs on one table, not the whole schema
+        GRANT SELECT, INSERT, UPDATE ON orders TO app_user;
+
+        -- Explicitly take back a right that is not needed
+        REVOKE DELETE ON orders FROM app_user;
+        ```
+
+        Les privilèges les plus courants : `SELECT` (lire), `INSERT` (ajouter), `UPDATE` (modifier), `DELETE`
+        (supprimer), et au niveau structurel `CREATE`, `DROP`, `ALTER`. L'erreur classique est d'accorder
+        `ALL PRIVILEGES` « pour que ça marche » : c'est l'exact opposé du moindre privilège.
+
+        PostgreSQL a une subtilité importante : par défaut, un nouveau rôle hérite de droits via le rôle
+        **`PUBLIC`** (tout le monde). Sur une base durcie, on retire ces droits par défaut :
+        `REVOKE ALL ON DATABASE app FROM PUBLIC;`.
+
+        > **MySQL** : même logique avec `CREATE USER 'app'@'%' IDENTIFIED BY '...';` puis
+        > `GRANT SELECT, INSERT ON app.orders TO 'app'@'%';`. MySQL attache l'utilisateur à un hôte
+        > (`'app'@'10.0.0.0/8'`), ce qui ajoute un filtrage par origine.
+      en: |
+        In PostgreSQL, every actor is a **role**: a role can represent a user (with `LOGIN`) or a group of
+        rights. You create a role, then **grant** it privileges with `GRANT` and take them back with `REVOKE`.
+
+        ```sql
+        -- An application login with no special attributes (least privilege by default)
+        CREATE ROLE app_user LOGIN PASSWORD 'changeme-in-vault';
+
+        -- Grant only what the app needs on one table, not the whole schema
+        GRANT SELECT, INSERT, UPDATE ON orders TO app_user;
+
+        -- Explicitly take back a right that is not needed
+        REVOKE DELETE ON orders FROM app_user;
+        ```
+
+        The most common privileges: `SELECT` (read), `INSERT` (add), `UPDATE` (change), `DELETE` (delete), and
+        structurally `CREATE`, `DROP`, `ALTER`. The classic mistake is granting `ALL PRIVILEGES` "to make it
+        work": the exact opposite of least privilege.
+
+        PostgreSQL has an important subtlety: by default, a new role inherits rights via the **`PUBLIC`** role
+        (everyone). On a hardened database, you revoke those defaults:
+        `REVOKE ALL ON DATABASE app FROM PUBLIC;`.
+
+        > **MySQL**: same logic with `CREATE USER 'app'@'%' IDENTIFIED BY '...';` then
+        > `GRANT SELECT, INSERT ON app.orders TO 'app'@'%';`. MySQL ties the user to a host
+        > (`'app'@'10.0.0.0/8'`), which adds filtering by origin.
+  - heading:
+      fr: "Séparer les comptes par usage"
+      en: "Separating accounts by purpose"
+    body:
+      fr: |
+        Un piège fréquent est d'utiliser **un seul** compte tout-puissant (souvent le propriétaire ou un
+        superutilisateur) pour tout : migrations, lectures, écritures applicatives. Si ce compte fuit, tout est
+        perdu. Le bon modèle **sépare les comptes selon leur usage** :
+
+        | Rôle | Droits | Usage |
+        |---|---|---|
+        | `app_migrate` | `CREATE`, `ALTER`, `DROP` sur le schéma | migrations, lancées ponctuellement |
+        | `app_rw` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | l'application en fonctionnement |
+        | `app_readonly` | `SELECT` uniquement | rapports, tableaux de bord, BI |
+
+        On utilise souvent des **rôles de groupe** (sans `LOGIN`) pour regrouper les droits, puis on y rattache
+        les rôles de connexion :
+
+        ```sql
+        CREATE ROLE readonly;                                    -- group role, no login
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly;
+        GRANT readonly TO analyst_bob;                           -- bob inherits read-only
+        ```
+
+        Ainsi, le compte que l'application web utilise au quotidien (`app_rw`) ne peut **pas** modifier la
+        structure de la base : une injection résiduelle ne pourra pas exécuter `DROP TABLE`. Et le compte des
+        rapports (`app_readonly`) ne peut rien écrire du tout. Chaque fuite est contenue à son périmètre.
+
+        Pour les nouvelles tables créées plus tard, on configure les **privilèges par défaut** :
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO readonly;`.
+      en: |
+        A frequent trap is using **one** all-powerful account (often the owner or a superuser) for everything:
+        migrations, reads, application writes. If that account leaks, all is lost. The good model **separates
+        accounts by purpose**:
+
+        | Role | Rights | Use |
+        |---|---|---|
+        | `app_migrate` | `CREATE`, `ALTER`, `DROP` on the schema | migrations, run occasionally |
+        | `app_rw` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | the running application |
+        | `app_readonly` | `SELECT` only | reports, dashboards, BI |
+
+        You often use **group roles** (without `LOGIN`) to bundle rights, then attach login roles to them:
+
+        ```sql
+        CREATE ROLE readonly;                                    -- group role, no login
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly;
+        GRANT readonly TO analyst_bob;                           -- bob inherits read-only
+        ```
+
+        This way, the account the web application uses daily (`app_rw`) **cannot** change the database
+        structure: a residual injection cannot run `DROP TABLE`. And the reporting account (`app_readonly`)
+        cannot write anything at all. Each leak is contained to its scope.
+
+        For new tables created later, you configure **default privileges**:
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO readonly;`.
+  - heading:
+      fr: "Sécurité au niveau des lignes (RLS)"
+      en: "Row-level security (RLS)"
+    body:
+      fr: |
+        Les `GRANT` contrôlent l'accès à une **table entière**. Mais parfois, on veut qu'un rôle ne voie que
+        **certaines lignes** : par exemple, dans une application multi-clients, chaque client ne doit voir que
+        **ses** données. C'est le rôle de la **Row-Level Security (RLS)** de PostgreSQL.
+
+        On active la RLS sur une table, puis on écrit une **politique** qui définit, par une condition, les
+        lignes visibles :
+
+        ```sql
+        ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+
+        -- Each tenant sees only its own rows. current_setting() reads a session
+        -- variable the application sets at connection time (the authenticated tenant).
+        CREATE POLICY tenant_isolation ON invoices
+            USING (tenant_id = current_setting('app.tenant_id')::int);
+
+        GRANT SELECT, INSERT, UPDATE ON invoices TO app_rw;
+        ```
+
+        Désormais, même si l'application exécute `SELECT * FROM invoices`, PostgreSQL ajoute automatiquement la
+        condition de la politique : le rôle ne reçoit que les lignes de son `tenant_id`. La cloison est
+        appliquée **par la base**, pas par le code applicatif — donc impossible à oublier dans une requête.
+
+        La RLS est particulièrement puissante en défense en profondeur : même en cas de bug dans le code ou
+        d'injection, un client ne peut pas voir les données d'un autre. On y ajoute souvent `FORCE ROW LEVEL
+        SECURITY` pour que la politique s'applique aussi au propriétaire de la table.
+
+        > **MySQL** n'a pas de RLS native équivalente ; on simule cette isolation avec des **vues** filtrées
+        > (`CREATE VIEW ... WHERE tenant_id = ...`) et des droits accordés sur la vue plutôt que sur la table.
+      en: |
+        `GRANT`s control access to a **whole table**. But sometimes you want a role to see only **certain
+        rows**: for example, in a multi-tenant application, each customer must see only **their** data. This is
+        the job of PostgreSQL's **Row-Level Security (RLS)**.
+
+        You enable RLS on a table, then write a **policy** that defines, through a condition, the visible rows:
+
+        ```sql
+        ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+
+        -- Each tenant sees only its own rows. current_setting() reads a session
+        -- variable the application sets at connection time (the authenticated tenant).
+        CREATE POLICY tenant_isolation ON invoices
+            USING (tenant_id = current_setting('app.tenant_id')::int);
+
+        GRANT SELECT, INSERT, UPDATE ON invoices TO app_rw;
+        ```
+
+        Now, even if the application runs `SELECT * FROM invoices`, PostgreSQL automatically adds the policy
+        condition: the role receives only the rows of its `tenant_id`. The partition is enforced **by the
+        database**, not by application code — so it cannot be forgotten in a query.
+
+        RLS is especially powerful as defence in depth: even with a bug in the code or an injection, one
+        customer cannot see another's data. You often add `FORCE ROW LEVEL SECURITY` so the policy also applies
+        to the table owner.
+
+        > **MySQL** has no native equivalent RLS; you simulate this isolation with filtered **views**
+        > (`CREATE VIEW ... WHERE tenant_id = ...`) and grants on the view rather than the table.
+
+examples:
+  - title:
+      fr: "Créer des rôles séparés avec le bon périmètre"
+      en: "Creating separate roles with the right scope"
+    file: roles.sql
+    lang: sql
+    kind: secure
+    code: |
+      -- PostgreSQL. Three accounts, each with the minimum rights for its job.
+
+      -- 1. Read-only group role for reporting/BI (no login of its own).
+      CREATE ROLE readonly NOLOGIN;
+      GRANT CONNECT ON DATABASE app TO readonly;
+      GRANT USAGE ON SCHEMA public TO readonly;
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly;
+      -- Future tables inherit SELECT too:
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO readonly;
+
+      -- 2. Application read/write login: no structural (DDL) rights.
+      CREATE ROLE app_rw LOGIN PASSWORD 'changeme-in-vault';
+      GRANT CONNECT ON DATABASE app TO app_rw;
+      GRANT USAGE ON SCHEMA public TO app_rw;
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rw;
+
+      -- 3. Remove the inherited default rights that PUBLIC would otherwise have.
+      REVOKE ALL ON DATABASE app FROM PUBLIC;
+    note:
+      fr: "Chaque rôle reçoit le strict nécessaire : `readonly` ne peut que lire, `app_rw` ne peut pas modifier la structure (pas de `CREATE`/`DROP`). Le `REVOKE ... FROM PUBLIC` ferme les droits par défaut que PostgreSQL accorde à tout le monde."
+      en: "Each role gets the strict minimum: `readonly` can only read, `app_rw` cannot change the structure (no `CREATE`/`DROP`). The `REVOKE ... FROM PUBLIC` closes the default rights PostgreSQL grants to everyone."
+
+  - title:
+      fr: "Version dangereuse : un seul compte tout-puissant"
+      en: "Dangerous version: a single all-powerful account"
+    file: superuser-bad.sql
+    lang: sql
+    kind: vulnerable
+    code: |
+      -- ANTI-PATTERN: the web application connects as a superuser.
+
+      -- This role can do ANYTHING: drop tables, read every database,
+      -- create other superusers, even read files on the server.
+      CREATE ROLE app_user LOGIN SUPERUSER PASSWORD 'changeme-in-vault';
+
+      -- "To avoid permission errors", everything is granted:
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO app_user;
+
+      -- If an injection or a leaked password reaches this account, the attacker
+      -- owns the whole server: there is no containment left.
+    note:
+      fr: "Un compte `SUPERUSER` utilisé par l'application est le pire scénario : une seule faille (injection résiduelle, mot de passe fuité) donne le contrôle total du serveur. `ALL PRIVILEGES` supprime toute limite. C'est l'inverse exact du moindre privilège."
+      en: "A `SUPERUSER` account used by the application is the worst case: a single flaw (residual injection, leaked password) gives full control of the server. `ALL PRIVILEGES` removes every limit. The exact opposite of least privilege."
+
+  - title:
+      fr: "GRANT et REVOKE précis sur une table"
+      en: "Precise GRANT and REVOKE on a table"
+    file: grant-revoke.sql
+    lang: sql
+    kind: secure
+    code: |
+      -- Fine-grained rights: the app can read and append orders, but never delete.
+
+      GRANT SELECT, INSERT ON orders TO app_rw;
+
+      -- Column-level control: the app may update the status, nothing else.
+      GRANT UPDATE (status) ON orders TO app_rw;
+
+      -- Make sure DELETE is NOT available, even if granted earlier.
+      REVOKE DELETE ON orders FROM app_rw;
+
+      -- Inspect what a role can do (psql meta-command): \dp orders
+      -- Or query the catalog:
+      SELECT grantee, privilege_type
+      FROM information_schema.role_table_grants
+      WHERE table_name = 'orders';
+    note:
+      fr: "On accorde `UPDATE (status)` : le droit de modifier **une seule colonne**, pas toute la ligne. `REVOKE DELETE` garantit que l'application ne peut jamais supprimer une commande. `information_schema.role_table_grants` permet d'auditer les droits réels."
+      en: "You grant `UPDATE (status)`: the right to modify **a single column**, not the whole row. `REVOKE DELETE` ensures the application can never delete an order. `information_schema.role_table_grants` lets you audit the actual rights."
+
+  - title:
+      fr: "Isolation multi-clients avec RLS"
+      en: "Multi-tenant isolation with RLS"
+    file: rls.sql
+    lang: sql
+    kind: secure
+    code: |
+      -- Each tenant must see ONLY its own invoices, enforced by the database.
+      CREATE TABLE invoices (
+          id        SERIAL PRIMARY KEY,
+          tenant_id INT NOT NULL,
+          amount    NUMERIC NOT NULL
+      );
+
+      ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE invoices FORCE ROW LEVEL SECURITY;   -- applies to the owner too
+
+      -- The policy restricts visible rows to the current session's tenant.
+      CREATE POLICY tenant_isolation ON invoices
+          USING (tenant_id = current_setting('app.tenant_id')::int);
+
+      GRANT SELECT, INSERT, UPDATE ON invoices TO app_rw;
+
+      -- The app sets the tenant right after connecting (from the authenticated user):
+      --   SET app.tenant_id = '42';
+      -- Then even "SELECT * FROM invoices" returns only tenant 42's rows.
+    note:
+      fr: "La RLS applique la cloison **dans la base** : impossible pour le code d'oublier le `WHERE tenant_id`. Même `SELECT *` ne renvoie que les lignes du client courant. `FORCE ROW LEVEL SECURITY` étend la règle au propriétaire de la table, bouclant la défense."
+      en: "RLS enforces the partition **in the database**: the code cannot forget the `WHERE tenant_id`. Even `SELECT *` returns only the current tenant's rows. `FORCE ROW LEVEL SECURITY` extends the rule to the table owner, closing the defence."
+
+mistake:
+  fr: |
+    **Faire tourner l'application avec un superutilisateur ou un compte `ALL PRIVILEGES`.**
+
+    C'est l'erreur de privilège la plus répandue et la plus grave. Pour « éviter les erreurs de permission »,
+    on donne au compte applicatif tous les droits, voire `SUPERUSER`. Résultat : la moindre faille résiduelle
+    (une injection qui passe, un mot de passe qui fuite) donne un contrôle total de la base, voire du serveur.
+    Le moindre privilège inverse la logique : on part de **zéro droit** et on n'accorde que ce que
+    l'application utilise réellement, table par table, action par action. Autre piège PostgreSQL : oublier de
+    retirer les droits par défaut du rôle `PUBLIC`, qui accorde silencieusement des accès à tout nouveau rôle.
+  en: |
+    **Running the application as a superuser or an `ALL PRIVILEGES` account.**
+
+    This is the most widespread and most serious privilege mistake. To "avoid permission errors", you give the
+    application account every right, even `SUPERUSER`. The result: the slightest residual flaw (an injection
+    that gets through, a leaked password) gives full control of the database, even the server. Least privilege
+    reverses the logic: you start from **zero rights** and grant only what the application actually uses, table
+    by table, action by action. Another PostgreSQL trap: forgetting to revoke the `PUBLIC` role's default
+    rights, which silently grant access to every new role.
+
+bestPractice:
+  fr: |
+    - **Partez de zéro droit** et accordez le strict nécessaire, table par table et action par action
+      (`SELECT`, `INSERT`…).
+    - **Séparez les comptes par usage** : migration (DDL), application (lecture/écriture), rapports (lecture
+      seule).
+    - **N'utilisez jamais un superutilisateur** pour l'application ; réservez-le à l'administration manuelle.
+    - **Retirez les droits de `PUBLIC`** (`REVOKE ALL ON DATABASE ... FROM PUBLIC`) sur une base durcie.
+    - **Utilisez la RLS** pour l'isolation multi-clients : la cloison est appliquée par la base, pas par le
+      code.
+    - **Auditez régulièrement les droits** (`\dp`, `information_schema.role_table_grants`) et gérez les mots de
+      passe de rôle dans un coffre, jamais en dur.
+  en: |
+    - **Start from zero rights** and grant the strict minimum, table by table and action by action (`SELECT`,
+      `INSERT`…).
+    - **Separate accounts by purpose**: migration (DDL), application (read/write), reporting (read-only).
+    - **Never use a superuser** for the application; reserve it for manual administration.
+    - **Revoke `PUBLIC`'s rights** (`REVOKE ALL ON DATABASE ... FROM PUBLIC`) on a hardened database.
+    - **Use RLS** for multi-tenant isolation: the partition is enforced by the database, not by the code.
+    - **Audit rights regularly** (`\dp`, `information_schema.role_table_grants`) and keep role passwords in a
+      vault, never hard-coded.
+
+exercise:
+  statement:
+    fr: |
+      Vous devez configurer les droits d'un tableau de bord de reporting qui ne doit **jamais** modifier les
+      données. Écrivez les commandes PostgreSQL qui :
+
+      1. créent un rôle de connexion `reporter` avec un mot de passe (fictif) ;
+      2. l'autorisent à se connecter à la base `app` et à utiliser le schéma `public` ;
+      3. lui accordent **uniquement** le droit de **lecture** sur toutes les tables du schéma `public`, y
+         compris les tables créées à l'avenir ;
+      4. garantissent qu'il ne peut ni insérer, ni modifier, ni supprimer.
+    en: |
+      You must configure the rights of a reporting dashboard that must **never** modify data. Write the
+      PostgreSQL commands that:
+
+      1. create a login role `reporter` with a (fake) password;
+      2. allow it to connect to the `app` database and use the `public` schema;
+      3. grant it **only** the **read** right on all tables of the `public` schema, including future tables;
+      4. ensure it can neither insert, update nor delete.
+  solution:
+    file: reporter.sql
+    lang: sql
+    code: |
+      -- 1. Login role with a placeholder password (real one comes from a vault).
+      CREATE ROLE reporter LOGIN PASSWORD 'changeme-in-vault';
+
+      -- 2. Allow connection and schema usage (no object rights yet).
+      GRANT CONNECT ON DATABASE app TO reporter;
+      GRANT USAGE ON SCHEMA public TO reporter;
+
+      -- 3. Read-only on current AND future tables.
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO reporter;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO reporter;
+
+      -- 4. Nothing else is granted, so INSERT/UPDATE/DELETE are impossible.
+      --    (Belt and braces: ensure no write rights lingered from PUBLIC.)
+      REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM reporter;
+    note:
+      fr: "On accorde seulement `SELECT`, et `ALTER DEFAULT PRIVILEGES` l'étend aux tables futures. Comme aucun droit d'écriture n'est donné, `reporter` ne peut rien modifier. Le `REVOKE` final est une ceinture de sécurité au cas où un droit aurait été hérité."
+      en: "You grant only `SELECT`, and `ALTER DEFAULT PRIVILEGES` extends it to future tables. Since no write right is given, `reporter` can modify nothing. The final `REVOKE` is a safety belt in case a right was inherited."
+
+quiz:
+  - q:
+      fr: "Que vise le principe du moindre privilège pour un compte de base de données ?"
+      en: "What does the least-privilege principle aim for on a database account?"
+    options:
+      fr:
+        - "Accorder tous les droits pour éviter les erreurs"
+        - "Donner uniquement les droits strictement nécessaires à sa tâche"
+        - "Utiliser un seul compte pour toute l'application"
+        - "Désactiver les mots de passe"
+      en:
+        - "Grant every right to avoid errors"
+        - "Give only the rights strictly needed for its task"
+        - "Use a single account for the whole application"
+        - "Disable passwords"
+    answer: 1
+    why:
+      fr: "Le moindre privilège limite chaque compte au strict nécessaire, pour que la compromission d'un compte ne donne qu'un accès réduit, pas un contrôle total."
+      en: "Least privilege limits each account to the strict minimum, so that compromising one account grants only reduced access, not full control."
+  - q:
+      fr: "Quelle commande retire un droit déjà accordé à un rôle PostgreSQL ?"
+      en: "Which command removes a right already granted to a PostgreSQL role?"
+    options:
+      fr: ["DENY", "REVOKE", "DROP", "DELETE"]
+      en: ["DENY", "REVOKE", "DROP", "DELETE"]
+    answer: 1
+    why:
+      fr: "`REVOKE` retire un privilège précédemment accordé par `GRANT`. `DROP` supprime un objet ou un rôle, `DELETE` supprime des lignes de données."
+      en: "`REVOKE` removes a privilege previously granted by `GRANT`. `DROP` deletes an object or role, `DELETE` removes data rows."
+  - q:
+      fr: "Pourquoi séparer un compte de migration d'un compte applicatif ?"
+      en: "Why separate a migration account from an application account?"
+    options:
+      fr:
+        - "Pour que l'application ne puisse pas modifier la structure (DROP, ALTER) si elle est compromise"
+        - "Pour accélérer les requêtes"
+        - "Parce que PostgreSQL l'exige"
+        - "Pour chiffrer les tables"
+      en:
+        - "So the application cannot change the structure (DROP, ALTER) if compromised"
+        - "To speed up queries"
+        - "Because PostgreSQL requires it"
+        - "To encrypt the tables"
+    answer: 0
+    why:
+      fr: "Le compte applicatif n'a besoin que de lire/écrire des données. Lui retirer les droits DDL (CREATE/DROP/ALTER) empêche une injection résiduelle de détruire la structure."
+      en: "The application account only needs to read/write data. Removing its DDL rights (CREATE/DROP/ALTER) prevents a residual injection from destroying the structure."
+  - q:
+      fr: "Que permet la sécurité au niveau des lignes (RLS) de PostgreSQL ?"
+      en: "What does PostgreSQL row-level security (RLS) allow?"
+    options:
+      fr:
+        - "De chiffrer chaque ligne"
+        - "De restreindre les lignes qu'un rôle peut voir, via une politique"
+        - "De supprimer les doublons"
+        - "D'accélérer les jointures"
+      en:
+        - "To encrypt each row"
+        - "To restrict the rows a role can see, via a policy"
+        - "To remove duplicates"
+        - "To speed up joins"
+    answer: 1
+    why:
+      fr: "La RLS applique une condition (politique) qui limite les lignes visibles par rôle, idéale pour l'isolation multi-clients, appliquée par la base et non par le code."
+      en: "RLS applies a condition (policy) limiting the rows a role can see, ideal for multi-tenant isolation, enforced by the database rather than the code."
+  - q:
+      fr: "Dans PostgreSQL, pourquoi exécuter `REVOKE ALL ON DATABASE app FROM PUBLIC` ?"
+      en: "In PostgreSQL, why run `REVOKE ALL ON DATABASE app FROM PUBLIC`?"
+    options:
+      fr:
+        - "Pour fermer les droits par défaut accordés à tout nouveau rôle"
+        - "Pour supprimer la base"
+        - "Pour créer un superutilisateur"
+        - "Pour activer le chiffrement"
+      en:
+        - "To close the default rights granted to every new role"
+        - "To delete the database"
+        - "To create a superuser"
+        - "To enable encryption"
+    answer: 0
+    why:
+      fr: "Le rôle `PUBLIC` représente tout le monde ; par défaut il reçoit certains droits. Les retirer garantit qu'un nouveau rôle ne dispose que des droits explicitement accordés."
+      en: "The `PUBLIC` role represents everyone; by default it receives some rights. Revoking them ensures a new role has only the rights explicitly granted."

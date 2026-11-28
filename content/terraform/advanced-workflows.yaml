@@ -1,0 +1,524 @@
+description:
+  fr: "Techniques avancées de Terraform : blocs moved pour refactoriser, blocs import pour adopter l'existant, terraform test, et un pipeline plan-en-PR / apply-au-merge."
+  en: "Advanced Terraform techniques: moved blocks to refactor, import blocks to adopt existing resources, terraform test, and a plan-in-PR / apply-on-merge pipeline."
+duration: 30
+
+intro:
+  fr: |
+    Vous maîtrisez le cycle de base ; il reste les gestes qui distinguent une équipe aguerrie. **Refactorer**
+    sans rien détruire (blocs `moved`), **adopter** une ressource déjà créée à la main (blocs `import`),
+    **tester** sa configuration comme du vrai code (`terraform test`), et surtout **automatiser** le tout
+    dans un pipeline sûr : un plan commenté sur chaque *pull request*, un apply uniquement à la fusion.
+
+    L'analogie : passer du **bricoleur du dimanche** à l'**atelier professionnel**. Le bricoleur applique à
+    la main et croise les doigts ; l'atelier a des gabarits (`import`, `moved`), des bancs d'essai (`test`)
+    et une chaîne de montage contrôlée (CI/CD) où chaque pièce est vérifiée avant d'être posée.
+
+    Dans cette leçon vous allez renommer une ressource sans la recréer, importer dans Terraform un bucket
+    existant et générer sa configuration, écrire un fichier `.tftest.hcl`, puis assembler un workflow GitHub
+    Actions qui planifie sur les PR et applique à la fusion — l'aboutissement de tout le cours.
+  en: |
+    You have mastered the core cycle; what remains are the moves that set a seasoned team apart.
+    **Refactoring** without destroying anything (`moved` blocks), **adopting** a resource already created by
+    hand (`import` blocks), **testing** your configuration like real code (`terraform test`), and above all
+    **automating** it all in a safe pipeline: a commented plan on every *pull request*, an apply only on
+    merge.
+
+    The analogy: moving from the **weekend DIYer** to the **professional workshop**. The DIYer applies by
+    hand and crosses their fingers; the workshop has jigs (`import`, `moved`), test benches (`test`) and a
+    controlled assembly line (CI/CD) where each part is checked before being fitted.
+
+    In this lesson you will rename a resource without recreating it, import an existing bucket into
+    Terraform and generate its configuration, write a `.tftest.hcl` file, then assemble a GitHub Actions
+    workflow that plans on PRs and applies on merge — the culmination of the whole course.
+
+sections:
+  - heading:
+      fr: "Refactorer avec les blocs moved"
+      en: "Refactoring with moved blocks"
+    body:
+      fr: |
+        Renommer une ressource ou la déplacer dans un module est fréquent. Mais Terraform identifie une
+        ressource par son **adresse** : changer `aws_instance.web` en `aws_instance.app`, c'est, de son point
+        de vue, **détruire** l'une et **créer** l'autre — catastrophique pour une base de données.
+
+        Le bloc **`moved`** (Terraform 1.1+) exprime le renommage **dans le code**, de façon versionnée et
+        revue :
+
+        ```hcl
+        moved {
+          from = aws_instance.web
+          to   = aws_instance.app
+        }
+        ```
+
+        Au prochain plan, Terraform comprend qu'il s'agit de la **même** ressource et met simplement à jour
+        son adresse dans le state, sans rien recréer. C'est l'équivalent, en code, de `terraform state mv`
+        (leçon « providers et state »), mais supérieur pour une équipe : le changement est dans la *pull
+        request*, relu et appliqué par la CI. On garde le bloc `moved` quelques versions, puis on peut le
+        retirer une fois que tous les environnements ont été appliqués.
+      en: |
+        Renaming a resource or moving it into a module is common. But Terraform identifies a resource by its
+        **address**: changing `aws_instance.web` to `aws_instance.app` is, from its point of view,
+        **destroying** one and **creating** the other — catastrophic for a database.
+
+        The **`moved`** block (Terraform 1.1+) expresses the rename **in code**, versioned and reviewed:
+
+        ```hcl
+        moved {
+          from = aws_instance.web
+          to   = aws_instance.app
+        }
+        ```
+
+        On the next plan, Terraform understands it is the **same** resource and simply updates its address
+        in the state, recreating nothing. It is the code equivalent of `terraform state mv` (the "providers
+        and state" lesson), but superior for a team: the change lives in the *pull request*, reviewed and
+        applied by CI. Keep the `moved` block for a few versions, then remove it once all environments have
+        been applied.
+  - heading:
+      fr: "Adopter l'existant avec les blocs import"
+      en: "Adopting existing resources with import blocks"
+    body:
+      fr: |
+        Toute infrastructure comporte des ressources créées « à la main » avant Terraform. Pour les mettre
+        sous gestion sans les recréer, on les **importe**. Le bloc **`import`** (Terraform 1.5+) le fait de
+        façon déclarative, à la différence de l'ancienne commande `terraform import` (impérative, non
+        versionnée) :
+
+        ```hcl
+        import {
+          to = aws_s3_bucket.legacy
+          id = "legacy-assets-bucket"   # the real existing resource's ID
+        }
+
+        resource "aws_s3_bucket" "legacy" {
+          bucket = "legacy-assets-bucket"
+        }
+        ```
+
+        Au `plan`, Terraform associe l'ID réel à l'adresse `aws_s3_bucket.legacy` et montre que la ressource
+        sera **importée**, pas créée. Mieux : `terraform plan -generate-config-out=generated.tf` **écrit**
+        un squelette de configuration pour la ressource importée, qu'il ne reste qu'à relire et ajuster —
+        un gain de temps énorme pour adopter des dizaines de ressources existantes.
+
+        Une fois l'import appliqué et confirmé, on retire le bloc `import` (il a joué son rôle). Toujours
+        vérifier qu'un `plan` ultérieur ne propose **aucun changement** : cela prouve que la configuration
+        écrite correspond bien à la ressource réelle.
+      en: |
+        Every infrastructure has resources created "by hand" before Terraform. To bring them under
+        management without recreating them, you **import** them. The **`import`** block (Terraform 1.5+) does
+        this declaratively, unlike the old `terraform import` command (imperative, not versioned):
+
+        ```hcl
+        import {
+          to = aws_s3_bucket.legacy
+          id = "legacy-assets-bucket"   # the real existing resource's ID
+        }
+
+        resource "aws_s3_bucket" "legacy" {
+          bucket = "legacy-assets-bucket"
+        }
+        ```
+
+        On `plan`, Terraform maps the real ID to the `aws_s3_bucket.legacy` address and shows the resource
+        will be **imported**, not created. Better: `terraform plan -generate-config-out=generated.tf`
+        **writes** a configuration skeleton for the imported resource, which you only need to review and
+        adjust — a huge time saver to adopt dozens of existing resources.
+
+        Once the import is applied and confirmed, remove the `import` block (it has done its job). Always
+        check that a later `plan` proposes **no change**: this proves the written configuration matches the
+        real resource.
+  - heading:
+      fr: "Tester, puis automatiser le pipeline"
+      en: "Testing, then automating the pipeline"
+    body:
+      fr: |
+        Terraform intègre un **framework de test** (`terraform test`, 1.6+). Les tests vivent dans des
+        fichiers `*.tftest.hcl` : chaque bloc `run` lance un `plan` (ou un `apply` dans un sandbox éphémère)
+        et vérifie des `assert`. On valide ainsi qu'un module produit bien, par défaut, un bucket privé et
+        chiffré — un test qui attrape toute régression de sécurité future.
+
+        Vient enfin l'automatisation, cœur du DevSecOps. Le motif de référence sépare deux moments :
+
+        | Événement | Action | Pourquoi |
+        |---|---|---|
+        | *Pull request* | `terraform plan` + commentaire | Revoir l'impact **avant** la fusion |
+        | *Merge* sur `main` | `terraform apply` | Appliquer seulement ce qui est revu et fusionné |
+
+        Le plan est publié en commentaire de la PR : les relecteurs voient exactement ce qui va changer. On
+        n'applique **jamais** sur une branche de fonctionnalité, seulement sur `main` après fusion. On y
+        ajoute les gardes des leçons précédentes : authentification **OIDC** (pas de clé statique),
+        `permissions` minimales, et un scan **Trivy/Checkov** qui bloque sur les failles critiques. C'est le
+        pipeline qui réunit tout le cours : code revu, testé, scanné, puis appliqué de façon contrôlée.
+      en: |
+        Terraform ships a **test framework** (`terraform test`, 1.6+). Tests live in `*.tftest.hcl` files:
+        each `run` block runs a `plan` (or an `apply` in an ephemeral sandbox) and checks `assert`s. You thus
+        validate that a module indeed produces, by default, a private and encrypted bucket — a test that
+        catches any future security regression.
+
+        Finally comes automation, the heart of DevSecOps. The reference pattern separates two moments:
+
+        | Event | Action | Why |
+        |---|---|---|
+        | *Pull request* | `terraform plan` + comment | Review the impact **before** merging |
+        | *Merge* to `main` | `terraform apply` | Apply only what is reviewed and merged |
+
+        The plan is posted as a PR comment: reviewers see exactly what will change. You **never** apply on a
+        feature branch, only on `main` after merge. You add the guards from previous lessons: **OIDC**
+        authentication (no static key), minimal `permissions`, and a **Trivy/Checkov** scan that blocks on
+        critical flaws. This is the pipeline that ties the whole course together: code reviewed, tested,
+        scanned, then applied under control.
+
+examples:
+  - title:
+      fr: "Renommer sans détruire avec moved"
+      en: "Renaming without destroying using moved"
+    file: moved.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # The resource used to be called "web"; it is now "app".
+      # Without the moved block, Terraform would DESTROY web and CREATE app.
+      moved {
+        from = aws_instance.web
+        to   = aws_instance.app
+      }
+
+      resource "aws_instance" "app" {
+        ami           = "ami-0123456789abcdef0"
+        instance_type = "t3.small"
+        metadata_options {
+          http_tokens = "required"
+        }
+      }
+    output: |
+      $ terraform plan
+      Terraform will perform the following actions:
+        # aws_instance.web has moved to aws_instance.app
+      Plan: 0 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "Le plan annonce « 0 to add, 0 to change, 0 to destroy » : la ressource n'est pas recréée, seule son adresse change dans le state. Supérieur à `terraform state mv` car le changement est versionné et relu dans la PR."
+      en: "The plan says \"0 to add, 0 to change, 0 to destroy\": the resource is not recreated, only its address changes in the state. Superior to `terraform state mv` because the change is versioned and reviewed in the PR."
+
+  - title:
+      fr: "Importer une ressource existante"
+      en: "Importing an existing resource"
+    file: import.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      # Adopt a bucket that was created by hand, without recreating it.
+      import {
+        to = aws_s3_bucket.legacy
+        id = "legacy-assets-bucket" # the real bucket name/ID in AWS
+      }
+
+      resource "aws_s3_bucket" "legacy" {
+        bucket = "legacy-assets-bucket"
+        # Fill in the remaining attributes to match the real resource,
+        # or generate them (see the next example).
+      }
+    output: |
+      $ terraform plan
+      Terraform will perform the following actions:
+        # aws_s3_bucket.legacy will be imported
+          resource "aws_s3_bucket" "legacy" {
+              bucket = "legacy-assets-bucket"
+          }
+      Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "Le bloc `import` est déclaratif (versionné), contrairement à l'ancienne commande `terraform import`. Le plan indique « 1 to import » : la ressource passe sous gestion Terraform sans être recréée. On retire le bloc après application."
+      en: "The `import` block is declarative (versioned), unlike the old `terraform import` command. The plan says \"1 to import\": the resource comes under Terraform management without being recreated. Remove the block after applying."
+
+  - title:
+      fr: "Générer la configuration d'une ressource importée"
+      en: "Generating the configuration of an imported resource"
+    file: generate.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # With only the import block present (no full resource body yet),
+      # let Terraform write a configuration skeleton for you:
+      terraform plan -generate-config-out=generated.tf
+
+      # Review generated.tf, move the resource into your real files,
+      # then confirm the import changes nothing:
+      terraform apply
+      terraform plan   # must say: No changes. Infrastructure matches configuration.
+    output: |
+      $ terraform plan -generate-config-out=generated.tf
+      Terraform has generated configuration and written it to generated.tf.
+      Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "`-generate-config-out` écrit automatiquement le squelette de configuration de la ressource importée : un gain de temps considérable pour adopter de l'existant. La règle de vérification : après import, un `plan` doit annoncer « No changes »."
+      en: "`-generate-config-out` automatically writes the imported resource's configuration skeleton: a huge time saver to adopt existing resources. The verification rule: after import, a `plan` must say \"No changes\"."
+
+  - title:
+      fr: "Tester un module avec terraform test"
+      en: "Testing a module with terraform test"
+    file: tests/bucket.tftest.hcl
+    lang: hcl
+    kind: secure
+    code: |
+      # tests/bucket.tftest.hcl — run with: terraform test
+
+      run "bucket_is_private_by_default" {
+        command = plan
+
+        # The module must block all public access with no extra input
+        assert {
+          condition     = aws_s3_bucket_public_access_block.this.block_public_acls == true
+          error_message = "Default config must block public ACLs."
+        }
+
+        assert {
+          condition     = aws_s3_bucket_public_access_block.this.restrict_public_buckets == true
+          error_message = "Default config must restrict public buckets."
+        }
+      }
+
+      run "encryption_is_enabled" {
+        command = plan
+
+        assert {
+          condition     = aws_s3_bucket_versioning.this.versioning_configuration[0].status == "Enabled"
+          error_message = "Versioning must be enabled by default."
+        }
+      }
+    output: |
+      $ terraform test
+      tests/bucket.tftest.hcl... in progress
+        run "bucket_is_private_by_default"... pass
+        run "encryption_is_enabled"... pass
+      tests/bucket.tftest.hcl... teardown
+      Success! 2 passed, 0 failed.
+    note:
+      fr: "Chaque bloc `run` lance un plan et vérifie des `assert`. Ici on prouve que le module est sûr par défaut (blocage public, versioning). Ce test attrapera toute régression future qui affaiblirait la sécurité du module."
+      en: "Each `run` block runs a plan and checks `assert`s. Here you prove the module is secure by default (public access block, versioning). This test will catch any future regression that weakens the module's security."
+
+  - title:
+      fr: "Le pipeline : plan en PR, apply au merge"
+      en: "The pipeline: plan on PR, apply on merge"
+    file: .github/workflows/terraform.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: terraform
+
+      on:
+        pull_request:
+        push:
+          branches: [main]
+
+      permissions:
+        contents: read
+        id-token: write        # OIDC
+        pull-requests: write    # to comment the plan on the PR
+
+      jobs:
+        terraform:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            - name: AWS credentials via OIDC (no static key)
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                role-to-assume: arn:aws:iam::123456789012:role/github-actions-terraform
+                aws-region: eu-west-3
+
+            - uses: hashicorp/setup-terraform@v3
+
+            - name: Scan IaC, fail on critical flaws
+              run: trivy config --severity HIGH,CRITICAL --exit-code 1 .
+
+            - run: terraform init
+            - run: terraform test
+
+            # On a PR: only plan, and post it as a comment for review
+            - name: Plan (pull request)
+              if: github.event_name == 'pull_request'
+              run: terraform plan -no-color -out=tfplan | tee plan.txt
+
+            # On merge to main: apply exactly the reviewed configuration
+            - name: Apply (merge to main)
+              if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+              run: terraform apply -auto-approve
+    note:
+      fr: "Un seul workflow, deux comportements selon l'événement : `plan` sur les PR (revu avant fusion), `apply` seulement après fusion sur `main`. OIDC, `permissions` minimales, scan Trivy et `terraform test` réunissent toutes les protections du cours."
+      en: "One workflow, two behaviours by event: `plan` on PRs (reviewed before merge), `apply` only after merge to `main`. OIDC, minimal `permissions`, the Trivy scan and `terraform test` bring together every protection in the course."
+
+mistake:
+  fr: |
+    **Renommer une ressource sans bloc `moved`, ou appliquer sur une branche de fonctionnalité.**
+
+    Changer l'adresse d'une ressource (renommage, passage dans un module) sans `moved` fait voir à Terraform
+    une destruction suivie d'une création : pour une base de données ou un volume, c'est une perte de
+    données. Ajoutez toujours un bloc `moved` et vérifiez que le plan annonce « 0 to destroy ». Autre erreur
+    structurante dans le pipeline : lancer `terraform apply` sur chaque *push*, y compris les branches de
+    fonctionnalité. On applique **uniquement** après revue et fusion sur `main` ; sur les PR, on se limite au
+    `plan` commenté. Enfin, après un `import`, ne partez pas tant qu'un `plan` ne confirme pas « No changes » :
+    sinon votre configuration diverge de la ressource réelle et le prochain apply la modifiera par surprise.
+  en: |
+    **Renaming a resource with no `moved` block, or applying on a feature branch.**
+
+    Changing a resource's address (rename, move into a module) without `moved` makes Terraform see a
+    destroy followed by a create: for a database or a volume, that is data loss. Always add a `moved` block
+    and check the plan says "0 to destroy". Another structural pipeline mistake: running `terraform apply`
+    on every *push*, including feature branches. You apply **only** after review and merge to `main`; on
+    PRs, limit yourself to the commented `plan`. Finally, after an `import`, do not leave until a `plan`
+    confirms "No changes": otherwise your configuration diverges from the real resource and the next apply
+    will modify it by surprise.
+
+bestPractice:
+  fr: |
+    - **`moved` pour tout renommage/déplacement** : versionné, relu, et « 0 to destroy » au plan.
+    - **`import` déclaratif** (bloc, pas la commande) ; `-generate-config-out` pour le squelette, puis « No changes » attendu.
+    - **`terraform test`** sur vos modules, surtout les garanties de sécurité par défaut.
+    - **Plan en PR (commenté), apply seulement au merge sur `main`** : jamais d'apply sur une branche.
+    - **OIDC + `permissions` minimales + scan Trivy/Checkov** intégrés au même workflow.
+    - **Retirez `moved`/`import`** une fois leur rôle joué et tous les environnements appliqués.
+  en: |
+    - **`moved` for every rename/move**: versioned, reviewed, and "0 to destroy" at plan.
+    - **Declarative `import`** (block, not the command); `-generate-config-out` for the skeleton, then expect "No changes".
+    - **`terraform test`** on your modules, especially the secure-by-default guarantees.
+    - **Plan on PR (commented), apply only on merge to `main`**: never apply on a branch.
+    - **OIDC + minimal `permissions` + Trivy/Checkov scan** built into the same workflow.
+    - **Remove `moved`/`import`** once they have done their job and all environments are applied.
+
+exercise:
+  statement:
+    fr: |
+      1. Vous déplacez la ressource `aws_s3_bucket.data` dans un module : elle devient
+         `module.storage.aws_s3_bucket.data`. Écrivez le bloc `moved` correspondant.
+      2. Écrivez un bloc `import` pour adopter une table DynamoDB existante nommée `prod-sessions` sous
+         l'adresse `aws_dynamodb_table.sessions`.
+      3. Dans un workflow CI, donnez la condition `if` qui n'exécute l'étape `terraform apply` **que** lors
+         d'un push sur la branche `main`.
+    en: |
+      1. You move the `aws_s3_bucket.data` resource into a module: it becomes
+         `module.storage.aws_s3_bucket.data`. Write the matching `moved` block.
+      2. Write an `import` block to adopt an existing DynamoDB table named `prod-sessions` under the address
+         `aws_dynamodb_table.sessions`.
+      3. In a CI workflow, give the `if` condition that runs the `terraform apply` step **only** on a push
+         to the `main` branch.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      # 1. Moving a resource into a module (no destroy/recreate)
+      moved {
+        from = aws_s3_bucket.data
+        to   = module.storage.aws_s3_bucket.data
+      }
+
+      # 2. Adopt an existing DynamoDB table
+      import {
+        to = aws_dynamodb_table.sessions
+        id = "prod-sessions"
+      }
+
+      resource "aws_dynamodb_table" "sessions" {
+        name     = "prod-sessions"
+        hash_key = "id"
+        # ... fill or generate the rest, then confirm plan shows "No changes"
+      }
+
+      # 3. GitHub Actions apply condition (in the workflow YAML):
+      #    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    note:
+      fr: "Le bloc `moved` suit la ressource jusque dans le module, sans destruction. Le bloc `import` adopte la table par son ID réel. La condition `if` réserve l'apply aux pushes sur `main`, jamais aux PR ni aux branches."
+      en: "The `moved` block follows the resource into the module, with no destruction. The `import` block adopts the table by its real ID. The `if` condition reserves apply to pushes on `main`, never PRs or branches."
+
+quiz:
+  - q:
+      fr: "À quoi sert un bloc `moved` ?"
+      en: "What is a `moved` block for?"
+    options:
+      fr:
+        - "À supprimer une ressource"
+        - "À renommer/déplacer une ressource sans la détruire ni la recréer"
+        - "À importer une ressource existante"
+        - "À chiffrer le state"
+      en:
+        - "To delete a resource"
+        - "To rename/move a resource without destroying and recreating it"
+        - "To import an existing resource"
+        - "To encrypt the state"
+    answer: 1
+    why:
+      fr: "`moved` indique à Terraform qu'une ressource a changé d'adresse ; il met à jour le state sans recréer la ressource. Le plan affiche alors « 0 to destroy »."
+      en: "`moved` tells Terraform a resource changed address; it updates the state without recreating the resource. The plan then shows \"0 to destroy\"."
+  - q:
+      fr: "Quel est l'avantage du bloc `import` par rapport à la commande `terraform import` ?"
+      en: "What is the advantage of the `import` block over the `terraform import` command?"
+    options:
+      fr:
+        - "Il est déclaratif et versionné dans le code, et peut générer la configuration"
+        - "Il est plus rapide mais non reproductible"
+        - "Il supprime la ressource après import"
+        - "Il ne nécessite pas de ressource correspondante"
+      en:
+        - "It is declarative and versioned in code, and can generate the configuration"
+        - "It is faster but not reproducible"
+        - "It deletes the resource after import"
+        - "It needs no matching resource"
+    answer: 0
+    why:
+      fr: "Le bloc `import` (1.5+) vit dans le code, passe en revue de PR et fonctionne avec `-generate-config-out`, contrairement à la commande impérative, non versionnée."
+      en: "The `import` block (1.5+) lives in the code, goes through PR review and works with `-generate-config-out`, unlike the imperative, non-versioned command."
+  - q:
+      fr: "Dans un pipeline CI/CD Terraform, quand faut-il lancer `terraform apply` ?"
+      en: "In a Terraform CI/CD pipeline, when should you run `terraform apply`?"
+    options:
+      fr:
+        - "Sur chaque push, y compris les branches de fonctionnalité"
+        - "Uniquement après fusion sur la branche principale"
+        - "Sur chaque pull request"
+        - "Jamais, l'apply se fait toujours à la main"
+      en:
+        - "On every push, including feature branches"
+        - "Only after merging to the main branch"
+        - "On every pull request"
+        - "Never, apply is always done by hand"
+    answer: 1
+    why:
+      fr: "On planifie (et commente) sur les PR, et on applique seulement ce qui est revu et fusionné sur `main`. Appliquer sur une branche contournerait la revue."
+      en: "You plan (and comment) on PRs, and apply only what is reviewed and merged to `main`. Applying on a branch would bypass review."
+  - q:
+      fr: "Dans un fichier `.tftest.hcl`, que fait un bloc `run` avec `command = plan` ?"
+      en: "In a `.tftest.hcl` file, what does a `run` block with `command = plan` do?"
+    options:
+      fr:
+        - "Il crée réellement les ressources"
+        - "Il lance un plan et vérifie les `assert` sans rien créer"
+        - "Il supprime le state"
+        - "Il formate le code"
+      en:
+        - "It really creates the resources"
+        - "It runs a plan and checks the `assert`s without creating anything"
+        - "It deletes the state"
+        - "It formats the code"
+    answer: 1
+    why:
+      fr: "`command = plan` évalue la configuration et vérifie les assertions sur le résultat du plan, sans créer de ressource : idéal pour tester les garanties de sécurité d'un module."
+      en: "`command = plan` evaluates the configuration and checks the assertions against the plan result, without creating a resource: ideal to test a module's security guarantees."
+  - q:
+      fr: "Après un `import`, comment vérifier que la configuration écrite est correcte ?"
+      en: "After an `import`, how do you verify the written configuration is correct?"
+    options:
+      fr:
+        - "En relançant `terraform init`"
+        - "En supprimant le state"
+        - "En vérifiant qu'un `plan` affiche « No changes »"
+        - "En lançant `terraform destroy`"
+      en:
+        - "By rerunning `terraform init`"
+        - "By deleting the state"
+        - "By checking that a `plan` shows \"No changes\""
+        - "By running `terraform destroy`"
+    answer: 2
+    why:
+      fr: "Si un `plan` après import annonce « No changes », la configuration correspond exactement à la ressource réelle ; sinon, elle diverge et un apply la modifierait par surprise."
+      en: "If a `plan` after import says \"No changes\", the configuration matches the real resource exactly; otherwise it diverges and an apply would modify it by surprise."

@@ -1,0 +1,372 @@
+description:
+  fr: "Convertir la capture de VOTRE box et tester la robustesse de VOTRE mot de passe Wi-Fi hors ligne avec hashcat en mode 22000."
+  en: "Convert the capture of YOUR OWN router and test YOUR Wi-Fi password strength offline with hashcat in mode 22000."
+duration: 25
+
+intro:
+  fr: |
+    Vous avez capturé le handshake de **votre propre** box dans la leçon précédente. Il est temps de répondre à
+    la question qui compte : **votre mot de passe Wi-Fi résisterait-il à une attaque ?** Pour le savoir, on
+    simule ce qu'un attaquant ferait hors ligne : tester des millions de mots de passe candidats contre la
+    capture, avec **hashcat**.
+
+    C'est l'équivalent d'embaucher un serrurier pour essayer de crocheter **votre** serrure et vous dire en
+    combien de temps il y arrive. Si votre mot de passe tombe en quelques secondes, il est faible ; s'il résiste
+    à une grande liste, il est bon. L'objectif est **défensif** : mesurer, puis renforcer.
+
+    Vous allez convertir la capture `.cap` au format **hc22000** avec `hcxpcapngtool`, puis lancer `hashcat -m
+    22000` contre une *wordlist*. Avertissement absolu : on ne teste que **le hash de SON PROPRE réseau**.
+    Déchiffrer le mot de passe du Wi-Fi d'autrui est un accès illégal. Ici, vous connaissez déjà votre mot de
+    passe ; le but n'est pas de « le trouver » mais de **vérifier s'il est devinable**.
+  en: |
+    You captured the handshake of **your own** router in the previous lesson. It is time to answer the question
+    that matters: **would your Wi-Fi password survive an attack?** To find out, you simulate what an attacker
+    would do offline: test millions of candidate passwords against the capture, with **hashcat**.
+
+    It is the equivalent of hiring a locksmith to try to pick **your** lock and tell you how long it takes. If
+    your password falls in seconds, it is weak; if it survives a large list, it is good. The goal is
+    **defensive**: measure, then strengthen.
+
+    You will convert the `.cap` capture to the **hc22000** format with `hcxpcapngtool`, then run `hashcat -m
+    22000` against a *wordlist*. Absolute warning: you only test **the hash of YOUR OWN network**. Cracking
+    someone else's Wi-Fi password is illegal access. Here you already know your password; the point is not to
+    "find it" but to **check whether it is guessable**.
+
+sections:
+  - heading:
+      fr: "Convertir la capture au format hc22000"
+      en: "Converting the capture to the hc22000 format"
+    body:
+      fr: |
+        hashcat ne lit pas directement le fichier `.cap` d'airodump-ng : il faut le convertir au format
+        **hc22000** (le format moderne qui regroupe handshake WPA2 et PMKID). L'outil est **hcxpcapngtool**
+        (du projet hcxtools) :
+
+        ```bash
+        hcxpcapngtool -o mylab.hc22000 capture-01.cap
+        ```
+
+        Le mode **22000** de hashcat s'appelle *WPA-PBKDF2-PMKID+EAPOL* : il gère à la fois le handshake complet
+        (EAPOL) et le PMKID, ce qui en fait le mode de référence depuis quelques années (il remplace les anciens
+        modes 2500 et 16800).
+
+        hcxpcapngtool extrait de la capture les éléments nécessaires : BSSID, SSID, nonces et MIC. Le fichier
+        `.hc22000` obtenu ne contient **pas** votre mot de passe en clair — il ne contient que de quoi
+        **vérifier** si un mot de passe candidat est le bon. C'est exactement ce dont hashcat a besoin pour la
+        simulation d'attaque.
+      en: |
+        hashcat does not read airodump-ng's `.cap` file directly: you must convert it to the **hc22000** format
+        (the modern format that groups WPA2 handshake and PMKID). The tool is **hcxpcapngtool** (from the
+        hcxtools project):
+
+        ```bash
+        hcxpcapngtool -o mylab.hc22000 capture-01.cap
+        ```
+
+        hashcat's **22000** mode is called *WPA-PBKDF2-PMKID+EAPOL*: it handles both the full handshake (EAPOL)
+        and the PMKID, which has made it the reference mode for some years now (it replaces the old modes 2500
+        and 16800).
+
+        hcxpcapngtool extracts the necessary elements from the capture: BSSID, SSID, nonces and MIC. The
+        resulting `.hc22000` file does **not** contain your password in clear — it only contains what is needed
+        to **check** whether a candidate password is the right one. That is exactly what hashcat needs for the
+        attack simulation.
+  - heading:
+      fr: "Lancer hashcat en mode 22000"
+      en: "Running hashcat in mode 22000"
+    body:
+      fr: |
+        L'attaque par **dictionnaire** teste chaque mot d'une liste. La wordlist classique est `rockyou.txt`
+        (des millions de mots de passe réels ayant fuité) :
+
+        ```bash
+        hashcat -m 22000 mylab.hc22000 /usr/share/wordlists/rockyou.txt
+        ```
+
+        - `-m 22000` : le mode WPA (EAPOL + PMKID).
+        - `-a 0` : attaque par dictionnaire (mode par défaut).
+
+        Si votre mot de passe est dans la liste, hashcat l'affichera à côté du hash : **preuve qu'il est
+        faible**. S'il n'y est pas, hashcat termine sans résultat (`Exhausted`) : bon signe, mais pas une
+        garantie absolue.
+
+        WPA2 utilise **PBKDF2**, une fonction volontairement lente : chaque candidat coûte du calcul. Cela limite
+        la vitesse (quelques centaines de milliers de candidats par seconde sur un GPU grand public), ce qui
+        protège un **bon** mot de passe. On peut aussi utiliser des **règles** (`-r`) ou une attaque par
+        **masque** (`-a 3`) pour tester des variations, mais le dictionnaire suffit pour détecter les mots de
+        passe vraiment faibles.
+      en: |
+        The **dictionary** attack tests each word of a list. The classic wordlist is `rockyou.txt` (millions of
+        real leaked passwords):
+
+        ```bash
+        hashcat -m 22000 mylab.hc22000 /usr/share/wordlists/rockyou.txt
+        ```
+
+        - `-m 22000`: the WPA mode (EAPOL + PMKID).
+        - `-a 0`: dictionary attack (the default mode).
+
+        If your password is in the list, hashcat prints it next to the hash: **proof that it is weak**. If it is
+        not there, hashcat finishes with no result (`Exhausted`): a good sign, but not an absolute guarantee.
+
+        WPA2 uses **PBKDF2**, a deliberately slow function: each candidate costs computation. This limits the
+        speed (a few hundred thousand candidates per second on a consumer GPU), which protects a **good**
+        password. You can also use **rules** (`-r`) or a **mask** attack (`-a 3`) to test variations, but the
+        dictionary is enough to detect truly weak passwords.
+  - heading:
+      fr: "Interpréter le résultat et renforcer"
+      en: "Interpreting the result and strengthening"
+    body:
+      fr: |
+        Deux issues possibles, deux conclusions :
+
+        | Résultat hashcat | Signification | Action |
+        |---|---|---|
+        | `Cracked` + mot de passe affiché | Mot de passe devinable | Le changer **immédiatement** |
+        | `Exhausted` (rien trouvé) | Résiste à cette liste | Bon, mais garder un mot de passe long |
+
+        Un mot de passe trouvé par `rockyou.txt` doit être changé sans attendre : s'il est dans une liste
+        publique, n'importe qui peut le casser. Un bon mot de passe Wi-Fi est **long** (au moins 15 caractères),
+        **aléatoire** et **unique**. La longueur compte plus que la complexité : une phrase de passe de plusieurs
+        mots aléatoires bat un court mot de passe « compliqué ».
+
+        Rappelez-vous l'objectif : ce test est un **diagnostic de votre propre réseau**. Si votre mot de passe
+        résiste, passez à la leçon de durcissement (WPA3, etc.) pour aller plus loin. S'il tombe, vous venez
+        d'éviter un vrai problème — sur votre propre réseau, en toute légalité.
+      en: |
+        Two possible outcomes, two conclusions:
+
+        | hashcat result | Meaning | Action |
+        |---|---|---|
+        | `Cracked` + password shown | Guessable password | Change it **immediately** |
+        | `Exhausted` (nothing found) | Resists this list | Good, but keep a long password |
+
+        A password found by `rockyou.txt` must be changed without delay: if it is in a public list, anyone can
+        crack it. A good Wi-Fi password is **long** (at least 15 characters), **random** and **unique**. Length
+        matters more than complexity: a passphrase of several random words beats a short "complicated" password.
+
+        Remember the goal: this test is a **diagnosis of your own network**. If your password resists, move on to
+        the hardening lesson (WPA3, etc.) to go further. If it falls, you have just avoided a real problem — on
+        your own network, perfectly legally.
+
+examples:
+  - title:
+      fr: "Convertir la capture de votre box"
+      en: "Converting your router's capture"
+    file: convert.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Convert the airodump-ng .cap of YOUR OWN network to hashcat's 22000 format.
+      # The .hc22000 file contains a verifier, NOT your password in clear.
+      hcxpcapngtool -o mylab.hc22000 capture-01.cap
+
+      # Quick sanity check that something was extracted.
+      wc -l mylab.hc22000
+    output: |
+      [i] reading from capture-01.cap...
+      [i] EAPOL messages (total)....: 4
+      [i] PMKID written to 22000 hash line.: 1
+      [i] WPA PSK hash line written.: 1
+      2 mylab.hc22000
+    note:
+      fr: "hcxpcapngtool extrait ici à la fois un PMKID et un handshake EAPOL : deux lignes à tester. Le fichier ne révèle pas le mot de passe, il permet seulement de le **vérifier**."
+      en: "hcxpcapngtool here extracts both a PMKID and an EAPOL handshake: two lines to test. The file does not reveal the password, it only lets you **verify** it."
+  - title:
+      fr: "Tester la robustesse avec une wordlist"
+      en: "Testing strength with a wordlist"
+    file: crack.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Dictionary attack against YOUR OWN hash. -m 22000 is the WPA mode.
+      # rockyou.txt holds millions of real leaked passwords: if yours is in it,
+      # it is weak and must be changed.
+      hashcat -m 22000 mylab.hc22000 /usr/share/wordlists/rockyou.txt
+
+      # Show the result afterwards (cracked passwords for this hash file).
+      hashcat -m 22000 mylab.hc22000 --show
+    output: |
+      Session..........: hashcat
+      Status...........: Cracked
+      Hash.Mode........: 22000 (WPA-PBKDF2-PMKID+EAPOL)
+      Speed.#1.........:   412.3 kH/s
+      ...
+      aabbccddeeff:deadbeef0001:MyLab-AP:password123
+    note:
+      fr: "Statut `Cracked` : le mot de passe `password123` est dans rockyou.txt. Sur votre propre réseau, c'est le signal clair qu'il faut le remplacer par un mot de passe long et aléatoire."
+      en: "Status `Cracked`: the password `password123` is in rockyou.txt. On your own network, this is the clear signal to replace it with a long, random password."
+  - title:
+      fr: "Un bon mot de passe résiste (Exhausted)"
+      en: "A good password resists (Exhausted)"
+    file: strong.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Same attack, but this time the network uses a long random passphrase.
+      # hashcat runs through the whole list and finds nothing: good sign.
+      hashcat -m 22000 strong.hc22000 /usr/share/wordlists/rockyou.txt
+
+      # A passphrase like "correct-horse-battery-staple-7f3a" is not in any
+      # public wordlist, so a dictionary attack is "Exhausted" without success.
+    output: |
+      Session..........: hashcat
+      Status...........: Exhausted
+      Hash.Mode........: 22000 (WPA-PBKDF2-PMKID+EAPOL)
+      Recovered........: 0/1 (0.00%) Digests
+    note:
+      fr: "Statut `Exhausted` : aucun mot de la liste ne correspond. Une phrase de passe longue et aléatoire déjoue l'attaque par dictionnaire, ce qui est exactement l'objectif défensif."
+      en: "Status `Exhausted`: no word in the list matches. A long, random passphrase defeats the dictionary attack, which is exactly the defensive goal."
+
+mistake:
+  fr: |
+    **Tester le hash d'un réseau qui n'est pas le vôtre.** Même si vous avez capturé un handshake « par
+    curiosité », lancer hashcat dessus pour retrouver le mot de passe d'autrui est un accès illégal à un système
+    de communication. Autre erreur, moins grave mais trompeuse : conclure qu'un mot de passe est « sûr » parce
+    qu'il résiste à `rockyou.txt`. Une liste publique ne teste que les mots de passe déjà connus ; un mot de
+    passe court mais absent de la liste peut quand même tomber face à une attaque par masque. La vraie garantie
+    reste la **longueur** et l'**aléa**.
+  en: |
+    **Testing the hash of a network that is not yours.** Even if you captured a handshake "out of curiosity",
+    running hashcat on it to recover someone else's password is illegal access to a communication system.
+    Another mistake, less serious but misleading: concluding a password is "safe" because it resists
+    `rockyou.txt`. A public list only tests already-known passwords; a short password absent from the list can
+    still fall to a mask attack. The real guarantee remains **length** and **randomness**.
+
+bestPractice:
+  fr: |
+    - **Testez uniquement le hash de votre propre réseau** : c'est un diagnostic, pas une attaque sur autrui.
+    - **Utilisez le mode 22000** de hashcat (EAPOL + PMKID), qui remplace les anciens modes 2500/16800.
+    - **Si le mot de passe tombe, changez-le immédiatement** pour une phrase de passe longue et aléatoire.
+    - **Visez la longueur** (15+ caractères) : elle protège mieux que la complexité d'un court mot de passe.
+    - **Ne concluez pas trop vite** : résister à rockyou.txt est bien, mais un mot de passe unique et long reste la règle.
+  en: |
+    - **Only test your own network's hash**: it is a diagnosis, not an attack on others.
+    - **Use hashcat's 22000 mode** (EAPOL + PMKID), which replaces the old 2500/16800 modes.
+    - **If the password falls, change it immediately** to a long, random passphrase.
+    - **Aim for length** (15+ characters): it protects better than the complexity of a short password.
+    - **Do not conclude too fast**: resisting rockyou.txt is good, but a unique, long password stays the rule.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez capturé le handshake de **votre** box dans le fichier `capture-01.cap`. Vous voulez :
+
+      1. le convertir au format hashcat,
+      2. tester votre mot de passe contre `rockyou.txt`.
+
+      Écrivez les deux commandes. Que concluez-vous si hashcat affiche le statut `Cracked` ?
+    en: |
+      You captured the handshake of **your** router in the file `capture-01.cap`. You want to:
+
+      1. convert it to the hashcat format,
+      2. test your password against `rockyou.txt`.
+
+      Write the two commands. What do you conclude if hashcat shows the status `Cracked`?
+  solution:
+    file: test_mine.sh
+    lang: bash
+    code: |
+      # 1. Convert the capture of YOUR OWN network to the 22000 format.
+      hcxpcapngtool -o mylab.hc22000 capture-01.cap
+
+      # 2. Dictionary attack with the rockyou wordlist.
+      hashcat -m 22000 mylab.hc22000 /usr/share/wordlists/rockyou.txt
+
+      # If the status is "Cracked", your Wi-Fi password is in a public wordlist,
+      # so it is WEAK. Change it right away for a long, random passphrase.
+    note:
+      fr: "`Cracked` signifie que votre mot de passe figure dans une liste publique : il est devinable et doit être changé immédiatement pour une phrase de passe longue."
+      en: "`Cracked` means your password appears in a public list: it is guessable and must be changed at once for a long passphrase."
+
+quiz:
+  - q:
+      fr: "Quel outil convertit une capture .cap au format hc22000 ?"
+      en: "Which tool converts a .cap capture to the hc22000 format?"
+    options:
+      fr:
+        - "hcxpcapngtool"
+        - "airmon-ng"
+        - "whatweb"
+        - "feroxbuster"
+      en:
+        - "hcxpcapngtool"
+        - "airmon-ng"
+        - "whatweb"
+        - "feroxbuster"
+    answer: 0
+    why:
+      fr: "hcxpcapngtool extrait de la capture les éléments nécessaires et produit un fichier .hc22000 lisible par hashcat."
+      en: "hcxpcapngtool extracts the necessary elements from the capture and produces a .hc22000 file readable by hashcat."
+  - q:
+      fr: "Que teste `hashcat -m 22000` ?"
+      en: "What does `hashcat -m 22000` test?"
+    options:
+      fr:
+        - "Des mots de passe candidats contre un handshake WPA (EAPOL + PMKID)"
+        - "La vitesse du réseau"
+        - "Les ports ouverts d'un serveur"
+        - "La validité d'un certificat TLS"
+      en:
+        - "Candidate passwords against a WPA handshake (EAPOL + PMKID)"
+        - "The network speed"
+        - "The open ports of a server"
+        - "The validity of a TLS certificate"
+    answer: 0
+    why:
+      fr: "Le mode 22000 (WPA-PBKDF2-PMKID+EAPOL) teste des mots de passe candidats contre la capture WPA."
+      en: "Mode 22000 (WPA-PBKDF2-PMKID+EAPOL) tests candidate passwords against the WPA capture."
+  - q:
+      fr: "Que signifie le statut `Cracked` pour votre propre réseau ?"
+      en: "What does the `Cracked` status mean for your own network?"
+    options:
+      fr:
+        - "Que le réseau est bien protégé"
+        - "Que votre mot de passe est devinable et doit être changé"
+        - "Que la capture a échoué"
+        - "Que hashcat a planté"
+      en:
+        - "That the network is well protected"
+        - "That your password is guessable and must be changed"
+        - "That the capture failed"
+        - "That hashcat crashed"
+    answer: 1
+    why:
+      fr: "`Cracked` signifie que le mot de passe figure dans la wordlist : il est faible et doit être remplacé."
+      en: "`Cracked` means the password is in the wordlist: it is weak and must be replaced."
+  - q:
+      fr: "Pourquoi WPA2 ralentit-il les attaques par dictionnaire ?"
+      en: "Why does WPA2 slow down dictionary attacks?"
+    options:
+      fr:
+        - "Parce qu'il change le canal"
+        - "Parce qu'il utilise PBKDF2, une fonction volontairement lente"
+        - "Parce qu'il cache le SSID"
+        - "Parce qu'il désactive le GPU"
+      en:
+        - "Because it changes the channel"
+        - "Because it uses PBKDF2, a deliberately slow function"
+        - "Because it hides the SSID"
+        - "Because it disables the GPU"
+    answer: 1
+    why:
+      fr: "PBKDF2 rend chaque test coûteux en calcul, ce qui limite le nombre de candidats par seconde et protège un bon mot de passe."
+      en: "PBKDF2 makes each test computationally costly, which limits candidates per second and protects a good password."
+  - q:
+      fr: "Qu'est-ce qui protège le mieux un mot de passe Wi-Fi ?"
+      en: "What best protects a Wi-Fi password?"
+    options:
+      fr:
+        - "Le masquage du SSID"
+        - "Un mot de passe court mais compliqué"
+        - "Une phrase de passe longue, aléatoire et unique"
+        - "Changer de canal régulièrement"
+      en:
+        - "Hiding the SSID"
+        - "A short but complicated password"
+        - "A long, random and unique passphrase"
+        - "Changing channel regularly"
+    answer: 2
+    why:
+      fr: "La longueur et l'aléa déjouent les attaques par dictionnaire et par masque, mieux qu'un court mot de passe « compliqué »."
+      en: "Length and randomness defeat dictionary and mask attacks better than a short \"complicated\" password."

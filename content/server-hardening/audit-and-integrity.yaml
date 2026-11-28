@@ -1,0 +1,462 @@
+description:
+  fr: "Enregistrer qui fait quoi avec auditd, détecter toute modification de fichier avec AIDE et noter son durcissement avec Lynis."
+  en: "Record who does what with auditd, detect any file change with AIDE and score your hardening with Lynis."
+duration: 28
+
+intro:
+  fr: |
+    Durcir un serveur réduit la surface d'attaque, mais aucun durcissement n'est parfait : il faut aussi
+    pouvoir **répondre à la question « que s'est-il passé ? »** après coup. C'est le rôle de l'audit et du
+    contrôle d'intégrité.
+
+    Pensez à une bijouterie. Les serrures renforcées, ce sont le pare-feu et SSH durci. Les caméras qui
+    filment chaque geste, c'est **auditd**. Le scellé sur la vitrine qui montre si on l'a ouverte, c'est
+    **AIDE**. Et l'inspecteur qui passe noter sur 100 la sécurité du magasin, c'est **Lynis**.
+
+    Dans cette leçon, vous allez écrire des règles `auditd` pour tracer les accès aux fichiers sensibles,
+    construire une base de référence AIDE et détecter une modification, puis lire un rapport Lynis et son
+    *hardening index*.
+  en: |
+    Hardening a server reduces the attack surface, but no hardening is perfect: you also need to be able to
+    **answer "what happened?"** after the fact. That is the job of auditing and integrity checking.
+
+    Think of a jewellery shop. Reinforced locks are the firewall and hardened SSH. The cameras that film
+    every move are **auditd**. The seal on the display case that shows whether it was opened is **AIDE**.
+    And the inspector who comes to grade the shop's security out of 100 is **Lynis**.
+
+    In this lesson you will write `auditd` rules to trace access to sensitive files, build an AIDE baseline
+    and detect a change, then read a Lynis report and its *hardening index*.
+
+sections:
+  - heading:
+      fr: "auditd : le journal d'audit du noyau"
+      en: "auditd: the kernel audit log"
+    body:
+      fr: |
+        `auditd` est le démon qui collecte les événements de sécurité émis par le sous-système d'audit du
+        noyau Linux. Contrairement à `journald`, il répond à des questions précises : *qui* a lu
+        `/etc/shadow`, *quand* le fichier `sudoers` a été modifié, *quel* appel système a changé une
+        permission.
+
+        Les règles vivent dans `/etc/audit/rules.d/*.rules`, sont compilées au démarrage et chargées avec
+        `augenrules --load`. Deux grandes familles :
+
+        | Type | Préfixe | Exemple | Ce qu'il trace |
+        |---|---|---|---|
+        | Surveillance de fichier (watch) | `-w` | `-w /etc/shadow -p wa -k identity` | Accès en écriture/attribut à un chemin |
+        | Règle d'appel système (syscall) | `-a` | `-a always,exit -F arch=b64 -S execve` | Un appel système précis, filtrable |
+
+        La clé `-k` (key) étiquette l'événement pour le retrouver ensuite avec `ausearch -k`. Terminez
+        toujours votre jeu de règles par `-e 2` pour **verrouiller** la configuration : plus aucune règle ne
+        peut être ajoutée ou retirée sans redémarrer, ce qui empêche un attaquant de désactiver la caméra.
+      en: |
+        `auditd` is the daemon that collects the security events emitted by the Linux kernel audit
+        subsystem. Unlike `journald`, it answers precise questions: *who* read `/etc/shadow`, *when* the
+        `sudoers` file was modified, *which* system call changed a permission.
+
+        Rules live in `/etc/audit/rules.d/*.rules`, are compiled at boot and loaded with `augenrules
+        --load`. Two main families:
+
+        | Type | Prefix | Example | What it traces |
+        |---|---|---|---|
+        | File watch | `-w` | `-w /etc/shadow -p wa -k identity` | Write/attribute access to a path |
+        | Syscall rule | `-a` | `-a always,exit -F arch=b64 -S execve` | One precise, filterable system call |
+
+        The `-k` (key) tags the event so you can find it later with `ausearch -k`. Always end your rule set
+        with `-e 2` to **lock** the configuration: no rule can be added or removed without a reboot, which
+        stops an attacker from switching the camera off.
+  - heading:
+      fr: "AIDE : la photo de référence du système de fichiers"
+      en: "AIDE: the reference snapshot of the filesystem"
+    body:
+      fr: |
+        **AIDE** (*Advanced Intrusion Detection Environment*) calcule une empreinte cryptographique de
+        chaque fichier important (taille, permissions, propriétaire, horodatage et hachage SHA-256), la
+        range dans une base de référence, puis compare l'état courant à cette base à la demande.
+
+        Le cycle de vie tient en trois commandes :
+
+        1. `aide --init` : construit la base de référence (`aide.db.new.gz`).
+        2. On déplace la base en `aide.db.gz` — **idéalement sur un support en lecture seule ou hors
+           machine**, sinon l'attaquant la réécrit après son méfait.
+        3. `aide --check` : compare et signale tout fichier ajouté, supprimé ou modifié.
+
+        La configuration (`/etc/aide/aide.conf`) définit des *groupes de règles*. Par exemple
+        `PERMS = p+u+g+acl+selinux` surveille uniquement les métadonnées (utile pour les journaux qui
+        changent de taille en permanence), tandis que `FIPSR = p+i+n+u+g+s+sha256` surveille aussi le
+        contenu. On applique un groupe à un chemin : `/etc/ FIPSR`.
+      en: |
+        **AIDE** (*Advanced Intrusion Detection Environment*) computes a cryptographic fingerprint of every
+        important file (size, permissions, owner, timestamps and SHA-256 hash), stores it in a reference
+        database, then compares the current state to that baseline on demand.
+
+        The life cycle is three commands:
+
+        1. `aide --init`: builds the reference database (`aide.db.new.gz`).
+        2. You move the database to `aide.db.gz` — **ideally onto read-only or off-host storage**,
+           otherwise an attacker rewrites it after their deed.
+        3. `aide --check`: compares and reports every added, removed or modified file.
+
+        The configuration (`/etc/aide/aide.conf`) defines *rule groups*. For example
+        `PERMS = p+u+g+acl+selinux` watches only metadata (useful for logs whose size changes constantly),
+        while `FIPSR = p+i+n+u+g+s+sha256` also watches content. You apply a group to a path: `/etc/ FIPSR`.
+  - heading:
+      fr: "Lynis : noter et améliorer son durcissement"
+      en: "Lynis: scoring and improving your hardening"
+    body:
+      fr: |
+        **Lynis** est un auditeur open source qui lance plus de 300 tests (comptes, SSH, pare-feu, noyau,
+        permissions, auditd, AIDE...) et produit deux choses utiles : une liste de **suggestions**
+        hiérarchisées et un **hardening index** sur 100.
+
+        Ce score n'est pas une note scolaire absolue — il dépend du profil de la machine — mais il donne une
+        tendance : on durcit, on relance `lynis audit system`, on vérifie que l'index monte et que les
+        avertissements (`[WARNING]`) disparaissent. Chaque suggestion renvoie à un identifiant de test
+        (ex. `SSH-7408`) documenté en ligne.
+
+        Lynis ne modifie rien : c'est un outil de **constat**. Il complète auditd et AIDE, qui sont des
+        outils de **surveillance continue**. Les trois ensemble couvrent le « avant » (durcir), le
+        « pendant » (tracer) et le « après » (prouver ce qui a changé).
+      en: |
+        **Lynis** is an open-source auditor that runs more than 300 tests (accounts, SSH, firewall, kernel,
+        permissions, auditd, AIDE...) and produces two useful things: a prioritised list of **suggestions**
+        and a **hardening index** out of 100.
+
+        That score is not an absolute school grade — it depends on the machine's profile — but it shows a
+        trend: you harden, re-run `lynis audit system`, and check that the index rises and the warnings
+        (`[WARNING]`) disappear. Each suggestion points to a test identifier (e.g. `SSH-7408`) documented
+        online.
+
+        Lynis changes nothing: it is an **assessment** tool. It complements auditd and AIDE, which are
+        **continuous monitoring** tools. Together the three cover the "before" (harden), the "during"
+        (trace) and the "after" (prove what changed).
+
+examples:
+  - title:
+      fr: "Un serveur sans audit : aveugle après une intrusion"
+      en: "A server with no audit: blind after a breach"
+    file: no-audit.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # auditd is installed but ships with an EMPTY rule set on many distros
+      sudo auditctl -l
+      # -> No rules
+
+      # An attacker reads every password hash...
+      sudo cat /etc/shadow > /tmp/.hashes
+      # ...and grants themselves a sudo backdoor
+      echo 'eve ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/eve
+
+      # Days later, the incident responder asks: who read /etc/shadow, and when?
+      sudo ausearch -f /etc/shadow
+      # -> <no matches>   (nothing was ever recorded)
+    output: |
+      No rules
+      <no matches>
+    note:
+      fr: "Sans règle, le sous-système d'audit ne trace ni la lecture de `/etc/shadow` ni la création de la porte dérobée. L'enquête repart de zéro : c'est exactement ce que l'audit doit empêcher."
+      en: "With no rule, the audit subsystem records neither the read of `/etc/shadow` nor the creation of the backdoor. The investigation starts from nothing: exactly what auditing is meant to prevent."
+
+  - title:
+      fr: "Un jeu de règles auditd durci, inspiré du profil CIS"
+      en: "A hardened auditd rule set, inspired by the CIS profile"
+    file: /etc/audit/rules.d/hardening.rules
+    lang: ini
+    kind: secure
+    code: |
+      ## Reset and set the backlog so no event is dropped under load
+      -D
+      -b 8192
+      ## What to do if the kernel audit buffer overflows (1 = printk warning)
+      -f 1
+
+      ## --- Identity and authentication files -------------------------------
+      # -p wa = trigger on WRITE and ATTRIBUTE change; -k tags the event
+      -w /etc/shadow  -p wa -k identity
+      -w /etc/passwd  -p wa -k identity
+      -w /etc/group   -p wa -k identity
+      -w /etc/sudoers -p wa -k scope
+      -w /etc/sudoers.d/ -p wa -k scope
+
+      ## --- Privilege escalation and user management ------------------------
+      -w /usr/bin/sudo  -p x -k privileged
+      -w /usr/sbin/useradd -p x -k user_mgmt
+
+      ## --- Changes to permissions (catch chmod/chown style syscalls) -------
+      -a always,exit -F arch=b64 -S chmod,fchmod,chown,fchown,setxattr -F auid>=1000 -F auid!=unset -k perm_mod
+
+      ## --- Every command run as a real user (execve) -----------------------
+      -a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=unset -k exec
+
+      ## Lock the configuration: no rule change until the next reboot.
+      ## KEEP THIS LINE LAST.
+      -e 2
+    note:
+      fr: "`auid>=1000` cible les vrais utilisateurs (et non les services système), `auid!=unset` ignore les processus du noyau. La ligne `-e 2` empêche un attaquant de faire `auditctl -D` pour effacer la surveillance."
+      en: "`auid>=1000` targets real users (not system services), `auid!=unset` skips kernel processes. The `-e 2` line stops an attacker running `auditctl -D` to wipe the monitoring."
+
+  - title:
+      fr: "Charger les règles et retrouver un événement avec ausearch"
+      en: "Loading the rules and finding an event with ausearch"
+    file: trace-identity.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Compile rules.d/*.rules into the running configuration
+      sudo augenrules --load
+      sudo auditctl -l | head -n 4
+
+      # Simulate a sensitive read, then investigate by key
+      sudo cat /etc/shadow >/dev/null
+      sudo ausearch -k identity --start recent -i | tail -n 3
+
+      # Daily summary: top keys, top users, top commands
+      sudo aureport --summary -i
+    output: |
+      -w /etc/shadow -p wa -k identity
+      -w /etc/passwd -p wa -k identity
+      ...
+      type=SYSCALL msg=audit(11/27/2026 09:14:02.113:488) : arch=x86_64 syscall=openat
+        success=yes exit=3 ... auid=alice uid=root comm=cat exe=/usr/bin/cat key=identity
+    note:
+      fr: "`ausearch -k identity -i` filtre par étiquette et traduit les identifiants numériques (`-i` = interpret). On lit clairement que `alice`, via `sudo`, a ouvert le fichier avec `cat`. C'est la traçabilité recherchée."
+      en: "`ausearch -k identity -i` filters by tag and translates numeric IDs (`-i` = interpret). You can clearly read that `alice`, through `sudo`, opened the file with `cat`. That is the traceability you want."
+
+  - title:
+      fr: "AIDE : base de référence puis détection d'une modification"
+      en: "AIDE: baseline then detection of a change"
+    file: aide-check.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. Build the reference database from /etc/aide/aide.conf
+      sudo aideinit                 # Debian/Ubuntu wrapper around: aide --init
+      # Store the baseline as the one '--check' compares against.
+      # In production, copy it to read-only or off-host storage.
+      sudo mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+
+      # 2. An attacker (or a legitimate change) touches a watched file
+      echo 'eve ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/eve
+
+      # 3. Compare current state against the baseline
+      sudo aide --check
+    output: |
+      Start timestamp: 2026-11-27 09:30 (AIDE 0.18.6)
+      AIDE found differences between database and filesystem!!
+
+      Summary:
+        Total number of entries:  61243
+        Added entries:            1
+        Removed entries:          0
+        Changed entries:          0
+
+      ---------------------------------------------------
+      Added entries:
+      ---------------------------------------------------
+      f++++++++++++++++: /etc/sudoers.d/eve
+    note:
+      fr: "AIDE voit l'apparition de `/etc/sudoers.d/eve` que l'attaquant croyait discrète. Planifiez `aide --check` par `cron`/`systemd timer` et envoyez le rapport ailleurs : une alerte locale que l'attaquant peut effacer ne sert à rien."
+      en: "AIDE spots the appearance of `/etc/sudoers.d/eve` that the attacker thought was quiet. Schedule `aide --check` via `cron`/a `systemd timer` and send the report off-host: a local alert the attacker can erase is useless."
+
+  - title:
+      fr: "Lynis : lire le hardening index et les suggestions"
+      en: "Lynis: reading the hardening index and suggestions"
+    file: lynis-audit.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Run the full system audit (no changes are made to the system)
+      sudo lynis audit system
+
+      # The machine-readable report is written here for CI / dashboards
+      sudo grep -E 'hardening_index|^warning|^suggestion' /var/log/lynis-report.dat | head
+    output: |
+      [+] Hardening
+      ------------------------------------
+        - Installed compiler(s)   [ FOUND ]
+        - Hardening index : [ 67 / 100 ]
+
+      Warnings (2):
+        ! Found some unprotected GRUB boot loader setting [BOOT-5122]
+        ! iptables module(s) loaded, but no rules active [FIRE-4512]
+
+      Suggestions (41):
+        * Configure password hashing rounds in /etc/login.defs [AUTH-9230]
+        * Enable auditd to collect audit information [ACCT-9628]
+        * Install AIDE to monitor file integrity [FINT-4350]
+    note:
+      fr: "Chaque suggestion porte un identifiant (`ACCT-9628`) que l'on recherche en ligne pour la procédure exacte. Après avoir ajouté auditd et AIDE comme ci-dessus, relancez : `ACCT-9628` et `FINT-4350` disparaissent et l'index remonte."
+      en: "Each suggestion carries an identifier (`ACCT-9628`) you look up online for the exact procedure. After adding auditd and AIDE as above, re-run: `ACCT-9628` and `FINT-4350` disappear and the index rises."
+
+mistake:
+  fr: |
+    **Croire qu'activer auditd ou AIDE suffit.** Deux pièges reviennent sans cesse :
+
+    1. *L'audit sans rapatriement.* Les journaux `auditd` et la base AIDE restent sur la machine surveillée.
+       Un attaquant qui obtient `root` les efface ou les modifie. Il faut **expédier** les événements vers
+       un serveur distant (SIEM, `audisp-remote`, `rsyslog`) et stocker la base AIDE hors machine.
+    2. *La base AIDE jamais figée.* Si vous ne verrouillez pas la base de référence et que vous la
+       régénérez après chaque changement sans la vérifier, elle finit par « valider » les portes dérobées.
+
+    Enfin, un `aide --check` qui n'est jamais planifié ne sert à rien : sans tâche `cron`/`systemd`, personne
+    ne le lance jamais.
+  en: |
+    **Thinking that enabling auditd or AIDE is enough.** Two traps come up again and again:
+
+    1. *Auditing without shipping.* The `auditd` logs and the AIDE database stay on the monitored machine.
+       An attacker who gets `root` erases or edits them. You must **ship** the events to a remote server
+       (SIEM, `audisp-remote`, `rsyslog`) and keep the AIDE database off-host.
+    2. *The AIDE database never frozen.* If you don't lock the reference database and you regenerate it
+       after every change without reviewing it, it ends up "blessing" the backdoors.
+
+    Finally, an `aide --check` that is never scheduled is useless: with no `cron`/`systemd` job, nobody
+    ever runs it.
+
+bestPractice:
+  fr: |
+    - **Partez d'un profil éprouvé** : les règles auditd des *CIS Benchmarks* ou le paquet `auditd` fourni par votre distribution, puis adaptez.
+    - **Verrouillez auditd** avec `-e 2` en dernière ligne et surveillez les fichiers d'identité (`shadow`, `sudoers`, `sudoers.d/`).
+    - **Centralisez** : expédiez les événements d'audit vers un serveur distant ; une preuve locale se falsifie.
+    - **Figez la base AIDE** sur un support en lecture seule ou hors machine, et planifiez `aide --check` par timer avec rapport par e-mail/SIEM.
+    - **Mesurez avec Lynis** avant/après chaque chantier de durcissement ; traitez les suggestions par identifiant.
+    - **Attention au volume** : la règle `execve` est précieuse mais bruyante ; dimensionnez la rétention et l'espace disque.
+  en: |
+    - **Start from a proven profile**: the auditd rules from the *CIS Benchmarks* or your distribution's `auditd` package, then adapt.
+    - **Lock auditd** with `-e 2` as the last line and watch the identity files (`shadow`, `sudoers`, `sudoers.d/`).
+    - **Centralise**: ship audit events to a remote server; local evidence can be forged.
+    - **Freeze the AIDE database** on read-only or off-host storage, and schedule `aide --check` via a timer with an email/SIEM report.
+    - **Measure with Lynis** before/after each hardening effort; work through suggestions by identifier.
+    - **Mind the volume**: the `execve` rule is valuable but noisy; size retention and disk space accordingly.
+
+exercise:
+  statement:
+    fr: |
+      Sur un serveur Ubuntu, on vous demande de tracer toute modification du fichier `/etc/sudoers` et de
+      tout fichier du dossier `/etc/sudoers.d/`, avec l'étiquette `scope`, puis de verrouiller la
+      configuration d'audit.
+
+      1. Écrivez un fichier `/etc/audit/rules.d/50-sudoers.rules` qui pose ces surveillances et verrouille
+         l'audit.
+      2. Chargez les règles et vérifiez qu'elles sont actives.
+      3. Montrez la commande qui, après coup, retrouve tous les événements étiquetés `scope`.
+    en: |
+      On an Ubuntu server, you are asked to trace every change to `/etc/sudoers` and to any file in the
+      `/etc/sudoers.d/` folder, with the `scope` tag, then lock the audit configuration.
+
+      1. Write a `/etc/audit/rules.d/50-sudoers.rules` file that sets those watches and locks auditing.
+      2. Load the rules and check that they are active.
+      3. Show the command that afterwards finds every event tagged `scope`.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Write the rule file (-p wa = write + attribute changes)
+      sudo tee /etc/audit/rules.d/50-sudoers.rules >/dev/null <<'EOF'
+      -w /etc/sudoers -p wa -k scope
+      -w /etc/sudoers.d/ -p wa -k scope
+      # Lock the audit config until the next reboot. Keep last.
+      -e 2
+      EOF
+
+      # 2. Compile and load, then confirm the rules are active
+      sudo augenrules --load
+      sudo auditctl -l | grep scope
+
+      # 3. Later, retrieve every 'scope' event, with IDs interpreted
+      sudo ausearch -k scope -i
+    note:
+      fr: "Comme `-e 2` verrouille l'audit, toute future modification de règle exigera un redémarrage : c'est voulu. Testez en ajoutant une ligne dans `sudoers.d/` puis en relançant `ausearch -k scope -i`."
+      en: "Because `-e 2` locks auditing, any future rule change will require a reboot: that is intended. Test by adding a line in `sudoers.d/` then re-running `ausearch -k scope -i`."
+
+quiz:
+  - q:
+      fr: "Que fait la ligne `-e 2` à la fin d'un fichier de règles auditd ?"
+      en: "What does the `-e 2` line at the end of an auditd rules file do?"
+    options:
+      fr:
+        - "Elle verrouille la configuration d'audit jusqu'au prochain redémarrage"
+        - "Elle double la taille du tampon d'audit"
+        - "Elle efface toutes les règles existantes"
+        - "Elle envoie les journaux vers le serveur distant numéro 2"
+      en:
+        - "It locks the audit configuration until the next reboot"
+        - "It doubles the size of the audit buffer"
+        - "It deletes all existing rules"
+        - "It sends the logs to remote server number 2"
+    answer: 0
+    why:
+      fr: "`-e 2` passe l'audit en mode immuable : plus aucune règle ne peut être ajoutée ou retirée sans redémarrer, ce qui empêche un attaquant de désactiver la surveillance."
+      en: "`-e 2` puts auditing into immutable mode: no rule can be added or removed without a reboot, which stops an attacker from disabling the monitoring."
+  - q:
+      fr: "À quoi sert la clé `-k identity` dans une règle auditd ?"
+      en: "What is the `-k identity` key for in an auditd rule?"
+    options:
+      fr:
+        - "À chiffrer l'événement"
+        - "À étiqueter l'événement pour le retrouver avec `ausearch -k`"
+        - "À limiter la règle aux comptes administrateurs"
+        - "À définir la priorité d'écriture sur le disque"
+      en:
+        - "To encrypt the event"
+        - "To tag the event so it can be found with `ausearch -k`"
+        - "To restrict the rule to admin accounts"
+        - "To set the disk write priority"
+    answer: 1
+    why:
+      fr: "La clé est une étiquette libre. Elle n'a aucun effet sur le filtrage de la règle, mais permet de regrouper et rechercher les événements avec `ausearch -k`."
+      en: "The key is a free-form tag. It has no effect on the rule's filtering, but it lets you group and search events with `ausearch -k`."
+  - q:
+      fr: "Pourquoi stocker la base de référence AIDE hors de la machine surveillée ?"
+      en: "Why store the AIDE reference database off the monitored machine?"
+    options:
+      fr:
+        - "Pour gagner de l'espace disque"
+        - "Parce que AIDE refuse de lire une base locale"
+        - "Pour que l'affichage du rapport soit plus rapide"
+        - "Parce qu'un attaquant avec les droits root pourrait réécrire une base locale et masquer ses modifications"
+      en:
+        - "To save disk space"
+        - "Because AIDE refuses to read a local database"
+        - "To make the report display faster"
+        - "Because an attacker with root could rewrite a local database and hide their changes"
+    answer: 3
+    why:
+      fr: "Si la base reste modifiable sur la machine, un attaquant root la régénère après son méfait et `aide --check` ne détecte plus rien. Hors machine ou en lecture seule, elle reste fiable."
+      en: "If the database stays writable on the machine, a root attacker regenerates it after their deed and `aide --check` detects nothing. Off-host or read-only, it stays trustworthy."
+  - q:
+      fr: "Que représente le `hardening index` affiché par Lynis ?"
+      en: "What does the `hardening index` reported by Lynis represent?"
+    options:
+      fr:
+        - "Le nombre de failles critiques trouvées"
+        - "Un indicateur global de durcissement sur 100, à suivre dans le temps"
+        - "Le pourcentage de disque chiffré"
+        - "La version du noyau Linux"
+      en:
+        - "The number of critical vulnerabilities found"
+        - "An overall hardening indicator out of 100, to track over time"
+        - "The percentage of encrypted disk"
+        - "The Linux kernel version"
+    answer: 1
+    why:
+      fr: "L'index est un score relatif de durcissement. On l'utilise comme tendance : il doit monter à mesure que l'on applique les suggestions et que les avertissements disparaissent."
+      en: "The index is a relative hardening score. You use it as a trend: it should rise as you apply suggestions and the warnings disappear."
+  - q:
+      fr: "Quel outil répond à la question « qui a lu `/etc/shadow` et quand » ?"
+      en: "Which tool answers the question \"who read `/etc/shadow` and when\"?"
+    options:
+      fr:
+        - "AIDE, via `aide --check`"
+        - "Lynis, via son hardening index"
+        - "auditd, via une surveillance `-w` et `ausearch`"
+        - "`chmod`, via les permissions"
+      en:
+        - "AIDE, via `aide --check`"
+        - "Lynis, via its hardening index"
+        - "auditd, via a `-w` watch and `ausearch`"
+        - "`chmod`, via file permissions"
+    answer: 2
+    why:
+      fr: "auditd trace les accès en temps réel ; `ausearch` les restitue. AIDE ne dit que *ce qui* a changé entre deux instantanés, pas *qui* a lu un fichier ; Lynis note la configuration."
+      en: "auditd traces access in real time; `ausearch` retrieves it. AIDE only says *what* changed between two snapshots, not *who* read a file; Lynis scores the configuration."

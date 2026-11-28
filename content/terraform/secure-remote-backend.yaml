@@ -1,0 +1,524 @@
+description:
+  fr: "Stocker le state Terraform dans un backend S3 sécurisé : chiffrement, versioning, blocage des accès publics et verrouillage (use_lockfile natif ou DynamoDB)."
+  en: "Store the Terraform state in a secure S3 backend: encryption, versioning, public access block and locking (native use_lockfile or DynamoDB)."
+duration: 30
+
+intro:
+  fr: |
+    Tant que le state est un fichier local, deux problèmes guettent. **La collaboration** : si un collègue
+    et vous lancez `apply` en même temps, vous écrasez mutuellement le state et corrompez l'infrastructure.
+    **La sécurité** : ce fichier plein de secrets dort sur un ordinateur portable. La solution est un
+    **backend distant** : le state vit dans un stockage partagé, chiffré, verrouillé et sauvegardé.
+
+    L'analogie : passer du **carnet de notes dans votre poche** à un **coffre-fort partagé à la banque**.
+    Une seule personne peut l'ouvrir à la fois (verrouillage), son contenu est chiffré, chaque version est
+    archivée (versioning), et personne ne peut y entrer par la rue (blocage public). C'est exactement ce
+    qu'on construit pour le state.
+
+    Dans cette leçon vous allez créer un bucket S3 **durci** pour héberger le state — chiffrement au repos,
+    versioning, blocage total des accès publics — puis configurer le backend `s3` avec le **verrouillage
+    natif** (`use_lockfile`, Terraform 1.10+) et voir l'ancienne approche par table **DynamoDB**. C'est la
+    fondation d'un usage de Terraform en équipe.
+  en: |
+    As long as the state is a local file, two problems loom. **Collaboration**: if a colleague and you run
+    `apply` at the same time, you overwrite each other's state and corrupt the infrastructure. **Security**:
+    this file full of secrets sleeps on a laptop. The solution is a **remote backend**: the state lives in
+    shared storage, encrypted, locked and backed up.
+
+    The analogy: moving from a **notebook in your pocket** to a **shared safe-deposit box at the bank**.
+    Only one person can open it at a time (locking), its content is encrypted, every version is archived
+    (versioning), and nobody can walk in from the street (public access block). This is exactly what we
+    build for the state.
+
+    In this lesson you will create a **hardened** S3 bucket to host the state — encryption at rest,
+    versioning, full public access block — then configure the `s3` backend with **native locking**
+    (`use_lockfile`, Terraform 1.10+) and see the older **DynamoDB** table approach. This is the foundation
+    of using Terraform as a team.
+
+sections:
+  - heading:
+      fr: "Pourquoi un backend distant"
+      en: "Why a remote backend"
+    body:
+      fr: |
+        Un *backend* décide où Terraform lit et écrit le state. Par défaut, c'est le backend `local` (un
+        fichier). Un backend **distant** (S3, Azure Blob, GCS, Terraform Cloud...) apporte trois garanties :
+
+        | Garantie | Ce que ça évite |
+        |---|---|
+        | **State partagé** | Chacun a sa propre copie divergente |
+        | **Verrouillage (lock)** | Deux `apply` simultanés qui se corrompent |
+        | **Chiffrement + versioning** | Fuite de secrets, perte d'un state (retour arrière impossible) |
+
+        Le **verrouillage** est le point le plus important pour une équipe : avant d'écrire, Terraform pose
+        un verrou ; tout autre `apply` attend ou échoue proprement, avec le message « state locked ». On
+        évite ainsi la « course » qui corrompt le state.
+
+        Sur AWS, le backend standard est **S3**. Historiquement, le verrouillage nécessitait une table
+        **DynamoDB** séparée. Depuis Terraform 1.10, un verrouillage **natif** par fichier de verrou dans le
+        bucket (`use_lockfile = true`) rend DynamoDB **optionnel** — une pièce de moins à gérer.
+      en: |
+        A *backend* decides where Terraform reads and writes the state. By default it is the `local` backend
+        (a file). A **remote** backend (S3, Azure Blob, GCS, Terraform Cloud...) brings three guarantees:
+
+        | Guarantee | What it prevents |
+        |---|---|
+        | **Shared state** | Everyone has their own diverging copy |
+        | **Locking** | Two simultaneous `apply` runs corrupting each other |
+        | **Encryption + versioning** | Secret leaks, losing a state (no rollback possible) |
+
+        **Locking** is the most important point for a team: before writing, Terraform takes a lock; any
+        other `apply` waits or fails cleanly, with the "state locked" message. This avoids the "race" that
+        corrupts the state.
+
+        On AWS, the standard backend is **S3**. Historically, locking required a separate **DynamoDB** table.
+        Since Terraform 1.10, a **native** lock file inside the bucket (`use_lockfile = true`) makes DynamoDB
+        **optional** — one fewer piece to manage.
+  - heading:
+      fr: "Le problème de l'œuf et la poule"
+      en: "The chicken-and-egg problem"
+    body:
+      fr: |
+        Pour stocker le state dans un bucket S3, il faut d'abord... créer ce bucket. Mais si on le crée avec
+        Terraform, où va *son* state ? C'est le problème de l'amorçage (*bootstrap*). La solution usuelle :
+
+        1. On crée le bucket de state (et sa configuration de sécurité) dans un petit projet Terraform **à
+           part**, avec un backend `local` temporaire.
+        2. Une fois le bucket créé, les **autres** projets l'utilisent comme backend distant.
+        3. Optionnellement, on fait pointer le projet d'amorçage vers son propre bucket (migration de state).
+
+        Le bucket de state est une ressource **critique** : il contient les secrets de toute votre
+        infrastructure. Il mérite donc le durcissement le plus strict : chiffrement, versioning (pour
+        restaurer un state corrompu), blocage total des accès publics, et une politique IAM qui n'autorise
+        que la CI et les administrateurs. Le bloc `prevent_destroy` sur le bucket évite une suppression
+        accidentelle qui effacerait l'historique.
+      en: |
+        To store the state in an S3 bucket, you first have to... create that bucket. But if you create it
+        with Terraform, where does *its* state go? This is the bootstrap problem. The usual solution:
+
+        1. Create the state bucket (and its security configuration) in a small, **separate** Terraform
+           project, with a temporary `local` backend.
+        2. Once the bucket exists, the **other** projects use it as their remote backend.
+        3. Optionally, point the bootstrap project at its own bucket (state migration).
+
+        The state bucket is a **critical** resource: it holds the secrets of your entire infrastructure. It
+        therefore deserves the strictest hardening: encryption, versioning (to restore a corrupted state),
+        full public access block, and an IAM policy allowing only the CI and administrators. A
+        `prevent_destroy` on the bucket avoids an accidental deletion that would wipe the history.
+  - heading:
+      fr: "Configurer le backend s3"
+      en: "Configuring the s3 backend"
+    body:
+      fr: |
+        Le backend se déclare dans le bloc `terraform`. **Particularité** : la configuration du backend ne
+        peut **pas** contenir de variables (`var.x`) — elle est lue avant tout le reste. On y met donc des
+        valeurs littérales, ou on fournit les valeurs variables via un fichier passé à l'init
+        (`-backend-config`), ce qui est pratique pour avoir une clé de state différente par environnement :
+
+        ```hcl
+        terraform {
+          backend "s3" {
+            bucket       = "devsecops-tfstate-42"
+            key          = "prod/terraform.tfstate"  # path inside the bucket
+            region       = "eu-west-3"
+            encrypt      = true                       # encrypt the state object
+            use_lockfile = true                       # native S3 locking (Terraform 1.10+)
+          }
+        }
+        ```
+
+        Après avoir ajouté ou modifié le bloc `backend`, on lance `terraform init` ; Terraform propose alors
+        de **migrer** le state local existant vers le backend distant. L'option `key` sépare les states de
+        plusieurs environnements dans un même bucket (`prod/…`, `staging/…`). Enfin, `encrypt = true`
+        chiffre l'objet côté S3 : combiné au chiffrement par défaut du bucket, c'est une double protection.
+      en: |
+        The backend is declared in the `terraform` block. **Quirk**: the backend configuration **cannot**
+        contain variables (`var.x`) — it is read before everything else. So you put literal values, or you
+        supply the variable values via a file passed at init (`-backend-config`), which is handy to have a
+        different state key per environment:
+
+        ```hcl
+        terraform {
+          backend "s3" {
+            bucket       = "devsecops-tfstate-42"
+            key          = "prod/terraform.tfstate"  # path inside the bucket
+            region       = "eu-west-3"
+            encrypt      = true                       # encrypt the state object
+            use_lockfile = true                       # native S3 locking (Terraform 1.10+)
+          }
+        }
+        ```
+
+        After adding or changing the `backend` block, run `terraform init`; Terraform then offers to
+        **migrate** the existing local state to the remote backend. The `key` option separates the states of
+        several environments in one bucket (`prod/…`, `staging/…`). Finally, `encrypt = true` encrypts the
+        object on the S3 side: combined with the bucket's default encryption, it is double protection.
+
+examples:
+  - title:
+      fr: "Vulnérable : un bucket de state nu"
+      en: "Vulnerable: a bare state bucket"
+    file: bad-backend.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      # A bucket to hold the state, with NONE of the protections it needs:
+      resource "aws_s3_bucket" "state" {
+        bucket = "devsecops-tfstate-42"
+        # No versioning: a corrupted state cannot be rolled back
+        # No encryption configuration: secrets at rest in clear
+        # No public access block: one wrong ACL exposes every secret to the internet
+      }
+
+      terraform {
+        backend "s3" {
+          bucket = "devsecops-tfstate-42"
+          key    = "prod/terraform.tfstate"
+          region = "eu-west-3"
+          # No encrypt, no locking: concurrent applies can corrupt the state
+        }
+      }
+    note:
+      fr: "Ce bucket héberge tous les secrets de l'infrastructure, mais sans versioning, chiffrement, blocage public ni verrou. Une mauvaise ACL, un `apply` concurrent ou un state écrasé, et c'est la catastrophe. La version sécurisée suivante corrige chaque point."
+      en: "This bucket hosts all the infrastructure's secrets, yet has no versioning, encryption, public access block or lock. A wrong ACL, a concurrent `apply` or an overwritten state, and it is a disaster. The secure version below fixes every point."
+
+  - title:
+      fr: "Sécurisé : amorcer le bucket de state durci"
+      en: "Secure: bootstrapping the hardened state bucket"
+    file: bootstrap/main.tf
+    lang: hcl
+    kind: secure
+    code: |
+      provider "aws" {
+        region = "eu-west-3"
+      }
+
+      # The bucket itself (name only); the protections are SEPARATE resources (provider v4+)
+      resource "aws_s3_bucket" "state" {
+        bucket = "devsecops-tfstate-42"
+
+        lifecycle {
+          prevent_destroy = true # the state history must never be deleted by a plan
+        }
+      }
+
+      # Versioning: keep every version of the state, so a corruption can be rolled back
+      resource "aws_s3_bucket_versioning" "state" {
+        bucket = aws_s3_bucket.state.id
+        versioning_configuration {
+          status = "Enabled"
+        }
+      }
+
+      # Encryption at rest: every state object is encrypted with SSE-KMS
+      resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
+        bucket = aws_s3_bucket.state.id
+        rule {
+          apply_server_side_encryption_by_default {
+            sse_algorithm = "aws:kms"
+          }
+          bucket_key_enabled = true
+        }
+      }
+
+      # Public access block: refuse any public ACL or policy, no matter what
+      resource "aws_s3_bucket_public_access_block" "state" {
+        bucket                  = aws_s3_bucket.state.id
+        block_public_acls       = true
+        block_public_policy     = true
+        ignore_public_acls      = true
+        restrict_public_buckets = true
+      }
+    note:
+      fr: "Depuis le provider AWS v4, chaque protection d'un bucket est une **ressource séparée** (`aws_s3_bucket_versioning`, `_server_side_encryption_configuration`, `_public_access_block`), toutes reliées par `bucket = aws_s3_bucket.state.id`. Ce projet d'amorçage utilise un backend local temporaire."
+      en: "Since AWS provider v4, each bucket protection is a **separate resource** (`aws_s3_bucket_versioning`, `_server_side_encryption_configuration`, `_public_access_block`), all tied by `bucket = aws_s3_bucket.state.id`. This bootstrap project uses a temporary local backend."
+
+  - title:
+      fr: "Sécurisé : le backend s3 avec verrouillage natif"
+      en: "Secure: the s3 backend with native locking"
+    file: backend.tf
+    lang: hcl
+    kind: secure
+    code: |
+      terraform {
+        required_version = ">= 1.10" # use_lockfile needs Terraform 1.10+
+
+        backend "s3" {
+          bucket       = "devsecops-tfstate-42"
+          key          = "prod/terraform.tfstate" # per-environment path
+          region       = "eu-west-3"
+          encrypt      = true                      # encrypt the state object
+          use_lockfile = true                      # native S3 locking, no DynamoDB needed
+        }
+      }
+    output: |
+      $ terraform init
+      Initializing the backend...
+      Successfully configured the backend "s3"! Terraform will automatically
+      use this backend unless the backend configuration changes.
+
+      # If someone else is mid-apply, your run is blocked cleanly:
+      $ terraform apply
+      Error: Error acquiring the state lock
+      Lock Info:
+        Path: devsecops-tfstate-42/prod/terraform.tfstate
+        Who:  alice@laptop
+    note:
+      fr: "`use_lockfile = true` (Terraform 1.10+) gère le verrou avec un objet `.tflock` dans le bucket, sans aucune table DynamoDB. Le message « Error acquiring the state lock » montre le verrouillage en action : un seul `apply` à la fois."
+      en: "`use_lockfile = true` (Terraform 1.10+) handles the lock with a `.tflock` object in the bucket, with no DynamoDB table at all. The \"Error acquiring the state lock\" message shows locking in action: one `apply` at a time."
+
+  - title:
+      fr: "L'ancienne approche : verrouillage par DynamoDB"
+      en: "The older approach: DynamoDB locking"
+    file: dynamodb-lock.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      # Pre-1.10 (or for compatibility), locking used a separate DynamoDB table.
+      resource "aws_dynamodb_table" "locks" {
+        name         = "terraform-locks"
+        billing_mode = "PAY_PER_REQUEST"
+        hash_key     = "LockID" # Terraform requires exactly this attribute
+
+        attribute {
+          name = "LockID"
+          type = "S"
+        }
+
+        server_side_encryption {
+          enabled = true
+        }
+      }
+
+      terraform {
+        backend "s3" {
+          bucket         = "devsecops-tfstate-42"
+          key            = "prod/terraform.tfstate"
+          region         = "eu-west-3"
+          encrypt        = true
+          dynamodb_table = "terraform-locks" # older locking mechanism
+        }
+      }
+    note:
+      fr: "Avant la 1.10, le verrou vivait dans une table DynamoDB dont la clé de hachage **doit** s'appeler `LockID`. C'est encore très répandu. Pour un nouveau projet, préférez `use_lockfile = true` : une ressource de moins à créer, chiffrer et surveiller."
+      en: "Before 1.10, the lock lived in a DynamoDB table whose hash key **must** be named `LockID`. It is still very common. For a new project, prefer `use_lockfile = true`: one fewer resource to create, encrypt and monitor."
+
+  - title:
+      fr: "Migrer le state et séparer les environnements"
+      en: "Migrating the state and separating environments"
+    file: migrate.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # After adding the backend block, init offers to migrate the local state:
+      terraform init
+      #   Do you want to copy existing state to the new backend? yes
+
+      # Per-environment state key via partial configuration (keeps the backend block generic):
+      # backend.tf declares bucket/region/encrypt/use_lockfile but NOT key.
+      terraform init -backend-config="key=staging/terraform.tfstate"
+      terraform init -backend-config="key=prod/terraform.tfstate"
+    output: |
+      $ terraform init
+      Initializing the backend...
+      Terraform detected that the backend type changed from "local" to "s3".
+      Do you want to copy existing state to the new backend? yes
+      Successfully configured the backend "s3"!
+    note:
+      fr: "La configuration du backend n'accepte pas de variables ; pour varier la `key` selon l'environnement, on la fournit à l'init avec `-backend-config`. La migration du state local vers S3 est proposée automatiquement au premier `init`."
+      en: "The backend configuration takes no variables; to vary the `key` per environment, supply it at init with `-backend-config`. Migration of the local state to S3 is offered automatically on the first `init`."
+
+mistake:
+  fr: |
+    **Créer le bucket de state sans le durcir, ou oublier le verrouillage.**
+
+    Le bucket qui héberge le state concentre les secrets de toute l'infrastructure : le laisser sans
+    chiffrement, sans versioning et sans blocage public est l'une des erreurs les plus graves en IaC. Sans
+    **versioning**, un state corrompu est irrécupérable. Sans **blocage public**, une ACL malheureuse
+    expose tous vos secrets sur Internet. Sans **verrouillage** (`use_lockfile` ou DynamoDB), deux `apply`
+    concurrents corrompent le state. Dernier piège classique : mettre une variable dans le bloc `backend`
+    (`bucket = var.state_bucket`) — c'est interdit, car le backend est évalué avant les variables ; utilisez
+    des valeurs littérales ou `-backend-config`.
+  en: |
+    **Creating the state bucket without hardening it, or forgetting locking.**
+
+    The bucket hosting the state concentrates the secrets of the whole infrastructure: leaving it without
+    encryption, versioning and public access block is one of the gravest IaC mistakes. Without
+    **versioning**, a corrupted state is unrecoverable. Without a **public access block**, an unlucky ACL
+    exposes all your secrets on the internet. Without **locking** (`use_lockfile` or DynamoDB), two
+    concurrent `apply` runs corrupt the state. One last classic trap: putting a variable in the `backend`
+    block (`bucket = var.state_bucket`) — this is forbidden, because the backend is evaluated before
+    variables; use literal values or `-backend-config`.
+
+bestPractice:
+  fr: |
+    - **Bucket de state durci** : versioning, chiffrement (SSE-KMS), blocage public total, `prevent_destroy`.
+    - **Verrouillage obligatoire** : `use_lockfile = true` (Terraform 1.10+) ou, en héritage, une table DynamoDB.
+    - **`encrypt = true`** dans le backend `s3`, en plus du chiffrement par défaut du bucket.
+    - **Une `key` par environnement** (`prod/…`, `staging/…`), fournie via `-backend-config` si besoin.
+    - **Accès IAM restreint** au bucket de state : seulement la CI et les administrateurs.
+    - **Pas de variable dans le bloc `backend`** : valeurs littérales ou configuration partielle à l'init.
+  en: |
+    - **Hardened state bucket**: versioning, encryption (SSE-KMS), full public access block, `prevent_destroy`.
+    - **Mandatory locking**: `use_lockfile = true` (Terraform 1.10+) or, as legacy, a DynamoDB table.
+    - **`encrypt = true`** in the `s3` backend, on top of the bucket's default encryption.
+    - **One `key` per environment** (`prod/…`, `staging/…`), supplied via `-backend-config` if needed.
+    - **Restricted IAM access** to the state bucket: only the CI and administrators.
+    - **No variable in the `backend` block**: literal values or partial configuration at init.
+
+exercise:
+  statement:
+    fr: |
+      Durcissez un bucket S3 `team-tfstate-7` destiné au state, puis configurez le backend.
+
+      1. Déclarez le bucket, puis **trois** ressources séparées : versioning activé, chiffrement SSE-KMS par
+         défaut, et un blocage public où les quatre drapeaux valent `true`.
+      2. Configurez un backend `s3` pointant vers ce bucket, clé `prod/terraform.tfstate`, région
+         `eu-west-1`, chiffrement activé et **verrouillage natif** (sans DynamoDB).
+    en: |
+      Harden an S3 bucket `team-tfstate-7` meant for the state, then configure the backend.
+
+      1. Declare the bucket, then **three** separate resources: versioning enabled, default SSE-KMS
+         encryption, and a public access block where the four flags are `true`.
+      2. Configure an `s3` backend pointing to this bucket, key `prod/terraform.tfstate`, region
+         `eu-west-1`, encryption on and **native locking** (no DynamoDB).
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      resource "aws_s3_bucket" "state" {
+        bucket = "team-tfstate-7"
+        lifecycle {
+          prevent_destroy = true
+        }
+      }
+
+      resource "aws_s3_bucket_versioning" "state" {
+        bucket = aws_s3_bucket.state.id
+        versioning_configuration {
+          status = "Enabled"
+        }
+      }
+
+      resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
+        bucket = aws_s3_bucket.state.id
+        rule {
+          apply_server_side_encryption_by_default {
+            sse_algorithm = "aws:kms"
+          }
+        }
+      }
+
+      resource "aws_s3_bucket_public_access_block" "state" {
+        bucket                  = aws_s3_bucket.state.id
+        block_public_acls       = true
+        block_public_policy     = true
+        ignore_public_acls      = true
+        restrict_public_buckets = true
+      }
+
+      terraform {
+        required_version = ">= 1.10"
+        backend "s3" {
+          bucket       = "team-tfstate-7"
+          key          = "prod/terraform.tfstate"
+          region       = "eu-west-1"
+          encrypt      = true
+          use_lockfile = true # native locking, no DynamoDB
+        }
+      }
+    note:
+      fr: "Les protections du bucket sont trois ressources distinctes reliées par `bucket = aws_s3_bucket.state.id`. `use_lockfile = true` suffit pour le verrouillage sous Terraform 1.10+, rendant DynamoDB inutile."
+      en: "The bucket protections are three separate resources tied by `bucket = aws_s3_bucket.state.id`. `use_lockfile = true` is enough for locking under Terraform 1.10+, making DynamoDB unnecessary."
+
+quiz:
+  - q:
+      fr: "Quel est le principal intérêt du verrouillage (lock) d'un backend distant ?"
+      en: "What is the main benefit of a remote backend's locking?"
+    options:
+      fr:
+        - "Il chiffre le state"
+        - "Il empêche deux `apply` simultanés de corrompre le state"
+        - "Il accélère le plan"
+        - "Il réduit la taille du state"
+      en:
+        - "It encrypts the state"
+        - "It prevents two simultaneous `apply` runs from corrupting the state"
+        - "It speeds up the plan"
+        - "It reduces the state size"
+    answer: 1
+    why:
+      fr: "Le verrou garantit qu'un seul `apply` écrit le state à la fois ; les autres attendent ou échouent proprement, évitant la corruption par écriture concurrente."
+      en: "The lock ensures a single `apply` writes the state at a time; others wait or fail cleanly, avoiding corruption from concurrent writes."
+  - q:
+      fr: "Depuis Terraform 1.10, comment verrouiller un backend S3 sans DynamoDB ?"
+      en: "Since Terraform 1.10, how do you lock an S3 backend without DynamoDB?"
+    options:
+      fr:
+        - "`use_lockfile = true`"
+        - "`enable_lock = yes`"
+        - "`locking = \"s3\"`"
+        - "Ce n'est pas possible sans DynamoDB"
+      en:
+        - "`use_lockfile = true`"
+        - "`enable_lock = yes`"
+        - "`locking = \"s3\"`"
+        - "It is not possible without DynamoDB"
+    answer: 0
+    why:
+      fr: "`use_lockfile = true` active le verrouillage natif par fichier `.tflock` dans le bucket, rendant la table DynamoDB optionnelle."
+      en: "`use_lockfile = true` enables native locking via a `.tflock` file in the bucket, making the DynamoDB table optional."
+  - q:
+      fr: "Pourquoi activer le versioning sur le bucket de state ?"
+      en: "Why enable versioning on the state bucket?"
+    options:
+      fr:
+        - "Pour chiffrer le state"
+        - "Pour pouvoir restaurer une version antérieure si le state est corrompu"
+        - "Pour accélérer l'apply"
+        - "Pour bloquer les accès publics"
+      en:
+        - "To encrypt the state"
+        - "To be able to restore a previous version if the state is corrupted"
+        - "To speed up apply"
+        - "To block public access"
+    answer: 1
+    why:
+      fr: "Le versioning conserve chaque version du state ; en cas de corruption ou d'erreur, on revient à une version saine. C'est le filet de sécurité du state."
+      en: "Versioning keeps every version of the state; in case of corruption or error, you roll back to a healthy version. It is the state's safety net."
+  - q:
+      fr: "Dans le provider AWS v4+, comment active-t-on le chiffrement par défaut d'un bucket ?"
+      en: "In AWS provider v4+, how do you enable a bucket's default encryption?"
+    options:
+      fr:
+        - "Avec un argument `encrypted = true` dans `aws_s3_bucket`"
+        - "Avec une ressource séparée `aws_s3_bucket_server_side_encryption_configuration`"
+        - "Ce n'est pas possible avec Terraform"
+        - "Avec le bloc `backend`"
+      en:
+        - "With an `encrypted = true` argument in `aws_s3_bucket`"
+        - "With a separate `aws_s3_bucket_server_side_encryption_configuration` resource"
+        - "It is not possible with Terraform"
+        - "With the `backend` block"
+    answer: 1
+    why:
+      fr: "Depuis la v4 du provider, versioning, chiffrement et blocage public sont des ressources distinctes reliées au bucket par son `id`, et non plus des arguments internes à `aws_s3_bucket`."
+      en: "Since provider v4, versioning, encryption and public access block are separate resources tied to the bucket by its `id`, no longer inner arguments of `aws_s3_bucket`."
+  - q:
+      fr: "Pourquoi ne peut-on pas écrire `bucket = var.state_bucket` dans un bloc `backend` ?"
+      en: "Why can't you write `bucket = var.state_bucket` in a `backend` block?"
+    options:
+      fr:
+        - "Parce que les variables sont interdites dans tout le fichier"
+        - "Parce que `bucket` n'existe pas"
+        - "Parce que le backend n'accepte que des nombres"
+        - "Parce que le backend est évalué avant les variables ; il n'accepte pas `var.x`"
+      en:
+        - "Because variables are forbidden in the whole file"
+        - "Because `bucket` does not exist"
+        - "Because the backend only accepts numbers"
+        - "Because the backend is evaluated before variables; it does not accept `var.x`"
+    answer: 3
+    why:
+      fr: "La configuration du backend est lue avant l'évaluation des variables. On y met des valeurs littérales, ou on les fournit à l'init via `-backend-config`."
+      en: "The backend configuration is read before variables are evaluated. You put literal values, or supply them at init via `-backend-config`."

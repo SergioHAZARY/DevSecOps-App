@@ -1,0 +1,441 @@
+description:
+  fr: "Détecter les secrets avec Gitleaks v8 : scanner l'historique, le dépôt de travail et un dossier, écrire un .gitleaks.toml avec allowlist et règle personnalisée, puis gérer une baseline."
+  en: "Detect secrets with Gitleaks v8: scan the history, the working tree and a folder, write a .gitleaks.toml with an allowlist and a custom rule, then manage a baseline."
+duration: 25
+
+intro:
+  fr: |
+    Un `.gitignore` empêche d'ajouter *volontairement* un fichier de secrets, mais il ne voit rien quand
+    une clé est collée **en plein milieu** d'un fichier de code. Il faut un outil qui lit le contenu et
+    reconnaît la forme d'un secret. Le plus connu s'appelle **Gitleaks**.
+
+    Pensez à un portique de sécurité d'aéroport : il ne regarde pas l'étiquette de votre valise, il scanne
+    *l'intérieur* et sonne dès qu'il reconnaît une forme suspecte. Gitleaks fait pareil avec votre code :
+    il connaît par cœur la forme de centaines de secrets (clés AWS, jetons GitHub, clés privées...) et
+    sonne quand il en trouve un.
+
+    Dans cette leçon, vous allez installer Gitleaks v8, scanner un historique Git complet, scanner le
+    code non encore commité, écrire un fichier de configuration `.gitleaks.toml` avec une *allowlist*
+    (liste d'exceptions) et une **règle personnalisée**, puis utiliser une **baseline** pour ignorer les
+    anciennes alertes sans fermer les yeux sur les nouvelles.
+  en: |
+    A `.gitignore` prevents you from *deliberately* adding a secrets file, but it sees nothing when a key
+    is pasted **right in the middle** of a code file. You need a tool that reads the content and
+    recognises the shape of a secret. The best known is called **Gitleaks**.
+
+    Think of an airport security gate: it does not read your suitcase label, it scans the *inside* and
+    beeps the moment it recognises a suspicious shape. Gitleaks does the same with your code: it knows the
+    shape of hundreds of secrets by heart (AWS keys, GitHub tokens, private keys...) and beeps when it
+    finds one.
+
+    In this lesson you will install Gitleaks v8, scan a full Git history, scan not-yet-committed code,
+    write a `.gitleaks.toml` configuration file with an *allowlist* (exceptions list) and a **custom
+    rule**, then use a **baseline** to ignore old findings without turning a blind eye to the new ones.
+
+sections:
+  - heading:
+      fr: "Les trois modes de scan de Gitleaks v8"
+      en: "The three scan modes of Gitleaks v8"
+    body:
+      fr: |
+        Gitleaks v8 a réorganisé ses commandes. Il faut connaître trois modes :
+
+        | Commande | Ce qu'elle scanne | Quand l'utiliser |
+        |---|---|---|
+        | `gitleaks git` | Tout l'**historique** Git (chaque commit) | Audit complet, CI sur un dépôt |
+        | `gitleaks dir` | Les **fichiers** d'un dossier, tels quels | Code non commité, dépôt sans `.git`, image |
+        | `gitleaks git --staged` | Uniquement ce qui est en zone de staging | Hook pre-commit, feedback instantané |
+
+        Un détail qui surprend souvent : `gitleaks dir` (anciennement `detect --no-git`) **ne lit pas**
+        l'historique ; il regarde le contenu actuel des fichiers. À l'inverse, `gitleaks git` lit les
+        *diffs* de chaque commit : il trouve un secret même s'il a été supprimé depuis, car il reste dans
+        l'historique.
+
+        Le code de retour vaut **0** si rien n'est trouvé et **1** si au moins une fuite est détectée :
+        c'est ce qui permet de faire échouer un pipeline. L'option `-v` (verbose) affiche chaque fuite,
+        et `--report-path report.json` écrit un rapport exploitable.
+      en: |
+        Gitleaks v8 reorganised its commands. You need to know three modes:
+
+        | Command | What it scans | When to use it |
+        |---|---|---|
+        | `gitleaks git` | The whole Git **history** (every commit) | Full audit, CI on a repo |
+        | `gitleaks dir` | The **files** of a folder, as they are | Uncommitted code, repo without `.git`, image |
+        | `gitleaks git --staged` | Only what is in the staging area | Pre-commit hook, instant feedback |
+
+        A detail that often surprises: `gitleaks dir` (formerly `detect --no-git`) **does not read** the
+        history; it looks at the current content of the files. Conversely, `gitleaks git` reads the *diffs*
+        of each commit: it finds a secret even if it has since been deleted, because it is still in the
+        history.
+
+        The exit code is **0** when nothing is found and **1** when at least one leak is detected: this is
+        what lets you fail a pipeline. The `-v` (verbose) option prints every leak, and
+        `--report-path report.json` writes an actionable report.
+  - heading:
+      fr: "Configurer Gitleaks avec .gitleaks.toml"
+      en: "Configuring Gitleaks with .gitleaks.toml"
+    body:
+      fr: |
+        Par défaut, Gitleaks utilise un jeu de règles intégré (plus de 150 motifs). Vous pouvez l'étendre
+        et surtout l'**ajuster** avec un fichier `.gitleaks.toml` à la racine du dépôt. Deux besoins
+        reviennent sans cesse :
+
+        1. **Réduire les faux positifs** avec une `allowlist`. On y met des chemins de fichiers de test,
+           des valeurs d'exemple (`AKIAIOSFODNN7EXAMPLE`) ou des expressions régulières à ignorer. Chaque
+           exception doit être **justifiée** : une allowlist trop large rend le scanner aveugle.
+        2. **Ajouter une règle maison** pour un secret propre à votre entreprise (un préfixe de jeton
+           interne, par exemple `acme_live_...`) que les règles génériques ne connaissent pas.
+
+        La directive `[extend]` avec `useDefault = true` conserve toutes les règles intégrées et y ajoute
+        les vôtres : ne repartez jamais de zéro, vous perdriez la détection des clés AWS, GitHub, etc.
+
+        Une allowlist peut filtrer par `regexes` (le secret lui-même), par `paths` (le fichier) ou par
+        `commits` (un identifiant de commit précis). Le champ `regexTarget` indique si l'expression
+        s'applique au secret trouvé (`match`) ou à toute la ligne (`line`).
+      en: |
+        By default Gitleaks uses a built-in ruleset (over 150 patterns). You can extend it and, above all,
+        **tune** it with a `.gitleaks.toml` file at the root of the repo. Two needs come up constantly:
+
+        1. **Reduce false positives** with an `allowlist`. You put test file paths, example values
+           (`AKIAIOSFODNN7EXAMPLE`) or regular expressions to ignore. Every exception must be
+           **justified**: an allowlist that is too broad blinds the scanner.
+        2. **Add a custom rule** for a secret specific to your company (an internal token prefix, for
+           example `acme_live_...`) that the generic rules do not know.
+
+        The `[extend]` directive with `useDefault = true` keeps every built-in rule and adds yours: never
+        start from scratch, you would lose detection of AWS, GitHub and other keys.
+
+        An allowlist can filter by `regexes` (the secret itself), by `paths` (the file) or by `commits`
+        (a specific commit hash). The `regexTarget` field says whether the expression applies to the
+        found secret (`match`) or to the whole line (`line`).
+  - heading:
+      fr: "La baseline : partir d'un dépôt déjà pollué"
+      en: "The baseline: starting from an already-polluted repo"
+    body:
+      fr: |
+        Quand vous ajoutez Gitleaks à un **vieux** projet, le premier scan trouve souvent des dizaines de
+        secrets historiques. Les corriger tous d'un coup est irréaliste, mais laisser le pipeline toujours
+        rouge le rend inutile. La solution est la **baseline**.
+
+        Une baseline est un rapport JSON des fuites **connues et acceptées à un instant T**. On le génère
+        une fois :
+
+        ```bash
+        gitleaks git -report-path gitleaks-report.json
+        cp gitleaks-report.json .gitleaks-baseline.json
+        ```
+
+        Ensuite, on lance Gitleaks avec `--baseline-path .gitleaks-baseline.json` : il soustrait les fuites
+        déjà listées et ne signale que les **nouvelles**. Le pipeline redevient vert, mais toute nouvelle
+        fuite le fait échouer.
+
+        **Attention** : une baseline n'est pas une solution, c'est un sursis. Les secrets de la baseline
+        sont toujours dans l'historique et toujours valides tant qu'ils ne sont pas révoqués. La baseline
+        sert à *arrêter l'hémorragie* pendant que l'équipe nettoie et change les anciens secrets.
+      en: |
+        When you add Gitleaks to an **old** project, the first scan often finds dozens of historical
+        secrets. Fixing them all at once is unrealistic, but leaving the pipeline permanently red makes it
+        useless. The answer is the **baseline**.
+
+        A baseline is a JSON report of the leaks **known and accepted at a point in time**. You generate it
+        once:
+
+        ```bash
+        gitleaks git -report-path gitleaks-report.json
+        cp gitleaks-report.json .gitleaks-baseline.json
+        ```
+
+        Then you run Gitleaks with `--baseline-path .gitleaks-baseline.json`: it subtracts the leaks already
+        listed and reports only the **new** ones. The pipeline turns green again, but any new leak fails
+        it.
+
+        **Beware**: a baseline is not a fix, it is a reprieve. The baseline secrets are still in the
+        history and still valid until they are rotated. The baseline is there to *stop the bleeding* while
+        the team cleans up and rotates the old secrets.
+
+examples:
+  - title:
+      fr: "Scanner l'historique complet d'un dépôt"
+      en: "Scanning the full history of a repo"
+    file: scan-history.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Scan every commit of the current repo. Exit code 1 means a leak was found.
+      # -v prints each finding; --report-path writes a JSON report for later.
+      gitleaks git -v --report-path gitleaks-report.json
+
+      echo "exit code: $?"   # 0 = clean, 1 = at least one leak
+    output: |
+      Finding:     AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
+      Secret:      AKIAIOSFODNN7EXAMPLE
+      RuleID:      aws-access-token
+      Entropy:     3.684
+      File:        config/settings.py
+      Line:        12
+      Commit:      7d9f0a1c2b3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a
+      Author:      dev <dev@example.com>
+      Date:        2026-02-11T09:22:30Z
+
+      11:58AM INF 342 commits scanned.
+      11:58AM WRN leaks found: 1
+      exit code: 1
+    note:
+      fr: "`gitleaks git` lit le diff de chaque commit : même si cette clé a été supprimée depuis, elle est trouvée car elle vit toujours dans l'historique. Le rapport JSON permet ensuite de construire une baseline ou d'alimenter un tableau de bord."
+      en: "`gitleaks git` reads each commit's diff: even if this key was deleted since, it is found because it still lives in the history. The JSON report then lets you build a baseline or feed a dashboard."
+
+  - title:
+      fr: "Scanner du code non encore commité (dir)"
+      en: "Scanning not-yet-committed code (dir)"
+    file: scan-dir.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # "dir" scans files as they are on disk, ignoring Git history.
+      # Perfect for code you have not committed yet, or a repo without .git.
+      gitleaks dir . -v
+
+      # In a pre-commit hook you scan only the staged changes instead:
+      gitleaks git --staged -v
+    output: |
+      Finding:     token = "ghp_1234567890abcdefghijklmnopqrstuv1234"
+      Secret:      ghp_1234567890abcdefghijklmnopqrstuv1234
+      RuleID:      github-pat
+      File:        deploy.sh
+      Line:        4
+
+      1:05PM WRN leaks found: 1
+    note:
+      fr: "`gitleaks dir` regarde les fichiers tels quels : il attrape le secret **avant** qu'il n'entre dans un commit. `gitleaks git --staged` fait de même mais uniquement sur ce qui est en zone de staging, idéal pour un hook pre-commit rapide."
+      en: "`gitleaks dir` looks at the files as they are: it catches the secret **before** it enters a commit. `gitleaks git --staged` does the same but only on what is staged, ideal for a fast pre-commit hook."
+
+  - title:
+      fr: "Un .gitleaks.toml avec allowlist et règle personnalisée"
+      en: "A .gitleaks.toml with an allowlist and a custom rule"
+    file: .gitleaks.toml
+    lang: toml
+    kind: secure
+    code: |
+      # Keep all 150+ built-in rules, then add our own on top
+      [extend]
+      useDefault = true
+
+      # --- Custom rule: our internal token has the prefix "acme_live_" ---
+      [[rules]]
+      id = "acme-internal-token"
+      description = "ACME internal service token"
+      # 32 hex chars after the prefix; (?i) makes it case-insensitive
+      regex = '''(?i)acme_live_[0-9a-f]{32}'''
+      keywords = ["acme_live_"]   # speeds up scanning: skip lines without this word
+
+      # --- Allowlist: documented exceptions, each one justified ---
+      [allowlist]
+      description = "Known false positives, reviewed by the security team"
+      # 1. Example values used in docs and tests are not real secrets
+      regexes = [
+        '''AKIAIOSFODNN7EXAMPLE''',
+        '''changeme-in-vault''',
+      ]
+      # 2. Whole folders of fixtures contain fake credentials on purpose
+      paths = [
+        '''tests/fixtures/.*''',
+        '''.*\.example$''',
+      ]
+    note:
+      fr: "`useDefault = true` est indispensable : sans lui, vous ne gardez QUE votre règle maison et perdez la détection des clés AWS/GitHub. Le champ `keywords` accélère le scan. Chaque entrée d'`allowlist` correspond à une valeur d'exemple ou un dossier de tests, jamais à un vrai secret."
+      en: "`useDefault = true` is essential: without it you keep ONLY your custom rule and lose AWS/GitHub detection. The `keywords` field speeds up scanning. Each `allowlist` entry maps to an example value or a test folder, never to a real secret."
+
+  - title:
+      fr: "Scanner en ignorant les fuites déjà connues (baseline)"
+      en: "Scanning while ignoring already-known leaks (baseline)"
+    file: baseline.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Step 1 (once): record the leaks that already exist in the old history
+      gitleaks git --report-path .gitleaks-baseline.json
+
+      # Step 2 (every run): subtract the baseline, report only NEW leaks.
+      # A brand-new secret still fails the build with exit code 1.
+      gitleaks git \
+        --baseline-path .gitleaks-baseline.json \
+        --config .gitleaks.toml \
+        -v --report-path gitleaks-report.json
+
+      echo "exit code: $?"
+    output: |
+      11:12AM INF 357 commits scanned.
+      11:12AM INF 1 leaks found in baseline, ignored.
+      11:12AM INF no new leaks found
+      exit code: 0
+    note:
+      fr: "La baseline neutralise les 1 fuite historique déjà acceptée : le pipeline redevient vert. Mais ce n'est qu'un sursis — ce secret reste valide tant qu'on ne l'a pas révoqué. Tout **nouveau** secret, lui, fera bien échouer le build."
+      en: "The baseline neutralises the 1 historical leak already accepted: the pipeline turns green again. But it is only a reprieve — that secret stays valid until it is rotated. Any **new** secret, however, will still fail the build."
+
+mistake:
+  fr: |
+    **Mettre une allowlist trop large, ou croire que la baseline « règle » le problème.**
+
+    Ajouter `regexes = ['''.*''']` ou `paths = ['''.*''']` pour faire taire Gitleaks revient à débrancher
+    le portique de sécurité : il tourne toujours mais ne détecte plus rien. De même, une baseline ne
+    supprime pas les secrets : ils restent dans l'historique et **valides**. Tant qu'ils ne sont pas
+    révoqués, un attaquant qui clone le dépôt peut les utiliser. La baseline sert à prioriser le nettoyage,
+    pas à l'éviter.
+  en: |
+    **Setting an allowlist that is too broad, or thinking the baseline "solves" the problem.**
+
+    Adding `regexes = ['''.*''']` or `paths = ['''.*''']` to silence Gitleaks is like unplugging the
+    security gate: it still runs but detects nothing. Likewise, a baseline does not remove secrets: they
+    stay in the history and stay **valid**. Until they are rotated, an attacker who clones the repo can use
+    them. The baseline is there to prioritise the cleanup, not to avoid it.
+
+bestPractice:
+  fr: |
+    - **Scannez l'historique (`gitleaks git`) en CI** et le staging (`gitleaks git --staged`) en pre-commit.
+    - **Versionnez `.gitleaks.toml`** et gardez `useDefault = true` pour ne jamais perdre les règles intégrées.
+    - **Justifiez chaque entrée d'allowlist** par un commentaire ; préférez des chemins précis à des regex larges.
+    - **Épinglez la version** de Gitleaks (image ou binaire) : les règles évoluent d'une version à l'autre.
+    - **Après chaque vraie fuite trouvée : révoquez d'abord le secret**, puis seulement ensuite nettoyez l'historique.
+    - **Utilisez une baseline pour les vieux dépôts**, mais datez-la et planifiez le nettoyage des secrets listés.
+  en: |
+    - **Scan the history (`gitleaks git`) in CI** and the staging area (`gitleaks git --staged`) in pre-commit.
+    - **Version `.gitleaks.toml`** and keep `useDefault = true` so you never lose the built-in rules.
+    - **Justify every allowlist entry** with a comment; prefer precise paths to broad regexes.
+    - **Pin the Gitleaks version** (image or binary): the rules change from one release to the next.
+    - **After every real leak found: rotate the secret first**, and only then clean the history.
+    - **Use a baseline for old repos**, but date it and plan the rotation of the listed secrets.
+
+exercise:
+  statement:
+    fr: |
+      Votre entreprise émet des jetons internes de la forme `corp-` suivi de **40 caractères hexadécimaux**
+      (exemple factice : `corp-0123456789abcdef0123456789abcdef01234567`). Les règles par défaut de
+      Gitleaks ne les connaissent pas.
+
+      Par ailleurs, le dossier `docs/examples/` contient volontairement des jetons factices pour la
+      documentation, et la valeur d'exemple `AKIAIOSFODNN7EXAMPLE` revient souvent.
+
+      1. Écrivez un `.gitleaks.toml` qui **garde** les règles par défaut, **ajoute** une règle pour le
+         jeton `corp-...` et **ignore** le dossier d'exemples ainsi que la clé AWS d'exemple.
+      2. Donnez la commande qui scanne tout l'historique avec ce fichier et écrit un rapport JSON.
+    en: |
+      Your company issues internal tokens of the form `corp-` followed by **40 hexadecimal characters**
+      (fake example: `corp-0123456789abcdef0123456789abcdef01234567`). Gitleaks' default rules do not know
+      them.
+
+      Separately, the `docs/examples/` folder deliberately contains fake tokens for documentation, and the
+      example value `AKIAIOSFODNN7EXAMPLE` appears often.
+
+      1. Write a `.gitleaks.toml` that **keeps** the default rules, **adds** a rule for the `corp-...`
+         token and **ignores** the examples folder plus the example AWS key.
+      2. Give the command that scans the whole history with this file and writes a JSON report.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      cat > .gitleaks.toml <<'EOF'
+      # Keep all built-in rules, add ours on top
+      [extend]
+      useDefault = true
+
+      [[rules]]
+      id = "corp-internal-token"
+      description = "Corp internal token"
+      regex = '''corp-[0-9a-f]{40}'''
+      keywords = ["corp-"]
+
+      [allowlist]
+      description = "Documentation examples, reviewed"
+      regexes = ['''AKIAIOSFODNN7EXAMPLE''']
+      paths = ['''docs/examples/.*''']
+      EOF
+
+      # Scan the full history with our config and write a JSON report
+      gitleaks git --config .gitleaks.toml -v --report-path gitleaks-report.json
+    note:
+      fr: "La règle maison repère exactement `corp-` + 40 caractères hex ; `keywords` accélère le scan. L'allowlist neutralise la clé d'exemple et tout le dossier de documentation, sans toucher à la détection des vrais secrets ailleurs."
+      en: "The custom rule matches exactly `corp-` + 40 hex chars; `keywords` speeds up the scan. The allowlist neutralises the example key and the whole docs folder, without affecting detection of real secrets elsewhere."
+
+quiz:
+  - q:
+      fr: "Quelle commande Gitleaks v8 scanne tout l'historique Git, y compris les secrets déjà supprimés ?"
+      en: "Which Gitleaks v8 command scans the whole Git history, including already-deleted secrets?"
+    options:
+      fr:
+        - "`gitleaks dir .`"
+        - "`gitleaks git`"
+        - "`gitleaks scan --files`"
+        - "`gitleaks check`"
+      en:
+        - "`gitleaks dir .`"
+        - "`gitleaks git`"
+        - "`gitleaks scan --files`"
+        - "`gitleaks check`"
+    answer: 1
+    why:
+      fr: "`gitleaks git` lit le diff de chaque commit, donc il trouve un secret même supprimé depuis. `gitleaks dir` ne regarde que les fichiers actuels."
+      en: "`gitleaks git` reads each commit's diff, so it finds a secret even if deleted since. `gitleaks dir` only looks at the current files."
+  - q:
+      fr: "Pourquoi garder `useDefault = true` dans `[extend]` ?"
+      en: "Why keep `useDefault = true` in `[extend]`?"
+    options:
+      fr:
+        - "Pour conserver les 150+ règles intégrées en plus des vôtres"
+        - "Pour désactiver toutes les règles sauf les vôtres"
+        - "Pour accélérer le scan en ignorant l'historique"
+        - "Pour chiffrer le rapport de sortie"
+      en:
+        - "To keep the 150+ built-in rules in addition to yours"
+        - "To disable every rule except yours"
+        - "To speed up the scan by ignoring history"
+        - "To encrypt the output report"
+    answer: 0
+    why:
+      fr: "Sans `useDefault = true`, vous ne gardez que vos règles personnalisées et perdez la détection des clés AWS, GitHub, etc."
+      en: "Without `useDefault = true` you keep only your custom rules and lose detection of AWS, GitHub and other keys."
+  - q:
+      fr: "Que fait une baseline Gitleaks ?"
+      en: "What does a Gitleaks baseline do?"
+    options:
+      fr:
+        - "Elle supprime les secrets de l'historique"
+        - "Elle chiffre automatiquement les secrets trouvés"
+        - "Elle ignore les fuites déjà listées et ne signale que les nouvelles"
+        - "Elle révoque les clés exposées via l'API du fournisseur"
+      en:
+        - "It removes secrets from the history"
+        - "It automatically encrypts the found secrets"
+        - "It ignores already-listed leaks and reports only new ones"
+        - "It revokes exposed keys via the provider API"
+    answer: 2
+    why:
+      fr: "La baseline soustrait les fuites connues au moment où elle a été créée ; une nouvelle fuite fait toujours échouer le scan. Elle ne supprime ni ne révoque les secrets."
+      en: "The baseline subtracts the leaks known when it was created; a new leak still fails the scan. It neither removes nor revokes the secrets."
+  - q:
+      fr: "Quel code de retour renvoie Gitleaks quand il trouve au moins une fuite ?"
+      en: "Which exit code does Gitleaks return when it finds at least one leak?"
+    options:
+      fr: ["0", "1", "2", "255"]
+      en: ["0", "1", "2", "255"]
+    answer: 1
+    why:
+      fr: "Gitleaks renvoie `1` dès qu'une fuite est trouvée et `0` sinon : c'est ce qui permet de faire échouer un pipeline."
+      en: "Gitleaks returns `1` as soon as a leak is found and `0` otherwise: that is what lets a pipeline fail."
+  - q:
+      fr: "Quel est le risque d'une allowlist `paths = ['''.*''']` ?"
+      en: "What is the risk of an allowlist `paths = ['''.*''']`?"
+    options:
+      fr:
+        - "Elle ralentit fortement le scan"
+        - "Elle force le scan de l'historique entier"
+        - "Elle fait planter Gitleaks"
+        - "Elle ignore tous les fichiers : le scanner ne détecte plus rien"
+      en:
+        - "It greatly slows the scan"
+        - "It forces a scan of the whole history"
+        - "It crashes Gitleaks"
+        - "It ignores every file: the scanner detects nothing any more"
+    answer: 3
+    why:
+      fr: "Un motif `.*` correspond à tous les chemins : l'allowlist couvre tout le dépôt et Gitleaks devient aveugle. Les exceptions doivent être précises et justifiées."
+      en: "A `.*` pattern matches every path: the allowlist covers the whole repo and Gitleaks goes blind. Exceptions must be precise and justified."

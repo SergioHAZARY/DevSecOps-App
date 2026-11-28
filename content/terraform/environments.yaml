@@ -1,0 +1,480 @@
+description:
+  fr: "Gérer plusieurs environnements (dev, staging, prod) avec Terraform : l'approche par dossiers séparés face aux workspaces, et pourquoi l'isolation compte pour la production."
+  en: "Manage multiple environments (dev, staging, prod) with Terraform: the separate-directories approach versus workspaces, and why isolation matters for production."
+duration: 25
+
+intro:
+  fr: |
+    Une infrastructure sérieuse n'existe jamais en un seul exemplaire : on a un environnement de
+    **développement** pour expérimenter, une **recette** (*staging*) qui imite la production, et la
+    **production** elle-même. Comment faire cohabiter ces trois versions du même code sans qu'un `apply`
+    destiné à dev ne frappe la prod ? Terraform offre deux approches : les **dossiers séparés** et les
+    **workspaces**.
+
+    L'analogie : trois **maquettes d'un même bâtiment**. Avec des dossiers séparés, chaque maquette est dans
+    une pièce fermée distincte, avec sa propre clé — impossible de les confondre. Avec les workspaces, les
+    trois maquettes partagent la même table et l'on « bascule » de l'une à l'autre : plus léger, mais on
+    peut se tromper de maquette.
+
+    Dans cette leçon vous allez comparer les deux approches, mettre en place une structure par dossiers avec
+    un state distinct par environnement, manipuler les workspaces (`terraform workspace`), et comprendre
+    pourquoi, **pour la production**, l'isolation forte par dossiers est généralement préférée.
+  en: |
+    A serious infrastructure never exists as a single copy: you have a **development** environment to
+    experiment, a **staging** one that mimics production, and **production** itself. How do you let these
+    three versions of the same code coexist without an `apply` meant for dev hitting prod? Terraform offers
+    two approaches: **separate directories** and **workspaces**.
+
+    The analogy: three **models of the same building**. With separate directories, each model is in its own
+    closed room, with its own key — impossible to mix them up. With workspaces, the three models share one
+    table and you "switch" between them: lighter, but you can pick the wrong model.
+
+    In this lesson you will compare the two approaches, set up a directory structure with a separate state
+    per environment, work with workspaces (`terraform workspace`), and understand why, **for production**,
+    strong directory isolation is generally preferred.
+
+sections:
+  - heading:
+      fr: "Deux approches, deux niveaux d'isolation"
+      en: "Two approaches, two levels of isolation"
+    body:
+      fr: |
+        | Critère | Dossiers séparés | Workspaces |
+        |---|---|---|
+        | State | Un fichier **par dossier** (clé distincte) | Un state **par workspace**, même backend |
+        | Backend/identifiants | Peuvent différer par environnement | **Partagés** par tous les workspaces |
+        | Risque d'erreur de cible | Faible (chemin explicite) | Plus élevé (il faut penser à `select`) |
+        | Divergence de config | Possible (chaque dossier évolue) | Impossible (même code) |
+        | Idéal pour | **Prod / environnements durables** | Environnements **éphémères/identiques** |
+
+        Les **dossiers séparés** donnent une isolation forte : chaque environnement a son propre dossier, son
+        propre state, et peut même utiliser un compte cloud ou des identifiants différents. Le prix à payer :
+        un peu de duplication, qu'on réduit en appelant un **module commun** depuis chaque dossier.
+
+        Les **workspaces** partagent le même code et le même backend ; seul le state change selon le
+        workspace actif. C'est léger et parfait pour créer des copies **éphémères et identiques** (une par
+        branche de test, par exemple). Mais comme le backend et les identifiants sont partagés, une
+        inattention (`apply` dans le mauvais workspace) peut toucher la production.
+      en: |
+        | Criterion | Separate directories | Workspaces |
+        |---|---|---|
+        | State | One file **per directory** (distinct key) | One state **per workspace**, same backend |
+        | Backend/credentials | May differ per environment | **Shared** by all workspaces |
+        | Wrong-target risk | Low (explicit path) | Higher (you must remember `select`) |
+        | Config divergence | Possible (each directory evolves) | Impossible (same code) |
+        | Ideal for | **Prod / long-lived environments** | **Ephemeral/identical** environments |
+
+        **Separate directories** give strong isolation: each environment has its own directory, its own
+        state, and can even use a different cloud account or credentials. The price: a little duplication,
+        reduced by calling a **shared module** from each directory.
+
+        **Workspaces** share the same code and the same backend; only the state changes with the active
+        workspace. It is lightweight and perfect for creating **ephemeral, identical** copies (one per test
+        branch, say). But since the backend and credentials are shared, a slip (`apply` in the wrong
+        workspace) can hit production.
+  - heading:
+      fr: "La structure par dossiers"
+      en: "The directory structure"
+    body:
+      fr: |
+        Le motif le plus répandu en entreprise sépare un dossier par environnement, chacun avec sa propre
+        configuration de backend (donc son propre state), et un dossier `modules/` partagé :
+
+        ```text
+        infra/
+          modules/
+            app/            # shared module: the actual resources
+          environments/
+            dev/
+              main.tf       # calls ../../modules/app with dev values
+              backend.tf    # key = "dev/terraform.tfstate"
+            staging/
+              main.tf
+              backend.tf    # key = "staging/terraform.tfstate"
+            prod/
+              main.tf
+              backend.tf    # key = "prod/terraform.tfstate"
+        ```
+
+        On lance `terraform apply` **depuis le dossier** de l'environnement visé. Le chemin rend la cible
+        explicite : difficile de confondre `environments/prod` avec `environments/dev`. Chaque dossier fixe
+        ses propres valeurs (taille des instances, nombre de répliques) en appelant le **même** module `app`,
+        ce qui garantit que les trois environnements déploient la même logique, seulement dimensionnée
+        différemment. C'est l'approche recommandée dès qu'un environnement est durable et sensible.
+      en: |
+        The most widespread enterprise pattern separates one directory per environment, each with its own
+        backend configuration (hence its own state), plus a shared `modules/` directory:
+
+        ```text
+        infra/
+          modules/
+            app/            # shared module: the actual resources
+          environments/
+            dev/
+              main.tf       # calls ../../modules/app with dev values
+              backend.tf    # key = "dev/terraform.tfstate"
+            staging/
+              main.tf
+              backend.tf    # key = "staging/terraform.tfstate"
+            prod/
+              main.tf
+              backend.tf    # key = "prod/terraform.tfstate"
+        ```
+
+        You run `terraform apply` **from the directory** of the target environment. The path makes the
+        target explicit: hard to confuse `environments/prod` with `environments/dev`. Each directory sets
+        its own values (instance sizes, replica counts) by calling the **same** `app` module, which
+        guarantees the three environments deploy the same logic, only sized differently. This is the
+        recommended approach as soon as an environment is long-lived and sensitive.
+  - heading:
+      fr: "Les workspaces"
+      en: "Workspaces"
+    body:
+      fr: |
+        Un workspace est un state nommé au sein d'un **même** dossier et d'un **même** backend. Les commandes :
+
+        ```bash
+        terraform workspace list          # show workspaces (* marks the active one)
+        terraform workspace new dev        # create and switch to "dev"
+        terraform workspace select prod    # switch to "prod"
+        terraform workspace show           # print the active workspace
+        ```
+
+        Dans le code, `terraform.workspace` donne le nom du workspace actif, qu'on peut utiliser pour
+        ajuster quelques valeurs. **Prudence** : s'appuyer trop sur `terraform.workspace` pour changer le
+        comportement (via de longues conditions) rend le code illisible et dangereux. Les workspaces servent
+        surtout à répliquer une infrastructure **identique**, pas à encoder des différences structurelles.
+
+        Le piège majeur : le workspace par défaut s'appelle `default`, et il est facile d'oublier de faire
+        `select` avant un `apply`. Comme le backend et les identifiants sont partagés, un `apply` lancé par
+        erreur dans le workspace `prod` affecte réellement la production. Pour cette raison, beaucoup
+        d'équipes réservent les workspaces aux environnements jetables et gardent la production dans un
+        dossier isolé.
+      en: |
+        A workspace is a named state within the **same** directory and the **same** backend. The commands:
+
+        ```bash
+        terraform workspace list          # show workspaces (* marks the active one)
+        terraform workspace new dev        # create and switch to "dev"
+        terraform workspace select prod    # switch to "prod"
+        terraform workspace show           # print the active workspace
+        ```
+
+        In the code, `terraform.workspace` gives the active workspace name, which you can use to adjust a
+        few values. **Caution**: relying too heavily on `terraform.workspace` to change behaviour (via long
+        conditionals) makes the code unreadable and dangerous. Workspaces are mainly for replicating an
+        **identical** infrastructure, not for encoding structural differences.
+
+        The main trap: the default workspace is called `default`, and it is easy to forget to `select`
+        before an `apply`. Since the backend and credentials are shared, an `apply` run by mistake in the
+        `prod` workspace really affects production. For this reason, many teams reserve workspaces for
+        disposable environments and keep production in an isolated directory.
+
+examples:
+  - title:
+      fr: "La structure par dossiers"
+      en: "The directory structure"
+    file: tree.txt
+    lang: text
+    kind: neutral
+    code: |
+      infra/
+      ├── modules/
+      │   └── app/
+      │       ├── main.tf          # the real resources (bucket, instance, ...)
+      │       ├── variables.tf     # interface: environment, instance_type, ...
+      │       └── outputs.tf
+      └── environments/
+          ├── dev/
+          │   ├── main.tf          # module "app" with dev values
+          │   └── backend.tf       # key = "dev/terraform.tfstate"
+          ├── staging/
+          │   ├── main.tf
+          │   └── backend.tf       # key = "staging/terraform.tfstate"
+          └── prod/
+              ├── main.tf
+              └── backend.tf       # key = "prod/terraform.tfstate"
+    note:
+      fr: "Chaque environnement est un dossier avec son propre state (clé distincte dans le backend). On applique depuis le dossier cible, ce qui rend l'environnement explicite. Le dossier `modules/app` est partagé pour éviter la duplication."
+      en: "Each environment is a directory with its own state (distinct backend key). You apply from the target directory, which makes the environment explicit. The `modules/app` directory is shared to avoid duplication."
+
+  - title:
+      fr: "Un environnement appelle le module commun"
+      en: "An environment calls the shared module"
+    file: environments/prod/main.tf
+    lang: hcl
+    kind: secure
+    code: |
+      terraform {
+        required_version = ">= 1.10"
+        backend "s3" {
+          bucket       = "devsecops-tfstate-42"
+          key          = "prod/terraform.tfstate" # distinct state for prod
+          region       = "eu-west-3"
+          encrypt      = true
+          use_lockfile = true
+        }
+      }
+
+      provider "aws" {
+        region = "eu-west-3"
+      }
+
+      # Same module as dev/staging, but sized for production
+      module "app" {
+        source = "../../modules/app"
+
+        environment    = "prod"
+        instance_type  = "m5.large" # bigger than dev
+        instance_count = 6          # more replicas than dev
+      }
+    note:
+      fr: "Le dossier `prod` appelle le **même** module `app` que `dev`, avec des valeurs de production. La clé de state `prod/terraform.tfstate` isole complètement son state. Les trois environnements partagent la logique mais pas le state."
+      en: "The `prod` directory calls the **same** `app` module as `dev`, with production values. The state key `prod/terraform.tfstate` fully isolates its state. The three environments share the logic but not the state."
+
+  - title:
+      fr: "Manipuler les workspaces"
+      en: "Working with workspaces"
+    file: workspaces.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # List existing workspaces; the active one is marked with *
+      terraform workspace list
+
+      # Create (and switch to) a workspace for a short-lived test environment
+      terraform workspace new feature-login
+
+      # Switch between workspaces; each has its OWN state, same code and backend
+      terraform workspace select default
+      terraform workspace show
+    output: |
+      $ terraform workspace list
+      * default
+
+      $ terraform workspace new feature-login
+      Created and switched to workspace "feature-login"!
+
+      $ terraform workspace show
+      feature-login
+    note:
+      fr: "Chaque workspace a son propre state dans le même backend. Idéal pour une copie éphémère par branche de fonctionnalité. Pensez toujours à `terraform workspace show` avant un `apply` : le workspace actif détermine la cible."
+      en: "Each workspace has its own state in the same backend. Ideal for an ephemeral copy per feature branch. Always run `terraform workspace show` before an `apply`: the active workspace determines the target."
+
+  - title:
+      fr: "Adapter quelques valeurs selon le workspace"
+      en: "Adapting a few values per workspace"
+    file: workspace-locals.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      locals {
+        # Per-workspace sizing, with a safe fallback for unknown workspaces
+        sizing = {
+          dev  = { instance_type = "t3.small", count = 1 }
+          prod = { instance_type = "m5.large", count = 6 }
+        }
+
+        current = lookup(local.sizing, terraform.workspace, local.sizing["dev"])
+      }
+
+      module "app" {
+        source = "./modules/app"
+
+        environment    = terraform.workspace
+        instance_type  = local.current.instance_type
+        instance_count = local.current.count
+      }
+    note:
+      fr: "`terraform.workspace` nomme le workspace actif ; une map `sizing` traduit ce nom en réglages. Gardez cet usage **léger** : si les environnements diffèrent structurellement, préférez des dossiers séparés plutôt que des conditions complexes sur `terraform.workspace`."
+      en: "`terraform.workspace` names the active workspace; a `sizing` map turns that name into settings. Keep this use **light**: if environments differ structurally, prefer separate directories over complex conditionals on `terraform.workspace`."
+
+  - title:
+      fr: "Vulnérable : appliquer dans le mauvais workspace"
+      en: "Vulnerable: applying in the wrong workspace"
+    file: danger.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # You THINK you are on dev, but you forgot to select it earlier.
+      # The active workspace is still "prod" from a previous session.
+      terraform apply -auto-approve   # <- this hits PRODUCTION
+
+      # Safer habit: always confirm the target before applying
+      echo "About to apply in workspace: $(terraform workspace show)"
+      terraform plan   # read the plan, confirm the environment, THEN apply
+    note:
+      fr: "Comme les workspaces partagent backend et identifiants, un `apply` dans le mauvais workspace touche réellement la production. D'où la règle : vérifier `terraform workspace show`, lire le plan, et réserver la prod à un dossier isolé plutôt qu'à un simple workspace."
+      en: "Since workspaces share the backend and credentials, an `apply` in the wrong workspace really hits production. Hence the rule: check `terraform workspace show`, read the plan, and keep prod in an isolated directory rather than a mere workspace."
+
+mistake:
+  fr: |
+    **Mettre la production dans un simple workspace et s'y tromper de cible.**
+
+    Les workspaces sont séduisants par leur légèreté, mais ils partagent le backend, les identifiants et le
+    code. Résultat : une seule commande `terraform workspace select` oubliée, et un `apply` destiné à dev
+    reconfigure la production — surtout avec `-auto-approve` en CI. Pour un environnement **durable et
+    sensible** comme la prod, préférez un **dossier isolé** avec son propre state (et, idéalement, son
+    propre compte cloud). Réservez les workspaces aux environnements **éphémères et identiques** (une copie
+    par branche de test). Et dans tous les cas, lisez le plan et vérifiez la cible avant d'appliquer :
+    l'automatisation sans garde-fou est un risque, pas un progrès.
+  en: |
+    **Putting production in a mere workspace and picking the wrong target.**
+
+    Workspaces are appealing for their lightness, but they share the backend, credentials and code. As a
+    result, one forgotten `terraform workspace select`, and an `apply` meant for dev reconfigures
+    production — especially with `-auto-approve` in CI. For a **long-lived, sensitive** environment like
+    prod, prefer an **isolated directory** with its own state (and, ideally, its own cloud account). Reserve
+    workspaces for **ephemeral, identical** environments (one copy per test branch). And in all cases, read
+    the plan and confirm the target before applying: automation without a guardrail is a risk, not progress.
+
+bestPractice:
+  fr: |
+    - **Prod dans un dossier isolé** avec son propre state, plutôt que dans un workspace partagé.
+    - **Un module commun appelé par chaque environnement** : logique identique, valeurs différentes.
+    - **Une clé de state distincte par environnement** (`dev/…`, `prod/…`) pour une isolation complète.
+    - **Workspaces pour l'éphémère/identique** (copies par branche), pas pour des environnements qui divergent.
+    - **Vérifiez la cible** (`terraform workspace show`, le chemin du dossier) et lisez le plan avant tout `apply`.
+    - **Comptes cloud séparés** entre prod et non-prod quand c'est possible : la meilleure des isolations.
+  en: |
+    - **Prod in an isolated directory** with its own state, rather than in a shared workspace.
+    - **A shared module called by each environment**: identical logic, different values.
+    - **A distinct state key per environment** (`dev/…`, `prod/…`) for complete isolation.
+    - **Workspaces for ephemeral/identical** (per-branch copies), not for environments that diverge.
+    - **Confirm the target** (`terraform workspace show`, the directory path) and read the plan before any `apply`.
+    - **Separate cloud accounts** between prod and non-prod where possible: the best isolation of all.
+
+exercise:
+  statement:
+    fr: |
+      1. Décrivez l'arborescence d'une approche par dossiers pour deux environnements (`dev`, `prod`) qui
+         partagent un module `./modules/network`.
+      2. Écrivez le `backend.tf` du dossier `dev` : bucket `team-tfstate-7`, clé propre à dev, région
+         `eu-west-1`, chiffrement et verrouillage natif.
+      3. Expliquez en une phrase pourquoi on préfère cette approche à un workspace pour la production.
+    en: |
+      1. Describe the directory tree of a directory-based approach for two environments (`dev`, `prod`) that
+         share a `./modules/network` module.
+      2. Write the `backend.tf` of the `dev` directory: bucket `team-tfstate-7`, a dev-specific key, region
+         `eu-west-1`, encryption and native locking.
+      3. Explain in one sentence why this approach is preferred over a workspace for production.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      # 1. Tree:
+      # infra/
+      #   modules/network/        <- shared module
+      #   environments/
+      #     dev/  { main.tf, backend.tf }
+      #     prod/ { main.tf, backend.tf }
+
+      # 2. environments/dev/backend.tf
+      terraform {
+        required_version = ">= 1.10"
+        backend "s3" {
+          bucket       = "team-tfstate-7"
+          key          = "dev/terraform.tfstate" # dev-specific state
+          region       = "eu-west-1"
+          encrypt      = true
+          use_lockfile = true
+        }
+      }
+
+      # 3. Separate directories give prod its own state, backend key and (optionally)
+      #    credentials, so an apply meant for dev can never silently hit production.
+    note:
+      fr: "La clé `dev/terraform.tfstate` isole le state de dev. L'argument décisif : avec des dossiers séparés, la cible est explicite (le chemin), alors qu'un workspace partage backend et identifiants et expose au risque de se tromper d'environnement."
+      en: "The `dev/terraform.tfstate` key isolates dev's state. The decisive argument: with separate directories the target is explicit (the path), whereas a workspace shares the backend and credentials and exposes you to hitting the wrong environment."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qui différencie principalement un workspace d'un dossier séparé ?"
+      en: "What mainly distinguishes a workspace from a separate directory?"
+    options:
+      fr:
+        - "Le workspace partage le même code et le même backend ; seul le state change"
+        - "Le workspace chiffre automatiquement le state"
+        - "Le dossier séparé ne peut pas utiliser de modules"
+        - "Il n'y a aucune différence"
+      en:
+        - "A workspace shares the same code and backend; only the state changes"
+        - "A workspace automatically encrypts the state"
+        - "A separate directory cannot use modules"
+        - "There is no difference"
+    answer: 0
+    why:
+      fr: "Un workspace réutilise le même dossier et le même backend, en changeant seulement le state actif ; des dossiers séparés isolent code, state et parfois identifiants."
+      en: "A workspace reuses the same directory and backend, changing only the active state; separate directories isolate code, state and sometimes credentials."
+  - q:
+      fr: "Pour une production durable et sensible, quelle approche est généralement recommandée ?"
+      en: "For a long-lived, sensitive production, which approach is generally recommended?"
+    options:
+      fr:
+        - "Un workspace nommé `prod`"
+        - "Un dossier isolé avec son propre state"
+        - "Le workspace `default`"
+        - "Aucune isolation"
+      en:
+        - "A workspace named `prod`"
+        - "An isolated directory with its own state"
+        - "The `default` workspace"
+        - "No isolation"
+    answer: 1
+    why:
+      fr: "Un dossier isolé rend la cible explicite et peut même utiliser un compte ou des identifiants distincts, ce qui protège la production des erreurs de workspace."
+      en: "An isolated directory makes the target explicit and can even use distinct credentials or account, protecting production from workspace mistakes."
+  - q:
+      fr: "Que renvoie `terraform.workspace` dans le code ?"
+      en: "What does `terraform.workspace` return in the code?"
+    options:
+      fr:
+        - "Le chemin du backend"
+        - "Le nom du workspace actuellement actif"
+        - "La version de Terraform"
+        - "La région du provider"
+      en:
+        - "The backend path"
+        - "The name of the currently active workspace"
+        - "The Terraform version"
+        - "The provider region"
+    answer: 1
+    why:
+      fr: "`terraform.workspace` donne le nom du workspace actif (`default`, `dev`...), utile pour ajuster quelques valeurs — à utiliser avec parcimonie."
+      en: "`terraform.workspace` gives the active workspace name (`default`, `dev`...), useful to adjust a few values — to be used sparingly."
+  - q:
+      fr: "Pourquoi les workspaces présentent-ils un risque pour la production ?"
+      en: "Why do workspaces pose a risk for production?"
+    options:
+      fr:
+        - "Ils ne supportent pas le chiffrement"
+        - "Ils partagent backend et identifiants, donc un `apply` dans le mauvais workspace touche la prod"
+        - "Ils sont incompatibles avec S3"
+        - "Ils doublent la taille du state"
+      en:
+        - "They do not support encryption"
+        - "They share the backend and credentials, so an `apply` in the wrong workspace hits prod"
+        - "They are incompatible with S3"
+        - "They double the state size"
+    answer: 1
+    why:
+      fr: "Comme tout est partagé sauf le state, oublier de sélectionner le bon workspace peut conduire à modifier la production par erreur, surtout avec `-auto-approve`."
+      en: "Since everything but the state is shared, forgetting to select the right workspace can lead to modifying production by mistake, especially with `-auto-approve`."
+  - q:
+      fr: "Comment éviter de dupliquer la logique entre les dossiers d'environnement ?"
+      en: "How do you avoid duplicating logic between environment directories?"
+    options:
+      fr:
+        - "En copiant-collant le code dans chaque dossier"
+        - "En supprimant les environnements"
+        - "En mettant tout dans le state"
+        - "En appelant un module commun depuis chaque dossier, avec des valeurs différentes"
+      en:
+        - "By copy-pasting the code into each directory"
+        - "By deleting the environments"
+        - "By putting everything in the state"
+        - "By calling a shared module from each directory, with different values"
+    answer: 3
+    why:
+      fr: "Chaque dossier d'environnement appelle le même module avec ses propres valeurs : la logique reste unique et testée une fois, seules les valeurs changent."
+      en: "Each environment directory calls the same module with its own values: the logic stays single and tested once, only the values change."

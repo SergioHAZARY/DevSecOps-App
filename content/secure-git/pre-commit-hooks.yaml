@@ -1,0 +1,444 @@
+description:
+  fr: "Bloquer les secrets avant le commit avec le framework pre-commit, écrire un .pre-commit-config.yaml et un hook .git/hooks/pre-commit à la main, et comprendre pourquoi un hook client doit être doublé en CI."
+  en: "Block secrets before the commit with the pre-commit framework, write a .pre-commit-config.yaml and a hand-written .git/hooks/pre-commit, and understand why a client hook must be backed by CI."
+duration: 25
+
+intro:
+  fr: |
+    Scanner les secrets, c'est bien ; les scanner **avant** qu'ils n'entrent dans un commit, c'est mieux.
+    Git offre un mécanisme fait pour ça : les **hooks**. Un hook est un petit script que Git exécute
+    automatiquement à un moment précis. Le plus utile pour la sécurité est le hook **`pre-commit`** :
+    il tourne juste avant que le commit soit enregistré et peut l'**annuler** s'il repère un problème.
+
+    Imaginez un correcteur orthographique qui vous empêche d'envoyer un e-mail tant qu'une faute n'est pas
+    corrigée. Le hook pre-commit joue ce rôle : il relit vos modifications et refuse le commit si une clé,
+    un mot de passe ou un fichier trop gros s'y trouve.
+
+    Dans cette leçon, vous allez utiliser le **framework `pre-commit`** (l'outil Python qui orchestre les
+    hooks), écrire un `.pre-commit-config.yaml` avec Gitleaks, `detect-private-key` et
+    `check-added-large-files`, puis écrire un hook `.git/hooks/pre-commit` **à la main** pour comprendre
+    ce qui se passe réellement. Enfin, vous verrez pourquoi un hook posé sur le poste du développeur ne
+    suffit jamais et doit être **doublé par un contrôle en CI**.
+  en: |
+    Scanning for secrets is good; scanning for them **before** they enter a commit is better. Git offers a
+    mechanism made for this: **hooks**. A hook is a small script Git runs automatically at a precise
+    moment. The most useful one for security is the **`pre-commit`** hook: it runs just before the commit
+    is recorded and can **cancel** it if it spots a problem.
+
+    Picture a spell-checker that stops you from sending an email until a typo is fixed. The pre-commit hook
+    plays that role: it rereads your changes and refuses the commit if a key, a password or an oversized
+    file is in them.
+
+    In this lesson you will use the **`pre-commit` framework** (the Python tool that orchestrates hooks),
+    write a `.pre-commit-config.yaml` with Gitleaks, `detect-private-key` and `check-added-large-files`,
+    then write a `.git/hooks/pre-commit` hook **by hand** to understand what really happens. Finally, you
+    will see why a hook installed on the developer's machine is never enough and must be **backed by a CI
+    check**.
+
+sections:
+  - heading:
+      fr: "Hooks Git et le framework pre-commit"
+      en: "Git hooks and the pre-commit framework"
+    body:
+      fr: |
+        Git stocke ses hooks dans le dossier `.git/hooks/`. Un fichier exécutable nommé exactement
+        `pre-commit` y est lancé à chaque `git commit`. S'il renvoie un code **différent de 0**, Git
+        **annule** le commit. C'est le mécanisme de base, mais écrire chaque hook à la main devient vite
+        pénible et, surtout, `.git/hooks/` **n'est pas versionné** : il ne part pas avec le dépôt.
+
+        Le framework **`pre-commit`** (projet open source, à installer avec `pip install pre-commit` ou
+        `pipx`) résout ces deux problèmes. On déclare les contrôles voulus dans un fichier **versionné**
+        `.pre-commit-config.yaml`, puis `pre-commit install` génère automatiquement le bon hook dans
+        `.git/hooks/`. Chaque développeur qui clone le dépôt n'a qu'à lancer `pre-commit install` une fois.
+
+        | Approche | Versionné ? | Partagé dans l'équipe | Effort |
+        |---|---|---|---|
+        | `.git/hooks/pre-commit` à la main | Non | Non (chacun recopie) | Élevé |
+        | Framework `pre-commit` | Oui (`.pre-commit-config.yaml`) | Oui | Faible |
+
+        Le framework télécharge chaque *repo de hooks* à la version épinglée (`rev:`), ce qui rend les
+        contrôles **reproductibles** d'un poste à l'autre.
+      en: |
+        Git stores its hooks in the `.git/hooks/` folder. An executable file named exactly `pre-commit`
+        there is run on every `git commit`. If it returns a code **other than 0**, Git **cancels** the
+        commit. That is the basic mechanism, but writing each hook by hand quickly becomes painful and,
+        above all, `.git/hooks/` **is not versioned**: it does not travel with the repo.
+
+        The **`pre-commit` framework** (open-source project, installed with `pip install pre-commit` or
+        `pipx`) solves both problems. You declare the wanted checks in a **versioned** file
+        `.pre-commit-config.yaml`, then `pre-commit install` automatically generates the right hook in
+        `.git/hooks/`. Every developer who clones the repo only has to run `pre-commit install` once.
+
+        | Approach | Versioned? | Shared across the team | Effort |
+        |---|---|---|---|
+        | Hand-written `.git/hooks/pre-commit` | No | No (everyone re-copies) | High |
+        | `pre-commit` framework | Yes (`.pre-commit-config.yaml`) | Yes | Low |
+
+        The framework downloads each *hooks repo* at the pinned version (`rev:`), which makes the checks
+        **reproducible** from one machine to another.
+  - heading:
+      fr: "Trois hooks essentiels pour la sécurité"
+      en: "Three essential hooks for security"
+    body:
+      fr: |
+        Un bon `.pre-commit-config.yaml` de départ combine au moins trois contrôles :
+
+        1. **Gitleaks** (`repo: https://github.com/gitleaks/gitleaks`) : détecte les clés et jetons dans
+           les fichiers ajoutés, comme vu à la leçon précédente.
+        2. **`detect-private-key`** (dans `pre-commit-hooks`) : refuse tout bloc de **clé privée**
+           (`-----BEGIN ... PRIVATE KEY-----`), que Gitleaks pourrait manquer si elle est encodée.
+        3. **`check-added-large-files`** : bloque les fichiers volumineux (par défaut 500 Ko). Un gros
+           fichier binaire ajouté par erreur est souvent un dump de base ou une archive — donc un risque de
+           fuite, en plus d'alourdir le dépôt pour toujours.
+
+        Le dépôt `pre-commit/pre-commit-hooks` fournit aussi `check-merge-conflict` (détecte des marqueurs
+        `<<<<<<<` oubliés) et `end-of-file-fixer`. On peut en ajouter autant que nécessaire ; l'important
+        est de commencer par les contrôles de **sécurité** et de les faire **échouer** le commit.
+
+        Chaque hook ne voit que les fichiers **ajoutés au commit** (staged), ce qui le rend très rapide :
+        le retour est quasi instantané, directement dans le terminal du développeur.
+      en: |
+        A good starting `.pre-commit-config.yaml` combines at least three checks:
+
+        1. **Gitleaks** (`repo: https://github.com/gitleaks/gitleaks`): detects keys and tokens in the
+           added files, as seen in the previous lesson.
+        2. **`detect-private-key`** (in `pre-commit-hooks`): refuses any **private key** block
+           (`-----BEGIN ... PRIVATE KEY-----`) that Gitleaks might miss if it is encoded.
+        3. **`check-added-large-files`**: blocks large files (500 KB by default). A big binary file added
+           by mistake is often a database dump or an archive — a leak risk, on top of bloating the repo
+           forever.
+
+        The `pre-commit/pre-commit-hooks` repo also provides `check-merge-conflict` (detects forgotten
+        `<<<<<<<` markers) and `end-of-file-fixer`. You can add as many as needed; what matters is to start
+        with the **security** checks and to make them **fail** the commit.
+
+        Each hook only sees the files **added to the commit** (staged), which makes it very fast: feedback
+        is almost instant, right in the developer's terminal.
+  - heading:
+      fr: "Pourquoi un hook client ne suffit jamais"
+      en: "Why a client hook is never enough"
+    body:
+      fr: |
+        Un hook pre-commit s'exécute **sur le poste du développeur**, ce qui a une conséquence majeure :
+        il est **contournable**. N'importe qui peut :
+
+        - lancer `git commit --no-verify` (ou `-n`) pour sauter tous les hooks ;
+        - supprimer `.git/hooks/pre-commit` ;
+        - oublier simplement de faire `pre-commit install` après avoir cloné le dépôt.
+
+        Un hook client est donc une aide **ergonomique** (retour rapide, confort du développeur), **pas**
+        une barrière de sécurité. La vraie barrière est côté serveur, dans la **CI** (intégration continue)
+        qui, elle, ne peut pas être contournée par un développeur.
+
+        La règle d'or : **le même scan doit tourner à deux endroits**. En pre-commit pour un retour
+        immédiat, et en CI (sur la pull request) comme filet obligatoire. Si quelqu'un contourne le hook
+        local, la CI rattrape la fuite et empêche la fusion. Un hook local sans CI donne une fausse
+        impression de sécurité ; une CI sans hook local fonctionne, mais fait perdre du temps au
+        développeur qui découvre l'erreur tard.
+      en: |
+        A pre-commit hook runs **on the developer's machine**, which has one major consequence: it is
+        **bypassable**. Anyone can:
+
+        - run `git commit --no-verify` (or `-n`) to skip all hooks;
+        - delete `.git/hooks/pre-commit`;
+        - simply forget to run `pre-commit install` after cloning the repo.
+
+        A client hook is therefore an **ergonomic** help (fast feedback, developer comfort), **not** a
+        security barrier. The real barrier is server-side, in the **CI** (continuous integration), which a
+        developer cannot bypass.
+
+        The golden rule: **the same scan must run in two places**. In pre-commit for instant feedback, and
+        in CI (on the pull request) as the mandatory safety net. If someone bypasses the local hook, the CI
+        catches the leak and blocks the merge. A local hook without CI gives a false sense of security; CI
+        without a local hook works, but wastes the developer's time by surfacing the error late.
+
+examples:
+  - title:
+      fr: "Un .pre-commit-config.yaml de sécurité"
+      en: "A security .pre-commit-config.yaml"
+    file: .pre-commit-config.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # Install once per clone with:  pre-commit install
+      # Run on all files on demand:   pre-commit run --all-files
+      repos:
+        # 1. Secret scanning on the staged changes
+        - repo: https://github.com/gitleaks/gitleaks
+          rev: v8.21.2            # pin the version for reproducible checks
+          hooks:
+            - id: gitleaks
+
+        # 2. General-purpose safety hooks
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          rev: v5.0.0
+          hooks:
+            - id: detect-private-key          # blocks "BEGIN PRIVATE KEY" blocks
+            - id: check-added-large-files      # blocks files over 500 KB by default
+              args: ["--maxkb=500"]
+            - id: check-merge-conflict         # blocks forgotten <<<<<<< markers
+    note:
+      fr: "Les versions sont **épinglées** (`rev:`) pour que chaque poste exécute exactement les mêmes règles. Ce fichier est versionné dans le dépôt ; il suffit ensuite de `pre-commit install` une fois par clone."
+      en: "Versions are **pinned** (`rev:`) so every machine runs exactly the same rules. This file is versioned in the repo; each clone then only needs `pre-commit install` once."
+
+  - title:
+      fr: "Le hook bloque un commit contenant une clé AWS"
+      en: "The hook blocks a commit containing an AWS key"
+    file: session.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # A developer accidentally hard-codes a key, then tries to commit
+      echo 'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"' >> settings.py
+      git add settings.py
+      git commit -m "Update settings"
+    output: |
+      Detect hardcoded secrets.................................................Failed
+      - hook id: gitleaks
+      - exit code: 1
+
+      Finding:     AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
+      RuleID:      aws-access-token
+      File:        settings.py
+      Line:        42
+
+      Detect Private Key......................................................Passed
+      Check for added large files.............................................Passed
+      Check for merge conflicts...............................................Passed
+    note:
+      fr: "Le commit est **annulé** : Gitleaks renvoie `1`, donc Git n'enregistre rien. Le développeur voit l'erreur en moins d'une seconde, avant même d'ouvrir une pull request. Il n'a plus qu'à retirer la clé et recommiter."
+      en: "The commit is **cancelled**: Gitleaks returns `1`, so Git records nothing. The developer sees the error in under a second, before even opening a pull request. They just remove the key and commit again."
+
+  - title:
+      fr: "Un hook .git/hooks/pre-commit écrit à la main"
+      en: "A hand-written .git/hooks/pre-commit hook"
+    file: .git/hooks/pre-commit
+    lang: bash
+    kind: secure
+    code: |
+      #!/usr/bin/env bash
+      # Hand-written pre-commit hook. Make it executable: chmod +x .git/hooks/pre-commit
+      # It must exit non-zero to CANCEL the commit.
+      set -euo pipefail
+
+      # Scan ONLY the staged changes, for a fast and precise check
+      if ! gitleaks git --staged --no-banner; then
+        echo "ERROR: a secret was found in your staged changes. Commit aborted." >&2
+        echo "Remove the secret, or (last resort) use: git commit --no-verify" >&2
+        exit 1
+      fi
+
+      # Extra guard: refuse any staged file larger than 500 KB
+      max_bytes=512000
+      for f in $(git diff --cached --name-only --diff-filter=A); do
+        size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+        if [ "$size" -gt "$max_bytes" ]; then
+          echo "ERROR: $f is larger than 500 KB (${size} bytes). Commit aborted." >&2
+          exit 1
+        fi
+      done
+
+      exit 0   # all checks passed, allow the commit
+    note:
+      fr: "Ce script montre ce que le framework fait sous le capot : il renvoie `exit 1` pour bloquer, `exit 0` pour laisser passer. Il **n'est pas versionné** (il vit dans `.git/`), d'où l'intérêt du framework qui, lui, versionne la configuration et génère ce hook automatiquement."
+      en: "This script shows what the framework does under the hood: it returns `exit 1` to block, `exit 0` to allow. It is **not versioned** (it lives in `.git/`), which is why the framework is better: it versions the configuration and generates this hook automatically."
+
+  - title:
+      fr: "Le filet obligatoire : le même scan en CI"
+      en: "The mandatory safety net: the same scan in CI"
+    file: .github/workflows/secrets.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: secret-scan
+      on: [pull_request]
+
+      # Least privilege: only read the code
+      permissions:
+        contents: read
+
+      jobs:
+        gitleaks:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0   # full history: the local hook can be bypassed
+            - name: Scan the whole history for secrets
+              uses: gitleaks/gitleaks-action@v2
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    note:
+      fr: "Ce job tourne sur le serveur, à chaque pull request : impossible de le contourner avec `--no-verify`. Même si un développeur a sauté le hook local, la CI scanne tout l'historique et bloque la fusion. Le hook local donne le confort, la CI donne la garantie."
+      en: "This job runs on the server, on every pull request: it cannot be bypassed with `--no-verify`. Even if a developer skipped the local hook, CI scans the whole history and blocks the merge. The local hook provides comfort, CI provides the guarantee."
+
+mistake:
+  fr: |
+    **Croire que le hook pre-commit protège le dépôt.**
+
+    Un hook s'exécute sur le poste du développeur : il suffit de `git commit --no-verify`, de supprimer le
+    fichier de hook, ou simplement d'oublier `pre-commit install` pour qu'il ne serve à rien. Le secret
+    part alors en production sans résistance. Un hook local est une commodité, pas une barrière : la seule
+    barrière réelle est le **même scan rejoué en CI**, côté serveur, que le développeur ne contrôle pas.
+  en: |
+    **Believing the pre-commit hook protects the repository.**
+
+    A hook runs on the developer's machine: a simple `git commit --no-verify`, deleting the hook file, or
+    just forgetting `pre-commit install` makes it useless. The secret then ships to production with no
+    resistance. A local hook is a convenience, not a barrier: the only real barrier is the **same scan
+    replayed in CI**, server-side, which the developer does not control.
+
+bestPractice:
+  fr: |
+    - **Versionnez `.pre-commit-config.yaml`** et épinglez chaque `rev:` pour des contrôles reproductibles.
+    - **Documentez `pre-commit install`** dans le README ; sans cette étape, le hook n'est pas actif.
+    - **Combinez au minimum** Gitleaks, `detect-private-key` et `check-added-large-files`.
+    - **Doublez toujours le hook par la CI** : le même scan de secrets doit bloquer la pull request.
+    - **Scannez uniquement le staged** en local (rapide) mais **tout l'historique** en CI (complet).
+    - **Gardez `--no-verify` pour les urgences vraies** et traçables, jamais comme habitude.
+  en: |
+    - **Version `.pre-commit-config.yaml`** and pin every `rev:` for reproducible checks.
+    - **Document `pre-commit install`** in the README; without this step the hook is inactive.
+    - **Combine at least** Gitleaks, `detect-private-key` and `check-added-large-files`.
+    - **Always back the hook with CI**: the same secret scan must block the pull request.
+    - **Scan only the staged changes** locally (fast) but **the whole history** in CI (thorough).
+    - **Keep `--no-verify` for genuine, traceable emergencies**, never as a habit.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe veut un retour immédiat sur trois problèmes, directement au moment du commit :
+      les secrets (Gitleaks), les clés privées, et les fichiers de plus de **200 Ko**.
+
+      1. Écrivez le `.pre-commit-config.yaml` correspondant, avec des versions épinglées.
+      2. Donnez les deux commandes à exécuter après avoir cloné le dépôt pour **activer** ces hooks, puis
+         pour les **tester** sur l'ensemble des fichiers du projet.
+      3. En une phrase : pourquoi faut-il, en plus, rejouer le scan de secrets en CI ?
+    en: |
+      Your team wants instant feedback on three problems, right at commit time: secrets (Gitleaks), private
+      keys, and files larger than **200 KB**.
+
+      1. Write the matching `.pre-commit-config.yaml`, with pinned versions.
+      2. Give the two commands to run after cloning the repo to **activate** these hooks, then to **test**
+         them on all the project files.
+      3. In one sentence: why must the secret scan also be replayed in CI?
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. The configuration file
+      cat > .pre-commit-config.yaml <<'EOF'
+      repos:
+        - repo: https://github.com/gitleaks/gitleaks
+          rev: v8.21.2
+          hooks:
+            - id: gitleaks
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          rev: v5.0.0
+          hooks:
+            - id: detect-private-key
+            - id: check-added-large-files
+              args: ["--maxkb=200"]   # 200 KB limit as requested
+      EOF
+
+      # 2. Activate the hooks for this clone, then test them on every file
+      pre-commit install
+      pre-commit run --all-files
+
+      # 3. Because a local hook can be bypassed (git commit --no-verify) or never
+      #    installed; the CI replays the same scan server-side where it cannot be skipped.
+    note:
+      fr: "`pre-commit install` écrit le hook dans `.git/hooks/` ; `pre-commit run --all-files` le teste sur tout le projet, pas seulement sur les fichiers ajoutés. La CI reste indispensable car le hook local est contournable."
+      en: "`pre-commit install` writes the hook into `.git/hooks/`; `pre-commit run --all-files` tests it on the whole project, not only the staged files. CI stays mandatory because the local hook is bypassable."
+
+quiz:
+  - q:
+      fr: "Quand le hook `pre-commit` s'exécute-t-il ?"
+      en: "When does the `pre-commit` hook run?"
+    options:
+      fr:
+        - "Juste avant que le commit soit enregistré"
+        - "Juste après un push vers le serveur"
+        - "À chaque clone du dépôt"
+        - "Uniquement lors d'un merge"
+      en:
+        - "Just before the commit is recorded"
+        - "Just after a push to the server"
+        - "On every clone of the repo"
+        - "Only during a merge"
+    answer: 0
+    why:
+      fr: "Le hook `pre-commit` tourne avant l'enregistrement du commit ; s'il renvoie un code non nul, Git annule le commit."
+      en: "The `pre-commit` hook runs before the commit is recorded; if it returns a non-zero code, Git cancels the commit."
+  - q:
+      fr: "Pourquoi préférer le framework `pre-commit` à un hook écrit à la main dans `.git/hooks/` ?"
+      en: "Why prefer the `pre-commit` framework over a hand-written hook in `.git/hooks/`?"
+    options:
+      fr:
+        - "Parce que `.git/hooks/` est chiffré"
+        - "Parce que la configuration est versionnée et partagée dans l'équipe"
+        - "Parce qu'il ne peut jamais être contourné"
+        - "Parce qu'il s'exécute sur le serveur"
+      en:
+        - "Because `.git/hooks/` is encrypted"
+        - "Because the configuration is versioned and shared across the team"
+        - "Because it can never be bypassed"
+        - "Because it runs on the server"
+    answer: 1
+    why:
+      fr: "`.git/hooks/` n'est pas versionné ; le framework met la configuration dans `.pre-commit-config.yaml`, versionné et identique pour tous. Il reste côté client et donc contournable."
+      en: "`.git/hooks/` is not versioned; the framework puts the config in `.pre-commit-config.yaml`, versioned and identical for everyone. It stays client-side and therefore bypassable."
+  - q:
+      fr: "Comment un développeur peut-il contourner un hook pre-commit local ?"
+      en: "How can a developer bypass a local pre-commit hook?"
+    options:
+      fr:
+        - "En changeant de branche"
+        - "En lançant `git push --force`"
+        - "En utilisant `git commit --no-verify`"
+        - "En créant un nouveau commit vide"
+      en:
+        - "By switching branches"
+        - "By running `git push --force`"
+        - "By using `git commit --no-verify`"
+        - "By creating a new empty commit"
+    answer: 2
+    why:
+      fr: "`--no-verify` (ou `-n`) saute tous les hooks. C'est pourquoi un hook local ne peut pas être la seule protection."
+      en: "`--no-verify` (or `-n`) skips all hooks. That is why a local hook cannot be the only protection."
+  - q:
+      fr: "Quel hook refuse spécifiquement un bloc `-----BEGIN ... PRIVATE KEY-----` ?"
+      en: "Which hook specifically refuses a `-----BEGIN ... PRIVATE KEY-----` block?"
+    options:
+      fr:
+        - "`check-added-large-files`"
+        - "`check-merge-conflict`"
+        - "`end-of-file-fixer`"
+        - "`detect-private-key`"
+      en:
+        - "`check-added-large-files`"
+        - "`check-merge-conflict`"
+        - "`end-of-file-fixer`"
+        - "`detect-private-key`"
+    answer: 3
+    why:
+      fr: "`detect-private-key` cherche les en-têtes de clés privées et bloque le commit s'il en trouve une."
+      en: "`detect-private-key` looks for private-key headers and blocks the commit if it finds one."
+  - q:
+      fr: "Quelle affirmation est correcte sur la relation hook local / CI ?"
+      en: "Which statement is correct about the local hook / CI relationship?"
+    options:
+      fr:
+        - "Le même scan doit tourner en local (confort) ET en CI (garantie)"
+        - "La CI remplace totalement le besoin de hooks locaux"
+        - "Le hook local remplace totalement le besoin de CI"
+        - "Les deux sont facultatifs si le `.gitignore` est bon"
+      en:
+        - "The same scan must run locally (comfort) AND in CI (guarantee)"
+        - "CI fully replaces the need for local hooks"
+        - "The local hook fully replaces the need for CI"
+        - "Both are optional if the `.gitignore` is good"
+    answer: 0
+    why:
+      fr: "Le hook local donne un retour rapide mais est contournable ; la CI est la barrière non contournable. Les deux se complètent, aucun ne remplace l'autre, et `.gitignore` ne scanne pas le contenu."
+      en: "The local hook gives fast feedback but is bypassable; CI is the non-bypassable barrier. They complement each other, neither replaces the other, and `.gitignore` does not scan content."

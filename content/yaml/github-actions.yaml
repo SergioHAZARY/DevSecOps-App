@@ -1,0 +1,364 @@
+description:
+  fr: "Comprendre la structure YAML d'un workflow GitHub Actions : on, jobs, steps, permissions et secrets."
+  en: "Understand the YAML structure of a GitHub Actions workflow: on, jobs, steps, permissions and secrets."
+duration: 22
+
+intro:
+  fr: |
+    **GitHub Actions** est le système d'intégration continue (CI/CD) intégré à GitHub. On lui décrit, en
+    **YAML**, ce qu'il doit faire quand un événement survient : à chaque `push`, chaque *pull request*, chaque
+    nuit... Ces fichiers vivent dans `.github/workflows/` et sont le cœur d'un pipeline DevSecOps.
+
+    Un workflow répond à trois questions : **quand** s'exécuter (`on`), **quoi** faire (`jobs` et leurs `steps`),
+    et **avec quels droits** (`permissions`). Comprendre cette structure, c'est pouvoir automatiser les tests,
+    les scans de sécurité et les déploiements.
+
+    Imaginez une recette déclenchée automatiquement : « quand quelqu'un pousse du code, installe les
+    dépendances, lance les tests, puis scanne les secrets ». Dans cette leçon vous écrirez un workflow complet et
+    apprendrez la règle de sécurité la plus importante : **le moindre privilège** via la clé `permissions`.
+  en: |
+    **GitHub Actions** is the continuous integration (CI/CD) system built into GitHub. You describe, in **YAML**,
+    what it must do when an event happens: on every `push`, every pull request, every night... These files live
+    in `.github/workflows/` and are the heart of a DevSecOps pipeline.
+
+    A workflow answers three questions: **when** to run (`on`), **what** to do (`jobs` and their `steps`), and
+    **with which rights** (`permissions`). Understanding this structure means you can automate tests, security
+    scans and deployments.
+
+    Picture a recipe triggered automatically: "when someone pushes code, install the dependencies, run the
+    tests, then scan for secrets". In this lesson you will write a complete workflow and learn the most important
+    security rule: **least privilege** through the `permissions` key.
+
+sections:
+  - heading:
+      fr: "La structure d'un workflow"
+      en: "The structure of a workflow"
+    body:
+      fr: |
+        Un workflow suit une hiérarchie précise :
+
+        ```yaml
+        name: ci
+        on: [push]            # trigger
+        jobs:                 # one or more jobs
+          build:
+            runs-on: ubuntu-latest
+            steps:            # ordered steps
+              - uses: actions/checkout@v4
+              - run: echo "hello"
+        ```
+
+        | Clé | Rôle |
+        |---|---|
+        | `name` | Nom affiché du workflow |
+        | `on` | Événement déclencheur (`push`, `pull_request`, `schedule`...) |
+        | `jobs` | Les travaux à exécuter (en parallèle par défaut) |
+        | `runs-on` | La machine virtuelle (`ubuntu-latest`...) |
+        | `steps` | Les étapes d'un job, dans l'ordre |
+        | `uses` | Appelle une action réutilisable |
+        | `run` | Exécute une commande shell |
+
+        Les étapes s'enchaînent de haut en bas. `uses` réutilise une action publiée (comme `checkout`), `run`
+        lance une commande.
+      en: |
+        A workflow follows a precise hierarchy:
+
+        ```yaml
+        name: ci
+        on: [push]            # trigger
+        jobs:                 # one or more jobs
+          build:
+            runs-on: ubuntu-latest
+            steps:            # ordered steps
+              - uses: actions/checkout@v4
+              - run: echo "hello"
+        ```
+
+        | Key | Role |
+        |---|---|
+        | `name` | Displayed workflow name |
+        | `on` | Triggering event (`push`, `pull_request`, `schedule`...) |
+        | `jobs` | The jobs to run (in parallel by default) |
+        | `runs-on` | The virtual machine (`ubuntu-latest`...) |
+        | `steps` | A job's steps, in order |
+        | `uses` | Calls a reusable action |
+        | `run` | Runs a shell command |
+
+        Steps run top to bottom. `uses` reuses a published action (like `checkout`), `run` executes a command.
+  - heading:
+      fr: "Permissions, secrets et épinglage"
+      en: "Permissions, secrets and pinning"
+    body:
+      fr: |
+        Par défaut, le jeton automatique `GITHUB_TOKEN` peut avoir des droits d'**écriture** sur le dépôt. Si une
+        action malveillante s'exécute, elle peut en abuser. La règle du **moindre privilège** : déclarez
+        explicitement `permissions` au plus juste, en commençant par `contents: read`.
+
+        ```yaml
+        permissions:
+          contents: read      # read-only by default
+        ```
+
+        Les **secrets** (clés, mots de passe) ne s'écrivent jamais en clair : on les stocke dans les *Secrets*
+        du dépôt et on les référence par `${{ secrets.NOM }}`. GitHub les masque dans les logs.
+
+        Enfin, **épinglez les actions** par version. Préférez un tag de version (`@v4`) et, pour les actions
+        tierces sensibles, épinglez carrément le *commit SHA* complet : cela empêche qu'une mise à jour
+        malveillante de l'action compromette votre pipeline (attaque de la chaîne d'approvisionnement).
+      en: |
+        By default, the automatic `GITHUB_TOKEN` can have **write** rights on the repository. If a malicious
+        action runs, it can abuse them. The **least-privilege** rule: declare `permissions` explicitly and as
+        tightly as possible, starting from `contents: read`.
+
+        ```yaml
+        permissions:
+          contents: read      # read-only by default
+        ```
+
+        **Secrets** (keys, passwords) are never written in clear text: store them in the repository's *Secrets*
+        and reference them with `${{ secrets.NAME }}`. GitHub masks them in the logs.
+
+        Finally, **pin actions** by version. Prefer a version tag (`@v4`) and, for sensitive third-party actions,
+        pin the full *commit SHA*: this prevents a malicious update of the action from compromising your pipeline
+        (a supply-chain attack).
+
+examples:
+  - title:
+      fr: "Un workflow CI minimal et lisible"
+      en: "A minimal, readable CI workflow"
+    file: .github/workflows/ci.yml
+    lang: yaml
+    kind: neutral
+    code: |
+      name: ci
+
+      on:
+        push:
+          branches: [main]
+        pull_request:
+
+      permissions:
+        contents: read          # least privilege: read-only
+
+      jobs:
+        test:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - name: Install and test
+              run: |
+                pip install -r requirements.txt
+                pytest -q
+    output: |
+      test  (ubuntu-latest)
+      ✓ checkout
+      ✓ setup-python 3.12
+      ✓ Install and test  (12 passed)
+    note:
+      fr: "Déclencheurs `push`/`pull_request`, droits en lecture seule, étapes ordonnées. `python-version` est quoté pour rester une chaîne."
+      en: "`push`/`pull_request` triggers, read-only rights, ordered steps. `python-version` is quoted so it stays a string."
+
+  - title:
+      fr: "Workflow dangereux : droits trop larges et secret en clair"
+      en: "Dangerous workflow: over-broad rights and a clear-text secret"
+    file: .github/workflows/deploy_bad.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # VULNERABLE: full write permissions and a hard-coded token
+      name: deploy
+      on: [push]
+
+      permissions: write-all     # BUG: grants every write scope
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v2          # BUG: outdated, unpinned major
+            - name: Deploy
+              env:
+                API_TOKEN: "tok_live_1234567890"  # BUG: secret in clear text
+              run: ./deploy.sh
+    output: |
+      zizmor: HIGH  excessive-permissions (write-all)
+      gitleaks: WARN  hard-coded API token in workflow
+    note:
+      fr: "Workflow volontairement faible (`kind: vulnerable`) : `write-all` viole le moindre privilège et le token est écrit en clair. Un scanner alerte."
+      en: "Intentionally weak workflow (`kind: vulnerable`): `write-all` breaks least privilege and the token is in clear text. A scanner flags it."
+
+  - title:
+      fr: "Workflow corrigé : moindre privilège et secret référencé"
+      en: "Fixed workflow: least privilege and a referenced secret"
+    file: .github/workflows/deploy_good.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: deploy
+
+      on:
+        push:
+          branches: [main]
+
+      permissions:
+        contents: read          # only what deploy needs to read the code
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Deploy
+              env:
+                # secret stored in repo settings, never in the file
+                API_TOKEN: ${{ secrets.API_TOKEN }}
+              run: ./deploy.sh
+    output: |
+      zizmor: no findings
+      Deploy step: API_TOKEN=*** (masked by GitHub)
+    note:
+      fr: "`permissions` restreint, secret via `${{ secrets.API_TOKEN }}` (masqué dans les logs), action `checkout@v4` à jour."
+      en: "Tight `permissions`, secret via `${{ secrets.API_TOKEN }}` (masked in logs), up-to-date `checkout@v4` action."
+
+mistake:
+  fr: |
+    **Utiliser `permissions: write-all` et coller un secret en clair dans le workflow.**
+
+    Accorder tous les droits d'écriture au `GITHUB_TOKEN` transforme la moindre action compromise en porte
+    d'entrée vers votre dépôt : déclarez toujours `contents: read` par défaut et n'ajoutez un droit d'écriture
+    que lorsqu'un job en a réellement besoin. Et ne codez **jamais** un token ou un mot de passe en dur : il
+    serait visible dans l'historique Git et dans les logs. Passez par `${{ secrets.NOM }}`.
+  en: |
+    **Using `permissions: write-all` and pasting a clear-text secret into the workflow.**
+
+    Granting all write rights to the `GITHUB_TOKEN` turns any compromised action into a doorway to your
+    repository: always declare `contents: read` by default and add a write scope only when a job truly needs it.
+    And **never** hard-code a token or password: it would be visible in the Git history and the logs. Use
+    `${{ secrets.NAME }}` instead.
+
+bestPractice:
+  fr: |
+    - **Déclarez `permissions: contents: read`** en haut du workflow, puis élargissez au cas par cas.
+    - **Référencez les secrets** avec `${{ secrets.NOM }}`, jamais de valeur en clair.
+    - **Épinglez les actions** par version (`@v4`), ou par commit SHA pour les actions tierces sensibles.
+    - **Déclenchez sur `pull_request`** pour que les contrôles s'exécutent avant la fusion.
+    - **Scannez vos workflows** avec un outil comme `zizmor` ou `actionlint`.
+  en: |
+    - **Declare `permissions: contents: read`** at the top of the workflow, then widen case by case.
+    - **Reference secrets** with `${{ secrets.NAME }}`, never a clear-text value.
+    - **Pin actions** by version (`@v4`), or by commit SHA for sensitive third-party actions.
+    - **Trigger on `pull_request`** so the checks run before merging.
+    - **Scan your workflows** with a tool such as `zizmor` or `actionlint`.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un workflow GitHub Actions `security.yml` qui :
+
+      1. se déclenche sur `push` et `pull_request` ;
+      2. applique le moindre privilège (`contents: read`) ;
+      3. contient un job `secrets` qui fait un `checkout@v4` puis exécute l'action `gitleaks/gitleaks-action@v2`
+         en lui passant le secret `GITHUB_TOKEN` via l'environnement.
+    en: |
+      Write a GitHub Actions workflow `security.yml` that:
+
+      1. triggers on `push` and `pull_request`;
+      2. applies least privilege (`contents: read`);
+      3. has a `secrets` job that runs `checkout@v4` then the `gitleaks/gitleaks-action@v2` action, passing the
+         `GITHUB_TOKEN` secret through the environment.
+  solution:
+    file: security.yml
+    lang: yaml
+    code: |
+      name: security
+
+      on: [push, pull_request]
+
+      permissions:
+        contents: read          # read-only: least privilege
+
+      jobs:
+        secrets:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0  # full history so old commits are scanned too
+            - name: Scan for hard-coded secrets
+              uses: gitleaks/gitleaks-action@v2
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    note:
+      fr: "`fetch-depth: 0` récupère tout l'historique pour que Gitleaks inspecte aussi les anciens commits ; le token passe par `secrets`."
+      en: "`fetch-depth: 0` fetches the full history so Gitleaks also inspects old commits; the token is passed via `secrets`."
+
+quiz:
+  - q:
+      fr: "Quelle clé définit l'événement qui déclenche un workflow ?"
+      en: "Which key defines the event that triggers a workflow?"
+    options:
+      fr: ["on", "jobs", "run", "steps"]
+      en: ["on", "jobs", "run", "steps"]
+    answer: 0
+    why:
+      fr: "La clé `on` liste les déclencheurs (`push`, `pull_request`, `schedule`...)."
+      en: "The `on` key lists the triggers (`push`, `pull_request`, `schedule`...)."
+  - q:
+      fr: "Comment référence-t-on un secret stocké dans le dépôt ?"
+      en: "How do you reference a secret stored in the repository?"
+    options:
+      fr:
+        - "En l'écrivant en clair dans le YAML"
+        - "Avec ${{ secrets.NOM }}"
+        - "Avec $NOM en majuscules"
+        - "Avec un fichier .env commité"
+      en:
+        - "By writing it in clear text in the YAML"
+        - "With ${{ secrets.NAME }}"
+        - "With $NAME in uppercase"
+        - "With a committed .env file"
+    answer: 1
+    why:
+      fr: "`${{ secrets.NOM }}` injecte un secret défini dans les réglages du dépôt ; GitHub le masque dans les logs."
+      en: "`${{ secrets.NAME }}` injects a secret defined in the repo settings; GitHub masks it in the logs."
+  - q:
+      fr: "Quel réglage de permissions respecte le moindre privilège par défaut ?"
+      en: "Which permissions setting respects least privilege by default?"
+    options:
+      fr: ["write-all", "admin: true", "contents: read", "all: write"]
+      en: ["write-all", "admin: true", "contents: read", "all: write"]
+    answer: 2
+    why:
+      fr: "`contents: read` donne le strict minimum ; on n'élargit qu'au cas par cas selon les besoins d'un job."
+      en: "`contents: read` grants the bare minimum; widen only case by case according to a job's needs."
+  - q:
+      fr: "Pourquoi épingler une action tierce à un commit SHA plutôt qu'à une branche ?"
+      en: "Why pin a third-party action to a commit SHA rather than a branch?"
+    options:
+      fr:
+        - "Pour que le workflow s'exécute plus vite"
+        - "Pour empêcher qu'une mise à jour malveillante de l'action compromette le pipeline"
+        - "Parce que les tags sont interdits"
+        - "Pour réduire la taille du dépôt"
+      en:
+        - "To make the workflow run faster"
+        - "To prevent a malicious update of the action from compromising the pipeline"
+        - "Because tags are forbidden"
+        - "To reduce the repository size"
+    answer: 1
+    why:
+      fr: "Un SHA fige le code exact de l'action : une version compromise publiée plus tard ne s'exécutera pas (défense de la chaîne d'appro)."
+      en: "A SHA freezes the action's exact code: a later compromised version will not run (supply-chain defense)."
+  - q:
+      fr: "Dans un job, quelle instruction exécute une commande shell ?"
+      en: "In a job, which instruction runs a shell command?"
+    options:
+      fr: ["uses", "needs", "with", "run"]
+      en: ["uses", "needs", "with", "run"]
+    answer: 3
+    why:
+      fr: "`run` exécute une commande shell ; `uses` appelle une action réutilisable."
+      en: "`run` executes a shell command; `uses` calls a reusable action."

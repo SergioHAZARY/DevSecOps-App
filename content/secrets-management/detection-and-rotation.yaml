@@ -1,0 +1,421 @@
+description:
+  fr: "Détecter les secrets commités avec gitleaks, ggshield et la protection GitHub, puis appliquer le bon runbook : révoquer d'abord, nettoyer ensuite."
+  en: "Detect committed secrets with gitleaks, ggshield and GitHub protection, then apply the right runbook: revoke first, clean later."
+duration: 24
+
+intro:
+  fr: |
+    Peu importe la rigueur d'une équipe : tôt ou tard, un secret finit par être commité. La question n'est
+    donc pas « si » mais « quand », et surtout « que fait-on ensuite ? ». Deux réflexes se combinent :
+    **détecter** la fuite le plus tôt possible, et **réagir** dans le bon ordre quand elle se produit.
+
+    Imaginez une clé de maison tombée dans la rue. Votre premier geste n'est pas de nettoyer le trottoir
+    pour faire disparaître la trace : c'est de **changer la serrure**, car la clé est déjà hors de votre
+    contrôle. Nettoyer vient après. Pour les secrets, c'est exactement pareil, et beaucoup d'équipes font
+    l'erreur de commencer par « effacer l'historique Git » — en laissant la serrure inchangée.
+
+    Dans cette leçon, vous allez scanner un dépôt avec gitleaks, découvrir ggshield et la protection
+    GitHub, puis dérouler le runbook d'incident : **révoquer et renouveler d'abord, nettoyer l'historique
+    ensuite**.
+  en: |
+    No matter how disciplined a team is: sooner or later, a secret ends up committed. The question is
+    therefore not "if" but "when", and above all "what do we do next?". Two reflexes combine: **detect**
+    the leak as early as possible, and **respond** in the right order when it happens.
+
+    Picture a house key dropped in the street. Your first move is not to clean the pavement to erase the
+    trace: it is to **change the lock**, because the key is already out of your control. Cleaning comes
+    after. For secrets it is exactly the same, and many teams make the mistake of starting with "erase the
+    Git history" — leaving the lock unchanged.
+
+    In this lesson you will scan a repo with gitleaks, discover ggshield and GitHub protection, then run the
+    incident runbook: **revoke and rotate first, clean the history later**.
+
+sections:
+  - heading:
+      fr: "Détecter : scanner avant, pendant et après le push"
+      en: "Detect: scan before, during and after the push"
+    body:
+      fr: |
+        La détection se place à plusieurs endroits de la chaîne, de plus en plus en amont :
+
+        | Emplacement | Outil | Quand | Effet |
+        |---|---|---|---|
+        | Poste du développeur | gitleaks / ggshield en *pre-commit* | Avant le commit | Bloque le secret avant qu'il n'entre dans Git |
+        | Pipeline CI | gitleaks / ggshield | À chaque push / PR | Fait échouer le build si un secret est présent |
+        | Côté plateforme | GitHub *push protection* / secret scanning | Au push vers GitHub | Refuse le push ou alerte |
+
+        **gitleaks** est un scanner open source qui parcourt le dépôt et son **historique** à la recherche
+        de motifs de secrets (clés AWS, tokens, clés privées). **ggshield** (GitGuardian) joue un rôle
+        similaire avec une base de détection enrichie. La **push protection** de GitHub va plus loin : elle
+        peut **bloquer le push** contenant un secret reconnu, avant même qu'il n'atteigne le dépôt distant.
+
+        La leçon « Git sécurisé » détaille la configuration de gitleaks et des hooks ; ici, l'essentiel est
+        de retenir qu'on **empile** ces défenses : le hook local attrape la plupart des cas, la CI et la
+        plateforme rattrapent le reste. Aucune n'est parfaite seule.
+      en: |
+        Detection sits at several points of the chain, more and more upstream:
+
+        | Location | Tool | When | Effect |
+        |---|---|---|---|
+        | Developer machine | gitleaks / ggshield in *pre-commit* | Before the commit | Blocks the secret before it enters Git |
+        | CI pipeline | gitleaks / ggshield | On every push / PR | Fails the build if a secret is present |
+        | Platform side | GitHub *push protection* / secret scanning | On push to GitHub | Rejects the push or alerts |
+
+        **gitleaks** is an open-source scanner that walks the repo and its **history** looking for secret
+        patterns (AWS keys, tokens, private keys). **ggshield** (GitGuardian) plays a similar role with an
+        enriched detection base. GitHub's **push protection** goes further: it can **block the push**
+        containing a recognised secret, before it even reaches the remote repo.
+
+        The "Secure Git" lesson details configuring gitleaks and hooks; here, the key point is that you
+        **stack** these defences: the local hook catches most cases, CI and the platform catch the rest. No
+        single one is perfect alone.
+  - heading:
+      fr: "Réagir : le runbook d'incident, dans le bon ordre"
+      en: "Respond: the incident runbook, in the right order"
+    body:
+      fr: |
+        Quand un secret a fuité, l'ordre des opérations est **crucial**. L'erreur fréquente — « je nettoie
+        d'abord l'historique Git » — laisse le secret actif pendant tout le nettoyage, alors qu'il est déjà
+        copié ailleurs (clones, forks, caches, robots). Le bon runbook :
+
+        1. **Révoquer / renouveler le secret EN PREMIER.** Chez l'émetteur (console AWS, base de données,
+           fournisseur d'API), désactivez l'ancien secret et créez-en un nouveau. À cet instant précis,
+           même publié, l'ancien ne vaut plus rien : la serrure est changée.
+        2. **Déployer le nouveau secret** via le coffre/gestionnaire (Vault, Secrets Manager) et vérifier
+           que l'application fonctionne.
+        3. **Nettoyer l'historique Git** avec `git filter-repo` (ou BFG) pour retirer l'ancienne valeur des
+           anciens commits, puis forcer la réécriture distante.
+        4. **Faire reclouer / re-synchroniser** les collaborateurs, car la réécriture change les SHA.
+        5. **Analyser** : comment le secret est-il arrivé là ? Ajouter la défense manquante (hook,
+           push protection) pour que cela ne se reproduise pas.
+
+        Le point à retenir et qui structure toute la leçon : **révoquer d'abord, nettoyer ensuite.** Un
+        historique propre avec un secret toujours valide n'a rien réglé.
+      en: |
+        When a secret has leaked, the order of operations is **crucial**. The common mistake — "I clean the
+        Git history first" — leaves the secret active during the whole cleanup, when it is already copied
+        elsewhere (clones, forks, caches, bots). The right runbook:
+
+        1. **Revoke / rotate the secret FIRST.** At the issuer (AWS console, database, API provider),
+           disable the old secret and create a new one. At that precise moment, even if published, the old
+           one is worthless: the lock is changed.
+        2. **Deploy the new secret** via the vault/manager (Vault, Secrets Manager) and check the
+           application works.
+        3. **Clean the Git history** with `git filter-repo` (or BFG) to remove the old value from the old
+           commits, then force the remote rewrite.
+        4. **Have collaborators re-clone / re-sync**, because the rewrite changes the SHAs.
+        5. **Analyse**: how did the secret get there? Add the missing defence (hook, push protection) so it
+           does not happen again.
+
+        The point to remember, which structures the whole lesson: **revoke first, clean later.** A clean
+        history with a still-valid secret has fixed nothing.
+
+examples:
+  - title:
+      fr: "Le mauvais ordre : nettoyer l'historique d'abord"
+      en: "The wrong order: clean the history first"
+    file: wrong-order.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN: the team rushes to erase the secret from Git...
+      git filter-repo --path config.py --invert-paths
+      git push --force origin main
+
+      # ...but the AWS key is STILL ACTIVE. Meanwhile, during these minutes:
+      #  - bots that scraped the public commit already have it
+      #  - forks and other clones still contain it
+      #  - the key keeps working against the AWS account
+
+      # Proof the key still works (it was never revoked):
+      AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE aws sts get-caller-identity
+    output: |
+      {
+        "UserId": "AIDAEXAMPLE",
+        "Account": "123456789012",
+        "Arn": "arn:aws:iam::123456789012:user/leaked-app"
+      }
+    note:
+      fr: "L'historique est « propre » mais la clé fonctionne toujours : l'incident n'est pas résolu. Pire, l'équipe croit le problème réglé. Nettoyer avant de révoquer laisse grande ouverte la fenêtre d'exploitation."
+      en: "The history is \"clean\" but the key still works: the incident is not resolved. Worse, the team believes it is fixed. Cleaning before revoking leaves the exploitation window wide open."
+
+  - title:
+      fr: "Le bon ordre : révoquer et renouveler d'abord"
+      en: "The right order: revoke and rotate first"
+    file: incident-runbook.sh
+    lang: bash
+    kind: secure
+    code: |
+      # STEP 1 - Revoke the compromised secret AT THE ISSUER, immediately.
+      # The old key stops working the instant it is deactivated.
+      aws iam update-access-key \
+        --access-key-id AKIAIOSFODNN7EXAMPLE \
+        --status Inactive --user-name leaked-app
+
+      # STEP 2 - Create a new credential and store it in the vault/manager.
+      aws iam create-access-key --user-name leaked-app >/dev/null
+      # (push the new value into Secrets Manager / Vault, not into the repo)
+
+      # STEP 3 - Confirm the OLD key is now dead before touching history:
+      AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE aws sts get-caller-identity || \
+        echo "Old key rejected: good, the lock is changed."
+
+      # STEP 4 - Only now, clean the history and delete the fully revoked key.
+      git filter-repo --path config.py --invert-paths
+      git push --force origin main
+      aws iam delete-access-key \
+        --access-key-id AKIAIOSFODNN7EXAMPLE --user-name leaked-app
+    output: |
+      An error occurred (InvalidClientTokenId) when calling the
+      GetCallerIdentity operation: The security token included in the
+      request is invalid.
+      Old key rejected: good, the lock is changed.
+    note:
+      fr: "L'ordre fait tout : d'abord désactiver la clé (STEP 1), vérifier qu'elle est morte (STEP 3), et seulement ensuite nettoyer l'historique. L'erreur `InvalidClientTokenId` prouve que l'ancienne clé ne fonctionne plus, même si elle traîne encore quelque part."
+      en: "Order is everything: first deactivate the key (STEP 1), confirm it is dead (STEP 3), and only then clean the history. The `InvalidClientTokenId` error proves the old key no longer works, even if it still lingers somewhere."
+
+  - title:
+      fr: "Scanner le dépôt et son historique avec gitleaks"
+      en: "Scanning the repo and its history with gitleaks"
+    file: scan.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Scan the full Git history, not just the working tree
+      gitleaks detect --source . --redact --report-path gitleaks-report.json
+
+      # ggshield (GitGuardian) does the same with an enriched detector set
+      ggshield secret scan repo .
+    output: |
+      ○ gitleaks
+      Finding:     AWS Access Key
+      Secret:      AKIA...REDACTED
+      File:        config.py
+      Commit:      3f9a1c2b
+      Author:      dev@example.com
+      Date:        2026-11-20
+      1 leak found in commit history
+    note:
+      fr: "`gitleaks detect` parcourt l'historique et trouve la clé même si elle a été « supprimée » depuis. `--redact` masque la valeur dans le rapport. Ce même scan, placé en CI, fait échouer le build dès qu'un secret est détecté."
+      en: "`gitleaks detect` walks the history and finds the key even if it was \"deleted\" since. `--redact` hides the value in the report. The same scan, placed in CI, fails the build as soon as a secret is detected."
+
+  - title:
+      fr: "Détection en CI + protection au push côté GitHub"
+      en: "CI detection + GitHub push protection"
+    file: .github/workflows/secret-scan.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: secret-scan
+
+      on: [push, pull_request]
+
+      # Least privilege: the workflow only needs to read the code
+      permissions:
+        contents: read
+
+      jobs:
+        gitleaks:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0 # full history: catch secrets in old commits
+            - name: Run gitleaks
+              uses: gitleaks/gitleaks-action@v2
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            # Enable GitHub push protection in the repo settings as well:
+            # it blocks a push that introduces a recognised secret, before
+            # it ever reaches the remote branch.
+    output: |
+      gitleaks: 1 leak found
+      Error: Process completed with exit code 1.
+    note:
+      fr: "Deux filets complémentaires : la CI échoue si un secret est présent dans l'historique, et la *push protection* de GitHub bloque en amont un push qui introduit un secret reconnu. On empile les défenses plutôt que de se fier à une seule."
+      en: "Two complementary nets: CI fails if a secret is present in the history, and GitHub *push protection* blocks upstream a push that introduces a recognised secret. You stack the defences rather than trusting a single one."
+
+mistake:
+  fr: |
+    **Commencer par nettoyer l'historique Git au lieu de révoquer le secret.**
+
+    C'est l'inversion la plus coûteuse. Dès qu'un secret est poussé, il faut le considérer comme déjà
+    copié : clones locaux, forks, caches de la plateforme, robots qui scrutent les dépôts publics. Tant que
+    vous n'avez pas **révoqué et renouvelé** le secret chez son émetteur, il reste exploitable — et le temps
+    passé à réécrire l'historique est du temps pendant lequel l'attaquant agit.
+
+    Le réflexe correct tient en une phrase : **la serrure d'abord, le trottoir ensuite.** Révoquez,
+    renouvelez, déployez le nouveau secret, vérifiez que l'ancien ne fonctionne plus — *puis* nettoyez
+    l'historique. Et ne vous arrêtez pas là : si le secret a pu arriver dans le dépôt, c'est qu'il manquait
+    une défense (hook pre-commit, scan en CI, push protection). Ajoutez-la pour que l'incident ne se répète
+    pas.
+  en: |
+    **Starting by cleaning the Git history instead of revoking the secret.**
+
+    This is the most costly reversal. As soon as a secret is pushed, treat it as already copied: local
+    clones, forks, platform caches, bots that scan public repos. Until you have **revoked and rotated** the
+    secret at its issuer, it stays exploitable — and the time spent rewriting history is time during which
+    the attacker acts.
+
+    The correct reflex fits in one sentence: **the lock first, the pavement later.** Revoke, rotate, deploy
+    the new secret, confirm the old one no longer works — *then* clean the history. And do not stop there:
+    if the secret could reach the repo, a defence was missing (pre-commit hook, CI scan, push protection).
+    Add it so the incident does not recur.
+
+bestPractice:
+  fr: |
+    - **Empilez la détection** : hook pre-commit, scan en CI (gitleaks/ggshield) et push protection GitHub.
+    - **Scannez l'historique entier** (`fetch-depth: 0`), pas seulement le dernier commit.
+    - **Runbook d'incident : révoquer et renouveler D'ABORD**, chez l'émetteur, avant toute réécriture d'historique.
+    - **Vérifiez que l'ancien secret est mort** (`sts get-caller-identity` échoue) avant de considérer l'incident clos.
+    - **Nettoyez ensuite** avec `git filter-repo`/BFG, puis faites reclouer les collaborateurs.
+    - **Déployez le nouveau secret par un coffre** (Vault, Secrets Manager), jamais de nouveau dans le dépôt.
+    - **Tirez la leçon** : ajoutez la défense manquante et documentez l'incident.
+  en: |
+    - **Stack detection**: pre-commit hook, CI scan (gitleaks/ggshield) and GitHub push protection.
+    - **Scan the full history** (`fetch-depth: 0`), not just the last commit.
+    - **Incident runbook: revoke and rotate FIRST**, at the issuer, before any history rewrite.
+    - **Confirm the old secret is dead** (`sts get-caller-identity` fails) before considering the incident closed.
+    - **Clean afterwards** with `git filter-repo`/BFG, then have collaborators re-clone.
+    - **Deploy the new secret via a vault** (Vault, Secrets Manager), never back into the repo.
+    - **Learn from it**: add the missing defence and document the incident.
+
+exercise:
+  statement:
+    fr: |
+      Un développeur a poussé par erreur une clé d'accès AWS dans un dépôt public il y a dix minutes. La
+      panique s'installe et quelqu'un propose de lancer tout de suite `git filter-repo` puis
+      `git push --force`.
+
+      1. Expliquez pourquoi commencer par le nettoyage de l'historique est une erreur.
+      2. Écrivez, dans l'ordre, les étapes du runbook d'incident sous forme d'un script commenté : la
+         révocation de la clé, la vérification qu'elle est inactive, puis seulement le nettoyage de
+         l'historique.
+    en: |
+      A developer accidentally pushed an AWS access key to a public repo ten minutes ago. Panic sets in and
+      someone suggests running `git filter-repo` then `git push --force` right away.
+
+      1. Explain why starting with the history cleanup is a mistake.
+      2. Write, in order, the incident runbook steps as a commented script: revoking the key, confirming it
+         is inactive, then only afterwards cleaning the history.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # WHY cleaning first is wrong: the key was public for 10 minutes, so it
+      # is already scraped by bots and copied in clones/forks. Rewriting
+      # history does NOT make the key stop working. The key must be revoked
+      # at AWS first; only then is the leak actually contained.
+
+      # STEP 1 - Revoke the key immediately (it stops working at once)
+      aws iam update-access-key \
+        --access-key-id AKIAIOSFODNN7EXAMPLE \
+        --status Inactive --user-name leaked-app
+
+      # STEP 2 - Create and deploy a new key via the secrets manager (not shown)
+      aws iam create-access-key --user-name leaked-app >/dev/null
+
+      # STEP 3 - Confirm the old key is dead BEFORE touching history
+      AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE aws sts get-caller-identity || \
+        echo "Old key rejected: leak contained."
+
+      # STEP 4 - Only now clean the history and delete the revoked key
+      git filter-repo --path config.py --invert-paths
+      git push --force origin main
+      aws iam delete-access-key \
+        --access-key-id AKIAIOSFODNN7EXAMPLE --user-name leaked-app
+    note:
+      fr: "La clé est neutralisée dès l'étape 1 ; l'étape 3 le prouve. Le nettoyage d'historique (étape 4) n'est qu'une opération d'hygiène, pas la mesure qui contient l'incident."
+      en: "The key is neutralised from step 1; step 3 proves it. The history cleanup (step 4) is only a hygiene operation, not the measure that contains the incident."
+
+quiz:
+  - q:
+      fr: "Quelle est la toute première action quand un secret a été poussé dans un dépôt ?"
+      en: "What is the very first action when a secret has been pushed to a repo?"
+    options:
+      fr:
+        - "Nettoyer l'historique Git avec filter-repo"
+        - "Révoquer et renouveler le secret chez son émetteur"
+        - "Mettre le dépôt en privé"
+        - "Supprimer le fichier dans un nouveau commit"
+      en:
+        - "Clean the Git history with filter-repo"
+        - "Revoke and rotate the secret at its issuer"
+        - "Make the repo private"
+        - "Delete the file in a new commit"
+    answer: 1
+    why:
+      fr: "Le secret est déjà copié ailleurs. Seule la révocation chez l'émetteur le neutralise. Le nettoyage de l'historique vient après, une fois la serrure changée."
+      en: "The secret is already copied elsewhere. Only revocation at the issuer neutralises it. Cleaning the history comes afterwards, once the lock is changed."
+  - q:
+      fr: "Pourquoi nettoyer l'historique sans révoquer la clé ne résout-il pas l'incident ?"
+      en: "Why does cleaning the history without revoking the key not resolve the incident?"
+    options:
+      fr:
+        - "Parce que la clé reste active et déjà copiée dans des clones, forks et par des robots"
+        - "Parce que filter-repo est trop lent"
+        - "Parce que GitHub réécrit l'historique tout seul"
+        - "Parce que la clé se renouvelle automatiquement"
+      en:
+        - "Because the key stays active and is already copied in clones, forks and by bots"
+        - "Because filter-repo is too slow"
+        - "Because GitHub rewrites the history itself"
+        - "Because the key rotates automatically"
+    answer: 0
+    why:
+      fr: "Réécrire l'historique ne touche pas les copies déjà faites ni la validité de la clé. Tant qu'elle n'est pas révoquée, elle fonctionne toujours."
+      en: "Rewriting history touches neither the copies already made nor the key's validity. Until it is revoked, it still works."
+  - q:
+      fr: "À quoi sert l'option `fetch-depth: 0` dans un scan de secrets en CI ?"
+      en: "What is `fetch-depth: 0` for in a CI secret scan?"
+    options:
+      fr:
+        - "À accélérer le clonage"
+        - "À récupérer tout l'historique pour détecter les secrets dans les anciens commits"
+        - "À désactiver le cache"
+        - "À limiter le scan au dernier commit"
+      en:
+        - "To speed up cloning"
+        - "To fetch the full history so secrets in old commits are detected"
+        - "To disable the cache"
+        - "To limit the scan to the last commit"
+    answer: 1
+    why:
+      fr: "Par défaut, la CI ne récupère qu'un historique superficiel. `fetch-depth: 0` clone tout, pour que gitleaks examine aussi les commits anciens où un secret peut se cacher."
+      en: "By default, CI only fetches a shallow history. `fetch-depth: 0` clones everything, so gitleaks also examines old commits where a secret may hide."
+  - q:
+      fr: "Qu'apporte la push protection de GitHub par rapport à un scan en CI ?"
+      en: "What does GitHub push protection add over a CI scan?"
+    options:
+      fr:
+        - "Elle chiffre le dépôt"
+        - "Elle remplace la révocation des secrets"
+        - "Elle peut bloquer le push d'un secret reconnu avant qu'il n'atteigne le dépôt distant"
+        - "Elle supprime le besoin de hooks"
+      en:
+        - "It encrypts the repo"
+        - "It replaces secret revocation"
+        - "It can block the push of a recognised secret before it reaches the remote repo"
+        - "It removes the need for hooks"
+    answer: 2
+    why:
+      fr: "La push protection agit en amont : elle refuse le push contenant un secret reconnu. La CI, elle, détecte après coup. On empile les deux, sans remplacer la révocation."
+      en: "Push protection acts upstream: it rejects the push containing a recognised secret. CI detects after the fact. You stack both, without replacing revocation."
+  - q:
+      fr: "Après avoir révoqué et nettoyé, quelle étape évite que l'incident se reproduise ?"
+      en: "After revoking and cleaning, which step prevents the incident from recurring?"
+    options:
+      fr:
+        - "Rendre le dépôt public"
+        - "Supprimer les journaux CloudTrail"
+        - "Désactiver gitleaks pour aller plus vite"
+        - "Ajouter la défense manquante (hook pre-commit, scan CI, push protection)"
+      en:
+        - "Make the repo public"
+        - "Delete the CloudTrail logs"
+        - "Disable gitleaks to go faster"
+        - "Add the missing defence (pre-commit hook, CI scan, push protection)"
+    answer: 3
+    why:
+      fr: "Si un secret a pu entrer, une défense manquait. L'ajouter (hook, CI, push protection) ferme la voie empruntée et évite la répétition."
+      en: "If a secret could get in, a defence was missing. Adding it (hook, CI, push protection) closes the path taken and prevents recurrence."

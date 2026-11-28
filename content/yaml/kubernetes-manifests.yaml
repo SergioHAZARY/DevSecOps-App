@@ -1,0 +1,375 @@
+description:
+  fr: "Écrire des manifestes Kubernetes en YAML : structure apiVersion/kind/metadata/spec et bonnes pratiques de sécurité."
+  en: "Write Kubernetes manifests in YAML: the apiVersion/kind/metadata/spec structure and security best practices."
+duration: 25
+
+intro:
+  fr: |
+    **Kubernetes** (souvent abrégé *k8s*) est l'orchestrateur de conteneurs le plus répandu. On ne le pilote
+    pas en cliquant mais en lui décrivant l'état souhaité dans des fichiers **YAML** appelés *manifestes*.
+    Kubernetes compare ensuite en permanence cet état désiré avec l'état réel et corrige les écarts.
+
+    Tous les manifestes partagent la même ossature : `apiVersion`, `kind`, `metadata`, `spec`. Si vous
+    comprenez ces quatre clés, vous pouvez lire n'importe quelle ressource, d'un simple `Pod` à un `Deployment`
+    complexe.
+
+    Imaginez une fiche de commande au restaurant : vous décrivez le plat voulu (le `spec`), le cuisinier se
+    débrouille pour le réaliser. Dans cette leçon vous écrirez un `Deployment` et un `Service`, et surtout vous
+    apprendrez à y ajouter le **`securityContext`** qui fait tourner le conteneur en non-root, détail crucial de
+    sécurité souvent oublié par les débutants.
+  en: |
+    **Kubernetes** (often shortened to *k8s*) is the most widespread container orchestrator. You do not drive it
+    by clicking but by describing the desired state in **YAML** files called *manifests*. Kubernetes then
+    continuously compares this desired state with the real state and fixes any drift.
+
+    All manifests share the same skeleton: `apiVersion`, `kind`, `metadata`, `spec`. If you understand these
+    four keys, you can read any resource, from a simple `Pod` to a complex `Deployment`.
+
+    Picture an order ticket at a restaurant: you describe the dish you want (the `spec`), and the cook figures
+    out how to make it. In this lesson you will write a `Deployment` and a `Service`, and above all learn to add
+    the **`securityContext`** that runs the container as non-root - a crucial security detail often forgotten by
+    beginners.
+
+sections:
+  - heading:
+      fr: "Les quatre clés de tout manifeste"
+      en: "The four keys of every manifest"
+    body:
+      fr: |
+        Chaque ressource Kubernetes se décrit avec quatre clés de premier niveau :
+
+        | Clé | Rôle |
+        |---|---|
+        | `apiVersion` | Version de l'API (ex. `apps/v1` pour un Deployment, `v1` pour un Service) |
+        | `kind` | Type de ressource (`Pod`, `Deployment`, `Service`, `ConfigMap`...) |
+        | `metadata` | Nom, namespace, labels et annotations |
+        | `spec` | L'état souhaité : conteneurs, réplicas, ports, règles... |
+
+        Les **labels** (dans `metadata.labels`) sont des étiquettes `clé: valeur`. Ils servent à relier les
+        ressources entre elles : un `Service` sélectionne les `Pods` grâce à un `selector` qui pointe vers leurs
+        labels. C'est le mécanisme central de Kubernetes.
+      en: |
+        Every Kubernetes resource is described with four top-level keys:
+
+        | Key | Role |
+        |---|---|
+        | `apiVersion` | API version (e.g. `apps/v1` for a Deployment, `v1` for a Service) |
+        | `kind` | Resource type (`Pod`, `Deployment`, `Service`, `ConfigMap`...) |
+        | `metadata` | Name, namespace, labels and annotations |
+        | `spec` | The desired state: containers, replicas, ports, rules... |
+
+        **Labels** (under `metadata.labels`) are `key: value` tags. They tie resources together: a `Service`
+        selects `Pods` through a `selector` that points to their labels. This is Kubernetes' central mechanism.
+  - heading:
+      fr: "La sécurité dans le spec : securityContext"
+      en: "Security in the spec: securityContext"
+    body:
+      fr: |
+        Par défaut, un conteneur tourne souvent en **root**, ce qui est dangereux : si un attaquant s'échappe du
+        conteneur, il devient root sur le nœud. Le bloc **`securityContext`** corrige cela. Les réglages
+        essentiels :
+
+        | Réglage | Effet |
+        |---|---|
+        | `runAsNonRoot: true` | Refuse de démarrer si l'image tourne en root |
+        | `runAsUser: 1000` | Impose un utilisateur non privilégié |
+        | `allowPrivilegeEscalation: false` | Empêche de gagner des droits (sudo, setuid) |
+        | `readOnlyRootFilesystem: true` | Système de fichiers en lecture seule |
+        | `capabilities.drop: ["ALL"]` | Retire toutes les capacités Linux |
+
+        On définit aussi des **limites de ressources** (`resources.limits`) pour qu'un conteneur compromis ou
+        buggé ne consomme pas toute la mémoire du nœud. Ces réglages sont ce que vérifient les outils de scan
+        comme Trivy, Checkov ou Kubescape.
+      en: |
+        By default a container often runs as **root**, which is dangerous: if an attacker escapes the container,
+        they become root on the node. The **`securityContext`** block fixes this. The essential settings:
+
+        | Setting | Effect |
+        |---|---|
+        | `runAsNonRoot: true` | Refuses to start if the image runs as root |
+        | `runAsUser: 1000` | Forces an unprivileged user |
+        | `allowPrivilegeEscalation: false` | Prevents gaining rights (sudo, setuid) |
+        | `readOnlyRootFilesystem: true` | Read-only root filesystem |
+        | `capabilities.drop: ["ALL"]` | Drops all Linux capabilities |
+
+        You also set **resource limits** (`resources.limits`) so a compromised or buggy container cannot eat all
+        the node's memory. These settings are exactly what scanners like Trivy, Checkov or Kubescape check.
+
+examples:
+  - title:
+      fr: "Un Pod minimal : les quatre clés"
+      en: "A minimal Pod: the four keys"
+    file: pod.yaml
+    lang: yaml
+    kind: neutral
+    code: |
+      apiVersion: v1          # core API group
+      kind: Pod
+      metadata:
+        name: hello
+        labels:
+          app: hello          # label used later by a Service selector
+      spec:
+        containers:
+          - name: web
+            image: nginx:1.27 # pinned version, never :latest
+            ports:
+              - containerPort: 80
+    output: |
+      pod/hello created
+      NAME    READY   STATUS    RESTARTS   AGE
+      hello   1/1     Running   0          5s
+    note:
+      fr: "Les quatre clés `apiVersion`, `kind`, `metadata`, `spec` structurent tout manifeste. L'image est épinglée à `1.27`, jamais `latest`."
+      en: "The four keys `apiVersion`, `kind`, `metadata`, `spec` structure every manifest. The image is pinned to `1.27`, never `latest`."
+
+  - title:
+      fr: "Deployment sans sécurité : tourne en root"
+      en: "Deployment with no security: runs as root"
+    file: deploy_insecure.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # VULNERABLE: no securityContext, no resource limits
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: api
+        template:
+          metadata:
+            labels:
+              app: api
+          spec:
+            containers:
+              - name: api
+                image: myapp:latest   # :latest is unpredictable
+                # container runs as root by default -> privilege escalation risk
+    output: |
+      Checkov: CKV_K8S_23  FAILED  Minimize the admission of root containers
+      Checkov: CKV_K8S_11  FAILED  CPU/memory limits should be set
+    note:
+      fr: "Manifeste volontairement faible (`kind: vulnerable`) : conteneur root, image `:latest`, aucune limite. Un scanner le rejette."
+      en: "Intentionally weak manifest (`kind: vulnerable`): root container, `:latest` image, no limits. A scanner rejects it."
+
+  - title:
+      fr: "Deployment durci + Service qui l'expose"
+      en: "Hardened Deployment + Service exposing it"
+    file: deploy_secure.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: api
+        template:
+          metadata:
+            labels:
+              app: api
+          spec:
+            securityContext:
+              runAsNonRoot: true        # refuse to run as root
+              runAsUser: 1000
+            containers:
+              - name: api
+                image: myapp:2.4.0      # pinned, reproducible
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]       # remove every Linux capability
+                resources:
+                  limits:
+                    cpu: "500m"
+                    memory: "256Mi"
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: api
+      spec:
+        selector:
+          app: api                      # matches the Pod labels above
+        ports:
+          - port: 80
+            targetPort: 8080
+    output: |
+      deployment.apps/api created
+      service/api created
+      Checkov: all container-security checks PASSED
+    note:
+      fr: "Le `securityContext` force le non-root, interdit l'escalade et retire les capacités ; le `Service` relie ses `Pods` par le label `app: api`."
+      en: "The `securityContext` forces non-root, blocks escalation and drops capabilities; the `Service` links its `Pods` via the `app: api` label."
+
+mistake:
+  fr: |
+    **Oublier le `securityContext` et utiliser l'image `:latest`.**
+
+    Un conteneur sans `securityContext` tourne en root : c'est le réglage par défaut le plus risqué de
+    Kubernetes. De plus, l'étiquette `:latest` rend les déploiements imprévisibles (deux nœuds peuvent tirer des
+    versions différentes) et empêche tout retour arrière propre. Épinglez toujours une version précise et
+    ajoutez `runAsNonRoot: true`. Enfin, vérifiez que le `selector` du Service correspond exactement aux labels
+    des Pods, sinon le trafic n'arrive nulle part.
+  en: |
+    **Forgetting the `securityContext` and using the `:latest` image.**
+
+    A container with no `securityContext` runs as root: it is Kubernetes' riskiest default. The `:latest` tag
+    also makes deployments unpredictable (two nodes may pull different versions) and prevents any clean
+    rollback. Always pin a precise version and add `runAsNonRoot: true`. Finally, make sure the Service's
+    `selector` exactly matches the Pod labels, otherwise traffic reaches nothing.
+
+bestPractice:
+  fr: |
+    - **Épinglez les versions d'images** (`myapp:2.4.0`), jamais `:latest`.
+    - **Ajoutez un `securityContext`** : `runAsNonRoot`, `allowPrivilegeEscalation: false`, `drop: ["ALL"]`.
+    - **Fixez des `resources.limits`** pour contenir un conteneur compromis.
+    - **Faites correspondre labels et selectors** pour que Services et Deployments se trouvent.
+    - **Scannez les manifestes** avec Checkov, Trivy ou Kubescape avant de les appliquer.
+  en: |
+    - **Pin image versions** (`myapp:2.4.0`), never `:latest`.
+    - **Add a `securityContext`**: `runAsNonRoot`, `allowPrivilegeEscalation: false`, `drop: ["ALL"]`.
+    - **Set `resources.limits`** to contain a compromised container.
+    - **Match labels and selectors** so Services and Deployments find each other.
+    - **Scan manifests** with Checkov, Trivy or Kubescape before applying them.
+
+exercise:
+  statement:
+    fr: |
+      À partir du Deployment vulnérable de la leçon (image `:latest`, conteneur root), écrivez une version
+      durcie qui :
+
+      1. épingle l'image à `web:1.27` ;
+      2. ajoute un `securityContext` au niveau du pod (`runAsNonRoot: true`, `runAsUser: 1000`) ;
+      3. ajoute au conteneur `allowPrivilegeEscalation: false` et `capabilities.drop: ["ALL"]`.
+    en: |
+      Starting from the lesson's vulnerable Deployment (`:latest` image, root container), write a hardened
+      version that:
+
+      1. pins the image to `web:1.27`;
+      2. adds a pod-level `securityContext` (`runAsNonRoot: true`, `runAsUser: 1000`);
+      3. adds `allowPrivilegeEscalation: false` and `capabilities.drop: ["ALL"]` to the container.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: web
+        template:
+          metadata:
+            labels:
+              app: web
+          spec:
+            securityContext:
+              runAsNonRoot: true      # pod refuses to run as root
+              runAsUser: 1000
+            containers:
+              - name: web
+                image: web:1.27       # pinned version, reproducible
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]     # no Linux capabilities
+    note:
+      fr: "Image épinglée + non-root + aucune capacité : ce manifeste passe les contrôles CKV_K8S_23 et apparentés."
+      en: "Pinned image + non-root + no capabilities: this manifest passes CKV_K8S_23 and related checks."
+
+quiz:
+  - q:
+      fr: "Quelles sont les quatre clés de premier niveau d'un manifeste Kubernetes ?"
+      en: "What are the four top-level keys of a Kubernetes manifest?"
+    options:
+      fr:
+        - "name, type, data, rules"
+        - "apiVersion, kind, metadata, spec"
+        - "version, class, labels, body"
+        - "group, resource, selector, ports"
+      en:
+        - "name, type, data, rules"
+        - "apiVersion, kind, metadata, spec"
+        - "version, class, labels, body"
+        - "group, resource, selector, ports"
+    answer: 1
+    why:
+      fr: "Tout manifeste suit la structure `apiVersion`, `kind`, `metadata`, `spec`."
+      en: "Every manifest follows the `apiVersion`, `kind`, `metadata`, `spec` structure."
+  - q:
+      fr: "Quel réglage empêche un conteneur de tourner en root ?"
+      en: "Which setting prevents a container from running as root?"
+    options:
+      fr: ["runAsNonRoot: true", "privileged: true", "replicas: 0", "hostNetwork: true"]
+      en: ["runAsNonRoot: true", "privileged: true", "replicas: 0", "hostNetwork: true"]
+    answer: 0
+    why:
+      fr: "`runAsNonRoot: true` refuse le démarrage si l'image s'exécute en root."
+      en: "`runAsNonRoot: true` refuses to start if the image runs as root."
+  - q:
+      fr: "Pourquoi éviter l'étiquette d'image `:latest` ?"
+      en: "Why avoid the `:latest` image tag?"
+    options:
+      fr:
+        - "Elle est plus lente à télécharger"
+        - "Elle rend les déploiements imprévisibles et empêche un retour arrière propre"
+        - "Elle est interdite par Kubernetes"
+        - "Elle double la taille de l'image"
+      en:
+        - "It is slower to download"
+        - "It makes deployments unpredictable and prevents a clean rollback"
+        - "It is forbidden by Kubernetes"
+        - "It doubles the image size"
+    answer: 1
+    why:
+      fr: "`:latest` peut pointer vers des versions différentes selon le moment et le nœud ; on épingle une version précise."
+      en: "`:latest` can point to different versions depending on time and node; pin a precise version instead."
+  - q:
+      fr: "Comment un Service trouve-t-il les Pods à desservir ?"
+      en: "How does a Service find the Pods it should serve?"
+    options:
+      fr:
+        - "Par leur adresse IP écrite en dur"
+        - "Par leur nom de conteneur"
+        - "Par un selector qui correspond à leurs labels"
+        - "Par ordre de création"
+      en:
+        - "By their hard-coded IP address"
+        - "By their container name"
+        - "By a selector matching their labels"
+        - "By creation order"
+    answer: 2
+    why:
+      fr: "Le `selector` du Service pointe vers les `labels` des Pods : c'est ce lien qui route le trafic."
+      en: "The Service's `selector` points to the Pods' `labels`: that link is what routes the traffic."
+  - q:
+      fr: "À quoi sert `capabilities.drop: [\"ALL\"]` dans un securityContext ?"
+      en: "What does `capabilities.drop: [\"ALL\"]` do in a securityContext?"
+    options:
+      fr:
+        - "Il supprime tous les Pods"
+        - "Il retire toutes les capacités Linux du conteneur, réduisant la surface d'attaque"
+        - "Il désactive la journalisation"
+        - "Il double les ressources"
+      en:
+        - "It deletes all Pods"
+        - "It removes all the container's Linux capabilities, shrinking the attack surface"
+        - "It disables logging"
+        - "It doubles the resources"
+    answer: 1
+    why:
+      fr: "Retirer toutes les capacités Linux limite ce qu'un conteneur compromis peut faire sur le système."
+      en: "Dropping all Linux capabilities limits what a compromised container can do to the system."

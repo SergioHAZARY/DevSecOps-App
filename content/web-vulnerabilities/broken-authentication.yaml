@@ -1,0 +1,483 @@
+description:
+  fr: "Authentification défaillante : hachage bcrypt/argon2, régénération de session, limitation des tentatives et erreurs génériques en 4 langages."
+  en: "Broken authentication: bcrypt/argon2 hashing, session regeneration, login rate-limiting and generic errors in 4 languages."
+duration: 30
+
+intro:
+  fr: |
+    L'**authentification défaillante** (*broken authentication*) regroupe toutes les failles qui laissent un
+    attaquant se faire passer pour un autre utilisateur : mots de passe mal protégés, sessions volées,
+    connexions sans limite de tentatives, messages d'erreur trop bavards. C'est l'une des causes les plus
+    fréquentes de compromission de comptes.
+
+    Pensez à un videur à l'entrée d'un club. S'il garde la liste des membres sur un papier à la vue de tous
+    (mots de passe en clair), s'il laisse réessayer le code mille fois (pas de limitation), ou s'il dit « ce
+    nom existe, mais le mot de passe est faux » (erreur trop précise), il facilite le travail d'un intrus. Une
+    authentification solide fait l'inverse à chaque étape.
+
+    Dans cette leçon, vous allez comparer le stockage de mots de passe en SHA-256 nu (dangereux) et en
+    **bcrypt/argon2** (correct), régénérer l'identifiant de session après connexion pour contrer la fixation,
+    limiter les tentatives et renvoyer une erreur **générique** — en Python, Node.js, PHP et Java.
+  en: |
+    **Broken authentication** covers every flaw that lets an attacker impersonate another user: poorly
+    protected passwords, stolen sessions, logins without attempt limits, over-chatty error messages. It is
+    one of the most common causes of account compromise.
+
+    Think of a bouncer at a club door. If they keep the member list on a sheet in plain view (clear-text
+    passwords), let people retry the code a thousand times (no rate limit), or say "that name exists, but the
+    password is wrong" (over-precise error), they make an intruder's job easy. Strong authentication does the
+    opposite at every step.
+
+    In this lesson you will compare password storage in bare SHA-256 (dangerous) and in **bcrypt/argon2**
+    (correct), regenerate the session id after login to defeat fixation, rate-limit attempts and return a
+    **generic** error — in Python, Node.js, PHP and Java.
+
+sections:
+  - heading:
+      fr: "Stocker les mots de passe : hachage lent et salé"
+      en: "Storing passwords: slow, salted hashing"
+    body:
+      fr: |
+        Un mot de passe ne se **chiffre** pas (ce serait réversible) : il se **hache** avec une fonction
+        **lente** et **salée**, conçue pour résister à la force brute. Les hachages rapides (MD5, SHA-1,
+        SHA-256 nu) sont une faute : un GPU en teste des milliards par seconde.
+
+        | Fonction | Adaptée aux mots de passe | Pourquoi |
+        |---|---|---|
+        | MD5, SHA-1, SHA-256 nu | **Non** | Trop rapides, pas de sel intégré, forçables |
+        | bcrypt | Oui | Lent, sel intégré, éprouvé |
+        | scrypt | Oui | Lent + coûteux en mémoire |
+        | **argon2id** | Oui (recommandé) | Résiste au GPU et aux ASIC, lauréat du concours PHC |
+
+        Le **sel** (une valeur aléatoire unique par mot de passe) empêche les *rainbow tables* et fait que deux
+        utilisateurs avec le même mot de passe ont des hachés différents. bcrypt et argon2 l'intègrent
+        automatiquement dans la chaîne de sortie. On ne compare jamais deux mots de passe avec `==` : on
+        utilise la fonction `verify`/`checkpw` de la bibliothèque, qui compare en temps constant.
+      en: |
+        A password is not **encrypted** (that would be reversible): it is **hashed** with a **slow**, **salted**
+        function designed to resist brute force. Fast hashes (MD5, SHA-1, bare SHA-256) are a mistake: a GPU
+        tests billions per second.
+
+        | Function | Suitable for passwords | Why |
+        |---|---|---|
+        | MD5, SHA-1, bare SHA-256 | **No** | Too fast, no built-in salt, brute-forceable |
+        | bcrypt | Yes | Slow, built-in salt, battle-tested |
+        | scrypt | Yes | Slow + memory-hard |
+        | **argon2id** | Yes (recommended) | Resists GPU and ASIC, PHC competition winner |
+
+        The **salt** (a unique random value per password) defeats *rainbow tables* and ensures two users with
+        the same password get different hashes. bcrypt and argon2 embed it automatically in the output string.
+        You never compare two passwords with `==`: you use the library's `verify`/`checkpw` function, which
+        compares in constant time.
+  - heading:
+      fr: "Sessions : régénération et cookies sûrs"
+      en: "Sessions: regeneration and safe cookies"
+    body:
+      fr: |
+        Après une connexion réussie, il faut **régénérer l'identifiant de session**. Sinon, un attaquant qui a
+        fixé un identifiant connu avant la connexion (*session fixation*) le réutilise une fois la victime
+        authentifiée. La règle : un nouvel ID de session à chaque changement de niveau de privilège (login,
+        élévation).
+
+        Le cookie de session doit porter trois attributs :
+
+        - **`HttpOnly`** : inaccessible au JavaScript, donc protégé du vol par XSS ;
+        - **`Secure`** : envoyé uniquement sur HTTPS ;
+        - **`SameSite=Lax`** (ou `Strict`) : non envoyé sur les requêtes inter-sites, défense anti-CSRF.
+
+        Enfin, les sessions **expirent** (inactivité et durée absolue) et la **déconnexion** invalide la
+        session côté serveur, pas seulement le cookie côté client.
+      en: |
+        After a successful login you must **regenerate the session id**. Otherwise an attacker who fixed a
+        known id before login (*session fixation*) reuses it once the victim is authenticated. The rule: a new
+        session id on every privilege change (login, elevation).
+
+        The session cookie must carry three attributes:
+
+        - **`HttpOnly`**: not reachable by JavaScript, so protected from XSS theft;
+        - **`Secure`**: sent only over HTTPS;
+        - **`SameSite=Lax`** (or `Strict`): not sent on cross-site requests, an anti-CSRF defense.
+
+        Finally, sessions **expire** (idle and absolute lifetime), and **logout** invalidates the session
+        server-side, not just the cookie on the client.
+  - heading:
+      fr: "Limiter la force brute et rester discret"
+      en: "Limiting brute force and staying discreet"
+    body:
+      fr: |
+        Sans limite, un attaquant teste des millions de mots de passe (*credential stuffing* avec des bases
+        fuitées). Deux leviers :
+
+        | Mesure | Effet |
+        |---|---|
+        | **Limitation des tentatives** (par compte et par IP) | Ralentit puis bloque temporairement après N échecs |
+        | **Erreur générique** | « Identifiant ou mot de passe incorrect » : ne révèle pas quel champ est faux |
+        | **MFA** | Un mot de passe volé ne suffit plus |
+        | **Détection des mots de passe fuités** | Refuser les mots de passe présents dans les fuites connues |
+
+        Le message d'erreur est crucial : « cet e-mail n'existe pas » permet d'**énumérer** les comptes
+        valides. Il faut la **même réponse** et, idéalement, le **même temps de réponse** que le compte existe
+        ou non. Attention aussi à la page d'inscription et à « mot de passe oublié », qui divulguent souvent
+        l'existence d'un compte.
+      en: |
+        Without a limit, an attacker tries millions of passwords (*credential stuffing* with leaked
+        databases). Two levers:
+
+        | Measure | Effect |
+        |---|---|
+        | **Attempt limiting** (per account and per IP) | Slows then temporarily locks after N failures |
+        | **Generic error** | "Invalid username or password": does not reveal which field is wrong |
+        | **MFA** | A stolen password is no longer enough |
+        | **Leaked-password detection** | Refuse passwords present in known breaches |
+
+        The error message is crucial: "this email does not exist" lets an attacker **enumerate** valid
+        accounts. You need the **same response** and, ideally, the **same response time** whether or not the
+        account exists. Beware too of the signup and "forgot password" pages, which often disclose whether an
+        account exists.
+
+examples:
+  - title:
+      fr: "Python - vulnérable : SHA-256 nu, erreur bavarde, pas de limite"
+      en: "Python - vulnerable: bare SHA-256, chatty error, no limit"
+    file: login_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import hashlib
+
+      USERS = {
+          # VULNERABLE: fast unsalted hash -> crackable, and identical passwords collide
+          "alice@example.com": hashlib.sha256(b"correct horse").hexdigest(),
+      }
+
+      def login(email, password):
+          stored = USERS.get(email)
+          if stored is None:
+              # VULNERABLE: reveals that the account does not exist (user enumeration)
+              return "no such user"
+          if stored == hashlib.sha256(password.encode()).hexdigest():
+              return "welcome"
+          # VULNERABLE: distinguishes "wrong password" from "no such user"
+          return "wrong password"
+
+      print(login("bob@example.com", "x"))        # no such user  -> leaks existence
+      print(login("alice@example.com", "nope"))   # wrong password -> leaks existence
+      print(login("alice@example.com", "correct horse"))
+    output: |
+      no such user
+      wrong password
+      welcome
+    note:
+      fr: "Trois fautes : SHA-256 nu (forçable au GPU), deux messages d'erreur différents (énumération des comptes) et aucune limite de tentatives."
+      en: "Three faults: bare SHA-256 (GPU-crackable), two different error messages (account enumeration) and no attempt limit."
+
+  - title:
+      fr: "Python - corrigé : argon2, erreur générique, limitation"
+      en: "Python - fixed: argon2, generic error, rate limiting"
+    file: login_fixed.py
+    lang: python
+    kind: secure
+    code: |
+      # Real environment: pip install argon2-cffi
+      import time
+      from argon2 import PasswordHasher
+      from argon2.exceptions import VerifyMismatchError
+
+      ph = PasswordHasher()  # argon2id: slow + memory-hard, salt embedded automatically
+
+      # The hash string already contains the algorithm, parameters and random salt
+      USERS = {"alice@example.com": ph.hash("correct horse")}
+      attempts: dict = {}  # per-account failure counter (use a shared store in prod)
+
+      def login(email, password):
+          # Rate limit: block after 5 failures to stop brute force / credential stuffing
+          if attempts.get(email, 0) >= 5:
+              return "invalid username or password"
+
+          stored = USERS.get(email)
+          try:
+              if stored is None:
+                  # Hash a dummy value anyway so the response time does not reveal
+                  # whether the account exists (defeats timing-based enumeration).
+                  ph.hash(password)
+                  raise VerifyMismatchError()
+              ph.verify(stored, password)  # constant-time, raises on mismatch
+              attempts[email] = 0
+              return "welcome"
+          except VerifyMismatchError:
+              attempts[email] = attempts.get(email, 0) + 1
+              # Same generic message whether the user exists or the password is wrong
+              return "invalid username or password"
+
+      print(login("bob@example.com", "x"))
+      print(login("alice@example.com", "nope"))
+      print(login("alice@example.com", "correct horse"))
+    output: |
+      invalid username or password
+      invalid username or password
+      welcome
+    note:
+      fr: "argon2id hache avec sel et lenteur ; `verify` compare en temps constant. Le même message et le hachage « à vide » du cas inexistant masquent l'énumération, et le compteur limite la force brute."
+      en: "argon2id hashes with salt and slowness; `verify` compares in constant time. The identical message and the dummy hash in the missing-user case hide enumeration, and the counter limits brute force."
+
+  - title:
+      fr: "Node.js (Express) - bcrypt, régénération de session, cookie sûr"
+      en: "Node.js (Express) - bcrypt, session regeneration, safe cookie"
+    file: auth.js
+    lang: javascript
+    kind: secure
+    code: |
+      // Real environment: npm i express express-session bcrypt
+      const bcrypt = require("bcrypt");
+
+      // Store a bcrypt hash (cost 12); the salt is embedded in the string
+      const users = { "alice@example.com": await bcrypt.hash("correct horse", 12) };
+
+      async function login(req, res) {
+        const { email, password } = req.body;
+        const hash = users[email];
+        // bcrypt.compare runs in ~constant time and tolerates a missing hash
+        const ok = hash ? await bcrypt.compare(password, hash) : false;
+        if (!ok) {
+          // One generic message, no hint about which field failed
+          return res.status(401).json({ error: "invalid username or password" });
+        }
+        // Regenerate the session id AFTER login to defeat session fixation
+        req.session.regenerate((err) => {
+          if (err) return res.status(500).end();
+          req.session.user = email;
+          res.json({ status: "welcome" });
+        });
+      }
+
+      // Cookie hardening for the session middleware:
+      //   cookie: { httpOnly: true, secure: true, sameSite: "lax", maxAge: 3600_000 }
+      module.exports = { login };
+    note:
+      fr: "`bcrypt.compare` remplace toute comparaison manuelle. `req.session.regenerate` change l'ID de session après connexion : un identifiant fixé par l'attaquant devient inutile."
+      en: "`bcrypt.compare` replaces any manual comparison. `req.session.regenerate` changes the session id after login: an id the attacker fixed becomes useless."
+
+  - title:
+      fr: "PHP et Java - hachage natif et vérification en temps constant"
+      en: "PHP and Java - native hashing and constant-time verification"
+    file: auth.php
+    lang: php
+    kind: secure
+    code: |
+      <?php
+      // ---------- Hash at registration ----------
+      // PASSWORD_DEFAULT is bcrypt today, PASSWORD_ARGON2ID if available; salt is automatic
+      $hash = password_hash("correct horse", PASSWORD_ARGON2ID);
+
+      // ---------- Verify at login ----------
+      function login(string $storedHash, string $email, string $password): string {
+          // password_verify compares in constant time and reads the embedded salt/params
+          if (!password_verify($password, $storedHash)) {
+              return "invalid username or password";   // one generic message
+          }
+          // Regenerate the session id to prevent fixation after authentication
+          session_regenerate_id(true);
+          $_SESSION['user'] = $email;
+          return "welcome";
+      }
+
+      // In Java (Spring Security), the same idea with a strong encoder:
+      //   PasswordEncoder encoder = new BCryptPasswordEncoder(12);
+      //   String hash = encoder.encode("correct horse");
+      //   boolean ok = encoder.matches(password, hash);   // constant time
+      //   // and request.changeSessionId() right after a successful login
+
+      echo password_verify("correct horse", $hash) ? "match" : "mismatch";
+    output: |
+      match
+    note:
+      fr: "`password_hash`/`password_verify` (PHP) et `BCryptPasswordEncoder` (Java) gèrent le sel et la comparaison en temps constant. `session_regenerate_id(true)` et `changeSessionId()` contrent la fixation."
+      en: "`password_hash`/`password_verify` (PHP) and `BCryptPasswordEncoder` (Java) handle the salt and constant-time comparison. `session_regenerate_id(true)` and `changeSessionId()` defeat fixation."
+
+mistake:
+  fr: |
+    **Hacher avec SHA-256 « parce que c'est cryptographique », et renvoyer des erreurs précises.**
+
+    SHA-256 est une excellente fonction de hachage... pour l'intégrité, pas pour les mots de passe : elle est
+    trop rapide et n'a pas de sel intégré, donc forçable au GPU et vulnérable aux *rainbow tables*. Il faut
+    bcrypt, scrypt ou argon2id. Deuxième faute récurrente : afficher « cet utilisateur n'existe pas » puis
+    « mot de passe incorrect ». Ces deux messages permettent d'énumérer les comptes valides. Un seul message
+    générique, le même temps de réponse, et une limitation des tentatives sont indispensables.
+  en: |
+    **Hashing with SHA-256 "because it is cryptographic", and returning precise errors.**
+
+    SHA-256 is an excellent hash function... for integrity, not for passwords: it is too fast and has no
+    built-in salt, so it is GPU-crackable and vulnerable to *rainbow tables*. You need bcrypt, scrypt or
+    argon2id. The second recurring fault: showing "this user does not exist" then "incorrect password". Those
+    two messages let an attacker enumerate valid accounts. A single generic message, the same response time,
+    and attempt limiting are essential.
+
+bestPractice:
+  fr: |
+    - **Hachage lent et salé** : argon2id (recommandé), scrypt ou bcrypt ; jamais MD5/SHA nu.
+    - **Vérification en temps constant** via la bibliothèque (`verify`, `compare`), jamais `==`.
+    - **Régénérer l'ID de session** après connexion et à chaque élévation de privilège.
+    - **Cookies `HttpOnly`, `Secure`, `SameSite`** et sessions qui expirent, déconnexion côté serveur.
+    - **Limiter les tentatives** par compte et par IP, et renvoyer une **erreur générique**.
+    - **MFA** et refus des mots de passe connus comme fuités ; **SAST/DAST** en CI pour repérer les régressions.
+  en: |
+    - **Slow, salted hashing**: argon2id (recommended), scrypt or bcrypt; never bare MD5/SHA.
+    - **Constant-time verification** via the library (`verify`, `compare`), never `==`.
+    - **Regenerate the session id** after login and on every privilege elevation.
+    - **`HttpOnly`, `Secure`, `SameSite` cookies** and expiring sessions, server-side logout.
+    - **Rate-limit attempts** per account and per IP, and return a **generic error**.
+    - **MFA** and refusal of known-leaked passwords; **SAST/DAST** in CI to catch regressions.
+
+exercise:
+  statement:
+    fr: |
+      Voici une fonction de connexion Python à auditer :
+
+      ```python
+      def login(db, email, password):
+          user = db.get(email)
+          if not user:
+              return {"error": "unknown email"}
+          if user["password"] == password:   # stored in clear text
+              return {"token": make_token(email)}
+          return {"error": "bad password"}
+      ```
+
+      1. Relevez les trois défaillances d'authentification.
+      2. Réécrivez la fonction : hachage argon2id, message d'erreur unique, et comparaison en temps constant.
+         (La limitation des tentatives peut être décrite en commentaire.)
+    en: |
+      Here is a Python login function to audit:
+
+      ```python
+      def login(db, email, password):
+          user = db.get(email)
+          if not user:
+              return {"error": "unknown email"}
+          if user["password"] == password:   # stored in clear text
+              return {"token": make_token(email)}
+          return {"error": "bad password"}
+      ```
+
+      1. List the three authentication failures.
+      2. Rewrite the function: argon2id hashing, a single error message, and constant-time comparison.
+         (Attempt limiting may be described in a comment.)
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      # Failures: (1) password stored and compared in clear text;
+      #           (2) == is not constant time; (3) two different error messages
+      #           reveal whether the account exists (user enumeration).
+      from argon2 import PasswordHasher
+      from argon2.exceptions import VerifyMismatchError
+
+      ph = PasswordHasher()  # argon2id, salt embedded in the hash string
+
+      def login(db, email, password):
+          # In production: check a per-account + per-IP rate limiter here first.
+          user = db.get(email)
+          try:
+              if user is None:
+                  ph.hash(password)        # equalise timing for missing accounts
+                  raise VerifyMismatchError()
+              ph.verify(user["password_hash"], password)  # constant-time
+              return {"token": make_token(email)}
+          except VerifyMismatchError:
+              # One generic message for both "unknown email" and "bad password"
+              return {"error": "invalid username or password"}
+    note:
+      fr: "On stocke un haché argon2id, on vérifie en temps constant, et on renvoie le même message que le compte existe ou non — le hachage à vide égalise aussi le temps de réponse."
+      en: "We store an argon2id hash, verify in constant time, and return the same message whether or not the account exists — the dummy hash also equalises the response time."
+
+quiz:
+  - q:
+      fr: "Pourquoi SHA-256 nu est-il un mauvais choix pour stocker des mots de passe ?"
+      en: "Why is bare SHA-256 a poor choice for storing passwords?"
+    options:
+      fr:
+        - "Il est trop rapide et sans sel, donc forçable au GPU"
+        - "Il est réversible et révèle le mot de passe"
+        - "Il n'est pas reconnu par les navigateurs"
+        - "Il produit des hachés trop courts pour être stockés"
+      en:
+        - "It is too fast and unsalted, so GPU-crackable"
+        - "It is reversible and reveals the password"
+        - "It is not recognised by browsers"
+        - "It produces hashes too short to store"
+    answer: 0
+    why:
+      fr: "Les fonctions de mot de passe doivent être lentes et salées (argon2id, bcrypt) ; SHA-256 nu est rapide et sans sel, donc vulnérable à la force brute."
+      en: "Password functions must be slow and salted (argon2id, bcrypt); bare SHA-256 is fast and unsalted, so vulnerable to brute force."
+  - q:
+      fr: "À quoi sert le sel dans le hachage d'un mot de passe ?"
+      en: "What is the salt for in password hashing?"
+    options:
+      fr:
+        - "À chiffrer le mot de passe de façon réversible"
+        - "À rendre le haché unique et à bloquer les rainbow tables"
+        - "À accélérer la vérification"
+        - "À raccourcir le mot de passe"
+      en:
+        - "To encrypt the password reversibly"
+        - "To make the hash unique and defeat rainbow tables"
+        - "To speed up verification"
+        - "To shorten the password"
+    answer: 1
+    why:
+      fr: "Un sel aléatoire unique par mot de passe rend chaque haché différent et rend les tables précalculées inutilisables."
+      en: "A unique random salt per password makes each hash different and renders precomputed tables useless."
+  - q:
+      fr: "Pourquoi régénérer l'identifiant de session après une connexion réussie ?"
+      en: "Why regenerate the session id after a successful login?"
+    options:
+      fr:
+        - "Pour réduire la taille du cookie"
+        - "Pour accélérer les requêtes suivantes"
+        - "Pour éviter la fixation de session avec un identifiant connu de l'attaquant"
+        - "Pour forcer l'utilisateur à ressaisir son mot de passe"
+      en:
+        - "To shrink the cookie size"
+        - "To speed up subsequent requests"
+        - "To prevent session fixation with an id the attacker knows"
+        - "To force the user to re-enter their password"
+    answer: 2
+    why:
+      fr: "Si l'ID ne change pas, un identifiant fixé avant la connexion reste valide après : la régénération le neutralise."
+      en: "If the id does not change, an id fixed before login stays valid afterwards: regeneration neutralises it."
+  - q:
+      fr: "Quel message renvoyer quand la connexion échoue ?"
+      en: "What message should be returned when login fails?"
+    options:
+      fr:
+        - "« Cet e-mail n'existe pas »"
+        - "« Mot de passe incorrect pour ce compte »"
+        - "« Compte verrouillé, contactez l'administrateur X »"
+        - "Un message générique identique, quel que soit le champ en cause"
+      en:
+        - "\"This email does not exist\""
+        - "\"Incorrect password for this account\""
+        - "\"Account locked, contact administrator X\""
+        - "A single generic message, whatever the failing field"
+    answer: 3
+    why:
+      fr: "Un message générique empêche l'énumération des comptes : l'attaquant ne sait pas si l'e-mail existe."
+      en: "A generic message prevents account enumeration: the attacker cannot tell whether the email exists."
+  - q:
+      fr: "Quelle mesure ralentit le credential stuffing (test massif de mots de passe fuités) ?"
+      en: "Which measure slows down credential stuffing (mass testing of leaked passwords)?"
+    options:
+      fr:
+        - "La limitation des tentatives par compte et par IP"
+        - "L'augmentation de la taille des cookies"
+        - "L'usage de SHA-1 à la place de SHA-256"
+        - "La suppression du sel"
+      en:
+        - "Attempt limiting per account and per IP"
+        - "Increasing cookie size"
+        - "Using SHA-1 instead of SHA-256"
+        - "Removing the salt"
+    answer: 0
+    why:
+      fr: "Limiter puis bloquer après plusieurs échecs rend impraticable le test de millions de combinaisons ; la MFA renforce encore cette protection."
+      en: "Limiting then locking after several failures makes testing millions of combinations impractical; MFA strengthens this further."

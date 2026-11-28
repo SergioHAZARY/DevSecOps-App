@@ -1,0 +1,488 @@
+description:
+  fr: "CSRF : comprendre la falsification de requête inter-sites et la corriger avec jetons anti-CSRF et cookies SameSite en 4 langages."
+  en: "CSRF: understand cross-site request forgery and fix it with anti-CSRF tokens and SameSite cookies in 4 languages."
+duration: 30
+
+intro:
+  fr: |
+    Une attaque **CSRF** (*Cross-Site Request Forgery*, falsification de requête inter-sites) pousse le
+    navigateur d'une victime **déjà connectée** à envoyer une requête qu'elle n'a pas voulue. Le navigateur
+    joint automatiquement le cookie de session : du point de vue du serveur, la requête semble légitime.
+
+    Imaginez une banque qui vous reconnaît à vie dès que vous entrez, sans jamais revérifier qui vous êtes.
+    Un escroc vous tend un formulaire pré-rempli « signez ici » ; comme la banque vous a reconnu, elle
+    exécute l'ordre. Le CSRF, c'est ce formulaire piégé : un site malveillant déclenche une action sur un
+    autre site où vous êtes authentifié (changer un e-mail, virer de l'argent, supprimer un compte).
+
+    Dans cette leçon, vous verrez une page attaquante qui vide un compte, puis la correction : **jeton
+    anti-CSRF** (double soumission) et **cookie SameSite**, en Python (Flask), Node.js (Express), PHP et Java
+    (Spring Security).
+  en: |
+    A **CSRF** attack (*Cross-Site Request Forgery*) makes the browser of an **already-logged-in** victim
+    send a request they never intended. The browser automatically attaches the session cookie: from the
+    server's point of view, the request looks legitimate.
+
+    Picture a bank that recognises you for life as soon as you walk in, never re-checking who you are. A con
+    artist hands you a pre-filled "sign here" form; because the bank recognised you, it carries out the
+    order. CSRF is that booby-trapped form: a malicious site triggers an action on another site where you are
+    authenticated (change an email, transfer money, delete an account).
+
+    In this lesson you will see an attacker page that empties an account, then the fix: an **anti-CSRF
+    token** (double submit) and a **SameSite cookie**, in Python (Flask), Node.js (Express), PHP and Java
+    (Spring Security).
+
+sections:
+  - heading:
+      fr: "Comment l'attaque fonctionne"
+      en: "How the attack works"
+    body:
+      fr: |
+        Le CSRF exploite deux faits : le navigateur **envoie les cookies automatiquement** vers un domaine, et
+        le serveur se fie uniquement au cookie de session pour autoriser une action. Si un site malveillant
+        fait soumettre un formulaire vers votre banque, le cookie part avec.
+
+        ```html
+        <!-- Page piégée sur evil.example : se soumet toute seule -->
+        <form action="https://bank.example/transfer" method="POST" id="x">
+          <input name="to" value="attacker">
+          <input name="amount" value="5000">
+        </form>
+        <script>document.getElementById('x').submit()</script>
+        ```
+
+        Les conditions nécessaires : la victime est connectée à `bank.example`, l'action change un état
+        (POST), et le serveur ne vérifie **rien** d'autre que le cookie. Le CSRF ne vole pas le cookie : il
+        s'en sert à distance. C'est pourquoi la défense consiste à exiger une **preuve que la requête vient
+        bien de votre propre page**, preuve qu'un site tiers ne peut pas fournir.
+      en: |
+        CSRF exploits two facts: the browser **sends cookies automatically** to a domain, and the server
+        trusts only the session cookie to authorize an action. If a malicious site makes a form submit to
+        your bank, the cookie goes along with it.
+
+        ```html
+        <!-- Booby-trapped page on evil.example: submits itself -->
+        <form action="https://bank.example/transfer" method="POST" id="x">
+          <input name="to" value="attacker">
+          <input name="amount" value="5000">
+        </form>
+        <script>document.getElementById('x').submit()</script>
+        ```
+
+        The necessary conditions: the victim is logged in to `bank.example`, the action changes state (POST),
+        and the server checks **nothing** beyond the cookie. CSRF does not steal the cookie: it uses it
+        remotely. That is why the defense is to require **proof that the request really came from your own
+        page**, proof a third-party site cannot supply.
+  - heading:
+      fr: "Les deux défenses : jeton anti-CSRF et SameSite"
+      en: "The two defenses: anti-CSRF token and SameSite"
+    body:
+      fr: |
+        | Défense | Principe | Portée |
+        |---|---|---|
+        | **Jeton anti-CSRF** | Un secret imprévisible, lié à la session, exigé dans chaque requête d'écriture | Protection principale, tous navigateurs |
+        | **Cookie `SameSite`** | Le navigateur n'envoie pas le cookie sur une requête initiée par un autre site | Défense en profondeur |
+        | **Vérifier l'origine** | Contrôler les en-têtes `Origin`/`Referer` côté serveur | Complément |
+
+        Le patron **synchronizer token** : le serveur place un jeton aléatoire dans un champ caché du
+        formulaire (ou un en-tête), le compare à celui stocké pour la session, et rejette la requête s'ils
+        diffèrent. Un site tiers ne peut pas lire ce jeton (même origine obligatoire), donc ne peut pas le
+        renvoyer.
+
+        `SameSite=Lax` (défaut moderne) bloque l'envoi du cookie sur les POST inter-sites ; `SameSite=Strict`
+        va plus loin mais casse certains liens entrants. SameSite seul ne suffit pas : certains navigateurs
+        anciens l'ignorent, et il ne protège pas des sous-domaines compromis. **Jeton + SameSite** ensemble.
+      en: |
+        | Defense | Principle | Scope |
+        |---|---|---|
+        | **Anti-CSRF token** | An unpredictable, session-bound secret, required on every write request | Primary protection, all browsers |
+        | **`SameSite` cookie** | The browser does not send the cookie on a request started by another site | Defense in depth |
+        | **Origin check** | Verify the `Origin`/`Referer` headers server-side | Complement |
+
+        The **synchronizer token** pattern: the server puts a random token in a hidden form field (or a
+        header), compares it to the one stored for the session, and rejects the request if they differ. A
+        third-party site cannot read that token (same-origin required), so it cannot send it back.
+
+        `SameSite=Lax` (the modern default) blocks sending the cookie on cross-site POSTs; `SameSite=Strict`
+        goes further but breaks some inbound links. SameSite alone is not enough: some old browsers ignore it,
+        and it does not protect against a compromised subdomain. Use **token + SameSite** together.
+  - heading:
+      fr: "Détection dans le pipeline DevSecOps"
+      en: "Detection in the DevSecOps pipeline"
+    body:
+      fr: |
+        Le CSRF se détecte à plusieurs étapes :
+
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | DAST | OWASP ZAP (règle « Absence of Anti-CSRF Tokens ») | Un formulaire POST sans jeton anti-CSRF |
+        | SAST / revue | Semgrep, revue de code | Une route d'écriture sans protection, `csrf.exempt`, un cookie sans `SameSite` |
+        | Tests | Test d'intégration qui poste sans jeton | Vérifie que le serveur renvoie bien 403 |
+
+        Les API **sans cookie** (authentification par `Authorization: Bearer <jeton>`) ne sont pas vulnérables
+        au CSRF classique, car le navigateur n'ajoute pas automatiquement l'en-tête : la défense CSRF cible
+        surtout les applications qui s'appuient sur un cookie de session.
+      en: |
+        CSRF is caught at several stages:
+
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | DAST | OWASP ZAP ("Absence of Anti-CSRF Tokens" rule) | A POST form without an anti-CSRF token |
+        | SAST / review | Semgrep, code review | A write route with no protection, `csrf.exempt`, a cookie without `SameSite` |
+        | Tests | An integration test that posts without a token | Checks the server returns 403 |
+
+        **Cookie-less** APIs (authentication via `Authorization: Bearer <token>`) are not vulnerable to
+        classic CSRF, because the browser does not add the header automatically: CSRF defense mainly targets
+        applications that rely on a session cookie.
+
+examples:
+  - title:
+      fr: "Flask - vulnérable puis corrigé avec Flask-WTF et SameSite"
+      en: "Flask - vulnerable then fixed with Flask-WTF and SameSite"
+    file: app.py
+    lang: python
+    kind: secure
+    code: |
+      # Real environment: pip install Flask Flask-WTF
+      from flask import Flask, request, session, abort
+      from flask_wtf.csrf import CSRFProtect, generate_csrf
+
+      app = Flask(__name__)
+      app.secret_key = "changeme-in-vault"
+
+      # Cookie hardening is defense in depth, not the primary fix
+      app.config.update(
+          SESSION_COOKIE_SAMESITE="Lax",   # cookie not sent on cross-site POST
+          SESSION_COOKIE_HTTPONLY=True,
+          SESSION_COOKIE_SECURE=True,      # cookie only over HTTPS
+      )
+
+      # ---------- VULNERABLE ----------
+      @app.post("/vulnerable/transfer")
+      def transfer_vulnerable():
+          # Trusts the session cookie alone -> a cross-site form can trigger this
+          amount = request.form["amount"]
+          return f"transferred {amount}"
+
+      # ---------- FIXED ----------
+      csrf = CSRFProtect(app)  # every POST/PUT/DELETE now requires a valid CSRF token
+
+      @app.get("/form")
+      def form():
+          # The token is unpredictable and bound to the session; a third-party site
+          # cannot read it, so it cannot forge a valid request.
+          token = generate_csrf()
+          return f'<form method="post" action="/transfer">' \
+                 f'<input type="hidden" name="csrf_token" value="{token}">' \
+                 f'<input name="amount"></form>'
+
+      @app.post("/transfer")
+      def transfer():
+          # CSRFProtect already validated csrf_token before reaching here
+          return f"transferred {request.form['amount']}"
+    note:
+      fr: "`CSRFProtect` exige un `csrf_token` valide sur chaque écriture ; sans lui, Flask renvoie 400. `SameSite=Lax` ajoute une barrière mais ne remplace pas le jeton."
+      en: "`CSRFProtect` requires a valid `csrf_token` on every write; without it, Flask returns 400. `SameSite=Lax` adds a barrier but does not replace the token."
+
+  - title:
+      fr: "Node.js (Express) - vulnérable puis corrigé avec csrf-csrf"
+      en: "Node.js (Express) - vulnerable then fixed with csrf-csrf"
+    file: server.js
+    lang: javascript
+    kind: secure
+    code: |
+      // Real environment: npm i express cookie-parser csrf-csrf
+      const express = require("express");
+      const cookieParser = require("cookie-parser");
+      const { doubleCsrf } = require("csrf-csrf");
+
+      const app = express();
+      app.use(express.urlencoded({ extended: false }));
+      app.use(cookieParser("changeme-in-vault"));
+
+      // ---------- VULNERABLE ----------
+      // No token check: any cross-site POST with the session cookie succeeds
+      app.post("/vulnerable/email", (req, res) => {
+        res.send(`email set to ${req.body.email}`);
+      });
+
+      // ---------- FIXED ----------
+      const { generateCsrfToken, doubleCsrfProtection } = doubleCsrf({
+        getSecret: () => "changeme-in-vault",
+        getSessionIdentifier: (req) => req.signedCookies["sid"] ?? "",
+        cookieName: "__Host-csrf",       // __Host- prefix: HTTPS + no subdomain
+        cookieOptions: { sameSite: "lax", secure: true },
+      });
+
+      app.get("/form", (req, res) => {
+        const token = generateCsrfToken(req, res);
+        res.send(`<form method="post" action="/email">
+          <input type="hidden" name="_csrf" value="${token}">
+          <input name="email"></form>`);
+      });
+
+      // doubleCsrfProtection rejects the request (403) if the token is missing or wrong
+      app.post("/email", doubleCsrfProtection, (req, res) => {
+        res.send(`email set to ${req.body.email}`);
+      });
+
+      app.listen(3000);
+    note:
+      fr: "`csrf-csrf` implémente le double submit : un jeton dans un cookie `__Host-` et un dans le formulaire, comparés côté serveur. Le préfixe `__Host-` empêche un sous-domaine de poser le cookie."
+      en: "`csrf-csrf` implements double submit: one token in a `__Host-` cookie and one in the form, compared server-side. The `__Host-` prefix stops a subdomain from setting the cookie."
+
+  - title:
+      fr: "PHP - vulnérable puis corrigé avec un jeton en session"
+      en: "PHP - vulnerable then fixed with a session token"
+    file: transfer.php
+    lang: php
+    kind: secure
+    code: |
+      <?php
+      session_start();
+
+      // ---------- VULNERABLE ----------
+      // Acts on the session cookie alone: a remote form can trigger the transfer
+      function transferVulnerable(): string {
+          return "transferred " . $_POST['amount'];
+      }
+
+      // ---------- FIXED ----------
+      // Generate a per-session token and embed it in the form
+      function csrfToken(): string {
+          if (empty($_SESSION['csrf'])) {
+              $_SESSION['csrf'] = bin2hex(random_bytes(32)); // unpredictable
+          }
+          return $_SESSION['csrf'];
+      }
+
+      function transfer(): string {
+          $sent = $_POST['csrf'] ?? '';
+          // hash_equals compares in constant time (no timing leak) and rejects a
+          // missing or wrong token before any state change happens.
+          if (!hash_equals($_SESSION['csrf'] ?? '', $sent)) {
+              http_response_code(403);
+              return 'CSRF check failed';
+          }
+          return "transferred " . $_POST['amount'];
+      }
+
+      // In the template:
+      //   <input type="hidden" name="csrf" value="<?= htmlspecialchars(csrfToken()) ?>">
+      $token = csrfToken();
+      echo '<form method="post"><input type="hidden" name="csrf" value="'
+           . htmlspecialchars($token) . '"><input name="amount"></form>';
+    note:
+      fr: "`random_bytes` produit un jeton imprévisible, `hash_equals` le compare en temps constant. Un site tiers ne peut pas lire `$_SESSION['csrf']`, donc ne peut pas renvoyer le bon jeton."
+      en: "`random_bytes` makes an unpredictable token, `hash_equals` compares it in constant time. A third-party site cannot read `$_SESSION['csrf']`, so it cannot send back the right token."
+
+  - title:
+      fr: "Java (Spring Security) - protection CSRF activée"
+      en: "Java (Spring Security) - CSRF protection enabled"
+    file: SecurityConfig.java
+    lang: java
+    kind: secure
+    code: |
+      import org.springframework.context.annotation.Bean;
+      import org.springframework.context.annotation.Configuration;
+      import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+      import org.springframework.security.web.SecurityFilterChain;
+      import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+
+      @Configuration
+      public class SecurityConfig {
+
+          @Bean
+          public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+              http
+                  // Spring Security enables CSRF protection by default.
+                  // Here we store the token in a cookie for a JS front-end to read and echo.
+                  .csrf(csrf -> csrf
+                      .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
+                  .authorizeHttpRequests(auth -> auth.anyRequest().authenticated());
+              // DANGEROUS and to avoid: http.csrf(csrf -> csrf.disable());
+              return http.build();
+          }
+      }
+    note:
+      fr: "Spring Security protège le CSRF par défaut : chaque écriture exige le jeton (champ `_csrf` ou en-tête `X-CSRF-TOKEN`). L'erreur serait d'appeler `csrf.disable()` « pour que ça marche »."
+      en: "Spring Security protects against CSRF by default: every write requires the token (field `_csrf` or header `X-CSRF-TOKEN`). The mistake would be calling `csrf.disable()` \"to make it work\"."
+
+mistake:
+  fr: |
+    **Désactiver la protection CSRF pour « débloquer » un formulaire, ou croire que SameSite suffit.**
+
+    Quand un POST renvoie une erreur de jeton, la tentation est d'appeler `csrf.disable()`,
+    `@csrf_exempt` ou de retirer le middleware. On supprime alors la défense au lieu de corriger le formulaire
+    (qui doit inclure le champ `csrf_token`). À l'inverse, compter uniquement sur `SameSite` laisse passer les
+    navigateurs qui l'ignorent et n'empêche pas une attaque depuis un sous-domaine compromis. La bonne réponse
+    est **jeton anti-CSRF + cookie SameSite ensemble**, jamais l'un contre l'autre.
+  en: |
+    **Disabling CSRF protection to "unblock" a form, or believing SameSite is enough.**
+
+    When a POST returns a token error, the temptation is to call `csrf.disable()`, `@csrf_exempt` or remove
+    the middleware. That deletes the defense instead of fixing the form (which must include the `csrf_token`
+    field). Conversely, relying only on `SameSite` lets through browsers that ignore it and does not stop an
+    attack from a compromised subdomain. The right answer is **anti-CSRF token + SameSite cookie together**,
+    never one instead of the other.
+
+bestPractice:
+  fr: |
+    - **Jeton anti-CSRF** (synchronizer ou double submit) sur toute requête qui change un état (POST/PUT/DELETE).
+    - **Cookies `SameSite=Lax`** au minimum, `HttpOnly` et `Secure`, en défense en profondeur.
+    - **Comparaison en temps constant** du jeton (`hash_equals`, `compare_digest`), jamais `==`.
+    - **Ne jamais désactiver** la protection du framework ; corriger le formulaire plutôt que de l'exempter.
+    - **DAST en CI** (OWASP ZAP) pour repérer les formulaires sans jeton.
+    - **API par jeton Bearer** plutôt que par cookie quand c'est possible : pas de CSRF classique.
+  en: |
+    - **Anti-CSRF token** (synchronizer or double submit) on every state-changing request (POST/PUT/DELETE).
+    - **`SameSite=Lax`** cookies at minimum, plus `HttpOnly` and `Secure`, as defense in depth.
+    - **Constant-time comparison** of the token (`hash_equals`, `compare_digest`), never `==`.
+    - **Never disable** the framework's protection; fix the form instead of exempting it.
+    - **DAST in CI** (OWASP ZAP) to catch forms without a token.
+    - **Bearer-token APIs** rather than cookie auth where possible: no classic CSRF.
+
+exercise:
+  statement:
+    fr: |
+      Cette route Express change le mot de passe en se fiant au seul cookie de session :
+
+      ```javascript
+      app.post("/account/password", (req, res) => {
+        setPassword(req.session.user, req.body.newPassword);
+        res.send("password updated");
+      });
+      ```
+
+      1. Expliquez comment une page sur `evil.example` pourrait changer le mot de passe d'une victime connectée.
+      2. Décrivez les deux protections à ajouter (jeton anti-CSRF et attribut de cookie) et où elles interviennent.
+    en: |
+      This Express route changes the password trusting only the session cookie:
+
+      ```javascript
+      app.post("/account/password", (req, res) => {
+        setPassword(req.session.user, req.body.newPassword);
+        res.send("password updated");
+      });
+      ```
+
+      1. Explain how a page on `evil.example` could change a logged-in victim's password.
+      2. Describe the two protections to add (anti-CSRF token and cookie attribute) and where each applies.
+  solution:
+    file: solution.js
+    lang: javascript
+    code: |
+      // 1. A hidden auto-submitting form on evil.example posts to /account/password.
+      //    The browser attaches the victim's session cookie, so the server accepts it.
+      //
+      // 2a. Anti-CSRF token: the real form must carry an unpredictable, session-bound
+      //     token; the route rejects the request (403) if it is missing or wrong.
+      // 2b. SameSite cookie: set the session cookie SameSite=Lax (or Strict) so the
+      //     browser does not send it on a cross-site POST.
+      const { doubleCsrf } = require("csrf-csrf");
+      const { doubleCsrfProtection } = doubleCsrf({
+        getSecret: () => "changeme-in-vault",
+        getSessionIdentifier: (req) => req.sessionID,
+        cookieName: "__Host-csrf",
+        cookieOptions: { sameSite: "lax", secure: true },
+      });
+
+      // session cookie: { sameSite: "lax", httpOnly: true, secure: true }
+      app.post("/account/password", doubleCsrfProtection, (req, res) => {
+        setPassword(req.session.user, req.body.newPassword);
+        res.send("password updated");
+      });
+    note:
+      fr: "Le middleware `doubleCsrfProtection` bloque toute requête sans jeton valide ; `SameSite=Lax` sur le cookie de session empêche son envoi depuis un autre site."
+      en: "The `doubleCsrfProtection` middleware blocks any request without a valid token; `SameSite=Lax` on the session cookie prevents it being sent from another site."
+
+quiz:
+  - q:
+      fr: "Sur quoi repose une attaque CSRF ?"
+      en: "What does a CSRF attack rely on?"
+    options:
+      fr:
+        - "Le navigateur joint automatiquement le cookie de session à la requête forgée"
+        - "Le vol du cookie de session via XSS"
+        - "Une faille dans l'algorithme de chiffrement TLS"
+        - "Une injection SQL dans le formulaire de connexion"
+      en:
+        - "The browser automatically attaches the session cookie to the forged request"
+        - "Stealing the session cookie via XSS"
+        - "A flaw in the TLS encryption algorithm"
+        - "A SQL injection in the login form"
+    answer: 0
+    why:
+      fr: "Le CSRF ne vole pas le cookie : il profite de son envoi automatique par le navigateur vers le site cible."
+      en: "CSRF does not steal the cookie: it takes advantage of the browser sending it automatically to the target site."
+  - q:
+      fr: "Pourquoi un site tiers ne peut-il pas fournir un jeton anti-CSRF valide ?"
+      en: "Why can a third-party site not supply a valid anti-CSRF token?"
+    options:
+      fr:
+        - "Parce que le jeton est chiffré avec RSA"
+        - "Parce que la politique de même origine l'empêche de lire le jeton de votre page"
+        - "Parce que le jeton change à chaque milliseconde"
+        - "Parce que le navigateur bloque tous les formulaires externes"
+      en:
+        - "Because the token is encrypted with RSA"
+        - "Because the same-origin policy prevents it from reading your page's token"
+        - "Because the token changes every millisecond"
+        - "Because the browser blocks all external forms"
+    answer: 1
+    why:
+      fr: "Le jeton est lisible uniquement depuis la même origine ; un site malveillant ne peut pas le récupérer, donc ne peut pas le renvoyer."
+      en: "The token is readable only from the same origin; a malicious site cannot obtain it, so it cannot send it back."
+  - q:
+      fr: "Quel attribut de cookie empêche son envoi sur une requête POST initiée par un autre site ?"
+      en: "Which cookie attribute stops it being sent on a POST started by another site?"
+    options:
+      fr:
+        - "`HttpOnly`"
+        - "`Secure`"
+        - "`Domain`"
+        - "`SameSite=Lax`"
+      en:
+        - "`HttpOnly`"
+        - "`Secure`"
+        - "`Domain`"
+        - "`SameSite=Lax`"
+    answer: 3
+    why:
+      fr: "`SameSite=Lax` empêche l'envoi du cookie sur un POST inter-sites ; `HttpOnly` et `Secure` traitent d'autres risques."
+      en: "`SameSite=Lax` prevents the cookie from being sent on a cross-site POST; `HttpOnly` and `Secure` address other risks."
+  - q:
+      fr: "Comment comparer le jeton anti-CSRF reçu à celui attendu ?"
+      en: "How should the received anti-CSRF token be compared to the expected one?"
+    options:
+      fr:
+        - "Avec une comparaison en temps constant (`hash_equals`, `compare_digest`)"
+        - "Avec `==`, c'est équivalent"
+        - "En hachant les deux avec MD5 d'abord"
+        - "En comparant seulement les 4 premiers caractères"
+      en:
+        - "With a constant-time comparison (`hash_equals`, `compare_digest`)"
+        - "With `==`, it is equivalent"
+        - "By hashing both with MD5 first"
+        - "By comparing only the first 4 characters"
+    answer: 0
+    why:
+      fr: "Une comparaison à temps constant évite une attaque temporelle qui révélerait le jeton caractère par caractère."
+      en: "A constant-time comparison avoids a timing attack that would reveal the token character by character."
+  - q:
+      fr: "Quel type d'API est globalement à l'abri du CSRF classique ?"
+      en: "Which kind of API is largely safe from classic CSRF?"
+    options:
+      fr:
+        - "Une API qui utilise un cookie de session"
+        - "Une API qui stocke les sessions en base"
+        - "Une API authentifiée par en-tête `Authorization: Bearer`"
+        - "Une API derrière un pare-feu"
+      en:
+        - "An API that uses a session cookie"
+        - "An API that stores sessions in a database"
+        - "An API authenticated by an `Authorization: Bearer` header"
+        - "An API behind a firewall"
+    answer: 2
+    why:
+      fr: "Le navigateur n'ajoute pas automatiquement l'en-tête `Authorization` : une page tierce ne peut donc pas forger une requête authentifiée."
+      en: "The browser does not add the `Authorization` header automatically: a third-party page therefore cannot forge an authenticated request."

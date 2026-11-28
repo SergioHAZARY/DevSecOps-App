@@ -1,0 +1,357 @@
+description:
+  fr: "Passer la carte Wi-Fi en mode moniteur avec airmon-ng et capturer le 4-way handshake de VOTRE PROPRE box avec airodump-ng."
+  en: "Put the Wi-Fi card into monitor mode with airmon-ng and capture the 4-way handshake of YOUR OWN access point with airodump-ng."
+duration: 25
+
+intro:
+  fr: |
+    Pour tester la robustesse de **votre propre** réseau Wi-Fi, il faut d'abord **capturer** un élément qui
+    dépend du mot de passe : le **4-way handshake**. Cette leçon montre comment écouter les ondes avec une carte
+    Wi-Fi en **mode moniteur**, puis enregistrer le handshake de **votre box à vous**.
+
+    Le mode normal d'une carte Wi-Fi ne reçoit que le trafic qui lui est destiné, comme une personne qui n'écoute
+    que quand on l'appelle. Le **mode moniteur** transforme la carte en micro d'ambiance : elle capte **toutes**
+    les trames qui passent sur un canal, qu'elles lui soient destinées ou non.
+
+    Vous utiliserez **airmon-ng** (activer le mode moniteur) et **airodump-ng** (capturer). Avertissement
+    central et non négociable : vous ne capturez le handshake que de **VOTRE PROPRE** point d'accès (SSID
+    `MyLab-AP`, BSSID `AA:BB:CC:DD:EE:FF` dans nos exemples), ou d'un réseau pour lequel vous avez une
+    **autorisation écrite**. Capter le handshake du réseau d'autrui est une **interception illégale**, même si
+    vous ne faites « que regarder ».
+  en: |
+    To test the strength of **your own** Wi-Fi network, you first need to **capture** something that depends on
+    the password: the **4-way handshake**. This lesson shows how to listen to the airwaves with a Wi-Fi card in
+    **monitor mode**, then record the handshake of **your own** router.
+
+    A Wi-Fi card's normal mode only receives traffic addressed to it, like a person who only listens when called.
+    **Monitor mode** turns the card into an ambient microphone: it captures **every** frame passing on a channel,
+    whether addressed to it or not.
+
+    You will use **airmon-ng** (enable monitor mode) and **airodump-ng** (capture). Central, non-negotiable
+    warning: you only capture the handshake of **YOUR OWN** access point (SSID `MyLab-AP`, BSSID
+    `AA:BB:CC:DD:EE:FF` in our examples), or a network you have **written authorisation** for. Capturing someone
+    else's handshake is **illegal interception**, even if you are "only watching".
+
+sections:
+  - heading:
+      fr: "Le mode moniteur avec airmon-ng"
+      en: "Monitor mode with airmon-ng"
+    body:
+      fr: |
+        Toutes les cartes Wi-Fi ne gèrent pas le mode moniteur ; il faut un adaptateur compatible (souvent un
+        dongle USB dédié). Une fois la bonne carte en place, **airmon-ng** l'active :
+
+        ```bash
+        sudo airmon-ng start wlan0
+        ```
+
+        La carte passe alors de `wlan0` à une interface moniteur, souvent nommée `wlan0mon`. En mode moniteur,
+        elle **n'est plus connectée** à aucun réseau : elle écoute, elle ne participe pas.
+
+        Un détail pratique : des processus comme NetworkManager peuvent interférer avec le mode moniteur.
+        `airmon-ng check kill` les arrête temporairement. Pensez à **rétablir** le mode normal après vos tests
+        avec `airmon-ng stop wlan0mon`, sinon vous perdez votre connexion habituelle. Le mode moniteur est
+        **passif** par nature : il ne fait qu'écouter, mais c'est déjà une capacité à n'utiliser que sur votre
+        propre réseau.
+      en: |
+        Not all Wi-Fi cards support monitor mode; you need a compatible adapter (often a dedicated USB dongle).
+        Once the right card is in place, **airmon-ng** enables it:
+
+        ```bash
+        sudo airmon-ng start wlan0
+        ```
+
+        The card then switches from `wlan0` to a monitor interface, often named `wlan0mon`. In monitor mode, it
+        is **no longer connected** to any network: it listens, it does not participate.
+
+        A practical detail: processes like NetworkManager can interfere with monitor mode. `airmon-ng check kill`
+        stops them temporarily. Remember to **restore** normal mode after your tests with
+        `airmon-ng stop wlan0mon`, otherwise you lose your usual connection. Monitor mode is **passive** by
+        nature: it only listens, but that is already a capability to use only on your own network.
+  - heading:
+      fr: "Repérer sa box avec airodump-ng"
+      en: "Spotting your router with airodump-ng"
+    body:
+      fr: |
+        **airodump-ng** affiche en temps réel les réseaux et les clients à portée. Lancé sans cible, il balaie
+        tous les canaux :
+
+        ```bash
+        sudo airodump-ng wlan0mon
+        ```
+
+        Vous verrez une liste avec le **BSSID** (adresse MAC du point d'accès), le **PWR** (puissance du signal),
+        le **CH** (canal), le **ENC** (chiffrement) et le **ESSID** (nom). Repérez la ligne de **votre** réseau :
+        notez son **BSSID** et son **canal**. Ces deux valeurs servent à cibler précisément la capture.
+
+        Il faut cibler un **canal fixe** pour capturer un handshake : en balayant tous les canaux, airodump-ng
+        passe trop peu de temps sur chacun pour saisir les quatre messages. On se « cale » donc sur le canal de
+        sa box. Encore une fois, on ne note et on ne cible que **sa propre** ligne dans la liste.
+      en: |
+        **airodump-ng** shows in real time the networks and clients in range. Launched with no target, it sweeps
+        all channels:
+
+        ```bash
+        sudo airodump-ng wlan0mon
+        ```
+
+        You will see a list with the **BSSID** (the access point's MAC address), the **PWR** (signal strength),
+        the **CH** (channel), the **ENC** (encryption) and the **ESSID** (name). Spot the line of **your**
+        network: note its **BSSID** and its **channel**. These two values are used to target the capture
+        precisely.
+
+        You must target a **fixed channel** to capture a handshake: by sweeping all channels, airodump-ng spends
+        too little time on each to grab the four messages. So you "lock" onto your router's channel. Again, you
+        note and target only **your own** line in the list.
+  - heading:
+      fr: "Capturer le handshake de votre réseau"
+      en: "Capturing your network's handshake"
+    body:
+      fr: |
+        Pour capturer, on fixe le canal (`-c`), on filtre sur le BSSID de sa box (`--bssid`) et on écrit la
+        capture dans un fichier (`-w`) :
+
+        ```bash
+        sudo airodump-ng -c 6 --bssid AA:BB:CC:DD:EE:FF -w capture wlan0mon
+        ```
+
+        Un handshake n'est capturé **que lorsqu'un appareil se (re)connecte** à la box. Il faut donc qu'un de
+        **vos** appareils rejoigne le réseau pendant la capture : il suffit souvent de couper/réactiver le Wi-Fi
+        de votre téléphone. Quand airodump-ng affiche `WPA handshake: AA:BB:CC:DD:EE:FF` en haut à droite, c'est
+        gagné : le fichier `capture-01.cap` contient les quatre messages.
+
+        **Ne faites cela que sur votre propre réseau, avec vos propres appareils.** Forcer la reconnexion de
+        l'appareil **d'autrui** (attaque de déauthentification) pour capturer son handshake est une attaque
+        active contre un tiers : hors de question ici. La capture passive de votre handshake à vous suffit pour
+        la leçon suivante, où l'on testera la force du mot de passe hors ligne.
+      en: |
+        To capture, you fix the channel (`-c`), filter on your router's BSSID (`--bssid`) and write the capture
+        to a file (`-w`):
+
+        ```bash
+        sudo airodump-ng -c 6 --bssid AA:BB:CC:DD:EE:FF -w capture wlan0mon
+        ```
+
+        A handshake is captured **only when a device (re)connects** to the router. So one of **your** devices
+        must join the network during the capture: often it is enough to turn your phone's Wi-Fi off and back on.
+        When airodump-ng shows `WPA handshake: AA:BB:CC:DD:EE:FF` in the top-right corner, you have it: the file
+        `capture-01.cap` contains the four messages.
+
+        **Do this only on your own network, with your own devices.** Forcing **someone else's** device to
+        reconnect (a deauthentication attack) to capture its handshake is an active attack against a third party:
+        out of the question here. Passively capturing your own handshake is enough for the next lesson, where you
+        will test the password strength offline.
+
+examples:
+  - title:
+      fr: "Activer le mode moniteur proprement"
+      en: "Enabling monitor mode cleanly"
+    file: monitor.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Stop processes that interfere with monitor mode (NetworkManager, etc.).
+      sudo airmon-ng check kill
+
+      # Put the Wi-Fi card into monitor mode. wlan0 -> wlan0mon.
+      sudo airmon-ng start wlan0
+
+      # Confirm the monitor interface exists and is in Monitor mode.
+      iw dev wlan0mon info | grep -E 'Interface|type'
+    output: |
+      PHY     Interface       Driver          Chipset
+      phy0    wlan0mon        ath9k_htc       Atheros AR9271
+              (monitor mode enabled)
+          Interface wlan0mon
+              type monitor
+    note:
+      fr: "`airmon-ng check kill` évite que NetworkManager reprenne la main. Après vos tests, pensez à `airmon-ng stop wlan0mon` pour retrouver une connexion normale."
+      en: "`airmon-ng check kill` stops NetworkManager from taking over. After your tests, remember `airmon-ng stop wlan0mon` to restore a normal connection."
+  - title:
+      fr: "Repérer uniquement votre propre réseau"
+      en: "Spotting only your own network"
+    file: survey.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Live survey of networks in range. Identify YOUR OWN line (MyLab-AP),
+      # note its BSSID and channel, then stop with Ctrl+C.
+      sudo airodump-ng wlan0mon
+    output: |
+       BSSID              PWR  CH  ENC  CIPHER AUTH ESSID
+       AA:BB:CC:DD:EE:FF  -38   6  WPA2 CCMP   PSK  MyLab-AP
+       11:22:33:44:55:66  -71  11  WPA2 CCMP   PSK  Neighbour1
+       99:88:77:66:55:44  -80   1  WEP  WEP         OldRouter
+    note:
+      fr: "On relève le BSSID `AA:BB:CC:DD:EE:FF` et le canal 6 de **sa** box (`MyLab-AP`, signal fort -38). Les autres réseaux ne nous concernent pas et ne doivent pas être ciblés."
+      en: "You take the BSSID `AA:BB:CC:DD:EE:FF` and channel 6 of **your** router (`MyLab-AP`, strong signal -38). The other networks are not our concern and must not be targeted."
+  - title:
+      fr: "Capturer le handshake de votre box"
+      en: "Capturing your router's handshake"
+    file: capture.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Lock onto YOUR router's channel and BSSID, and write the capture.
+      # -c channel, --bssid filter, -w output file prefix.
+      sudo airodump-ng -c 6 --bssid AA:BB:CC:DD:EE:FF -w capture wlan0mon
+
+      # On ONE OF YOUR OWN devices, toggle Wi-Fi off/on so it reconnects.
+      # When airodump-ng shows "WPA handshake: AA:BB:CC:DD:EE:FF", you captured it.
+    output: |
+       CH  6 ][ Elapsed: 48 s ][ WPA handshake: AA:BB:CC:DD:EE:FF
+
+       BSSID              STATION            PWR   Frames  Notes
+       AA:BB:CC:DD:EE:FF  DE:AD:BE:EF:00:01  -40   126     EAPOL
+    note:
+      fr: "Le message `WPA handshake` confirme la capture ; le fichier `capture-01.cap` contient les quatre messages EAPOL. On a reconnecté **son propre** appareil, jamais celui d'un tiers."
+      en: "The `WPA handshake` message confirms the capture; the file `capture-01.cap` contains the four EAPOL messages. You reconnected **your own** device, never a third party's."
+
+mistake:
+  fr: |
+    **Déauthentifier l'appareil d'un voisin pour « accélérer » la capture.** L'attaque de déauthentification
+    force un client à se reconnecter, ce qui rejoue le handshake. Sur **votre** réseau avec **vos** appareils,
+    c'est un test légitime ; contre l'appareil d'autrui, c'est une attaque active et une interception, donc un
+    délit. Autre erreur : oublier de relancer le mode normal (`airmon-ng stop`) et se retrouver sans connexion.
+    Capturez passivement, sur votre propre matériel, et remettez la carte en état après.
+  en: |
+    **Deauthenticating a neighbour's device to "speed up" the capture.** The deauthentication attack forces a
+    client to reconnect, which replays the handshake. On **your** network with **your** devices, it is a
+    legitimate test; against someone else's device, it is an active attack and an interception, hence a crime.
+    Another mistake: forgetting to restore normal mode (`airmon-ng stop`) and ending up with no connection.
+    Capture passively, on your own equipment, and put the card back to normal afterwards.
+
+bestPractice:
+  fr: |
+    - **Utilisez une carte compatible mode moniteur** (souvent un dongle USB dédié).
+    - **Ciblez un canal fixe** (`-c`) et le BSSID de **votre** box (`--bssid`) pour capturer efficacement.
+    - **Capturez passivement** : reconnectez **vos** appareils plutôt que de déauthentifier qui que ce soit.
+    - **Confirmez le handshake** (message `WPA handshake`) avant d'arrêter la capture.
+    - **Rétablissez le mode normal** (`airmon-ng stop`) et ne visez jamais que votre propre réseau ou un périmètre autorisé.
+  en: |
+    - **Use a monitor-mode-capable card** (often a dedicated USB dongle).
+    - **Target a fixed channel** (`-c`) and **your** router's BSSID (`--bssid`) to capture efficiently.
+    - **Capture passively**: reconnect **your** devices rather than deauthenticating anyone.
+    - **Confirm the handshake** (the `WPA handshake` message) before stopping the capture.
+    - **Restore normal mode** (`airmon-ng stop`) and never target anything but your own network or an authorised scope.
+
+exercise:
+  statement:
+    fr: |
+      Vous voulez capturer le handshake de **votre** box, dont vous avez relevé le BSSID `AA:BB:CC:DD:EE:FF` sur
+      le **canal 6**, et enregistrer la capture sous le préfixe `monlab`, avec l'interface `wlan0mon`.
+
+      1. Écrivez la commande airodump-ng ciblée.
+      2. Expliquez comment déclencher la capture du handshake **sans** attaquer un appareil tiers.
+    en: |
+      You want to capture the handshake of **your** router, whose BSSID you noted as `AA:BB:CC:DD:EE:FF` on
+      **channel 6**, saving the capture under the prefix `mylab`, with the interface `wlan0mon`.
+
+      1. Write the targeted airodump-ng command.
+      2. Explain how to trigger the handshake capture **without** attacking a third-party device.
+  solution:
+    file: capture_mine.sh
+    lang: bash
+    code: |
+      # 1. Lock onto your own channel and BSSID, write to prefix "mylab".
+      sudo airodump-ng -c 6 --bssid AA:BB:CC:DD:EE:FF -w mylab wlan0mon
+
+      # 2. To trigger the handshake without attacking anyone: simply reconnect
+      #    one of YOUR OWN devices (toggle its Wi-Fi off and back on). As it
+      #    rejoins the network, the 4-way handshake is exchanged and captured.
+      #    No deauthentication of third-party devices is ever needed or allowed.
+    note:
+      fr: "On cible uniquement sa propre box, et on provoque le handshake en reconnectant **son propre** téléphone. Aucune attaque active contre un tiers n'est nécessaire."
+      en: "You target only your own router, and trigger the handshake by reconnecting **your own** phone. No active attack against a third party is needed."
+
+quiz:
+  - q:
+      fr: "Que permet le mode moniteur d'une carte Wi-Fi ?"
+      en: "What does a Wi-Fi card's monitor mode allow?"
+    options:
+      fr:
+        - "De capter toutes les trames qui passent sur un canal"
+        - "De se connecter plus vite à Internet"
+        - "De chiffrer automatiquement le trafic"
+        - "De doubler la portée du Wi-Fi"
+      en:
+        - "To capture every frame passing on a channel"
+        - "To connect to the internet faster"
+        - "To automatically encrypt traffic"
+        - "To double the Wi-Fi range"
+    answer: 0
+    why:
+      fr: "En mode moniteur, la carte écoute toutes les trames d'un canal, qu'elles lui soient destinées ou non."
+      en: "In monitor mode, the card listens to all frames on a channel, whether addressed to it or not."
+  - q:
+      fr: "Quel outil active le mode moniteur ?"
+      en: "Which tool enables monitor mode?"
+    options:
+      fr:
+        - "hashcat"
+        - "airmon-ng"
+        - "nmap"
+        - "whatweb"
+      en:
+        - "hashcat"
+        - "airmon-ng"
+        - "nmap"
+        - "whatweb"
+    answer: 1
+    why:
+      fr: "`airmon-ng start wlan0` bascule la carte en mode moniteur (interface `wlan0mon`)."
+      en: "`airmon-ng start wlan0` switches the card into monitor mode (interface `wlan0mon`)."
+  - q:
+      fr: "Quand le 4-way handshake est-il capturé ?"
+      en: "When is the 4-way handshake captured?"
+    options:
+      fr:
+        - "En permanence, sans condition"
+        - "Lorsqu'un appareil se (re)connecte à la box"
+        - "Uniquement la nuit"
+        - "Quand on change le canal"
+      en:
+        - "Continuously, unconditionally"
+        - "When a device (re)connects to the router"
+        - "Only at night"
+        - "When you change the channel"
+    answer: 1
+    why:
+      fr: "Le handshake n'est échangé qu'au moment d'une (re)connexion : il faut donc qu'un appareil rejoigne le réseau pendant la capture."
+      en: "The handshake is only exchanged when a device (re)connects: a device must join the network during the capture."
+  - q:
+      fr: "Sur quel réseau pouvez-vous capturer un handshake dans ce module ?"
+      en: "On which network may you capture a handshake in this module?"
+    options:
+      fr:
+        - "N'importe quel réseau à portée"
+        - "Celui du voisin le plus proche"
+        - "Votre propre réseau ou un périmètre autorisé par écrit"
+        - "Un réseau public d'aéroport"
+      en:
+        - "Any network in range"
+        - "The nearest neighbour's"
+        - "Your own network or a scope authorised in writing"
+        - "A public airport network"
+    answer: 2
+    why:
+      fr: "Capter le handshake d'autrui est une interception illégale ; on ne capture que sa propre box ou un périmètre autorisé."
+      en: "Capturing someone else's handshake is illegal interception; you only capture your own router or an authorised scope."
+  - q:
+      fr: "Pourquoi cibler un canal fixe avec `-c` pour la capture ?"
+      en: "Why target a fixed channel with `-c` for the capture?"
+    options:
+      fr:
+        - "Pour chiffrer la capture"
+        - "Parce qu'en balayant tous les canaux, on passe trop peu de temps sur chacun"
+        - "Pour masquer le SSID"
+        - "Pour accélérer Internet"
+      en:
+        - "To encrypt the capture"
+        - "Because sweeping all channels spends too little time on each"
+        - "To hide the SSID"
+        - "To speed up the internet"
+    answer: 1
+    why:
+      fr: "Se caler sur le canal de sa box garantit de rester à l'écoute au moment précis du handshake."
+      en: "Locking onto your router's channel ensures you stay listening at the exact moment of the handshake."

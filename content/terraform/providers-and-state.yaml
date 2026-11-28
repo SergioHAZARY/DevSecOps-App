@@ -1,0 +1,476 @@
+description:
+  fr: "Comprendre les providers et l'épinglage de versions avec le lock file, puis le fichier de state Terraform, pourquoi il est sensible et comment l'inspecter sans danger."
+  en: "Understand providers and version pinning with the lock file, then the Terraform state file, why it is sensitive and how to inspect it safely."
+duration: 25
+
+intro:
+  fr: |
+    Terraform ne sait rien faire tout seul : ce sont les **providers** (greffons) qui traduisent votre code
+    en appels d'API — le provider `aws` pour Amazon, `azurerm` pour Azure, `kubernetes`, `github`, et des
+    milliers d'autres. Choisir et **figer** la version d'un provider est une décision de reproductibilité.
+
+    Et pour savoir ce qu'il a déjà créé, Terraform tient un journal : le **fichier de state**. L'analogie :
+    le **carnet de santé** d'un patient. Il relie chaque ressource du monde réel (un numéro d'instance AWS)
+    à son entrée dans votre code, garde des métadonnées, et sert de référence à chaque `plan`. Ce carnet
+    contient des informations intimes — y compris, parfois, des mots de passe — et doit être traité comme tel.
+
+    Dans cette leçon vous allez épingler proprement un provider avec le *lock file*, configurer plusieurs
+    providers (deux régions via un `alias`), inspecter le state avec `terraform state list` et `show`, et
+    surtout comprendre **pourquoi le state est sensible** et ne doit jamais traîner dans Git.
+  en: |
+    Terraform does nothing on its own: the **providers** (plugins) translate your code into API calls — the
+    `aws` provider for Amazon, `azurerm` for Azure, `kubernetes`, `github`, and thousands more. Choosing and
+    **freezing** a provider's version is a reproducibility decision.
+
+    And to know what it has already created, Terraform keeps a logbook: the **state file**. The analogy: a
+    patient's **health record**. It links each real-world resource (an AWS instance id) to its entry in your
+    code, keeps metadata, and serves as the reference for every `plan`. This record holds intimate
+    information — including, sometimes, passwords — and must be treated accordingly.
+
+    In this lesson you will cleanly pin a provider with the *lock file*, configure several providers (two
+    regions via an `alias`), inspect the state with `terraform state list` and `show`, and above all
+    understand **why the state is sensitive** and must never linger in Git.
+
+sections:
+  - heading:
+      fr: "Providers et contraintes de version"
+      en: "Providers and version constraints"
+    body:
+      fr: |
+        Un provider est déclaré dans `required_providers` avec sa `source` (l'adresse dans le *registry*) et
+        une contrainte de `version`. Les opérateurs de contrainte :
+
+        | Contrainte | Signifie | Accepte | Refuse |
+        |---|---|---|---|
+        | `= 6.4.0` | exactement | `6.4.0` | tout le reste |
+        | `>= 6.0` | au moins | `6.0`, `6.4`, `7.2`... | `5.9` |
+        | `~> 6.0` | opérateur « pessimiste » | `6.x` (6.0 à 6.99) | `7.0` |
+        | `~> 6.4.0` | pessimiste, patch | `6.4.x` | `6.5.0` |
+
+        L'opérateur **`~> `** est le plus utilisé : il autorise les mises à jour mineures (corrections de
+        bugs) mais bloque la montée de version majeure, qui peut casser la compatibilité. À l'`init`,
+        Terraform écrit le fichier **`.terraform.lock.hcl`** qui enregistre la version *exacte* retenue et
+        les empreintes (*hashes*) des plugins. **Ce fichier se committe dans Git** : il garantit que toute
+        l'équipe et la CI utilisent le même binaire de provider, au hash près. On le met à jour avec
+        `terraform init -upgrade`.
+      en: |
+        A provider is declared in `required_providers` with its `source` (its address in the *registry*) and
+        a `version` constraint. The constraint operators:
+
+        | Constraint | Means | Accepts | Rejects |
+        |---|---|---|---|
+        | `= 6.4.0` | exactly | `6.4.0` | everything else |
+        | `>= 6.0` | at least | `6.0`, `6.4`, `7.2`... | `5.9` |
+        | `~> 6.0` | "pessimistic" operator | `6.x` (6.0 to 6.99) | `7.0` |
+        | `~> 6.4.0` | pessimistic, patch | `6.4.x` | `6.5.0` |
+
+        The **`~> `** operator is the most used: it allows minor updates (bug fixes) but blocks a major
+        version bump, which can break compatibility. At `init`, Terraform writes the
+        **`.terraform.lock.hcl`** file recording the *exact* chosen version and the plugins' checksums
+        (*hashes*). **This file is committed to Git**: it guarantees that the whole team and the CI use the
+        same provider binary, down to the hash. You update it with `terraform init -upgrade`.
+  - heading:
+      fr: "Plusieurs providers : le méta-argument alias"
+      en: "Several providers: the alias meta-argument"
+    body:
+      fr: |
+        On a souvent besoin du **même** provider configuré de plusieurs façons : deux régions AWS, deux
+        comptes. On utilise un **`alias`** :
+
+        ```hcl
+        provider "aws" {
+          region = "eu-west-3" # default, used when no provider is specified
+        }
+
+        provider "aws" {
+          alias  = "us"
+          region = "us-east-1" # some services (CloudFront certs) live here
+        }
+        ```
+
+        Une ressource choisit la configuration avec l'argument `provider = aws.us`. Sans alias, elle utilise
+        la configuration par défaut. Ce mécanisme permet de déployer dans deux régions depuis un seul projet,
+        ou de lire des données d'un compte tout en créant dans un autre.
+
+        Rappel du cours « HCL » : un module **enfant** ne contient pas de bloc `provider` ; il hérite de la
+        configuration du module racine, éventuellement via l'argument `providers = { aws = aws.us }` du bloc
+        `module`. On garde ainsi la configuration des identifiants au seul niveau racine.
+      en: |
+        You often need the **same** provider configured in several ways: two AWS regions, two accounts. You
+        use an **`alias`**:
+
+        ```hcl
+        provider "aws" {
+          region = "eu-west-3" # default, used when no provider is specified
+        }
+
+        provider "aws" {
+          alias  = "us"
+          region = "us-east-1" # some services (CloudFront certs) live here
+        }
+        ```
+
+        A resource picks the configuration with the `provider = aws.us` argument. With no alias, it uses the
+        default configuration. This mechanism lets you deploy to two regions from one project, or read data
+        from one account while creating in another.
+
+        Reminder from the "HCL" course: a **child** module contains no `provider` block; it inherits the
+        root module's configuration, possibly via the `module` block's `providers = { aws = aws.us }`
+        argument. This keeps credential configuration at the root level only.
+  - heading:
+      fr: "Le state : indispensable et sensible"
+      en: "The state: indispensable and sensitive"
+    body:
+      fr: |
+        Le state (`terraform.tfstate`, du JSON) remplit trois rôles : il **associe** chaque ressource du
+        code à son identifiant réel, il **mémorise** les métadonnées (dépendances, attributs calculés), et
+        il sert de **cache** pour accélérer les plans. Sans lui, Terraform ne saurait pas qu'il a déjà créé
+        votre bucket.
+
+        Le problème de sécurité : le state stocke **en clair** la valeur de tous les attributs, y compris
+        ceux marqués `sensitive`. Un mot de passe de base de données, une clé privée générée, un token : tout
+        atterrit dans le state en texte lisible. Conséquences concrètes :
+
+        - **Ne jamais committer** le state dans Git (déjà dans le `.gitignore`).
+        - **Chiffrer** le state au repos et **restreindre** qui peut le lire.
+        - **Ne pas le poser** dans un artefact de CI public ni un bucket ouvert.
+
+        On inspecte le state en lecture avec `terraform state list` (les adresses des ressources gérées) et
+        `terraform state show <adresse>` (le détail d'une ressource). Pour le réorganiser, `terraform state
+        mv` (renommer/déplacer une ressource dans le state sans la recréer) et, en dernier recours,
+        `terraform state rm` (oublier une ressource sans la détruire). Ces opérations sont puissantes :
+        toujours sur un state **sauvegardé** au préalable.
+      en: |
+        The state (`terraform.tfstate`, JSON) has three roles: it **maps** each code resource to its real
+        identifier, it **remembers** metadata (dependencies, computed attributes), and it serves as a
+        **cache** to speed up plans. Without it, Terraform would not know it already created your bucket.
+
+        The security problem: the state stores **in clear** the value of every attribute, including those
+        marked `sensitive`. A database password, a generated private key, a token: it all lands in the state
+        as readable text. Concrete consequences:
+
+        - **Never commit** the state to Git (already in `.gitignore`).
+        - **Encrypt** the state at rest and **restrict** who can read it.
+        - **Do not drop it** into a public CI artifact or an open bucket.
+
+        You inspect the state read-only with `terraform state list` (the addresses of managed resources) and
+        `terraform state show <address>` (a resource's detail). To reorganise it, `terraform state mv`
+        (rename/move a resource in the state without recreating it) and, as a last resort, `terraform state
+        rm` (forget a resource without destroying it). These operations are powerful: always on a
+        **backed-up** state.
+
+examples:
+  - title:
+      fr: "Épingler les providers et comprendre le lock file"
+      en: "Pinning providers and understanding the lock file"
+    file: versions.tf
+    lang: hcl
+    kind: secure
+    code: |
+      terraform {
+        required_version = ">= 1.9"
+
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = "~> 6.0" # minor updates allowed, major (7.0) blocked
+          }
+          random = {
+            source  = "hashicorp/random"
+            version = "~> 3.6"
+          }
+        }
+      }
+    output: |
+      # After `terraform init`, the lock file records the EXACT versions + hashes.
+      # .terraform.lock.hcl (commit this file to Git):
+      provider "registry.terraform.io/hashicorp/aws" {
+        version     = "6.4.0"
+        constraints = "~> 6.0"
+        hashes = [
+          "h1:abcdef0123456789examplehashdonotuse==",
+        ]
+      }
+    note:
+      fr: "La contrainte `~> 6.0` reste dans le code ; le `.terraform.lock.hcl` fige la version résolue (`6.4.0`) et son hash. Committer le lock file garantit que la CI installe le même provider, protégeant contre un plugin modifié (chaîne d'approvisionnement)."
+      en: "The `~> 6.0` constraint stays in the code; the `.terraform.lock.hcl` freezes the resolved version (`6.4.0`) and its hash. Committing the lock file guarantees CI installs the same provider, protecting against a tampered plugin (supply chain)."
+
+  - title:
+      fr: "Deux régions avec un alias de provider"
+      en: "Two regions with a provider alias"
+    file: multiregion.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      provider "aws" {
+        region = "eu-west-3" # default provider
+      }
+
+      provider "aws" {
+        alias  = "us_east"
+        region = "us-east-1"
+      }
+
+      # Uses the default provider (eu-west-3)
+      resource "aws_s3_bucket" "eu_logs" {
+        bucket = "devsecops-eu-logs-42"
+      }
+
+      # Explicitly uses the aliased provider (us-east-1)
+      resource "aws_s3_bucket" "us_logs" {
+        provider = aws.us_east
+        bucket   = "devsecops-us-logs-42"
+      }
+    note:
+      fr: "Le même provider `aws` est configuré deux fois. L'argument `provider = aws.us_east` aiguille une ressource vers la configuration voulue. Pratique pour une réplication multi-région ou des services qui n'existent que dans `us-east-1`."
+      en: "The same `aws` provider is configured twice. The `provider = aws.us_east` argument routes a resource to the desired configuration. Handy for multi-region replication or services that only exist in `us-east-1`."
+
+  - title:
+      fr: "Inspecter le state en lecture seule"
+      en: "Inspecting the state read-only"
+    file: inspect.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # List the addresses of every resource Terraform manages
+      terraform state list
+
+      # Show the full detail of one resource (read-only)
+      terraform state show aws_s3_bucket.eu_logs
+    output: |
+      $ terraform state list
+      aws_s3_bucket.eu_logs
+      aws_s3_bucket.us_logs
+
+      $ terraform state show aws_s3_bucket.eu_logs
+      # aws_s3_bucket.eu_logs:
+      resource "aws_s3_bucket" "eu_logs" {
+          arn    = "arn:aws:s3:::devsecops-eu-logs-42"
+          bucket = "devsecops-eu-logs-42"
+          id     = "devsecops-eu-logs-42"
+      }
+    note:
+      fr: "`state list` donne la carte des ressources gérées, `state show` leur contenu. Ces commandes sont en lecture seule : idéales pour comprendre ce que Terraform suit avant de toucher au code."
+      en: "`state list` gives the map of managed resources, `state show` their content. These commands are read-only: ideal to understand what Terraform tracks before touching the code."
+
+  - title:
+      fr: "Vulnérable : un secret en clair dans le state"
+      en: "Vulnerable: a secret in clear in the state"
+    file: db.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      resource "aws_db_instance" "app" {
+        engine         = "postgres"
+        instance_class = "db.t3.micro"
+        username       = "appuser"
+        # Even though this is marked sensitive elsewhere, the VALUE lands in the state
+        password       = var.db_password
+        # ... other arguments omitted
+      }
+    output: |
+      # terraform.tfstate stores the password in clear text, regardless of `sensitive`:
+      $ grep -A2 '"password"' terraform.tfstate
+          "password": "S3cr3t-ChangeMe-In-Vault",
+          "username": "appuser",
+          "engine": "postgres"
+      # Anyone who can read the state file can read the database password.
+    note:
+      fr: "`sensitive` masque l'affichage dans la CLI, **pas** le stockage : le mot de passe est en clair dans le state. C'est la raison fondamentale pour laquelle le state doit être chiffré, à accès restreint, et jamais dans Git. L'idéal est de sortir le secret vers Vault/Secrets Manager."
+      en: "`sensitive` hides the CLI display, **not** the storage: the password sits in clear in the state. This is the fundamental reason the state must be encrypted, access-restricted, and never in Git. Best is to move the secret out to Vault/Secrets Manager."
+
+  - title:
+      fr: "Renommer une ressource sans la recréer"
+      en: "Renaming a resource without recreating it"
+    file: rename.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # You renamed aws_s3_bucket.eu_logs to aws_s3_bucket.logs_eu in the code.
+      # Without help, Terraform would DESTROY the old and CREATE a new one.
+      # `state mv` tells Terraform it is the SAME resource, just renamed:
+      terraform state mv aws_s3_bucket.eu_logs aws_s3_bucket.logs_eu
+
+      # Always back up the state before surgery (remote backends keep versions too):
+      cp terraform.tfstate terraform.tfstate.backup-manual
+    output: |
+      $ terraform state mv aws_s3_bucket.eu_logs aws_s3_bucket.logs_eu
+      Move "aws_s3_bucket.eu_logs" to "aws_s3_bucket.logs_eu"
+      Successfully moved 1 object(s).
+
+      # The next plan shows "No changes": the bucket was not recreated.
+    note:
+      fr: "`state mv` évite une destruction/recréation inutile (et risquée) lors d'un renommage. Note : les blocs `moved` (leçon avancée) font la même chose **dans le code**, de façon versionnée et revue — à préférer pour un travail d'équipe."
+      en: "`state mv` avoids a needless (and risky) destroy/recreate on a rename. Note: `moved` blocks (advanced lesson) do the same **in code**, versioned and reviewed — preferable for teamwork."
+
+mistake:
+  fr: |
+    **Croire que `sensitive` ou un secret manager suffit à protéger le state.**
+
+    Le state contient en clair **toutes** les valeurs, y compris les mots de passe, clés et tokens, même si
+    la variable source est marquée `sensitive`. Deux erreurs en découlent. D'abord, laisser le state en
+    local sur un poste ou dans un artefact de CI accessible : quiconque le lit lit les secrets. Ensuite,
+    oublier de committer `.terraform.lock.hcl` : chaque machine résout alors sa propre version de provider,
+    les plans divergent, et rien ne protège contre un plugin altéré. Committez le lock file, chiffrez le
+    state, restreignez-en l'accès — et, idéalement, ne mettez pas de secret dans une ressource qui le
+    recopiera dans le state (préférez une référence à Vault/Secrets Manager).
+  en: |
+    **Believing that `sensitive` or a secret manager is enough to protect the state.**
+
+    The state holds **all** values in clear, including passwords, keys and tokens, even if the source
+    variable is marked `sensitive`. Two mistakes follow. First, leaving the state locally on a laptop or in
+    a reachable CI artifact: anyone who reads it reads the secrets. Second, forgetting to commit
+    `.terraform.lock.hcl`: each machine then resolves its own provider version, plans diverge, and nothing
+    guards against a tampered plugin. Commit the lock file, encrypt the state, restrict its access — and,
+    ideally, do not put a secret in a resource that copies it into the state (prefer a reference to
+    Vault/Secrets Manager).
+
+bestPractice:
+  fr: |
+    - **`~> ` pour les providers** : mises à jour mineures permises, majeures bloquées.
+    - **Committez `.terraform.lock.hcl`** : versions et hashes identiques partout (sécurité d'approvisionnement).
+    - **State chiffré, à accès restreint, jamais dans Git** : il contient des secrets en clair.
+    - **`terraform state list`/`show`** pour comprendre ; `mv`/`rm` avec prudence, sur un state sauvegardé.
+    - **`alias`** pour configurer un provider plusieurs fois (régions, comptes) sans dupliquer le code.
+    - **Secrets hors des ressources** quand c'est possible : une référence à un gestionnaire de secrets évite de les figer dans le state.
+  en: |
+    - **`~> ` for providers**: minor updates allowed, major blocked.
+    - **Commit `.terraform.lock.hcl`**: identical versions and hashes everywhere (supply-chain safety).
+    - **Encrypted, access-restricted state, never in Git**: it holds secrets in clear.
+    - **`terraform state list`/`show`** to understand; `mv`/`rm` carefully, on a backed-up state.
+    - **`alias`** to configure a provider several times (regions, accounts) without duplicating code.
+    - **Secrets out of resources** where possible: a reference to a secret manager avoids freezing them in the state.
+
+exercise:
+  statement:
+    fr: |
+      1. Déclarez deux providers `aws` : un par défaut en `eu-west-1`, et un alias `replica` en `eu-west-2`.
+      2. Épinglez le provider AWS avec une contrainte qui autorise les versions `6.x` mais refuse `7.0`.
+      3. Expliquez, en une phrase, pourquoi il faut committer `.terraform.lock.hcl`.
+      4. Donnez la commande pour afficher le détail de la ressource `aws_s3_bucket.replica_logs`.
+    en: |
+      1. Declare two `aws` providers: a default one in `eu-west-1`, and a `replica` alias in `eu-west-2`.
+      2. Pin the AWS provider with a constraint that allows `6.x` versions but rejects `7.0`.
+      3. Explain, in one sentence, why `.terraform.lock.hcl` must be committed.
+      4. Give the command to show the detail of the `aws_s3_bucket.replica_logs` resource.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      terraform {
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = "~> 6.0" # allows 6.x, blocks 7.0
+          }
+        }
+      }
+
+      provider "aws" {
+        region = "eu-west-1"
+      }
+
+      provider "aws" {
+        alias  = "replica"
+        region = "eu-west-2"
+      }
+
+      # 3. Committing .terraform.lock.hcl forces the whole team and the CI to install
+      #    the exact same provider version and hash, making plans reproducible and safe.
+
+      # 4. terraform state show aws_s3_bucket.replica_logs
+    note:
+      fr: "`~> 6.0` est la contrainte « pessimiste » classique : elle accepte toute version 6.x mais pas 7.0. L'alias `replica` sert aux ressources portant `provider = aws.replica`."
+      en: "`~> 6.0` is the classic \"pessimistic\" constraint: it accepts any 6.x version but not 7.0. The `replica` alias serves resources carrying `provider = aws.replica`."
+
+quiz:
+  - q:
+      fr: "Que signifie la contrainte de version `~> 6.0` ?"
+      en: "What does the version constraint `~> 6.0` mean?"
+    options:
+      fr:
+        - "Exactement la version 6.0"
+        - "Toute version 6.x, mais pas 7.0"
+        - "Toute version supérieure ou égale à 6.0, y compris 7.x"
+        - "Uniquement les versions antérieures à 6.0"
+      en:
+        - "Exactly version 6.0"
+        - "Any 6.x version, but not 7.0"
+        - "Any version greater than or equal to 6.0, including 7.x"
+        - "Only versions before 6.0"
+    answer: 1
+    why:
+      fr: "L'opérateur pessimiste `~> 6.0` autorise les mises à jour mineures et correctives (6.1, 6.4...) mais bloque le changement de version majeure (7.0), qui peut casser la compatibilité."
+      en: "The pessimistic operator `~> 6.0` allows minor and patch updates (6.1, 6.4...) but blocks the major version bump (7.0), which can break compatibility."
+  - q:
+      fr: "Pourquoi committer `.terraform.lock.hcl` dans Git ?"
+      en: "Why commit `.terraform.lock.hcl` to Git?"
+    options:
+      fr:
+        - "Pour partager le state entre collègues"
+        - "Pour que toute l'équipe et la CI utilisent exactement la même version de provider et son hash"
+        - "Parce que Terraform ne démarre pas sans lui"
+        - "Pour stocker les identifiants AWS"
+      en:
+        - "To share the state between colleagues"
+        - "So the whole team and CI use exactly the same provider version and its hash"
+        - "Because Terraform will not start without it"
+        - "To store the AWS credentials"
+    answer: 1
+    why:
+      fr: "Le lock file fige la version résolue et les empreintes des plugins : il rend les plans reproductibles et protège contre un provider altéré."
+      en: "The lock file freezes the resolved version and the plugins' checksums: it makes plans reproducible and guards against a tampered provider."
+  - q:
+      fr: "Pourquoi le fichier de state est-il considéré comme sensible ?"
+      en: "Why is the state file considered sensitive?"
+    options:
+      fr:
+        - "Parce qu'il est écrit en JSON"
+        - "Parce qu'il stocke en clair toutes les valeurs, y compris les secrets, même marqués `sensitive`"
+        - "Parce qu'il est très volumineux"
+        - "Parce qu'il contient le code HCL"
+      en:
+        - "Because it is written in JSON"
+        - "Because it stores all values in clear, including secrets, even those marked `sensitive`"
+        - "Because it is very large"
+        - "Because it contains the HCL code"
+    answer: 1
+    why:
+      fr: "Les attributs sont stockés en texte lisible dans le state, mots de passe compris. `sensitive` ne masque que l'affichage CLI, d'où la nécessité de chiffrer et restreindre le state."
+      en: "Attributes are stored as readable text in the state, passwords included. `sensitive` only hides the CLI display, hence the need to encrypt and restrict the state."
+  - q:
+      fr: "Quelle commande renomme une ressource dans le state sans la détruire ni la recréer ?"
+      en: "Which command renames a resource in the state without destroying and recreating it?"
+    options:
+      fr:
+        - "`terraform state mv`"
+        - "`terraform rename`"
+        - "`terraform apply -replace`"
+        - "`terraform destroy`"
+      en:
+        - "`terraform state mv`"
+        - "`terraform rename`"
+        - "`terraform apply -replace`"
+        - "`terraform destroy`"
+    answer: 0
+    why:
+      fr: "`terraform state mv ancien nouveau` indique à Terraform qu'il s'agit de la même ressource renommée ; aucune destruction n'a lieu. Les blocs `moved` font la même chose dans le code."
+      en: "`terraform state mv old new` tells Terraform it is the same resource, just renamed; no destruction occurs. `moved` blocks do the same in code."
+  - q:
+      fr: "À quoi sert le méta-argument `alias` sur un `provider` ?"
+      en: "What is the `alias` meta-argument on a `provider` for?"
+    options:
+      fr:
+        - "À renommer une ressource"
+        - "À chiffrer le state"
+        - "À configurer le même provider plusieurs fois (par exemple deux régions)"
+        - "À épingler une version"
+      en:
+        - "To rename a resource"
+        - "To encrypt the state"
+        - "To configure the same provider several times (for example two regions)"
+        - "To pin a version"
+    answer: 2
+    why:
+      fr: "`alias` crée une seconde configuration du même provider ; une ressource la sélectionne avec `provider = aws.<alias>`. Idéal pour le multi-région ou le multi-compte."
+      en: "`alias` creates a second configuration of the same provider; a resource selects it with `provider = aws.<alias>`. Ideal for multi-region or multi-account."

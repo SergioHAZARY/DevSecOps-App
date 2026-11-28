@@ -1,0 +1,511 @@
+description:
+  fr: "Durcir et auditer une base PostgreSQL en production : authentification pg_hba.conf, chiffrement TLS des connexions, journalisation d'audit avec pgaudit et contrôle de l'exposition réseau."
+  en: "Harden and audit a production PostgreSQL database: pg_hba.conf authentication, TLS connection encryption, audit logging with pgaudit and controlling network exposure."
+duration: 40
+
+intro:
+  fr: |
+    Une base de données bien conçue au niveau des requêtes et des privilèges peut encore être vulnérable à
+    cause de sa **configuration système** : écoute sur toutes les interfaces, authentification faible,
+    connexions en clair, absence de journal d'audit. Le **durcissement** consiste à fermer toutes ces portes,
+    et l'**audit** à vérifier qu'elles le restent.
+
+    Pensez à un **coffre-fort** : le mécanisme de la serrure (les requêtes paramétrées, les privilèges) ne sert
+    à rien si le coffre est posé dans la rue, porte entrouverte, sans caméra. Le durcissement, c'est sceller le
+    coffre dans un mur, verrouiller l'accès, et enregistrer qui l'ouvre.
+
+    Cette leçon se concentre sur **PostgreSQL** et couvre quatre axes de durcissement de production : contrôler
+    **qui peut se connecter et comment** (`pg_hba.conf`), **chiffrer les connexions** avec TLS pour qu'elles ne
+    circulent pas en clair, **journaliser les accès sensibles** avec l'extension **pgaudit**, et **limiter
+    l'exposition réseau**. Les équivalents **MySQL** sont signalés. L'objectif : une base qui résiste même
+    quand une couche applicative est percée.
+  en: |
+    A database well designed at the query and privilege level can still be vulnerable because of its **system
+    configuration**: listening on all interfaces, weak authentication, clear-text connections, no audit log.
+    **Hardening** means closing all these doors, and **auditing** means checking they stay closed.
+
+    Think of a **safe**: the lock mechanism (parameterized queries, privileges) is useless if the safe sits in
+    the street, door ajar, with no camera. Hardening means sealing the safe into a wall, locking the access,
+    and recording who opens it.
+
+    This lesson focuses on **PostgreSQL** and covers four production hardening axes: controlling **who can
+    connect and how** (`pg_hba.conf`), **encrypting connections** with TLS so they do not travel in clear text,
+    **logging sensitive access** with the **pgaudit** extension, and **limiting network exposure**. The
+    **MySQL** equivalents are noted. The goal: a database that holds even when an application layer is
+    breached.
+
+sections:
+  - heading:
+      fr: "Contrôler l'accès : listen_addresses et pg_hba.conf"
+      en: "Controlling access: listen_addresses and pg_hba.conf"
+    body:
+      fr: |
+        Deux réglages décident **qui peut atteindre** la base. D'abord, `listen_addresses` dans
+        `postgresql.conf` fixe les interfaces d'écoute. Par défaut sur beaucoup d'installations, PostgreSQL
+        n'écoute que `localhost`, ce qui est sûr. L'erreur est de mettre `listen_addresses = '*'` (toutes les
+        interfaces) sans pare-feu : la base devient accessible depuis Internet.
+
+        Ensuite, `pg_hba.conf` (*host-based authentication*) est la **liste de contrôle d'accès** : chaque
+        ligne dit quel utilisateur, depuis quelle adresse, sur quelle base, avec quelle méthode d'
+        authentification. Les lignes sont évaluées **de haut en bas**, la première qui correspond gagne.
+
+        ```ini
+        # TYPE  DATABASE  USER     ADDRESS           METHOD
+        local   all       all                        scram-sha-256
+        hostssl app       app_rw   10.0.0.0/8        scram-sha-256   # TLS + strong auth
+        host    all       all      0.0.0.0/0         reject          # deny the rest
+        ```
+
+        Points de durcissement essentiels :
+
+        - Utilisez `scram-sha-256` (authentification par mot de passe moderne), **jamais** `trust` (aucun mot
+          de passe) ni `md5` (obsolète).
+        - Préférez `hostssl` à `host` pour **exiger TLS** sur les connexions réseau.
+        - Restreignez l'adresse à des plages connues (`10.0.0.0/8`), jamais `0.0.0.0/0` sans raison.
+        - Terminez par une règle `reject` explicite.
+
+        > **MySQL** : l'équivalent se configure avec `bind-address` dans `my.cnf` et des comptes attachés à un
+        > hôte (`'app'@'10.0.0.0/8'`), plus `REQUIRE SSL` sur l'utilisateur.
+      en: |
+        Two settings decide **who can reach** the database. First, `listen_addresses` in `postgresql.conf` sets
+        the listening interfaces. By default on many installs, PostgreSQL only listens on `localhost`, which is
+        safe. The mistake is setting `listen_addresses = '*'` (all interfaces) with no firewall: the database
+        becomes reachable from the Internet.
+
+        Then, `pg_hba.conf` (*host-based authentication*) is the **access control list**: each line says which
+        user, from which address, on which database, with which authentication method. Lines are evaluated
+        **top to bottom**, the first match wins.
+
+        ```ini
+        # TYPE  DATABASE  USER     ADDRESS           METHOD
+        local   all       all                        scram-sha-256
+        hostssl app       app_rw   10.0.0.0/8        scram-sha-256   # TLS + strong auth
+        host    all       all      0.0.0.0/0         reject          # deny the rest
+        ```
+
+        Essential hardening points:
+
+        - Use `scram-sha-256` (modern password authentication), **never** `trust` (no password) nor `md5`
+          (obsolete).
+        - Prefer `hostssl` to `host` to **require TLS** on network connections.
+        - Restrict the address to known ranges (`10.0.0.0/8`), never `0.0.0.0/0` without reason.
+        - End with an explicit `reject` rule.
+
+        > **MySQL**: the equivalent is configured with `bind-address` in `my.cnf` and accounts tied to a host
+        > (`'app'@'10.0.0.0/8'`), plus `REQUIRE SSL` on the user.
+  - heading:
+      fr: "Chiffrer les connexions avec TLS"
+      en: "Encrypting connections with TLS"
+    body:
+      fr: |
+        Sans TLS, les échanges entre l'application et la base — y compris les **mots de passe** et les données
+        — circulent en **clair** sur le réseau. Quiconque écoute le trafic (un réseau partagé, un routeur
+        compromis) peut tout lire. Le chiffrement **TLS** résout cela.
+
+        Côté serveur, on active TLS dans `postgresql.conf` :
+
+        ```ini
+        ssl = on
+        ssl_cert_file = '/etc/postgresql/server.crt'
+        ssl_key_file  = '/etc/postgresql/server.key'   # private key, chmod 600
+        ssl_min_protocol_version = 'TLSv1.2'            # refuse old, broken TLS
+        ```
+
+        Mais activer TLS ne suffit pas : il faut aussi l'**exiger** et le **vérifier**. Deux leviers :
+
+        1. Dans `pg_hba.conf`, utiliser `hostssl` (et non `host`) force le chiffrement pour les lignes
+           concernées.
+        2. Côté client, le paramètre `sslmode` contrôle le niveau d'exigence :
+
+        | `sslmode` | Chiffrement | Vérifie le certificat du serveur |
+        |---|---|---|
+        | `disable` | non | non |
+        | `require` | oui | non (vulnérable au *man-in-the-middle*) |
+        | `verify-ca` | oui | oui (autorité) |
+        | `verify-full` | oui | oui (autorité **et** nom d'hôte) |
+
+        En production, on vise `verify-full` : non seulement la connexion est chiffrée, mais le client vérifie
+        qu'il parle au **bon** serveur, pas à un imposteur. `require` seul chiffre mais ne protège pas contre un
+        intermédiaire qui présente son propre certificat.
+
+        > **MySQL** : équivalent avec `REQUIRE SSL`/`REQUIRE X509` sur le compte, et `--ssl-mode=VERIFY_IDENTITY`
+        > côté client.
+      en: |
+        Without TLS, the exchanges between the application and the database — including **passwords** and data
+        — travel in **clear text** on the network. Anyone listening to the traffic (a shared network, a
+        compromised router) can read everything. **TLS** encryption solves this.
+
+        On the server side, you enable TLS in `postgresql.conf`:
+
+        ```ini
+        ssl = on
+        ssl_cert_file = '/etc/postgresql/server.crt'
+        ssl_key_file  = '/etc/postgresql/server.key'   # private key, chmod 600
+        ssl_min_protocol_version = 'TLSv1.2'            # refuse old, broken TLS
+        ```
+
+        But enabling TLS is not enough: you must also **require** and **verify** it. Two levers:
+
+        1. In `pg_hba.conf`, using `hostssl` (not `host`) forces encryption for the relevant lines.
+        2. On the client side, the `sslmode` parameter controls the strictness:
+
+        | `sslmode` | Encryption | Verifies the server certificate |
+        |---|---|---|
+        | `disable` | no | no |
+        | `require` | yes | no (vulnerable to *man-in-the-middle*) |
+        | `verify-ca` | yes | yes (authority) |
+        | `verify-full` | yes | yes (authority **and** hostname) |
+
+        In production, you aim for `verify-full`: not only is the connection encrypted, but the client checks it
+        is talking to the **right** server, not an impostor. `require` alone encrypts but does not protect
+        against a middleman presenting their own certificate.
+
+        > **MySQL**: equivalent with `REQUIRE SSL`/`REQUIRE X509` on the account, and
+        > `--ssl-mode=VERIFY_IDENTITY` on the client.
+  - heading:
+      fr: "Journaliser et auditer avec pgaudit"
+      en: "Logging and auditing with pgaudit"
+    body:
+      fr: |
+        Pour détecter un abus et enquêter après un incident, il faut **savoir qui a fait quoi**. La
+        journalisation de base de PostgreSQL (`log_connections`, `log_disconnections`) enregistre déjà les
+        connexions. Pour un vrai journal d'audit, on ajoute l'extension **pgaudit**, qui enregistre les
+        requêtes selon des catégories :
+
+        ```ini
+        # postgresql.conf
+        shared_preload_libraries = 'pgaudit'
+        log_connections = on
+        log_disconnections = on
+        pgaudit.log = 'ddl, role, write'   # structure changes, grants, data writes
+        ```
+
+        `pgaudit.log` choisit ce qui est tracé : `ddl` (créations/suppressions de tables), `role` (`GRANT`,
+        `CREATE ROLE`), `write` (`INSERT`/`UPDATE`/`DELETE`), `read` (`SELECT`), etc. On évite en général
+        `read` sur une base très sollicitée (volume énorme), mais `ddl`, `role` et `write` sont précieux : ils
+        tracent toute modification de structure, de droits ou de données.
+
+        Deux règles de sécurité pour les journaux eux-mêmes :
+
+        - **Protégez et centralisez les journaux.** Un attaquant qui obtient un accès cherche à effacer ses
+          traces ; envoyez les journaux vers un système distant (SIEM, serveur de logs) en plus du disque
+          local.
+        - **Ne journalisez pas les secrets.** Attention à ne pas écrire des mots de passe en clair dans les
+          logs (par exemple via `log_statement = 'all'` sur un `ALTER ROLE ... PASSWORD`). pgaudit et une
+          configuration prudente limitent ce risque.
+
+        > **MySQL** : équivalent avec le plugin **audit_log** (MySQL Enterprise) ou **MariaDB Audit Plugin**.
+      en: |
+        To detect abuse and investigate after an incident, you must **know who did what**. PostgreSQL's basic
+        logging (`log_connections`, `log_disconnections`) already records connections. For a real audit trail,
+        you add the **pgaudit** extension, which logs queries by category:
+
+        ```ini
+        # postgresql.conf
+        shared_preload_libraries = 'pgaudit'
+        log_connections = on
+        log_disconnections = on
+        pgaudit.log = 'ddl, role, write'   # structure changes, grants, data writes
+        ```
+
+        `pgaudit.log` chooses what is traced: `ddl` (table creation/deletion), `role` (`GRANT`, `CREATE ROLE`),
+        `write` (`INSERT`/`UPDATE`/`DELETE`), `read` (`SELECT`), etc. You usually avoid `read` on a very busy
+        database (huge volume), but `ddl`, `role` and `write` are valuable: they trace every change to
+        structure, rights or data.
+
+        Two security rules for the logs themselves:
+
+        - **Protect and centralise the logs.** An attacker who gains access tries to erase their traces; send
+          the logs to a remote system (SIEM, log server) in addition to the local disk.
+        - **Do not log secrets.** Be careful not to write clear-text passwords into the logs (for example via
+          `log_statement = 'all'` on an `ALTER ROLE ... PASSWORD`). pgaudit and a careful configuration limit
+          this risk.
+
+        > **MySQL**: equivalent with the **audit_log** plugin (MySQL Enterprise) or the **MariaDB Audit
+        > Plugin**.
+
+examples:
+  - title:
+      fr: "Version dangereuse : pg_hba.conf permissif"
+      en: "Dangerous version: permissive pg_hba.conf"
+    file: pg_hba_bad.conf
+    lang: ini
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN: wide open access, no encryption, weak/no authentication.
+
+      # TYPE  DATABASE  USER  ADDRESS        METHOD
+      # 'trust' means NO password at all: anyone who can reach the port is in.
+      host    all       all   0.0.0.0/0      trust
+
+      # 'md5' is the obsolete password method; and 'host' allows clear-text TCP.
+      host    all       all   0.0.0.0/0      md5
+
+      # Combined with listen_addresses = '*' and no firewall, this database is
+      # reachable and loggable-into from the entire Internet.
+    note:
+      fr: "`trust` supprime toute authentification : quiconque atteint le port est connecté. `0.0.0.0/0` ouvre à tout Internet et `host` autorise le trafic en clair. C'est la configuration qui mène aux fuites massives de bases exposées."
+      en: "`trust` removes all authentication: anyone reaching the port is logged in. `0.0.0.0/0` opens to the whole Internet and `host` allows clear-text traffic. This is the configuration behind the massive leaks of exposed databases."
+
+  - title:
+      fr: "Version sûre : pg_hba.conf durci"
+      en: "Safe version: hardened pg_hba.conf"
+    file: pg_hba_good.conf
+    lang: ini
+    kind: secure
+    code: |
+      # Hardened: TLS required, strong auth, restricted sources, explicit deny.
+
+      # TYPE     DATABASE  USER     ADDRESS        METHOD
+      # Local Unix-socket connections, modern password hashing.
+      local      all       all                     scram-sha-256
+
+      # The app connects only from the private app subnet, over TLS (hostssl),
+      # with SCRAM authentication. No other user/db combination is allowed here.
+      hostssl    app       app_rw   10.0.0.0/8     scram-sha-256
+
+      # Read-only reporting account, also TLS + SCRAM, from the BI subnet only.
+      hostssl    app       reporter 192.0.2.0/24   scram-sha-256
+
+      # Explicit final deny: anything not matched above is rejected.
+      host       all       all      0.0.0.0/0      reject
+    note:
+      fr: "`hostssl` impose TLS, `scram-sha-256` est l'authentification moderne, les sources sont restreintes à des plages privées, et une règle `reject` finale ferme tout le reste. Les règles se lisent de haut en bas : la première correspondance gagne."
+      en: "`hostssl` enforces TLS, `scram-sha-256` is modern authentication, sources are restricted to private ranges, and a final `reject` rule closes everything else. Rules are read top to bottom: the first match wins."
+
+  - title:
+      fr: "Activer TLS et vérifier côté client"
+      en: "Enabling TLS and verifying on the client"
+    file: tls-setup.sql
+    lang: sql
+    kind: secure
+    code: |
+      -- Server side (postgresql.conf), applied with a reload:
+      --   ssl = on
+      --   ssl_cert_file = '/etc/postgresql/server.crt'
+      --   ssl_key_file  = '/etc/postgresql/server.key'
+      --   ssl_min_protocol_version = 'TLSv1.2'
+
+      -- Check from a session whether the current connection is encrypted:
+      SELECT ssl, version, cipher
+      FROM pg_stat_ssl
+      WHERE pid = pg_backend_pid();
+
+      -- Client connection string MUST verify the server, not just encrypt:
+      --   postgresql://app_rw@db.example.com/app?sslmode=verify-full&sslrootcert=/etc/ssl/ca.crt
+      -- sslmode=require would encrypt but NOT detect a man-in-the-middle.
+    output: |
+      ssl | version | cipher
+      ----+---------+------------------------
+      t   | TLSv1.3 | TLS_AES_256_GCM_SHA384
+      (1 row)
+    note:
+      fr: "`pg_stat_ssl` confirme que la connexion courante est chiffrée (`ssl = t`) et avec quel protocole. Côté client, `sslmode=verify-full` vérifie l'identité du serveur : `require` chiffrerait sans détecter un intermédiaire malveillant."
+      en: "`pg_stat_ssl` confirms the current connection is encrypted (`ssl = t`) and with which protocol. On the client, `sslmode=verify-full` verifies the server identity: `require` would encrypt without detecting a malicious middleman."
+
+  - title:
+      fr: "Audit avec pgaudit et requête de vérification"
+      en: "Auditing with pgaudit and a verification query"
+    file: pgaudit.sql
+    lang: sql
+    kind: secure
+    code: |
+      -- Enable the extension (after adding it to shared_preload_libraries & restart).
+      CREATE EXTENSION IF NOT EXISTS pgaudit;
+
+      -- Audit structural changes, grants and data writes (not noisy SELECTs).
+      ALTER SYSTEM SET pgaudit.log = 'ddl, role, write';
+      ALTER SYSTEM SET log_connections = on;
+      ALTER SYSTEM SET log_disconnections = on;
+      SELECT pg_reload_conf();
+
+      -- Audit the live configuration: which accounts can log in, and who is superuser?
+      SELECT rolname, rolsuper, rolcanlogin
+      FROM pg_roles
+      WHERE rolcanlogin
+      ORDER BY rolsuper DESC, rolname;
+    output: |
+      rolname  | rolsuper | rolcanlogin
+      ---------+----------+-------------
+      postgres | t        | t
+      app_rw   | f        | t
+      reporter | f        | t
+      (3 rows)
+    note:
+      fr: "pgaudit trace les changements de structure, de droits et de données vers les journaux. La requête sur `pg_roles` audite les comptes : un seul superutilisateur (`postgres`), les comptes applicatifs sans privilège élevé. Un deuxième `rolsuper = t` inattendu serait une alerte."
+      en: "pgaudit traces structure, rights and data changes to the logs. The `pg_roles` query audits the accounts: a single superuser (`postgres`), the application accounts without elevated privilege. A second unexpected `rolsuper = t` would be an alert."
+
+mistake:
+  fr: |
+    **Exposer la base sur `0.0.0.0` avec `trust` et sans TLS.**
+
+    C'est la combinaison derrière la plupart des fuites de bases de données. Mettre `listen_addresses = '*'`
+    sans pare-feu rend la base joignable depuis Internet ; une ligne `trust` dans `pg_hba.conf` supprime le mot
+    de passe ; l'absence de TLS laisse circuler les données en clair. Chacun de ces réglages est déjà risqué,
+    leur cumul est catastrophique. Le durcissement inverse chaque point : écouter sur une interface privée
+    derrière un pare-feu, exiger `scram-sha-256` et `hostssl`, et vérifier le certificat avec
+    `sslmode=verify-full`. Et surtout, **auditez** : relisez régulièrement `pg_hba.conf`, la liste des
+    superutilisateurs et l'état TLS, car une configuration durcie peut dériver avec le temps.
+  en: |
+    **Exposing the database on `0.0.0.0` with `trust` and no TLS.**
+
+    This is the combination behind most database leaks. Setting `listen_addresses = '*'` with no firewall makes
+    the database reachable from the Internet; a `trust` line in `pg_hba.conf` removes the password; the absence
+    of TLS leaves data travelling in clear text. Each of these settings is already risky; together they are
+    catastrophic. Hardening reverses each point: listen on a private interface behind a firewall, require
+    `scram-sha-256` and `hostssl`, and verify the certificate with `sslmode=verify-full`. And above all,
+    **audit**: regularly re-read `pg_hba.conf`, the superuser list and the TLS state, because a hardened
+    configuration can drift over time.
+
+bestPractice:
+  fr: |
+    - **Limitez l'écoute réseau** (`listen_addresses` sur une IP privée) derrière un pare-feu ; jamais exposée
+      à Internet sans raison.
+    - **Durcissez `pg_hba.conf`** : `scram-sha-256` (pas `trust` ni `md5`), `hostssl`, sources restreintes,
+      règle `reject` finale.
+    - **Exigez et vérifiez TLS** : `ssl = on` côté serveur, `sslmode=verify-full` côté client pour éviter le
+      *man-in-the-middle*.
+    - **Activez un journal d'audit** avec pgaudit (`ddl, role, write`) et centralisez les logs hors de la
+      machine.
+    - **Un seul superutilisateur**, réservé à l'administration ; auditez régulièrement `pg_roles` et les
+      droits.
+    - **Mettez à jour** le moteur de base de données : les CVE des SGBD sont corrigées par les versions
+      récentes.
+  en: |
+    - **Limit network listening** (`listen_addresses` on a private IP) behind a firewall; never exposed to the
+      Internet without reason.
+    - **Harden `pg_hba.conf`**: `scram-sha-256` (not `trust` or `md5`), `hostssl`, restricted sources, final
+      `reject` rule.
+    - **Require and verify TLS**: `ssl = on` server-side, `sslmode=verify-full` client-side to avoid
+      man-in-the-middle.
+    - **Enable an audit trail** with pgaudit (`ddl, role, write`) and centralise the logs off the machine.
+    - **One superuser only**, reserved for administration; regularly audit `pg_roles` and the rights.
+    - **Keep the database engine updated**: DBMS CVEs are fixed by recent versions.
+
+exercise:
+  statement:
+    fr: |
+      Vous auditez un serveur PostgreSQL de production et trouvez cette ligne dans `pg_hba.conf` :
+
+      ```ini
+      host    all    all    0.0.0.0/0    trust
+      ```
+
+      1. Citez **trois** problèmes de sécurité de cette ligne.
+      2. Réécrivez-la (ou remplacez-la par plusieurs lignes) pour un compte applicatif `app_rw` qui se connecte
+         uniquement depuis le sous-réseau privé `10.0.0.0/8`, en TLS, avec une authentification forte, et en
+         refusant tout le reste.
+    en: |
+      You are auditing a production PostgreSQL server and find this line in `pg_hba.conf`:
+
+      ```ini
+      host    all    all    0.0.0.0/0    trust
+      ```
+
+      1. Name **three** security problems with this line.
+      2. Rewrite it (or replace it with several lines) for an application account `app_rw` that connects only
+         from the private subnet `10.0.0.0/8`, over TLS, with strong authentication, and rejecting everything
+         else.
+  solution:
+    file: pg_hba_fixed.conf
+    lang: ini
+    code: |
+      # Problems with "host all all 0.0.0.0/0 trust":
+      #  1. trust  -> no authentication at all (anyone who reaches the port is in)
+      #  2. 0.0.0.0/0 -> reachable from the entire Internet
+      #  3. host (not hostssl) -> connections allowed in clear text, no encryption
+
+      # TYPE     DATABASE  USER     ADDRESS       METHOD
+      # Only app_rw, only on database 'app', only from the private subnet,
+      # only over TLS, with modern SCRAM password authentication.
+      hostssl    app       app_rw   10.0.0.0/8    scram-sha-256
+
+      # Explicit final deny: every other connection is rejected.
+      host       all       all      0.0.0.0/0     reject
+    note:
+      fr: "Les trois problèmes : `trust` (aucune authentification), `0.0.0.0/0` (ouvert à Internet), `host` (clair, sans TLS). La correction restreint l'utilisateur, la base, la source, impose `hostssl` et `scram-sha-256`, et ajoute un `reject` final. On restreint aussi `listen_addresses` et le pare-feu en complément."
+      en: "The three problems: `trust` (no authentication), `0.0.0.0/0` (open to the Internet), `host` (clear text, no TLS). The fix restricts the user, the database, the source, enforces `hostssl` and `scram-sha-256`, and adds a final `reject`. You also restrict `listen_addresses` and the firewall as a complement."
+
+quiz:
+  - q:
+      fr: "Que signifie la méthode `trust` dans `pg_hba.conf` ?"
+      en: "What does the `trust` method mean in `pg_hba.conf`?"
+    options:
+      fr:
+        - "Une authentification par certificat"
+        - "Aucune authentification : la connexion est acceptée sans mot de passe"
+        - "Une connexion chiffrée obligatoire"
+        - "Un accès en lecture seule"
+      en:
+        - "Certificate authentication"
+        - "No authentication: the connection is accepted with no password"
+        - "A mandatory encrypted connection"
+        - "Read-only access"
+    answer: 1
+    why:
+      fr: "`trust` accepte toute connexion correspondante sans mot de passe : quiconque atteint le port est connecté. À proscrire sur toute ligne réseau ; on utilise `scram-sha-256`."
+      en: "`trust` accepts any matching connection with no password: anyone reaching the port is logged in. Forbidden on any network line; use `scram-sha-256` instead."
+  - q:
+      fr: "Quel `sslmode` client chiffre ET vérifie l'identité du serveur ?"
+      en: "Which client `sslmode` encrypts AND verifies the server identity?"
+    options:
+      fr: ["disable", "require", "verify-full", "allow"]
+      en: ["disable", "require", "verify-full", "allow"]
+    answer: 2
+    why:
+      fr: "`verify-full` chiffre et vérifie l'autorité et le nom d'hôte du serveur, protégeant du *man-in-the-middle*. `require` chiffre mais ne vérifie pas le certificat."
+      en: "`verify-full` encrypts and verifies the server's authority and hostname, protecting against man-in-the-middle. `require` encrypts but does not verify the certificate."
+  - q:
+      fr: "Dans `pg_hba.conf`, quelle différence entre `host` et `hostssl` ?"
+      en: "In `pg_hba.conf`, what is the difference between `host` and `hostssl`?"
+    options:
+      fr:
+        - "`hostssl` exige une connexion chiffrée TLS, `host` l'autorise en clair"
+        - "`host` est plus rapide"
+        - "`hostssl` n'existe qu'en MySQL"
+        - "Aucune, ce sont des synonymes"
+      en:
+        - "`hostssl` requires an encrypted TLS connection, `host` allows clear text"
+        - "`host` is faster"
+        - "`hostssl` only exists in MySQL"
+        - "None, they are synonyms"
+    answer: 0
+    why:
+      fr: "`hostssl` n'accepte que les connexions TLS ; `host` accepte aussi les connexions en clair. Sur une base durcie, on impose `hostssl` pour le trafic réseau."
+      en: "`hostssl` only accepts TLS connections; `host` also accepts clear-text ones. On a hardened database, you enforce `hostssl` for network traffic."
+  - q:
+      fr: "À quoi sert l'extension pgaudit ?"
+      en: "What is the pgaudit extension for?"
+    options:
+      fr:
+        - "À chiffrer les tables"
+        - "À accélérer les requêtes"
+        - "À journaliser les actions sensibles (DDL, droits, écritures) pour l'audit"
+        - "À sauvegarder la base"
+      en:
+        - "To encrypt the tables"
+        - "To speed up queries"
+        - "To log sensitive actions (DDL, rights, writes) for auditing"
+        - "To back up the database"
+    answer: 2
+    why:
+      fr: "pgaudit enregistre les requêtes par catégorie (`ddl`, `role`, `write`…) dans les journaux, pour savoir qui a fait quoi et enquêter après un incident."
+      en: "pgaudit records queries by category (`ddl`, `role`, `write`…) into the logs, to know who did what and investigate after an incident."
+  - q:
+      fr: "Quelle combinaison est à l'origine de la plupart des fuites de bases exposées ?"
+      en: "Which combination is behind most exposed-database leaks?"
+    options:
+      fr:
+        - "Un index manquant et des requêtes lentes"
+        - "Écoute sur 0.0.0.0, méthode trust et absence de TLS"
+        - "Trop de sauvegardes chiffrées"
+        - "Un seul superutilisateur"
+      en:
+        - "A missing index and slow queries"
+        - "Listening on 0.0.0.0, the trust method and no TLS"
+        - "Too many encrypted backups"
+        - "A single superuser"
+    answer: 1
+    why:
+      fr: "Exposer la base à Internet (`0.0.0.0`), supprimer l'authentification (`trust`) et laisser les données en clair (sans TLS) cumulent les failles : c'est le scénario type des fuites massives."
+      en: "Exposing the database to the Internet (`0.0.0.0`), removing authentication (`trust`) and leaving data in clear text (no TLS) stack the flaws: the typical scenario of massive leaks."

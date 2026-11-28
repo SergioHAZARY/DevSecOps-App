@@ -1,0 +1,512 @@
+description:
+  fr: "Comprendre l'injection SQL par la pratique : démonstrations Python exécutables du contournement de connexion et de l'attaque UNION, puis la correction par requêtes paramétrées."
+  en: "Understand SQL injection hands-on: runnable Python demonstrations of login bypass and the UNION attack, then the fix with parameterized queries."
+duration: 35
+
+intro:
+  fr: |
+    L'**injection SQL** (SQLi) est l'une des failles les plus anciennes et les plus dévastatrices du web. Elle
+    figure dans le Top 10 de l'OWASP depuis sa création. Le principe est simple : quand une application
+    **colle** une donnée fournie par l'utilisateur directement dans une requête SQL, l'utilisateur peut
+    **réécrire** la requête et faire exécuter à la base ce qu'il veut.
+
+    L'analogie : imaginez un formulaire où l'on écrit un nom, et qu'un employé recopie **mot pour mot** ce nom
+    dans une instruction officielle. Si vous écrivez *« Dupont, et donne-moi aussi le coffre »*, l'employé
+    naïf exécute les deux. L'ordinateur qui concatène du texte SQL est cet employé naïf : il ne distingue plus
+    la **donnée** (le nom) de la **commande** (la requête).
+
+    Dans cette leçon, vous verrez l'attaque **en action** avec des démonstrations Python exécutables (module
+    `sqlite3` de la bibliothèque standard) : d'abord le **contournement de connexion** (`' OR '1'='1`), puis
+    l'attaque **UNION** qui extrait d'autres tables. Ensuite, vous verrez la **seule** vraie défense : les
+    **requêtes paramétrées**, qui séparent définitivement la donnée de la commande. Ces démonstrations visent
+    votre propre base locale, à des fins d'apprentissage uniquement.
+  en: |
+    **SQL injection** (SQLi) is one of the oldest and most devastating web flaws. It has been in the OWASP Top
+    10 since its creation. The principle is simple: when an application **glues** user-supplied data straight
+    into a SQL query, the user can **rewrite** the query and make the database do whatever they want.
+
+    The analogy: picture a form where you write a name, and a clerk copies that name **word for word** into an
+    official instruction. If you write *"Dupont, and also give me the vault"*, the naive clerk does both. A
+    computer concatenating SQL text is that naive clerk: it no longer tells the **data** (the name) from the
+    **command** (the query).
+
+    In this lesson you will see the attack **in action** with runnable Python demonstrations (the standard
+    library `sqlite3` module): first the **login bypass** (`' OR '1'='1`), then the **UNION** attack that
+    extracts other tables. Then you will see the **only** real defence: **parameterized queries**, which
+    permanently separate data from command. These demonstrations target your own local database, for learning
+    purposes only.
+
+sections:
+  - heading:
+      fr: "Comment naît une injection"
+      en: "How an injection is born"
+    body:
+      fr: |
+        Le défaut vient toujours de la **concaténation** : construire la requête en assemblant des morceaux de
+        texte dont une partie vient de l'utilisateur.
+
+        ```python
+        # VULNERABLE: the username is pasted directly into the SQL string.
+        query = "SELECT * FROM users WHERE username = '" + name + "'"
+        ```
+
+        Si `name` vaut `alice`, la requête est correcte :
+        `SELECT * FROM users WHERE username = 'alice'`. Mais si l'utilisateur saisit `' OR '1'='1`, la requête
+        devient :
+
+        ```sql
+        SELECT * FROM users WHERE username = '' OR '1'='1'
+        ```
+
+        La condition `'1'='1'` est **toujours vraie**, donc la requête renvoie **tous** les utilisateurs.
+        L'apostrophe saisie par l'attaquant a **fermé** la chaîne prévue par le développeur et ajouté sa propre
+        logique. La donnée est devenue de la commande.
+
+        Les conséquences vont bien au-delà de la lecture : selon la requête, un attaquant peut contourner une
+        authentification, lire des tables entières, modifier ou supprimer des données, voire (avec des
+        empilements de requêtes) exécuter `DROP TABLE`. L'injection SQL est classée comme une faille
+        **critique** car elle touche directement le cœur des données.
+      en: |
+        The flaw always comes from **concatenation**: building the query by assembling pieces of text, part of
+        which comes from the user.
+
+        ```python
+        # VULNERABLE: the username is pasted directly into the SQL string.
+        query = "SELECT * FROM users WHERE username = '" + name + "'"
+        ```
+
+        If `name` is `alice`, the query is correct: `SELECT * FROM users WHERE username = 'alice'`. But if the
+        user types `' OR '1'='1`, the query becomes:
+
+        ```sql
+        SELECT * FROM users WHERE username = '' OR '1'='1'
+        ```
+
+        The condition `'1'='1'` is **always true**, so the query returns **all** users. The quote typed by the
+        attacker **closed** the string intended by the developer and added its own logic. Data became command.
+
+        The consequences go far beyond reading: depending on the query, an attacker can bypass authentication,
+        read entire tables, modify or delete data, or even (with stacked queries) run `DROP TABLE`. SQL
+        injection is rated a **critical** flaw because it strikes the heart of the data directly.
+  - heading:
+      fr: "Contournement de connexion et attaque UNION"
+      en: "Login bypass and the UNION attack"
+    body:
+      fr: |
+        Deux attaques classiques illustrent la puissance de la SQLi.
+
+        Le **contournement de connexion**. Une page de login vérifie souvent :
+        `SELECT * FROM users WHERE username = '<nom>' AND password = '<mdp>'`. En saisissant comme nom
+        d'utilisateur `admin' --`, l'attaquant transforme la requête en :
+
+        ```sql
+        SELECT * FROM users WHERE username = 'admin' --' AND password = '...'
+        ```
+
+        Le `--` démarre un **commentaire** SQL : tout ce qui suit (la vérification du mot de passe) est ignoré.
+        L'attaquant se connecte en tant qu'`admin` **sans connaître le mot de passe**.
+
+        L'**attaque UNION**. L'opérateur `UNION` combine le résultat de deux `SELECT`. Si une page affiche le
+        résultat d'une recherche, l'attaquant peut y **greffer** les données d'une autre table :
+
+        ```sql
+        SELECT name, price FROM products WHERE id = '1'
+        UNION SELECT username, password FROM users --'
+        ```
+
+        La page, qui croyait afficher des produits, affiche maintenant les identifiants et mots de passe. Pour
+        réussir, l'attaquant ajuste le **nombre de colonnes** (`UNION` exige le même nombre des deux côtés) ;
+        c'est précisément ce qu'il cherche en tâtonnant. Ces deux attaques reposent sur le même défaut :
+        l'absence de séparation entre donnée et commande.
+      en: |
+        Two classic attacks show the power of SQLi.
+
+        The **login bypass**. A login page often checks:
+        `SELECT * FROM users WHERE username = '<name>' AND password = '<pwd>'`. By entering `admin' --` as the
+        username, the attacker turns the query into:
+
+        ```sql
+        SELECT * FROM users WHERE username = 'admin' --' AND password = '...'
+        ```
+
+        The `--` starts a SQL **comment**: everything after it (the password check) is ignored. The attacker
+        logs in as `admin` **without knowing the password**.
+
+        The **UNION attack**. The `UNION` operator combines the result of two `SELECT`s. If a page displays the
+        result of a search, the attacker can **graft** another table's data onto it:
+
+        ```sql
+        SELECT name, price FROM products WHERE id = '1'
+        UNION SELECT username, password FROM users --'
+        ```
+
+        The page, which thought it was showing products, now shows usernames and passwords. To succeed, the
+        attacker adjusts the **number of columns** (`UNION` requires the same count on both sides); that is
+        exactly what they probe for by trial. Both attacks rely on the same flaw: no separation between data
+        and command.
+  - heading:
+      fr: "La défense : requêtes paramétrées"
+      en: "The defence: parameterized queries"
+    body:
+      fr: |
+        La **seule** défense fiable est la **requête paramétrée** (aussi appelée *prepared statement*). On
+        écrit la requête avec des **marqueurs** (`?` ou `:nom`) à la place des valeurs, puis on fournit les
+        valeurs **séparément**. La base reçoit la commande et les données par deux canaux distincts : la donnée
+        n'est **jamais** interprétée comme du SQL.
+
+        ```python
+        # SAFE: the ? is a placeholder; the value travels in a separate channel.
+        cur.execute("SELECT * FROM users WHERE username = ?", (name,))
+        ```
+
+        Désormais, même si `name` vaut `' OR '1'='1`, cette chaîne est traitée comme un **nom littéral** à
+        chercher : la base cherche un utilisateur réellement nommé `' OR '1'='1`, ne le trouve pas, et renvoie
+        zéro ligne. L'attaque est neutralisée à la racine.
+
+        | Approche | Donnée et commande | Résultat face à `' OR '1'='1` |
+        |---|---|---|
+        | Concaténation | mélangées | **injection** : toutes les lignes |
+        | Requête paramétrée | séparées | **sûr** : zéro ligne |
+
+        Points clés : ne construisez **jamais** une requête par concaténation ou f-string avec une donnée
+        externe. N'utilisez pas non plus un simple « échappement » des apostrophes comme seule défense : c'est
+        fragile. Les marqueurs sont pour les **valeurs** ; un nom de table ou de colonne ne peut pas être
+        paramétré, il doit être validé contre une **liste blanche**. Et pour un login, le mot de passe ne se
+        compare pas en clair : on compare un **hachage** (sujet d'une autre leçon).
+      en: |
+        The **only** reliable defence is the **parameterized query** (also called a *prepared statement*). You
+        write the query with **placeholders** (`?` or `:name`) in place of values, then supply the values
+        **separately**. The database receives the command and the data through two distinct channels: the data
+        is **never** interpreted as SQL.
+
+        ```python
+        # SAFE: the ? is a placeholder; the value travels in a separate channel.
+        cur.execute("SELECT * FROM users WHERE username = ?", (name,))
+        ```
+
+        Now, even if `name` is `' OR '1'='1`, that string is treated as a **literal name** to look up: the
+        database searches for a user actually named `' OR '1'='1`, does not find it, and returns zero rows. The
+        attack is neutralised at the root.
+
+        | Approach | Data and command | Result against `' OR '1'='1` |
+        |---|---|---|
+        | Concatenation | mixed | **injection**: all rows |
+        | Parameterized query | separated | **safe**: zero rows |
+
+        Key points: **never** build a query by concatenation or f-string with external data. Do not rely on
+        merely "escaping" quotes as the sole defence either: it is fragile. Placeholders are for **values**; a
+        table or column name cannot be parameterized, it must be validated against an **allow-list**. And for a
+        login, the password is not compared in clear text: you compare a **hash** (the subject of another
+        lesson).
+
+examples:
+  - title:
+      fr: "Démonstration vulnérable : contournement de connexion"
+      en: "Vulnerable demo: login bypass"
+    file: login_bypass.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.execute("CREATE TABLE users (username TEXT, password TEXT, role TEXT)")
+      db.execute("INSERT INTO users VALUES ('admin', 's3cr3t', 'admin')")
+      db.execute("INSERT INTO users VALUES ('bob', 'hunter2', 'user')")
+
+
+      def login_vulnerable(username, password):
+          # VULNERABLE: user input is concatenated straight into the SQL.
+          query = (
+              "SELECT role FROM users "
+              "WHERE username = '" + username + "' "
+              "AND password = '" + password + "'"
+          )
+          return db.execute(query).fetchone()
+
+      # Normal, legitimate login
+      print("Legit  :", login_vulnerable("admin", "s3cr3t"))
+
+      # Attack: the username closes the string and comments out the password check.
+      print("Attack :", login_vulnerable("admin' --", "wrong-password"))
+    output: |
+      Legit  : ('admin',)
+      Attack : ('admin',)
+    note:
+      fr: "Avec `admin' --`, l'apostrophe ferme la chaîne et `--` commente la vérification du mot de passe : l'attaquant se connecte en admin avec un **mauvais** mot de passe. Les deux appels renvoient le rôle admin, ce qui prouve le contournement."
+      en: "With `admin' --`, the quote closes the string and `--` comments out the password check: the attacker logs in as admin with a **wrong** password. Both calls return the admin role, proving the bypass."
+
+  - title:
+      fr: "Démonstration vulnérable : attaque UNION"
+      en: "Vulnerable demo: UNION attack"
+    file: union_attack.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.execute("CREATE TABLE products (id INTEGER, name TEXT, price TEXT)")
+      db.execute("CREATE TABLE users (username TEXT, password TEXT)")
+      db.execute("INSERT INTO products VALUES (1, 'Keyboard', '29')")
+      db.execute("INSERT INTO users VALUES ('admin', 's3cr3t')")
+
+
+      def search_product(product_id):
+          # VULNERABLE: product_id pasted into the query, enabling UNION.
+          query = "SELECT name, price FROM products WHERE id = '" + product_id + "'"
+          return db.execute(query).fetchall()
+
+      # Normal search returns one product
+      print("Normal:", search_product("1"))
+
+      # Attack: graft the users table onto the product result via UNION.
+      payload = "1' UNION SELECT username, password FROM users --"
+      print("Stolen:", search_product(payload))
+    output: |
+      Normal: [('Keyboard', '29')]
+      Stolen: [('Keyboard', '29'), ('admin', 's3cr3t')]
+    note:
+      fr: "`UNION SELECT username, password FROM users` greffe les identifiants sur le résultat de la recherche de produits. La page croyait afficher un produit ; elle affiche maintenant le mot de passe de l'admin. Le `--` neutralise la fin de la requête d'origine."
+      en: "`UNION SELECT username, password FROM users` grafts the credentials onto the product search result. The page thought it was showing a product; it now shows the admin password. The `--` neutralises the end of the original query."
+
+  - title:
+      fr: "Version sûre : requête paramétrée"
+      en: "Safe version: parameterized query"
+    file: login_safe.py
+    lang: python
+    kind: secure
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.execute("CREATE TABLE users (username TEXT, password TEXT, role TEXT)")
+      db.execute("INSERT INTO users VALUES ('admin', 's3cr3t', 'admin')")
+
+
+      def login_safe(username, password):
+          # SAFE: ? placeholders; values passed separately, never parsed as SQL.
+          query = "SELECT role FROM users WHERE username = ? AND password = ?"
+          return db.execute(query, (username, password)).fetchone()
+
+      # Legitimate login still works
+      print("Legit  :", login_safe("admin", "s3cr3t"))
+
+      # The SAME attack now fails: the string is treated as a literal username.
+      print("Attack :", login_safe("admin' --", "wrong-password"))
+    output: |
+      Legit  : ('admin',)
+      Attack : None
+    note:
+      fr: "Avec les marqueurs `?`, `admin' --` est cherché comme un **nom littéral** : aucun utilisateur ne porte ce nom, donc le résultat est `None`. L'attaque identique à l'exemple vulnérable échoue : la donnée n'est jamais interprétée comme du SQL."
+      en: "With `?` placeholders, `admin' --` is looked up as a **literal name**: no user has that name, so the result is `None`. The same attack as the vulnerable example fails: the data is never interpreted as SQL."
+
+  - title:
+      fr: "Valider un identifiant de colonne par liste blanche"
+      en: "Validating a column identifier with an allow-list"
+    file: safe_sort.py
+    lang: python
+    kind: secure
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.execute("CREATE TABLE users (username TEXT, role TEXT)")
+      db.execute("INSERT INTO users VALUES ('bob', 'user'), ('alice', 'admin')")
+
+
+      def list_users(sort_by):
+          # A column name CANNOT be a ? placeholder, so validate it against a
+          # fixed allow-list. Anything else is rejected (no injection possible).
+          allowed = {"username", "role"}
+          if sort_by not in allowed:
+              raise ValueError(f"invalid sort column: {sort_by!r}")
+          query = f"SELECT username, role FROM users ORDER BY {sort_by}"
+          return db.execute(query).fetchall()
+
+      print("By role:", list_users("role"))
+      try:
+          list_users("username; DROP TABLE users")   # rejected by the allow-list
+      except ValueError as e:
+          print("Blocked:", e)
+    output: |
+      By role: [('alice', 'admin'), ('bob', 'user')]
+      Blocked: invalid sort column: 'username; DROP TABLE users'
+    note:
+      fr: "Les marqueurs `?` ne valent que pour les **valeurs**. Un nom de colonne (dans `ORDER BY`) ne peut pas être paramétré : on le valide donc contre une **liste blanche** fixe. Toute valeur hors liste est refusée, fermant cette voie d'injection."
+      en: "Placeholders `?` only work for **values**. A column name (in `ORDER BY`) cannot be parameterized: you validate it against a fixed **allow-list**. Any value off the list is rejected, closing that injection path."
+
+mistake:
+  fr: |
+    **Croire qu'« échapper les apostrophes » ou « filtrer les mots dangereux » suffit.**
+
+    Beaucoup de développeurs, sachant que l'injection passe par l'apostrophe, remplacent les `'` par `''` à la
+    main, ou bloquent les mots comme `UNION` et `DROP`. C'est une fausse défense. L'échappement manuel oublie
+    toujours un cas (encodages, caractères Unicode, requêtes numériques sans guillemets), et les listes de mots
+    interdits se contournent (commentaires, casse mélangée, encodage). La **seule** défense robuste est la
+    requête paramétrée, qui sépare structurellement la donnée de la commande. Pour les éléments qui ne peuvent
+    pas être paramétrés (noms de table ou de colonne), on utilise une **liste blanche**, jamais un filtrage de
+    caractères.
+  en: |
+    **Believing that "escaping quotes" or "filtering dangerous words" is enough.**
+
+    Many developers, knowing injection goes through the quote, replace `'` with `''` by hand, or block words
+    like `UNION` and `DROP`. This is a false defence. Manual escaping always misses a case (encodings, Unicode
+    characters, numeric queries without quotes), and blocklists of forbidden words are bypassable (comments,
+    mixed case, encoding). The **only** robust defence is the parameterized query, which structurally separates
+    data from command. For elements that cannot be parameterized (table or column names), use an **allow-list**,
+    never character filtering.
+
+bestPractice:
+  fr: |
+    - **Utilisez toujours des requêtes paramétrées** (`?` ou `:nom`) pour toute valeur venue de l'extérieur :
+      c'est la défense de référence.
+    - **Ne concaténez jamais** de donnée utilisateur dans une requête, ni avec `+`, ni avec une f-string, ni
+      avec `%`.
+    - **Validez par liste blanche** ce qui ne peut pas être paramétré (noms de table, de colonne, direction de
+      tri).
+    - **Appliquez le moindre privilège** à l'utilisateur de la base : une appli en lecture n'a pas besoin de
+      `DROP` ni de `DELETE`.
+    - **N'écrivez pas votre propre échappement** : les listes de mots interdits et le remplacement manuel des
+      apostrophes se contournent.
+    - **Complétez par la défense en profondeur** : validation d'entrée, WAF, et messages d'erreur génériques
+      (ne révélez pas la structure de la base).
+  en: |
+    - **Always use parameterized queries** (`?` or `:name`) for any value from outside: the reference defence.
+    - **Never concatenate** user data into a query, not with `+`, not with an f-string, not with `%`.
+    - **Validate with an allow-list** what cannot be parameterized (table names, column names, sort
+      direction).
+    - **Apply least privilege** to the database user: a read-only app needs neither `DROP` nor `DELETE`.
+    - **Do not write your own escaping**: blocklists of words and manual quote replacement are bypassable.
+    - **Add defence in depth**: input validation, a WAF, and generic error messages (do not reveal the
+      database structure).
+
+exercise:
+  statement:
+    fr: |
+      Le code ci-dessous est vulnérable à l'injection SQL. Il recherche un article par catégorie :
+
+      ```python
+      def find_by_category(db, category):
+          query = "SELECT title FROM articles WHERE category = '" + category + "'"
+          return db.execute(query).fetchall()
+      ```
+
+      1. Expliquez quelle entrée permettrait de récupérer **tous** les articles, quelle que soit la catégorie.
+      2. Réécrivez la fonction pour la rendre sûre, avec une requête paramétrée.
+    en: |
+      The code below is vulnerable to SQL injection. It searches for an article by category:
+
+      ```python
+      def find_by_category(db, category):
+          query = "SELECT title FROM articles WHERE category = '" + category + "'"
+          return db.execute(query).fetchall()
+      ```
+
+      1. Explain which input would retrieve **all** articles, whatever the category.
+      2. Rewrite the function to make it safe, using a parameterized query.
+  solution:
+    file: find_safe.py
+    lang: python
+    code: |
+      def find_by_category(db, category):
+          # SAFE: the ? placeholder keeps 'category' as pure data.
+          # The input "x' OR '1'='1" is now searched as a literal category name,
+          # matches nothing, and the injection fails.
+          query = "SELECT title FROM articles WHERE category = ?"
+          return db.execute(query, (category,)).fetchall()
+    note:
+      fr: "Entrée d'attaque : `x' OR '1'='1` rendrait la condition toujours vraie et renverrait tous les articles. Avec le marqueur `?`, cette chaîne devient une catégorie littérale introuvable : la fonction ne renvoie rien d'anormal. La donnée n'est plus jamais du code."
+      en: "Attack input: `x' OR '1'='1` would make the condition always true and return every article. With the `?` placeholder, that string becomes a literal, non-existent category: the function returns nothing abnormal. Data is never code again."
+
+quiz:
+  - q:
+      fr: "D'où provient fondamentalement une injection SQL ?"
+      en: "Where does a SQL injection fundamentally come from?"
+    options:
+      fr:
+        - "De la concaténation de données utilisateur dans une requête SQL"
+        - "D'un mot de passe trop court"
+        - "D'un serveur mal dimensionné"
+        - "D'une absence de chiffrement du disque"
+      en:
+        - "From concatenating user data into a SQL query"
+        - "From a too-short password"
+        - "From an undersized server"
+        - "From a lack of disk encryption"
+    answer: 0
+    why:
+      fr: "L'injection naît du mélange entre donnée et commande : quand l'entrée est collée dans la requête, l'utilisateur peut en réécrire la logique."
+      en: "Injection is born from mixing data and command: when input is pasted into the query, the user can rewrite its logic."
+  - q:
+      fr: "Que fait l'entrée `admin' --` dans un formulaire de connexion vulnérable ?"
+      en: "What does the input `admin' --` do in a vulnerable login form?"
+    options:
+      fr:
+        - "Elle crée un nouvel utilisateur admin"
+        - "Elle ferme la chaîne et commente la vérification du mot de passe"
+        - "Elle chiffre le mot de passe"
+        - "Elle n'a aucun effet"
+      en:
+        - "It creates a new admin user"
+        - "It closes the string and comments out the password check"
+        - "It encrypts the password"
+        - "It has no effect"
+    answer: 1
+    why:
+      fr: "L'apostrophe ferme la chaîne du nom et `--` démarre un commentaire SQL : la condition sur le mot de passe est ignorée, l'attaquant se connecte sans le connaître."
+      en: "The quote closes the name string and `--` starts a SQL comment: the password condition is ignored, and the attacker logs in without knowing it."
+  - q:
+      fr: "Quelle est la seule défense fiable contre l'injection SQL ?"
+      en: "What is the only reliable defence against SQL injection?"
+    options:
+      fr:
+        - "Interdire le mot UNION"
+        - "Remplacer les apostrophes à la main"
+        - "Les requêtes paramétrées (marqueurs ? ou :nom)"
+        - "Raccourcir les requêtes"
+      en:
+        - "Forbidding the word UNION"
+        - "Replacing quotes by hand"
+        - "Parameterized queries (placeholders ? or :name)"
+        - "Shortening the queries"
+    answer: 2
+    why:
+      fr: "Les requêtes paramétrées séparent structurellement la donnée de la commande : l'entrée n'est jamais interprétée comme du SQL. Les filtres de mots et l'échappement manuel se contournent."
+      en: "Parameterized queries structurally separate data from command: input is never interpreted as SQL. Word filters and manual escaping are bypassable."
+  - q:
+      fr: "Que fait l'opérateur `UNION` dans une attaque par injection ?"
+      en: "What does the `UNION` operator do in an injection attack?"
+    options:
+      fr:
+        - "Il supprime une table"
+        - "Il combine le résultat avec un SELECT sur une autre table pour en extraire les données"
+        - "Il chiffre la base"
+        - "Il verrouille le compte"
+      en:
+        - "It deletes a table"
+        - "It combines the result with a SELECT on another table to extract its data"
+        - "It encrypts the database"
+        - "It locks the account"
+    answer: 1
+    why:
+      fr: "`UNION` fusionne deux résultats : l'attaquant greffe un `SELECT` sur une table sensible (comme `users`) à l'affichage prévu, exfiltrant identifiants et mots de passe."
+      en: "`UNION` merges two results: the attacker grafts a `SELECT` on a sensitive table (like `users`) onto the intended display, exfiltrating usernames and passwords."
+  - q:
+      fr: "Comment sécuriser une partie de requête qui ne peut pas être paramétrée, comme un nom de colonne de tri ?"
+      en: "How do you secure a query part that cannot be parameterized, like a sort column name?"
+    options:
+      fr:
+        - "En la validant contre une liste blanche de valeurs autorisées"
+        - "En la concaténant directement"
+        - "En la mettant en majuscules"
+        - "En la chiffrant"
+      en:
+        - "By validating it against an allow-list of permitted values"
+        - "By concatenating it directly"
+        - "By uppercasing it"
+        - "By encrypting it"
+    answer: 0
+    why:
+      fr: "Un nom de colonne ou de table ne peut pas être un marqueur `?`. On le compare à une liste blanche fixe ; toute valeur hors liste est rejetée, ce qui ferme cette voie d'injection."
+      en: "A column or table name cannot be a `?` placeholder. You compare it against a fixed allow-list; any value off the list is rejected, closing that injection path."

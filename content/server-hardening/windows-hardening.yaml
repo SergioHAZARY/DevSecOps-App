@@ -1,0 +1,467 @@
+description:
+  fr: "Durcir Windows Server en PowerShell : désactiver SMBv1, déployer LAPS, régler Defender, les profils de pare-feu et la politique d'audit."
+  en: "Harden Windows Server with PowerShell: disable SMBv1, deploy LAPS, tune Defender, firewall profiles and the audit policy."
+duration: 28
+
+intro:
+  fr: |
+    Un serveur Windows « sorti de la boîte » fait tourner des protocoles anciens, un mot de passe
+    administrateur local souvent identique partout, et une journalisation d'audit quasi vide. Le durcir, ce
+    n'est pas cliquer dans vingt fenêtres : c'est appliquer quelques commandes PowerShell, idéalement
+    dérivées d'une **baseline** (un modèle de référence).
+
+    Imaginez un immeuble de bureaux où toutes les portes auraient la même clé, où un vieil interphone des
+    années 1980 (SMBv1) laisserait entrer n'importe qui, et où aucune caméra n'enregistrerait. Durcir, c'est
+    poser une clé différente par porte (LAPS), débrancher le vieil interphone, et rallumer les caméras.
+
+    Dans cette leçon, vous allez comparer un hôte Windows par défaut à un script PowerShell de durcissement,
+    puis apprendre à vérifier chaque réglage et à vous appuyer sur les baselines Microsoft.
+  en: |
+    A Windows server "out of the box" runs legacy protocols, a local administrator password that is often
+    identical everywhere, and an almost empty audit log. Hardening it is not clicking through twenty
+    windows: it is applying a few PowerShell commands, ideally derived from a **baseline** (a reference
+    template).
+
+    Picture an office block where every door shares one key, where an old 1980s intercom (SMBv1) lets
+    anyone in, and where no camera records. Hardening means a different key per door (LAPS), unplugging the
+    old intercom, and switching the cameras back on.
+
+    In this lesson you will compare a default Windows host to a PowerShell hardening script, then learn to
+    verify each setting and to lean on the Microsoft baselines.
+
+sections:
+  - heading:
+      fr: "Protocoles hérités : commencer par couper SMBv1"
+      en: "Legacy protocols: start by cutting SMBv1"
+    body:
+      fr: |
+        **SMB** (*Server Message Block*) est le protocole de partage de fichiers Windows. Sa version 1,
+        vieille de plus de trente ans, n'a ni intégrité ni authentification modernes : c'est elle qu'a
+        exploitée le ver *WannaCry* en 2017. Elle est désactivée par défaut sur les versions récentes, mais
+        reste présente sur beaucoup de serveurs migrés.
+
+        | Réglage | Valeur par défaut héritée | Valeur durcie | Pourquoi |
+        |---|---|---|---|
+        | SMBv1 | Parfois activé | Désactivé | Protocole vulnérable (WannaCry, EternalBlue) |
+        | Signature SMB | Facultative | Requise | Empêche l'attaque de l'intercepteur (relais SMB) |
+        | NTLMv1 / LM | Toléré | Refusé | Hachages faibles, cassables hors ligne |
+
+        On coupe SMBv1 côté serveur avec `Set-SmbServerConfiguration -EnableSMB1Protocol $false`, et on
+        vérifie l'état de la fonctionnalité Windows avec `Get-WindowsOptionalFeature -Online -FeatureName
+        SMB1Protocol`. On exige la signature avec `-RequireSecuritySignature $true`.
+      en: |
+        **SMB** (*Server Message Block*) is the Windows file-sharing protocol. Its version 1, over thirty
+        years old, has no modern integrity or authentication: it is the one the *WannaCry* worm exploited
+        in 2017. It is disabled by default on recent versions but remains present on many migrated servers.
+
+        | Setting | Legacy default | Hardened value | Why |
+        |---|---|---|---|
+        | SMBv1 | Sometimes enabled | Disabled | Vulnerable protocol (WannaCry, EternalBlue) |
+        | SMB signing | Optional | Required | Prevents the man-in-the-middle (SMB relay) attack |
+        | NTLMv1 / LM | Tolerated | Refused | Weak hashes, crackable offline |
+
+        You cut SMBv1 on the server side with `Set-SmbServerConfiguration -EnableSMB1Protocol $false`, and
+        check the Windows feature state with `Get-WindowsOptionalFeature -Online -FeatureName
+        SMB1Protocol`. You require signing with `-RequireSecuritySignature $true`.
+  - heading:
+      fr: "LAPS : un mot de passe administrateur local unique par machine"
+      en: "LAPS: a unique local administrator password per machine"
+    body:
+      fr: |
+        Le pire scénario d'un parc Windows : le **même** mot de passe administrateur local sur tous les
+        postes. Un attaquant qui compromet une machine le réutilise partout (*pass-the-hash*, mouvement
+        latéral). **LAPS** (*Windows Local Administrator Password Solution*) résout cela : chaque machine
+        reçoit un mot de passe **aléatoire, unique et renouvelé automatiquement**, stocké dans Active
+        Directory (ou Entra ID) et lisible seulement par les comptes autorisés.
+
+        Depuis Windows 11/Server 2019 et à jour, LAPS est **intégré** à l'OS (module PowerShell `LAPS`) et
+        ne nécessite plus l'ancien agent séparé. Le cycle :
+
+        1. Étendre le schéma AD : `Update-LapsADSchema`.
+        2. Déléguer la lecture aux administrateurs : `Set-LapsADReadPasswordPermission`.
+        3. Appliquer une stratégie (par GPO ou Intune) définissant la longueur, la complexité et la durée.
+        4. Récupérer le mot de passe courant d'une machine : `Get-LapsADPassword -Identity SRV01
+           -AsPlainText`.
+
+        Résultat : compromettre une machine ne donne plus les clés de tout le domaine.
+      en: |
+        The worst scenario for a Windows fleet: the **same** local administrator password on every host. An
+        attacker who compromises one machine reuses it everywhere (*pass-the-hash*, lateral movement).
+        **LAPS** (*Windows Local Administrator Password Solution*) fixes this: each machine gets a
+        **random, unique, automatically rotated** password, stored in Active Directory (or Entra ID) and
+        readable only by authorised accounts.
+
+        Since Windows 11/Server 2019 when patched, LAPS is **built into** the OS (the `LAPS` PowerShell
+        module) and no longer needs the old separate agent. The cycle:
+
+        1. Extend the AD schema: `Update-LapsADSchema`.
+        2. Delegate read access to admins: `Set-LapsADReadPasswordPermission`.
+        3. Apply a policy (via GPO or Intune) setting length, complexity and age.
+        4. Retrieve a machine's current password: `Get-LapsADPassword -Identity SRV01 -AsPlainText`.
+
+        The result: compromising one machine no longer hands over the keys to the whole domain.
+  - heading:
+      fr: "Defender, pare-feu et politique d'audit"
+      en: "Defender, firewall and audit policy"
+    body:
+      fr: |
+        Trois piliers se règlent en PowerShell :
+
+        - **Microsoft Defender Antivirus** via `Set-MpPreference` : protection en temps réel, analyse du
+          cloud, soumission des échantillons et surtout les **règles de réduction de surface d'attaque**
+          (*ASR*, `Add-MpPreference -AttackSurfaceReductionRules_Ids ... -AttackSurfaceReductionRules_Actions Enabled`)
+          qui bloquent par exemple l'exécution de macros Office malveillantes.
+        - **Pare-feu Windows Defender** via `Set-NetFirewallProfile`. Il existe trois profils —
+          `Domain`, `Private`, `Public` — et la règle d'or est : **bloquer le trafic entrant par défaut**,
+          n'ouvrir que ce qui est nécessaire, et journaliser les paquets rejetés.
+        - **Politique d'audit avancée** via `auditpol /set`. Par défaut, Windows journalise peu. On active
+          par exemple l'audit des ouvertures de session, de la gestion des comptes et de l'usage des
+          privilèges sensibles, pour alimenter un SIEM.
+
+        | Profil de pare-feu | S'applique quand | Posture recommandée |
+        |---|---|---|
+        | `Domain` | La machine est jointe à son domaine AD | Entrant: bloqué, exceptions gérées par GPO |
+        | `Private` | Réseau privé de confiance | Entrant: bloqué |
+        | `Public` | Réseau inconnu (le plus hostile) | Entrant: bloqué, très peu d'exceptions |
+      en: |
+        Three pillars are set in PowerShell:
+
+        - **Microsoft Defender Antivirus** via `Set-MpPreference`: real-time protection, cloud analysis,
+          sample submission and above all the **Attack Surface Reduction rules** (*ASR*,
+          `Add-MpPreference -AttackSurfaceReductionRules_Ids ... -AttackSurfaceReductionRules_Actions Enabled`)
+          that block, for example, the execution of malicious Office macros.
+        - **Windows Defender Firewall** via `Set-NetFirewallProfile`. There are three profiles —
+          `Domain`, `Private`, `Public` — and the golden rule is: **block inbound traffic by default**,
+          open only what is needed, and log dropped packets.
+        - **Advanced audit policy** via `auditpol /set`. By default Windows logs little. You enable, for
+          example, auditing of logons, account management and sensitive privilege use, to feed a SIEM.
+
+        | Firewall profile | Applies when | Recommended posture |
+        |---|---|---|
+        | `Domain` | The machine is joined to its AD domain | Inbound: blocked, exceptions via GPO |
+        | `Private` | Trusted private network | Inbound: blocked |
+        | `Public` | Unknown network (the most hostile) | Inbound: blocked, very few exceptions |
+
+examples:
+  - title:
+      fr: "Un hôte par défaut : protocoles et audit laxistes"
+      en: "A default host: lax protocols and auditing"
+    file: audit-defaults.ps1
+    lang: powershell
+    kind: vulnerable
+    code: |
+      # SMBv1 still installed and enabled on a migrated server
+      Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol |
+        Select-Object FeatureName, State
+      # State : Enabled   <-- 30-year-old vulnerable protocol is reachable
+
+      # SMB signing is not required: SMB relay / MITM is possible
+      (Get-SmbServerConfiguration).RequireSecuritySignature
+      # False
+
+      # The firewall Public profile allows inbound by default on this box
+      (Get-NetFirewallProfile -Name Public).DefaultInboundAction
+      # Allow
+
+      # Advanced audit is empty: logons and privilege use are not recorded
+      auditpol /get /subcategory:"Logon"
+    output: |
+      FeatureName    State
+      -----------    -----
+      SMB1Protocol   Enabled
+
+      False
+      Allow
+      System audit policy
+      Category/Subcategory      Setting
+      Logon                     No Auditing
+    note:
+      fr: "Chaque ligne est un problème : SMBv1 présent, signature SMB facultative, pare-feu `Public` en `Allow` entrant, et aucun audit des connexions. C'est l'état typique d'un serveur jamais durci."
+      en: "Every line is a problem: SMBv1 present, SMB signing optional, the `Public` firewall in inbound `Allow`, and no logon auditing. This is the typical state of a never-hardened server."
+
+  - title:
+      fr: "Script de durcissement : SMB, Defender, pare-feu, audit"
+      en: "Hardening script: SMB, Defender, firewall, audit"
+    file: harden-windows.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      #Requires -RunAsAdministrator
+      $ErrorActionPreference = 'Stop'
+
+      # --- 1. Legacy protocols -------------------------------------------
+      # Remove the SMBv1 feature and require SMB signing (stops SMB relay)
+      Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+      Set-SmbServerConfiguration -RequireSecuritySignature $true -Force
+
+      # --- 2. Microsoft Defender -----------------------------------------
+      # Real-time + cloud protection, and block executable content from email
+      Set-MpPreference -DisableRealtimeMonitoring $false
+      Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples
+      # ASR rule: block Office apps from creating child processes
+      Add-MpPreference -AttackSurfaceReductionRules_Ids `
+        D4F940AB-401B-4EFC-AADC-AD5F3C50688A `
+        -AttackSurfaceReductionRules_Actions Enabled
+
+      # --- 3. Firewall: deny inbound by default on every profile ---------
+      Set-NetFirewallProfile -Profile Domain,Private,Public `
+        -DefaultInboundAction Block -DefaultOutboundAction Allow `
+        -LogBlocked True -Enabled True
+
+      # --- 4. Advanced audit policy (feeds the SIEM) ---------------------
+      auditpol /set /subcategory:"Logon" /success:enable /failure:enable
+      auditpol /set /subcategory:"User Account Management" /success:enable /failure:enable
+      auditpol /set /subcategory:"Sensitive Privilege Use" /success:enable /failure:enable
+
+      Write-Host "Hardening applied. Reboot to finish removing SMBv1." -ForegroundColor Green
+    note:
+      fr: "`-NoRestart` évite un redémarrage immédiat, mais SMBv1 n'est réellement retiré qu'au reboot. L'identifiant GUID de la règle ASR est celui, documenté par Microsoft, qui empêche les applications Office de lancer des processus enfants (vecteur classique des macros)."
+      en: "`-NoRestart` avoids an immediate reboot, but SMBv1 is only truly removed after one. The ASR rule GUID is Microsoft's documented one that stops Office apps from spawning child processes (the classic macro vector)."
+
+  - title:
+      fr: "Déployer LAPS : mot de passe local unique et renouvelé"
+      en: "Deploying LAPS: a unique, rotated local password"
+    file: setup-laps.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # Run on a domain controller / admin workstation with the LAPS module
+      Import-Module LAPS
+
+      # 1. Extend the AD schema to store the managed password (one-time)
+      Update-LapsADSchema
+
+      # 2. Let the machines write their own managed password to AD
+      Set-LapsADComputerSelfPermission -Identity "OU=Servers,DC=example,DC=com"
+
+      # 3. Delegate READ of the password only to the server admins group
+      Set-LapsADReadPasswordPermission `
+        -Identity "OU=Servers,DC=example,DC=com" `
+        -AllowedPrincipals "EXAMPLE\Server-Admins"
+
+      # 4. (Policy length/age is pushed by GPO or Intune, not shown here)
+
+      # 5. Retrieve the current local admin password for one machine
+      Get-LapsADPassword -Identity SRV01 -AsPlainText |
+        Select-Object ComputerName, Account, Password, PasswordExpirationTimestamp
+    output: |
+      ComputerName : SRV01
+      Account      : Administrator
+      Password     : 7xK!p2mQ9wZ-rVb4 (example, randomly generated)
+      PasswordExpirationTimestamp : 2026-12-11 03:14:00
+    note:
+      fr: "Chaque machine a désormais un mot de passe administrateur local différent, renouvelé avant expiration. Seuls les membres de `Server-Admins` peuvent le lire. Compromettre `SRV01` ne donne plus accès à `SRV02`."
+      en: "Each machine now has a different local admin password, rotated before expiry. Only members of `Server-Admins` can read it. Compromising `SRV01` no longer gives access to `SRV02`."
+
+  - title:
+      fr: "Vérifier que le durcissement a bien pris"
+      en: "Verifying the hardening actually applied"
+    file: verify-hardening.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      # Build a small report object so results can be piped to CI or a file
+      [PSCustomObject]@{
+        SMB1Enabled       = (Get-SmbServerConfiguration).EnableSMB1Protocol
+        SMBSigningReq     = (Get-SmbServerConfiguration).RequireSecuritySignature
+        PublicInbound     = (Get-NetFirewallProfile -Name Public).DefaultInboundAction
+        RealtimeProtOn    = -not (Get-MpPreference).DisableRealtimeMonitoring
+      } | Format-List
+
+      # Confirm the audit subcategories are now enabled
+      auditpol /get /subcategory:"Logon","Sensitive Privilege Use"
+    output: |
+      SMB1Enabled    : False
+      SMBSigningReq  : True
+      PublicInbound  : Block
+      RealtimeProtOn : True
+
+      Logon                       Success and Failure
+      Sensitive Privilege Use     Success and Failure
+    note:
+      fr: "Chaque valeur est désormais à l'état durci. Transformer la vérification en objet PowerShell permet de l'exporter en JSON et de l'intégrer dans un pipeline de conformité (DevSecOps : la preuve est automatisée)."
+      en: "Every value is now in its hardened state. Turning the check into a PowerShell object lets you export it as JSON and plug it into a compliance pipeline (DevSecOps: the evidence is automated)."
+
+mistake:
+  fr: |
+    **Durcir à la main, machine par machine, sans baseline ni mesure.**
+
+    Microsoft publie le *Security Compliance Toolkit* et des **baselines** officielles (GPO/Intune) pour
+    Windows Server, Windows 11, Edge, Office. Elles représentent des centaines de réglages testés. Réinventer
+    tout cela à la main mène à des écarts invisibles entre serveurs et à des régressions.
+
+    Deuxième erreur fréquente : désactiver l'antivirus ou ouvrir le pare-feu « pour débloquer » un logiciel,
+    puis oublier de revenir en arrière. Un `Set-MpPreference -DisableRealtimeMonitoring $true` « temporaire »
+    reste souvent des mois. Mesurez l'écart avec l'outil `PolicyAnalyzer` de la baseline plutôt que de
+    bricoler, et consignez toute dérogation.
+  en: |
+    **Hardening by hand, machine by machine, with no baseline and no measurement.**
+
+    Microsoft ships the *Security Compliance Toolkit* and official **baselines** (GPO/Intune) for Windows
+    Server, Windows 11, Edge, Office. They represent hundreds of tested settings. Reinventing all of that by
+    hand leads to invisible drift between servers and to regressions.
+
+    A second common mistake: disabling the antivirus or opening the firewall "to unblock" a piece of
+    software, then forgetting to revert. A "temporary" `Set-MpPreference -DisableRealtimeMonitoring $true`
+    often lingers for months. Measure the gap with the baseline's `PolicyAnalyzer` tool rather than
+    tinkering, and record every exception.
+
+bestPractice:
+  fr: |
+    - **Partez des baselines Microsoft** (*Security Compliance Toolkit*) et mesurez l'écart avec `PolicyAnalyzer` avant d'appliquer vos ajustements.
+    - **Supprimez SMBv1**, exigez la signature SMB et refusez NTLMv1/LM.
+    - **Déployez LAPS** : plus jamais de mot de passe administrateur local partagé entre machines.
+    - **Pare-feu : entrant bloqué par défaut** sur les trois profils, journalisation des paquets rejetés, exceptions minimales.
+    - **Activez les règles ASR de Defender** et laissez la protection cloud active ; ne désactivez jamais la protection en temps réel « temporairement ».
+    - **Activez l'audit avancé** (ouvertures de session, gestion des comptes, privilèges) et expédiez les journaux vers un SIEM.
+    - **Automatisez et versionnez** le durcissement (DSC, Intune, Ansible for Windows) : la configuration devient du code.
+  en: |
+    - **Start from the Microsoft baselines** (*Security Compliance Toolkit*) and measure the gap with `PolicyAnalyzer` before applying your tweaks.
+    - **Remove SMBv1**, require SMB signing and refuse NTLMv1/LM.
+    - **Deploy LAPS**: never again a local admin password shared across machines.
+    - **Firewall: inbound blocked by default** on all three profiles, dropped-packet logging, minimal exceptions.
+    - **Enable Defender ASR rules** and keep cloud protection on; never disable real-time protection "temporarily".
+    - **Enable advanced auditing** (logons, account management, privileges) and ship the logs to a SIEM.
+    - **Automate and version** the hardening (DSC, Intune, Ansible for Windows): the configuration becomes code.
+
+exercise:
+  statement:
+    fr: |
+      On vous confie un Windows Server 2022 fraîchement installé. Écrivez un script PowerShell (exécuté en
+      administrateur) qui :
+
+      1. désactive le protocole SMBv1 côté serveur et exige la signature SMB ;
+      2. configure le pare-feu pour **bloquer** le trafic entrant par défaut sur les trois profils
+         (`Domain`, `Private`, `Public`) tout en autorisant le sortant ;
+      3. active l'audit des ouvertures de session (succès et échec) ;
+      4. affiche à la fin un objet récapitulant l'état de SMBv1, de la signature SMB et du profil `Public`.
+    en: |
+      You are handed a freshly installed Windows Server 2022. Write a PowerShell script (run as
+      administrator) that:
+
+      1. disables the SMBv1 protocol on the server side and requires SMB signing;
+      2. configures the firewall to **block** inbound traffic by default on all three profiles
+         (`Domain`, `Private`, `Public`) while allowing outbound;
+      3. enables logon auditing (success and failure);
+      4. prints at the end an object summarising the state of SMBv1, SMB signing and the `Public` profile.
+  solution:
+    file: solution.ps1
+    lang: powershell
+    code: |
+      #Requires -RunAsAdministrator
+      $ErrorActionPreference = 'Stop'
+
+      # 1. SMBv1 off, SMB signing required
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+      Set-SmbServerConfiguration -RequireSecuritySignature $true -Force
+
+      # 2. Firewall: deny inbound, allow outbound on all profiles
+      Set-NetFirewallProfile -Profile Domain,Private,Public `
+        -DefaultInboundAction Block -DefaultOutboundAction Allow `
+        -Enabled True -LogBlocked True
+
+      # 3. Logon auditing: success and failure
+      auditpol /set /subcategory:"Logon" /success:enable /failure:enable
+
+      # 4. Summary object (easy to export as JSON in a pipeline)
+      [PSCustomObject]@{
+        SMB1Enabled   = (Get-SmbServerConfiguration).EnableSMB1Protocol
+        SMBSigningReq = (Get-SmbServerConfiguration).RequireSecuritySignature
+        PublicInbound = (Get-NetFirewallProfile -Name Public).DefaultInboundAction
+      } | Format-List
+    note:
+      fr: "On règle SMBv1 côté service sans retirer la fonctionnalité Windows, pour éviter le redémarrage pendant l'exercice. En production, on ajoute `Disable-WindowsOptionalFeature` et on redémarre."
+      en: "We set SMBv1 at the service level without removing the Windows feature, to avoid a reboot during the exercise. In production, add `Disable-WindowsOptionalFeature` and reboot."
+
+quiz:
+  - q:
+      fr: "Pourquoi désactiver le protocole SMBv1 sur un serveur Windows ?"
+      en: "Why disable the SMBv1 protocol on a Windows server?"
+    options:
+      fr:
+        - "Parce qu'il consomme trop de mémoire"
+        - "Parce que c'est un protocole ancien et vulnérable, exploité par WannaCry"
+        - "Parce qu'il est incompatible avec PowerShell"
+        - "Parce qu'il chiffre trop fortement le trafic"
+      en:
+        - "Because it uses too much memory"
+        - "Because it is an old, vulnerable protocol exploited by WannaCry"
+        - "Because it is incompatible with PowerShell"
+        - "Because it encrypts traffic too strongly"
+    answer: 1
+    why:
+      fr: "SMBv1 n'a pas de protection moderne et a servi de vecteur à WannaCry/EternalBlue. On le retire et on exige la signature SMB sur les versions suivantes."
+      en: "SMBv1 has no modern protection and was the vector for WannaCry/EternalBlue. You remove it and require SMB signing on later versions."
+  - q:
+      fr: "Quel problème LAPS résout-il principalement ?"
+      en: "What problem does LAPS mainly solve?"
+    options:
+      fr:
+        - "Le même mot de passe administrateur local réutilisé sur toutes les machines"
+        - "La lenteur du démarrage de Windows"
+        - "L'absence d'antivirus"
+        - "Le chiffrement du disque"
+      en:
+        - "The same local administrator password reused on every machine"
+        - "Slow Windows boot time"
+        - "The absence of an antivirus"
+        - "Disk encryption"
+    answer: 0
+    why:
+      fr: "LAPS attribue à chaque machine un mot de passe administrateur local aléatoire, unique et renouvelé, stocké dans AD. Compromettre une machine ne compromet plus les autres."
+      en: "LAPS gives each machine a random, unique, rotated local admin password stored in AD. Compromising one machine no longer compromises the others."
+  - q:
+      fr: "Quelle posture le pare-feu Windows doit-il adopter pour le trafic entrant ?"
+      en: "What posture should the Windows firewall take for inbound traffic?"
+    options:
+      fr:
+        - "Tout autoriser, puis bloquer au cas par cas"
+        - "Désactiver le pare-feu sur le profil Domain"
+        - "Bloquer par défaut et n'ouvrir que le nécessaire, sur les trois profils"
+        - "Autoriser uniquement sur le profil Public"
+      en:
+        - "Allow everything, then block case by case"
+        - "Disable the firewall on the Domain profile"
+        - "Block by default and open only what is needed, on all three profiles"
+        - "Allow only on the Public profile"
+    answer: 2
+    why:
+      fr: "Le moindre privilège réseau impose de bloquer l'entrant par défaut (`DefaultInboundAction Block`) et de n'ajouter que les règles indispensables, sur Domain, Private et Public."
+      en: "Network least privilege means blocking inbound by default (`DefaultInboundAction Block`) and adding only the necessary rules, across Domain, Private and Public."
+  - q:
+      fr: "À quoi sert `auditpol /set /subcategory:\"Logon\" /success:enable /failure:enable` ?"
+      en: "What does `auditpol /set /subcategory:\"Logon\" /success:enable /failure:enable` do?"
+    options:
+      fr:
+        - "Il désactive les connexions réseau"
+        - "Il active l'audit des ouvertures de session réussies et échouées"
+        - "Il force la déconnexion de tous les utilisateurs"
+        - "Il supprime les journaux existants"
+      en:
+        - "It disables network connections"
+        - "It enables auditing of successful and failed logons"
+        - "It forces all users to log off"
+        - "It deletes the existing logs"
+    answer: 1
+    why:
+      fr: "`auditpol` règle la politique d'audit avancée. Ici il journalise chaque ouverture de session réussie ou échouée, donnée précieuse pour un SIEM et une enquête."
+      en: "`auditpol` sets the advanced audit policy. Here it logs every successful or failed logon, valuable data for a SIEM and an investigation."
+  - q:
+      fr: "Pourquoi partir des baselines du Microsoft Security Compliance Toolkit ?"
+      en: "Why start from the Microsoft Security Compliance Toolkit baselines?"
+    options:
+      fr:
+        - "Parce qu'elles désactivent toute journalisation"
+        - "Parce qu'elles remplacent l'antivirus"
+        - "Parce qu'elles suppriment Active Directory"
+        - "Parce qu'elles fournissent des centaines de réglages testés et un outil pour mesurer l'écart"
+      en:
+        - "Because they disable all logging"
+        - "Because they replace the antivirus"
+        - "Because they remove Active Directory"
+        - "Because they provide hundreds of tested settings and a tool to measure the gap"
+    answer: 3
+    why:
+      fr: "Les baselines évitent de réinventer le durcissement à la main ; `PolicyAnalyzer` compare l'état réel à la référence et révèle les dérives entre serveurs."
+      en: "The baselines save you reinventing hardening by hand; `PolicyAnalyzer` compares the real state to the reference and reveals drift between servers."

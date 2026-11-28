@@ -1,0 +1,468 @@
+description:
+  fr: "Protéger une branche avec des rulesets (revues, status checks, pas de force-push, commits signés, CODEOWNERS) et retirer un secret de l'historique avec git filter-repo, après l'avoir révoqué."
+  en: "Protect a branch with rulesets (reviews, status checks, no force-push, signed commits, CODEOWNERS) and remove a leaked secret from the history with git filter-repo, after rotating it."
+duration: 30
+
+intro:
+  fr: |
+    Les leçons précédentes protégeaient le code **avant** le commit (`.gitignore`, Gitleaks, hooks,
+    signatures). Cette dernière leçon ferme la boucle côté serveur, avec deux sujets de niveau pro : la
+    **protection de branche** (empêcher d'abîmer la branche principale) et le **nettoyage d'historique**
+    (retirer un secret déjà parti).
+
+    Imaginez la branche `main` comme le coffre-fort de l'entreprise : on ne devrait pas pouvoir y entrer
+    seul, ni y modifier le passé sans trace. Les **rulesets** (ou *branch protection rules*) imposent des
+    règles que **personne**, pas même un administrateur distrait, ne peut contourner : revue obligatoire,
+    tests verts, pas de réécriture de l'historique, commits signés.
+
+    Et si un secret est malgré tout parti dans l'historique ? Dans cette leçon, vous apprendrez l'ordre
+    **impératif** des opérations : d'abord **révoquer** le secret (le rendre inutile), ensuite seulement
+    le retirer de l'historique avec **`git filter-repo`**. Nous verrons aussi `CODEOWNERS`, qui exige
+    l'accord des bonnes personnes sur les fichiers sensibles.
+  en: |
+    The previous lessons protected the code **before** the commit (`.gitignore`, Gitleaks, hooks,
+    signatures). This final lesson closes the loop server-side, with two pro-level topics: **branch
+    protection** (preventing damage to the main branch) and **history cleanup** (removing a secret that has
+    already escaped).
+
+    Picture the `main` branch as the company vault: you should not be able to enter it alone, nor change
+    the past without a trace. **Rulesets** (or *branch protection rules*) impose rules that **no one**, not
+    even a careless administrator, can bypass: mandatory review, green tests, no history rewrite, signed
+    commits.
+
+    And if a secret escaped into the history anyway? In this lesson you will learn the **mandatory** order
+    of operations: first **rotate** the secret (make it useless), and only then remove it from the history
+    with **`git filter-repo`**. We will also cover `CODEOWNERS`, which requires sign-off from the right
+    people on sensitive files.
+
+sections:
+  - heading:
+      fr: "Protéger la branche principale avec un ruleset"
+      en: "Protecting the main branch with a ruleset"
+    body:
+      fr: |
+        Un **ruleset** (GitHub) ou une **branch protection rule** (le terme GitLab équivalent est *protected
+        branches* + *approval rules*) est un ensemble de conditions appliquées à une branche, en général
+        `main`. Les règles les plus utiles :
+
+        | Règle | Ce qu'elle garantit |
+        |---|---|
+        | **Require pull request reviews** | Personne ne fusionne seul ; au moins N revues approuvées |
+        | **Require status checks** | La CI (tests, SAST, scan de secrets) doit être verte |
+        | **Require signed commits** | Chaque commit doit porter une signature vérifiée |
+        | **Block force pushes** | Impossible de réécrire l'historique de la branche |
+        | **Require linear history** | Pas de merge commits « sales », historique lisible |
+        | **Require CODEOWNERS review** | Les fichiers sensibles exigent l'accord de leurs propriétaires |
+
+        Le réglage qui fait toute la différence s'appelle **« Do not allow bypassing the above settings »**
+        (ou *Include administrators*) : sans lui, un administrateur peut ignorer toutes les règles, et la
+        protection devient théorique. Une bonne protection s'applique **à tout le monde**, y compris à vous.
+
+        Ces règles transforment les contrôles des leçons précédentes en **obligations** : le scan de
+        secrets en CI ne sert que si « status checks must pass » est coché ; les commits signés ne sont
+        garantis que si « require signed commits » est activé.
+      en: |
+        A **ruleset** (GitHub) or a **branch protection rule** (the GitLab equivalent is *protected
+        branches* + *approval rules*) is a set of conditions applied to a branch, usually `main`. The most
+        useful rules:
+
+        | Rule | What it guarantees |
+        |---|---|
+        | **Require pull request reviews** | No one merges alone; at least N approved reviews |
+        | **Require status checks** | CI (tests, SAST, secret scan) must be green |
+        | **Require signed commits** | Every commit must carry a verified signature |
+        | **Block force pushes** | The branch history cannot be rewritten |
+        | **Require linear history** | No messy merge commits, readable history |
+        | **Require CODEOWNERS review** | Sensitive files require their owners' approval |
+
+        The setting that makes all the difference is **"Do not allow bypassing the above settings"** (or
+        *Include administrators*): without it, an administrator can ignore every rule, and the protection
+        becomes theoretical. Good protection applies **to everyone**, including you.
+
+        These rules turn the checks of the previous lessons into **obligations**: the CI secret scan only
+        matters if "status checks must pass" is ticked; signed commits are only guaranteed if "require
+        signed commits" is enabled.
+  - heading:
+      fr: "CODEOWNERS : exiger les bonnes revues"
+      en: "CODEOWNERS: requiring the right reviews"
+    body:
+      fr: |
+        Un fichier **`CODEOWNERS`** (à la racine, dans `.github/` ou `.gitlab/`) associe des chemins de
+        fichiers à des **propriétaires**. Couplé à la règle « Require review from Code Owners », il force
+        l'approbation des bonnes personnes sur les parties sensibles du dépôt.
+
+        ```text
+        # Each line: a path pattern, then the owners (users or @teams)
+        *                       @acme/dev-team
+        /.github/workflows/      @acme/security
+        /infra/                  @acme/platform @acme/security
+        /CODEOWNERS              @acme/security
+        ```
+
+        L'intérêt pour la sécurité est direct : une modification d'un **workflow CI** (là où vivent les
+        secrets et les permissions) ou du code d'**infrastructure** ne peut pas être fusionnée sans l'aval
+        de l'équipe sécurité. On évite ainsi qu'un développeur, même bien intentionné, n'affaiblisse un
+        pipeline sans qu'un spécialiste le voie.
+
+        Le dernier chemin de l'exemple est important : rendre l'équipe sécurité propriétaire du fichier
+        `CODEOWNERS` lui-même empêche de contourner la règle en s'ajoutant discrètement comme propriétaire.
+      en: |
+        A **`CODEOWNERS`** file (at the root, in `.github/` or `.gitlab/`) maps file paths to **owners**.
+        Combined with the "Require review from Code Owners" rule, it forces the right people to approve the
+        sensitive parts of the repo.
+
+        ```text
+        # Each line: a path pattern, then the owners (users or @teams)
+        *                       @acme/dev-team
+        /.github/workflows/      @acme/security
+        /infra/                  @acme/platform @acme/security
+        /CODEOWNERS              @acme/security
+        ```
+
+        The security benefit is direct: a change to a **CI workflow** (where secrets and permissions live)
+        or to **infrastructure** code cannot be merged without the security team's sign-off. This prevents
+        a developer, even a well-meaning one, from weakening a pipeline without a specialist seeing it.
+
+        The last path in the example matters: making the security team the owner of the `CODEOWNERS` file
+        itself prevents someone from bypassing the rule by quietly adding themselves as an owner.
+  - heading:
+      fr: "Nettoyer l'historique : révoquer d'abord, filtrer ensuite"
+      en: "Cleaning the history: rotate first, filter second"
+    body:
+      fr: |
+        Un secret a fini dans l'historique malgré tout. L'ordre des opérations n'est **pas négociable** :
+
+        1. **RÉVOQUER d'abord.** Le secret a été exposé ; considérez-le comme compromis. Changez-le,
+           régénérez la clé, invalidez l'ancienne **tout de suite**. Nettoyer l'historique d'un secret
+           encore valide ne protège de rien : quelqu'un a peut-être déjà cloné le dépôt.
+        2. **NETTOYER ensuite.** Une fois le secret inutile, retirez-le de l'historique pour l'hygiène du
+           dépôt, avec **`git filter-repo`** (l'outil recommandé ; `filter-branch` est déprécié et `BFG`
+           est une alternative).
+
+        ```bash
+        pip install git-filter-repo
+        # Replace every occurrence of the secret in the WHOLE history
+        git filter-repo --replace-text <(echo 'AKIAIOSFODNN7EXAMPLE==>REDACTED')
+        ```
+
+        `filter-repo` **réécrit tous les commits** : leurs empreintes (*hashes*) changent. C'est une
+        opération lourde et partagée :
+
+        - Elle nécessite un **force-push**, donc de lever temporairement la protection de branche.
+        - Tous les collègues doivent **re-cloner** (leur ancien historique ne correspond plus).
+        - Les anciens commits peuvent survivre dans les *forks*, les caches de la plateforme et les clones
+          déjà faits — d'où l'étape 1, non négociable.
+
+        Pour cibler un fichier entier plutôt qu'une chaîne, on utilise `--path fichier --invert-paths`
+        (supprime ce fichier de tout l'historique).
+      en: |
+        A secret ended up in the history anyway. The order of operations is **non-negotiable**:
+
+        1. **ROTATE first.** The secret was exposed; treat it as compromised. Change it, regenerate the key,
+           invalidate the old one **right away**. Cleaning the history of a still-valid secret protects
+           nothing: someone may already have cloned the repo.
+        2. **CLEAN second.** Once the secret is useless, remove it from the history for repo hygiene, with
+           **`git filter-repo`** (the recommended tool; `filter-branch` is deprecated and `BFG` is an
+           alternative).
+
+        ```bash
+        pip install git-filter-repo
+        # Replace every occurrence of the secret in the WHOLE history
+        git filter-repo --replace-text <(echo 'AKIAIOSFODNN7EXAMPLE==>REDACTED')
+        ```
+
+        `filter-repo` **rewrites every commit**: their hashes change. It is a heavy, shared operation:
+
+        - It requires a **force-push**, so you must temporarily lift the branch protection.
+        - Every colleague must **re-clone** (their old history no longer matches).
+        - Old commits may survive in *forks*, platform caches and already-made clones — hence step 1, the
+          non-negotiable one.
+
+        To target a whole file rather than a string, use `--path file --invert-paths` (removes that file
+        from the entire history).
+
+examples:
+  - title:
+      fr: "Un ruleset de branche en JSON (API GitHub)"
+      en: "A branch ruleset as JSON (GitHub API)"
+    file: ruleset.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "name": "protect-main",
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+        "rules": [
+          { "type": "pull_request",
+            "parameters": {
+              "required_approving_review_count": 2,
+              "require_code_owner_review": true,
+              "dismiss_stale_reviews_on_push": true
+            }
+          },
+          { "type": "required_signatures" },
+          { "type": "required_status_checks",
+            "parameters": {
+              "required_status_checks": [
+                { "context": "secret-scan" },
+                { "context": "sast" }
+              ]
+            }
+          },
+          { "type": "non_fast_forward" },
+          { "type": "deletion" }
+        ],
+        "bypass_actors": []
+      }
+    note:
+      fr: "`non_fast_forward` interdit le force-push, `required_signatures` exige des commits signés, `required_status_checks` impose que les jobs `secret-scan` et `sast` soient verts. Le point clé : `bypass_actors` est **vide**, donc personne (pas même un admin) ne contourne ces règles."
+      en: "`non_fast_forward` forbids force-push, `required_signatures` requires signed commits, `required_status_checks` makes the `secret-scan` and `sast` jobs mandatory. The key point: `bypass_actors` is **empty**, so no one (not even an admin) bypasses these rules."
+
+  - title:
+      fr: "Un fichier CODEOWNERS orienté sécurité"
+      en: "A security-oriented CODEOWNERS file"
+    file: .github/CODEOWNERS
+    lang: text
+    kind: secure
+    code: |
+      # Later rules win over earlier ones for the same file.
+      # Default owner for everything
+      *                        @acme/dev-team
+
+      # CI pipelines hold secrets and permissions: security must review
+      /.github/workflows/      @acme/security
+
+      # Infrastructure as code: platform AND security must both approve
+      /infra/                  @acme/platform @acme/security
+      /terraform/              @acme/platform @acme/security
+
+      # The ownership file itself: only security can change who owns what
+      /.github/CODEOWNERS      @acme/security
+    note:
+      fr: "Les chemins les plus sensibles (workflows, infra) exigent l'accord de l'équipe sécurité. Rendre `CODEOWNERS` propriétaire de lui-même empêche de contourner la règle en s'auto-ajoutant. Couplez ce fichier à « Require review from Code Owners » dans le ruleset."
+      en: "The most sensitive paths (workflows, infra) require the security team's approval. Making `CODEOWNERS` own itself prevents bypassing the rule by self-adding. Pair this file with \"Require review from Code Owners\" in the ruleset."
+
+  - title:
+      fr: "La bonne séquence : révoquer PUIS nettoyer"
+      en: "The right sequence: rotate THEN clean"
+    file: remove-secret.sh
+    lang: bash
+    kind: secure
+    code: |
+      # === STEP 1 (FIRST, ALWAYS): rotate the exposed secret ===
+      # The key below leaked in a past commit. Treat it as compromised:
+      # - create a new key in the AWS console / your vault
+      # - update the CI secret and the running services
+      # - DISABLE the old key:  aws iam update-access-key --status Inactive ...
+      # Only once the old key is useless do we touch the history.
+
+      # === STEP 2: rewrite the history to remove the string ===
+      pip install git-filter-repo
+
+      # Replace every occurrence of the old key across ALL commits
+      git filter-repo --replace-text <(echo 'AKIAIOSFODNN7EXAMPLE==>REDACTED')
+
+      # filter-repo rewrote every hash. The branch must be force-pushed,
+      # which means temporarily lifting branch protection, then restoring it.
+      git push --force origin main
+
+      # Every teammate must now re-clone: their old history no longer matches.
+    output: |
+      Parsed 357 commits
+      HEAD is now at 2b9f0c1 Update settings
+      Rewrote 357 commits in 1.84 seconds
+    note:
+      fr: "L'ordre est **impératif** : révoquer d'abord (étape 1), nettoyer ensuite (étape 2). Un secret déjà exposé doit être changé car des clones ont pu le copier ; `filter-repo` ne récupère pas ces copies. Le nettoyage ne sert que l'hygiène du dépôt, jamais la révocation."
+      en: "The order is **mandatory**: rotate first (step 1), clean second (step 2). An already-exposed secret must be changed because clones may have copied it; `filter-repo` cannot reach those copies. The cleanup only serves repo hygiene, never the rotation."
+
+  - title:
+      fr: "Supprimer un fichier entier de tout l'historique"
+      en: "Removing a whole file from the entire history"
+    file: purge-file.sh
+    lang: bash
+    kind: secure
+    code: |
+      # A ".env" file was committed long ago. AFTER rotating every secret it held,
+      # purge the file from the full history.
+      # --invert-paths: keep everything EXCEPT the given path
+      git filter-repo --path .env --invert-paths
+
+      # Verify the file is gone from every commit (count must be 0)
+      git log --all --oneline -- .env | wc -l
+    output: |
+      Parsed 357 commits
+      Rewrote 357 commits in 1.71 seconds
+      0
+    note:
+      fr: "`--path .env --invert-paths` retire `.env` de **tous** les commits. Comme toujours, cela ne remplace pas la révocation des secrets qu'il contenait ; cela réécrit l'historique (force-push + re-clone pour toute l'équipe)."
+      en: "`--path .env --invert-paths` removes `.env` from **every** commit. As always, this does not replace rotating the secrets it held; it rewrites history (force-push + re-clone for the whole team)."
+
+mistake:
+  fr: |
+    **Nettoyer l'historique sans avoir révoqué le secret, ou laisser les administrateurs contourner les règles.**
+
+    Deux pièges de fin de parcours. D'abord, lancer `git filter-repo` sur un secret encore valide donne un
+    faux sentiment de sécurité : des clones, des forks et des caches de la plateforme ont pu le copier, et
+    `filter-repo` ne les atteint pas. **Révoquez toujours d'abord.** Ensuite, une protection de branche qui
+    exclut les administrateurs (« allow bypassing ») ne protège rien le jour où ça compte : les règles
+    doivent s'appliquer à **tout le monde**, `bypass_actors` vide.
+  en: |
+    **Cleaning the history without rotating the secret, or letting administrators bypass the rules.**
+
+    Two end-of-course traps. First, running `git filter-repo` on a still-valid secret gives a false sense
+    of security: clones, forks and platform caches may have copied it, and `filter-repo` cannot reach them.
+    **Always rotate first.** Second, a branch protection that excludes administrators ("allow bypassing")
+    protects nothing on the day it matters: the rules must apply to **everyone**, with `bypass_actors`
+    empty.
+
+bestPractice:
+  fr: |
+    - **Protégez `main`** : revues obligatoires, status checks verts, commits signés, pas de force-push.
+    - **Appliquez les règles à tout le monde** (`bypass_actors` vide, « include administrators »).
+    - **Utilisez `CODEOWNERS`** pour exiger l'aval de la sécurité sur les workflows et l'infrastructure.
+    - **Face à une fuite : révoquez d'abord, nettoyez ensuite** — jamais l'inverse.
+    - **Préférez `git filter-repo`** à `filter-branch` (déprécié) ; prévenez l'équipe (force-push + re-clone).
+    - **Reliez les contrôles** : le scan de secrets en CI n'a de valeur que s'il est un *required status check*.
+  en: |
+    - **Protect `main`**: mandatory reviews, green status checks, signed commits, no force-push.
+    - **Apply the rules to everyone** (`bypass_actors` empty, "include administrators").
+    - **Use `CODEOWNERS`** to require security sign-off on workflows and infrastructure.
+    - **On a leak: rotate first, clean second** — never the other way round.
+    - **Prefer `git filter-repo`** over `filter-branch` (deprecated); warn the team (force-push + re-clone).
+    - **Connect the checks**: the CI secret scan only has value if it is a *required status check*.
+
+exercise:
+  statement:
+    fr: |
+      Un développeur a commité il y a trois semaines un fichier `config/prod.env` contenant une vraie clé
+      d'API de paiement. Le dépôt est partagé avec toute l'équipe et possède une branche `main` protégée.
+
+      1. Dans quel **ordre** réalisez-vous les actions suivantes, et pourquoi : (a) retirer le fichier de
+         l'historique, (b) révoquer et régénérer la clé d'API ?
+      2. Donnez la commande `git filter-repo` qui supprime `config/prod.env` de **tout** l'historique.
+      3. Citez deux conséquences de cette réécriture pour l'équipe, et une règle de protection de branche
+         qu'il faudra temporairement lever.
+    en: |
+      Three weeks ago a developer committed a `config/prod.env` file containing a real payment API key. The
+      repo is shared with the whole team and has a protected `main` branch.
+
+      1. In which **order** do you perform these actions, and why: (a) remove the file from the history,
+         (b) rotate and regenerate the API key?
+      2. Give the `git filter-repo` command that deletes `config/prod.env` from the **entire** history.
+      3. Name two consequences of this rewrite for the team, and one branch protection rule that will have
+         to be temporarily lifted.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. ORDER: (b) rotate FIRST, then (a) clean the history.
+      #    The key was exposed for three weeks on a shared repo: it is compromised.
+      #    Clones, forks and caches may already hold it, and filter-repo cannot
+      #    reach them. So revoke and regenerate the key BEFORE anything else.
+
+      # 2. Remove the file from every commit of the history
+      git filter-repo --path config/prod.env --invert-paths
+
+      # 3a. Consequences: every commit hash changed, so
+      #       - a force-push is required on main
+      #       - every teammate must re-clone (their old history no longer matches)
+      # 3b. Rule to lift temporarily: "Block force pushes" (non_fast_forward),
+      #     then re-enable it right after the push.
+      git push --force origin main
+    note:
+      fr: "Le point noté de l'exercice est l'ordre : **révoquer d'abord**. Supprimer le fichier avec `--invert-paths` réécrit tout l'historique ; il faut lever « Block force pushes » le temps du push, puis la réactiver. La clé, elle, est déjà neutralisée."
+      en: "The graded point is the order: **rotate first**. Deleting the file with `--invert-paths` rewrites the whole history; you must lift \"Block force pushes\" for the push, then re-enable it. The key itself is already neutralised."
+
+quiz:
+  - q:
+      fr: "Face à un secret trouvé dans l'historique, quelle est la toute première action ?"
+      en: "When a secret is found in the history, what is the very first action?"
+    options:
+      fr:
+        - "Révoquer et régénérer le secret"
+        - "Lancer `git filter-repo`"
+        - "Supprimer le dépôt"
+        - "Ajouter le fichier à `.gitignore`"
+      en:
+        - "Rotate and regenerate the secret"
+        - "Run `git filter-repo`"
+        - "Delete the repository"
+        - "Add the file to `.gitignore`"
+    answer: 0
+    why:
+      fr: "Le secret a été exposé : des clones ou forks ont pu le copier. Révoquer d'abord le rend inutile ; nettoyer l'historique ne sert ensuite que l'hygiène du dépôt."
+      en: "The secret was exposed: clones or forks may have copied it. Rotating first makes it useless; cleaning the history afterwards only serves repo hygiene."
+  - q:
+      fr: "Quel réglage rend une protection de branche réellement efficace ?"
+      en: "Which setting makes a branch protection truly effective?"
+    options:
+      fr:
+        - "Autoriser les administrateurs à la contourner"
+        - "La limiter aux nouveaux contributeurs"
+        - "L'appliquer à tout le monde (bypass_actors vide)"
+        - "La désactiver pendant les week-ends"
+      en:
+        - "Allowing administrators to bypass it"
+        - "Limiting it to new contributors"
+        - "Applying it to everyone (empty bypass_actors)"
+        - "Disabling it on weekends"
+    answer: 2
+    why:
+      fr: "Une protection que les administrateurs peuvent ignorer est théorique. Les règles doivent s'appliquer à tous, `bypass_actors` vide."
+      en: "A protection administrators can ignore is theoretical. The rules must apply to everyone, with `bypass_actors` empty."
+  - q:
+      fr: "À quoi sert un fichier `CODEOWNERS` ?"
+      en: "What is a `CODEOWNERS` file for?"
+    options:
+      fr:
+        - "À chiffrer les fichiers sensibles"
+        - "À exiger l'approbation de propriétaires désignés sur certains chemins"
+        - "À lister les secrets autorisés"
+        - "À signer automatiquement les commits"
+      en:
+        - "To encrypt sensitive files"
+        - "To require approval from designated owners on certain paths"
+        - "To list the allowed secrets"
+        - "To sign commits automatically"
+    answer: 1
+    why:
+      fr: "`CODEOWNERS` associe des chemins à des propriétaires ; avec « require Code Owners review », une modification de ces fichiers exige leur approbation."
+      en: "`CODEOWNERS` maps paths to owners; with \"require Code Owners review\", changing those files requires their approval."
+  - q:
+      fr: "Quel effet a `git filter-repo` sur les commits existants ?"
+      en: "What effect does `git filter-repo` have on existing commits?"
+    options:
+      fr:
+        - "Il ne change rien aux empreintes"
+        - "Il chiffre chaque commit"
+        - "Il supprime uniquement le dernier commit"
+        - "Il réécrit les commits, dont les empreintes changent"
+      en:
+        - "It changes nothing about the hashes"
+        - "It encrypts each commit"
+        - "It removes only the last commit"
+        - "It rewrites the commits, whose hashes change"
+    answer: 3
+    why:
+      fr: "`filter-repo` réécrit l'historique : chaque empreinte change, ce qui impose un force-push et un re-clone pour toute l'équipe."
+      en: "`filter-repo` rewrites history: every hash changes, which forces a force-push and a re-clone for the whole team."
+  - q:
+      fr: "Quelle règle de ruleset empêche de réécrire l'historique d'une branche ?"
+      en: "Which ruleset rule prevents rewriting a branch's history?"
+    options:
+      fr:
+        - "Block force pushes (non_fast_forward)"
+        - "Require signed commits"
+        - "Require status checks"
+        - "Require pull request reviews"
+      en:
+        - "Block force pushes (non_fast_forward)"
+        - "Require signed commits"
+        - "Require status checks"
+        - "Require pull request reviews"
+    answer: 0
+    why:
+      fr: "Interdire le force-push (`non_fast_forward`) empêche d'écraser l'historique de la branche ; c'est justement ce qu'il faut lever temporairement pour un nettoyage par `filter-repo`."
+      en: "Blocking force-push (`non_fast_forward`) prevents overwriting the branch history; it is exactly what must be temporarily lifted for a `filter-repo` cleanup."

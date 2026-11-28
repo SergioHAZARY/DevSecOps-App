@@ -1,0 +1,479 @@
+description:
+  fr: "Injection de commandes et traversée de répertoires : exécuter sans shell et résoudre les chemins en toute sécurité, en 4 langages."
+  en: "Command injection and path traversal: executing without a shell and resolving paths safely, in 4 languages."
+duration: 30
+
+intro:
+  fr: |
+    Deux failles cousines naissent quand une entrée utilisateur atteint le système d'exploitation sans
+    contrôle. L'**injection de commandes** fait exécuter au serveur une commande que l'attaquant a glissée dans
+    un champ. La **traversée de répertoires** (*path traversal*) fait lire ou écrire un fichier hors du dossier
+    prévu, grâce à des `../`.
+
+    Imaginez un automate de cuisine à qui vous dictez une recette. Si vous dites « ajoute du sel ; puis ouvre
+    le coffre et donne-moi l'argent », un automate naïf obéit aux deux ordres (injection). Si vous demandez le
+    plat « ../../chambre-forte », il sort du placard des recettes (traversée). La défense est la même idée dans
+    les deux cas : **ne jamais laisser l'entrée décider de la structure** de la commande ou du chemin.
+
+    Dans cette leçon, vous verrez un `ping` injectable puis sa version **sans shell** (`subprocess`/`execFile`),
+    et un téléchargement de fichier vulnérable au `../` puis sa correction par **jointure sécurisée**, en
+    Python, Node.js, PHP et Java.
+  en: |
+    Two cousin flaws appear when user input reaches the operating system unchecked. **Command injection** makes
+    the server run a command the attacker slipped into a field. **Path traversal** makes it read or write a
+    file outside the intended folder, thanks to `../`.
+
+    Picture a kitchen robot you dictate a recipe to. If you say "add salt; then open the safe and give me the
+    money", a naive robot obeys both orders (injection). If you ask for dish "../../strongroom", it steps
+    outside the recipe cupboard (traversal). The defense is the same idea in both cases: **never let the input
+    decide the structure** of the command or the path.
+
+    In this lesson you will see an injectable `ping` then its **shell-free** version
+    (`subprocess`/`execFile`), and a file download vulnerable to `../` then its fix by **safe join**, in
+    Python, Node.js, PHP and Java.
+
+sections:
+  - heading:
+      fr: "Injection de commandes : supprimer le shell"
+      en: "Command injection: remove the shell"
+    body:
+      fr: |
+        L'injection de commandes survient quand on construit une ligne de commande par concaténation et qu'on
+        la passe à un **shell** (`/bin/sh -c`, `cmd.exe`). Le shell interprète alors les métacaractères :
+
+        | Métacaractère | Effet |
+        |---|---|
+        | `;` `&&` `\|\|` | Enchaîner une deuxième commande |
+        | `\|` | Rediriger vers une autre commande |
+        | `` ` `` `$( )` | Substitution de commande |
+        | `>` `<` | Redirection de fichier |
+
+        Une saisie comme `8.8.8.8; cat /etc/passwd` sur une fonction « ping » devient deux commandes. La
+        correction n'est **pas** de filtrer ces caractères (on en oublie toujours), mais de **ne pas utiliser
+        de shell** : on passe la commande sous forme de **liste d'arguments** (`["ping", "-c", "1", host]`).
+        Sans shell, `8.8.8.8; cat /etc/passwd` est traité comme **un seul argument** littéral, donc un nom
+        d'hôte invalide — rien n'est exécuté.
+
+        En Python : `subprocess.run([...], shell=False)` (jamais `shell=True`). En Node : `execFile`/`spawn`
+        (jamais `exec`). En Java : `ProcessBuilder` avec une liste (jamais `Runtime.exec(String)` concaténé).
+      en: |
+        Command injection happens when you build a command line by concatenation and pass it to a **shell**
+        (`/bin/sh -c`, `cmd.exe`). The shell then interprets the metacharacters:
+
+        | Metacharacter | Effect |
+        |---|---|
+        | `;` `&&` `\|\|` | Chain a second command |
+        | `\|` | Pipe into another command |
+        | `` ` `` `$( )` | Command substitution |
+        | `>` `<` | File redirection |
+
+        An input like `8.8.8.8; cat /etc/passwd` on a "ping" feature becomes two commands. The fix is **not**
+        to filter those characters (you always miss one), but to **not use a shell**: pass the command as a
+        **list of arguments** (`["ping", "-c", "1", host]`). Without a shell, `8.8.8.8; cat /etc/passwd` is
+        treated as **one literal argument**, so an invalid hostname — nothing is executed.
+
+        In Python: `subprocess.run([...], shell=False)` (never `shell=True`). In Node: `execFile`/`spawn`
+        (never `exec`). In Java: `ProcessBuilder` with a list (never a concatenated `Runtime.exec(String)`).
+  - heading:
+      fr: "Traversée de répertoires : jointure sécurisée"
+      en: "Path traversal: safe join"
+    body:
+      fr: |
+        La traversée survient quand un nom de fichier fourni par l'utilisateur est **collé** à un dossier de
+        base : `base + "/" + user_input`. Avec `user_input = "../../etc/passwd"`, le chemin final sort du
+        dossier prévu. Les variantes incluent les chemins absolus (`/etc/passwd`), l'encodage (`%2e%2e%2f`) et
+        les séparateurs Windows (`..\\`).
+
+        La bonne méthode :
+
+        1. **Construire** le chemin candidat en joignant base + entrée.
+        2. **Normaliser** (résoudre les `..`) avec `os.path.realpath` / `Path.resolve()` / `realpath()`.
+        3. **Vérifier** que le résultat **commence bien par le dossier de base** canonique ; sinon, refuser.
+
+        ```text
+        base      = /srv/files
+        demandé   = ../../etc/passwd
+        résolu    = /etc/passwd        -> hors de /srv/files -> REFUS
+        ```
+
+        On peut aussi réduire l'entrée à son **nom de base** (`os.path.basename`) quand on ne veut pas de
+        sous-dossiers, et refuser tout nom contenant `/`, `\` ou `..`. La vérification finale sur le chemin
+        **canonique** reste la garde ultime, car elle gère aussi les liens symboliques.
+      en: |
+        Traversal happens when a user-supplied file name is **glued** to a base folder: `base + "/" +
+        user_input`. With `user_input = "../../etc/passwd"`, the final path leaves the intended folder.
+        Variants include absolute paths (`/etc/passwd`), encoding (`%2e%2e%2f`) and Windows separators
+        (`..\\`).
+
+        The right method:
+
+        1. **Build** the candidate path by joining base + input.
+        2. **Normalise** (resolve the `..`) with `os.path.realpath` / `Path.resolve()` / `realpath()`.
+        3. **Check** the result **starts with the canonical base folder**; otherwise, refuse.
+
+        ```text
+        base       = /srv/files
+        requested  = ../../etc/passwd
+        resolved   = /etc/passwd        -> outside /srv/files -> REFUSE
+        ```
+
+        You can also reduce the input to its **base name** (`os.path.basename`) when you want no subfolders,
+        and refuse any name containing `/`, `\` or `..`. The final check on the **canonical** path remains the
+        ultimate guard, because it also handles symbolic links.
+  - heading:
+      fr: "Détection dans le pipeline DevSecOps"
+      en: "Detection in the DevSecOps pipeline"
+    body:
+      fr: |
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST | Bandit (`B602` `shell=True`, `B605`), Semgrep, CodeQL (`py/command-line-injection`, `py/path-injection`) | Entrée utilisateur passée à un shell ou à une ouverture de fichier |
+        | DAST | OWASP ZAP, Nuclei | L'application qui exécute une commande ou lit un fichier hors périmètre |
+        | Revue | Recherche de `shell=True`, `exec(`, `Runtime.exec`, de concaténations de chemins | Les motifs à risque |
+        | Exécution | Utilisateur non-root, conteneur en lecture seule, AppArmor/seccomp | Limite les dégâts si une injection passe |
+
+        La défense en profondeur compte : même avec une injection résiduelle, un conteneur **non-root**, un
+        système de fichiers **en lecture seule** et un profil **seccomp** réduisent fortement ce qu'un
+        attaquant peut faire. Le moindre privilège applicatif reste la meilleure assurance.
+      en: |
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | SAST | Bandit (`B602` `shell=True`, `B605`), Semgrep, CodeQL (`py/command-line-injection`, `py/path-injection`) | User input passed to a shell or a file open |
+        | DAST | OWASP ZAP, Nuclei | The app running a command or reading a file out of scope |
+        | Review | Searching for `shell=True`, `exec(`, `Runtime.exec`, path concatenations | Risky patterns |
+        | Runtime | Non-root user, read-only container, AppArmor/seccomp | Limits the damage if an injection gets through |
+
+        Defense in depth matters: even with a residual injection, a **non-root** container, a **read-only**
+        filesystem and a **seccomp** profile strongly reduce what an attacker can do. Application least
+        privilege remains the best insurance.
+
+examples:
+  - title:
+      fr: "Python - vulnérable : ping via le shell"
+      en: "Python - vulnerable: ping via the shell"
+    file: ping_vulnerable.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import subprocess
+
+      def ping(host):
+          # VULNERABLE: the string is handed to a shell, which interprets ; | && $( )
+          cmd = "ping -c 1 " + host
+          return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
+
+      # host = "8.8.8.8; cat /etc/passwd" would run TWO commands:
+      #   ping -c 1 8.8.8.8   AND   cat /etc/passwd
+      print("A normal host builds:", "ping -c 1 " + "8.8.8.8")
+      print("An attack builds   :", "ping -c 1 " + "8.8.8.8; cat /etc/passwd")
+    output: |
+      A normal host builds: ping -c 1 8.8.8.8
+      An attack builds   : ping -c 1 8.8.8.8; cat /etc/passwd
+    note:
+      fr: "`shell=True` + concaténation = injection de commandes. La charge `8.8.8.8; cat /etc/passwd` devient deux commandes exécutées par `/bin/sh`."
+      en: "`shell=True` + concatenation = command injection. The payload `8.8.8.8; cat /etc/passwd` becomes two commands run by `/bin/sh`."
+
+  - title:
+      fr: "Python - corrigé : liste d'arguments sans shell"
+      en: "Python - fixed: argument list, no shell"
+    file: ping_fixed.py
+    lang: python
+    kind: secure
+    code: |
+      import subprocess
+      import re
+
+      HOSTNAME = re.compile(r"^[a-zA-Z0-9.-]{1,253}$")  # allow-list of valid characters
+
+      def ping(host: str) -> str:
+          # Defense 1: validate the input against an allow-list
+          if not HOSTNAME.match(host):
+              raise ValueError("invalid hostname")
+          # Defense 2: pass an argument LIST with shell=False (the default).
+          # The host is one argument, never parsed by a shell.
+          result = subprocess.run(
+              ["ping", "-c", "1", host],
+              shell=False, capture_output=True, text=True, timeout=5,
+          )
+          return result.stdout
+
+      # The injection payload now fails the allow-list before any execution
+      for host in ["8.8.8.8", "8.8.8.8; cat /etc/passwd"]:
+          try:
+              ping(host)
+              print(f"accepted: {host}")
+          except ValueError:
+              print(f"rejected: {host}")
+    output: |
+      accepted: 8.8.8.8
+      rejected: 8.8.8.8; cat /etc/passwd
+    note:
+      fr: "Même sans la regex, la liste d'arguments suffirait : `8.8.8.8; cat /etc/passwd` serait un seul nom d'hôte invalide. La validation en liste d'autorisation ajoute une barrière."
+      en: "Even without the regex, the argument list would suffice: `8.8.8.8; cat /etc/passwd` would be one invalid hostname. The allow-list validation adds a barrier."
+
+  - title:
+      fr: "Python - traversée de répertoires : collage vulnérable puis jointure sûre"
+      en: "Python - path traversal: vulnerable glue then safe join"
+    file: download.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+
+      BASE = os.path.realpath("/srv/files")
+
+      def read_vulnerable(name: str) -> str:
+          # VULNERABLE: ../../etc/passwd escapes the base directory
+          return os.path.join(BASE, name)
+
+      def safe_path(name: str) -> str:
+          # Build, then resolve .. and symlinks to a canonical absolute path
+          candidate = os.path.realpath(os.path.join(BASE, name))
+          # FIXED: the resolved path must stay inside BASE (os.sep guards a prefix match
+          # so that /srv/files-secret is not accepted as being under /srv/files)
+          if candidate != BASE and not candidate.startswith(BASE + os.sep):
+              raise ValueError("path traversal blocked")
+          return candidate
+
+      for name in ["report.pdf", "../../etc/passwd", "sub/data.csv"]:
+          try:
+              print("OK   ", safe_path(name))
+          except ValueError:
+              print("BLOCK", name)
+    output: |
+      OK    /srv/files/report.pdf
+      BLOCK ../../etc/passwd
+      OK    /srv/files/sub/data.csv
+    note:
+      fr: "On résout le chemin canonique puis on vérifie qu'il reste sous `BASE`. Le `+ os.sep` évite qu'un dossier voisin comme `/srv/files-secret` passe pour un sous-dossier de `/srv/files`."
+      en: "We resolve the canonical path then check it stays under `BASE`. The `+ os.sep` stops a sibling folder like `/srv/files-secret` from passing as a subfolder of `/srv/files`."
+
+  - title:
+      fr: "Node.js, PHP et Java - exécution et chemins sûrs"
+      en: "Node.js, PHP and Java - safe execution and paths"
+    file: safe.js
+    lang: javascript
+    kind: secure
+    code: |
+      const { execFile } = require("node:child_process");
+      const path = require("node:path");
+
+      const BASE = path.resolve("/srv/files");
+
+      // Command: execFile runs the binary directly, with no shell to interpret ; | &&
+      function ping(host) {
+        // execFile(file, args) -> host is a single argument, never a shell line
+        return execFile("ping", ["-c", "1", host], { timeout: 5000 });
+      }
+
+      // Path: resolve then confirm the result is still inside BASE
+      function safePath(name) {
+        const resolved = path.resolve(BASE, name);
+        if (resolved !== BASE && !resolved.startsWith(BASE + path.sep)) {
+          throw new Error("path traversal blocked");
+        }
+        return resolved;
+      }
+
+      // PHP equivalent:
+      //   $real = realpath($base . '/' . $name);
+      //   if ($real === false || !str_starts_with($real, $base . DIRECTORY_SEPARATOR)) { http_response_code(403); exit; }
+      //   // and exec without a shell: $p = new Symfony\Component\Process\Process(['ping', '-c', '1', $host]);
+      //
+      // Java equivalent:
+      //   new ProcessBuilder("ping", "-c", "1", host).start();        // no shell
+      //   Path real = base.resolve(name).normalize();
+      //   if (!real.startsWith(base)) throw new SecurityException("traversal");
+
+      console.log(safePath("report.pdf"));
+      console.log(ping ? "ping uses execFile (no shell)" : "");
+    output: |
+      /srv/files/report.pdf
+      ping uses execFile (no shell)
+    note:
+      fr: "Même schéma partout : `execFile`/`ProcessBuilder`/`Process` sans shell, et résolution canonique du chemin avant un `startsWith` sur le dossier de base. `Runtime.exec(String)` et `exec()` concaténés sont à bannir."
+      en: "Same pattern everywhere: `execFile`/`ProcessBuilder`/`Process` with no shell, and canonical path resolution before a `startsWith` on the base folder. Concatenated `Runtime.exec(String)` and `exec()` are banned."
+
+mistake:
+  fr: |
+    **Croire qu'on peut « nettoyer » l'entrée en retirant `;`, `&&` ou `..`.**
+
+    Les listes de caractères interdits sont toujours incomplètes : on oublie `|`, `` ` ``, `$()`, les
+    nouvelles lignes, l'encodage URL, les séparateurs Windows `..\\`, ou les chemins absolus. La vraie
+    correction est structurelle : pour les commandes, **ne pas utiliser de shell** et passer une liste
+    d'arguments ; pour les fichiers, **résoudre le chemin canonique** et vérifier qu'il reste dans le dossier
+    autorisé. Le filtrage par liste noire est au mieux une défense secondaire, jamais la protection principale.
+  en: |
+    **Believing you can "sanitise" input by stripping `;`, `&&` or `..`.**
+
+    Block-lists of forbidden characters are always incomplete: you forget `|`, `` ` ``, `$()`, newlines, URL
+    encoding, Windows separators `..\\`, or absolute paths. The real fix is structural: for commands, **do not
+    use a shell** and pass an argument list; for files, **resolve the canonical path** and check it stays in
+    the allowed folder. Block-list filtering is at best a secondary defense, never the primary protection.
+
+bestPractice:
+  fr: |
+    - **Pas de shell** : `subprocess.run([...], shell=False)`, `execFile`/`spawn`, `ProcessBuilder` avec une liste.
+    - **Mieux : pas de commande du tout** quand une bibliothèque fait le travail (résolution DNS, redimensionnement d'image...).
+    - **Chemins** : joindre, résoudre le chemin canonique, puis vérifier le préfixe du dossier de base (`+ os.sep`).
+    - **Liste d'autorisation** des caractères ou des valeurs attendues, en complément de la correction structurelle.
+    - **Moindre privilège à l'exécution** : utilisateur non-root, FS en lecture seule, seccomp/AppArmor.
+    - **SAST en CI** : Bandit (`B602`/`B605`), Semgrep, CodeQL bloquent `shell=True` et les chemins non validés.
+  en: |
+    - **No shell**: `subprocess.run([...], shell=False)`, `execFile`/`spawn`, `ProcessBuilder` with a list.
+    - **Better: no command at all** when a library does the job (DNS resolution, image resizing...).
+    - **Paths**: join, resolve the canonical path, then check the base-folder prefix (`+ os.sep`).
+    - **Allow-list** of expected characters or values, complementing the structural fix.
+    - **Runtime least privilege**: non-root user, read-only FS, seccomp/AppArmor.
+    - **SAST in CI**: Bandit (`B602`/`B605`), Semgrep, CodeQL block `shell=True` and unvalidated paths.
+
+exercise:
+  statement:
+    fr: |
+      Cet endpoint convertit une image avec l'outil `convert`, et sert ensuite le résultat :
+
+      ```python
+      @app.get("/thumb")
+      def thumb():
+          name = request.args["file"]
+          os.system(f"convert /srv/img/{name} -resize 100x100 /tmp/out.png")
+          return send_file("/srv/img/" + name)
+      ```
+
+      1. Montrez une charge utile qui exécute une commande arbitraire, et une autre qui lit `/etc/passwd`.
+      2. Réécrivez l'endpoint : exécution sans shell et chemin de fichier sécurisé.
+    en: |
+      This endpoint converts an image with the `convert` tool, then serves the result:
+
+      ```python
+      @app.get("/thumb")
+      def thumb():
+          name = request.args["file"]
+          os.system(f"convert /srv/img/{name} -resize 100x100 /tmp/out.png")
+          return send_file("/srv/img/" + name)
+      ```
+
+      1. Show a payload that runs an arbitrary command, and another that reads `/etc/passwd`.
+      2. Rewrite the endpoint: shell-free execution and a safe file path.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import os
+      import subprocess
+
+      BASE = os.path.realpath("/srv/img")
+
+      # 1. Command injection: file = "x.png; id"  -> os.system runs `id` as a 2nd command.
+      #    Path traversal:    file = "../../etc/passwd" -> send_file serves /etc/passwd.
+
+      def safe_path(name: str) -> str:
+          candidate = os.path.realpath(os.path.join(BASE, name))
+          if candidate != BASE and not candidate.startswith(BASE + os.sep):
+              raise ValueError("path traversal blocked")
+          return candidate
+
+      def thumb(name: str):
+          src = safe_path(name)                 # 2a. canonical path inside BASE
+          out = "/tmp/out.png"
+          # 2b. argument list + shell=False: 'name' can never start a second command
+          subprocess.run(
+              ["convert", src, "-resize", "100x100", out],
+              shell=False, check=True, timeout=10,
+          )
+          return out
+    note:
+      fr: "Deux corrections indépendantes : `subprocess.run([...])` sans shell neutralise l'injection, et `safe_path` neutralise la traversée. Chacune couvre une faille distincte de l'endpoint d'origine."
+      en: "Two independent fixes: `subprocess.run([...])` without a shell neutralises the injection, and `safe_path` neutralises the traversal. Each covers a distinct flaw in the original endpoint."
+
+quiz:
+  - q:
+      fr: "Quelle est la correction fondamentale contre l'injection de commandes ?"
+      en: "What is the fundamental fix against command injection?"
+    options:
+      fr:
+        - "Retirer les caractères `;` et `&&` de l'entrée"
+        - "Exécuter sans shell en passant une liste d'arguments"
+        - "Mettre l'entrée entre guillemets dans la commande"
+        - "Chiffrer l'entrée avant de l'exécuter"
+      en:
+        - "Strip the `;` and `&&` characters from the input"
+        - "Execute without a shell by passing an argument list"
+        - "Quote the input inside the command"
+        - "Encrypt the input before running it"
+    answer: 1
+    why:
+      fr: "Sans shell, l'entrée est un argument littéral : aucun métacaractère n'est interprété. Le filtrage de caractères est toujours contournable."
+      en: "Without a shell, the input is a literal argument: no metacharacter is interpreted. Character filtering is always bypassable."
+  - q:
+      fr: "En Python, quel appel est dangereux pour exécuter une commande avec une entrée utilisateur ?"
+      en: "In Python, which call is dangerous for running a command with user input?"
+    options:
+      fr:
+        - "`subprocess.run([\"ping\", \"-c\", \"1\", host])`"
+        - "`subprocess.run(cmd, shell=True)`"
+        - "`subprocess.run([...], shell=False)`"
+        - "`subprocess.run([...], timeout=5)`"
+      en:
+        - "`subprocess.run([\"ping\", \"-c\", \"1\", host])`"
+        - "`subprocess.run(cmd, shell=True)`"
+        - "`subprocess.run([...], shell=False)`"
+        - "`subprocess.run([...], timeout=5)`"
+    answer: 1
+    why:
+      fr: "`shell=True` passe la chaîne à `/bin/sh`, qui interprète les métacaractères ; Bandit le signale avec la règle `B602`."
+      en: "`shell=True` hands the string to `/bin/sh`, which interprets metacharacters; Bandit flags it with rule `B602`."
+  - q:
+      fr: "Comment vérifier qu'un chemin construit à partir d'une entrée reste dans le dossier autorisé ?"
+      en: "How do you verify a path built from input stays in the allowed folder?"
+    options:
+      fr:
+        - "En vérifiant que le nom ne dépasse pas 255 caractères"
+        - "En remplaçant les `/` par des `_`"
+        - "En résolvant le chemin canonique puis en contrôlant qu'il commence par le dossier de base"
+        - "En ajoutant l'extension `.txt` au nom"
+      en:
+        - "By checking the name is at most 255 characters"
+        - "By replacing `/` with `_`"
+        - "By resolving the canonical path then checking it starts with the base folder"
+        - "By appending the `.txt` extension to the name"
+    answer: 2
+    why:
+      fr: "La résolution canonique (`realpath`/`resolve`) élimine les `..` et les liens ; le contrôle du préfixe garantit que le fichier est bien sous la racine autorisée."
+      en: "Canonical resolution (`realpath`/`resolve`) removes `..` and links; the prefix check guarantees the file is under the allowed root."
+  - q:
+      fr: "Quelle charge utile illustre une traversée de répertoires ?"
+      en: "Which payload illustrates a path traversal?"
+    options:
+      fr:
+        - "`' OR '1'='1`"
+        - "`<script>alert(1)</script>`"
+        - "`8.8.8.8; cat /etc/passwd`"
+        - "`../../etc/passwd`"
+      en:
+        - "`' OR '1'='1`"
+        - "`<script>alert(1)</script>`"
+        - "`8.8.8.8; cat /etc/passwd`"
+        - "`../../etc/passwd`"
+    answer: 3
+    why:
+      fr: "Les `../` font remonter l'arborescence au-dessus du dossier prévu ; les autres charges correspondent à SQLi, XSS et injection de commandes."
+      en: "The `../` climb above the intended folder; the other payloads are SQLi, XSS and command injection."
+  - q:
+      fr: "Quelle mesure d'exécution limite les dégâts d'une injection résiduelle ?"
+      en: "Which runtime measure limits the damage of a residual injection?"
+    options:
+      fr:
+        - "Un conteneur non-root, en lecture seule, avec seccomp"
+        - "Un nom de fichier plus long"
+        - "Un cache HTTP plus agressif"
+        - "Un certificat TLS renouvelé plus souvent"
+      en:
+        - "A non-root, read-only container with seccomp"
+        - "A longer file name"
+        - "A more aggressive HTTP cache"
+        - "A TLS certificate renewed more often"
+    answer: 0
+    why:
+      fr: "Le moindre privilège à l'exécution (non-root, FS en lecture seule, seccomp) réduit fortement ce qu'un attaquant peut faire même si une injection passe."
+      en: "Runtime least privilege (non-root, read-only FS, seccomp) strongly reduces what an attacker can do even if an injection gets through."

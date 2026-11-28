@@ -1,0 +1,355 @@
+description:
+  fr: "Repérer et corriger les erreurs YAML les plus fréquentes, et automatiser leur détection avec yamllint."
+  en: "Spot and fix the most common YAML errors, and automate their detection with yamllint."
+duration: 20
+
+intro:
+  fr: |
+    Le YAML est facile à lire mais facile à casser. La plupart des incidents de production « bêtes » viennent
+    d'une **erreur de syntaxe YAML** : un espace de trop, une tabulation invisible, un deux-points mal placé.
+    Comme le fichier reste parfois techniquement valide mais sémantiquement faux (le piège de la Norvège), le
+    bug peut passer inaperçu jusqu'à la mise en production.
+
+    La parade est double : **connaître** les erreurs classiques pour les éviter, et **automatiser** leur
+    détection avec un *linter* comme **yamllint**. Un linter lit votre fichier avant vous et signale les
+    problèmes de style et de syntaxe.
+
+    Imaginez un correcteur orthographique pour vos fichiers de configuration. Dans cette dernière leçon du
+    cours, vous passerez en revue les pièges les plus fréquents, apprendrez à lire un message d'erreur
+    yamllint, et intégrerez le linter dans un pipeline CI pour qu'aucun YAML cassé n'atteigne la production.
+  en: |
+    YAML is easy to read but easy to break. Most "silly" production incidents come from a **YAML syntax error**:
+    one space too many, an invisible tab, a misplaced colon. Since the file is sometimes technically valid but
+    semantically wrong (the Norway problem), the bug can go unnoticed until it reaches production.
+
+    The defence is twofold: **know** the classic errors to avoid them, and **automate** their detection with a
+    *linter* such as **yamllint**. A linter reads your file before you do and reports style and syntax issues.
+
+    Picture a spell-checker for your configuration files. In this final lesson of the course you will review the
+    most common traps, learn to read a yamllint error message, and wire the linter into a CI pipeline so no
+    broken YAML reaches production.
+
+sections:
+  - heading:
+      fr: "Les erreurs qui reviennent toujours"
+      en: "The errors that keep coming back"
+    body:
+      fr: |
+        | Erreur | Symptôme | Correction |
+        |---|---|---|
+        | Tabulation pour indenter | `found character '\t' that cannot start any token` | Remplacer par des espaces |
+        | Indentation incohérente | `mapping values are not allowed here` | Aligner sur 2 espaces |
+        | Pas d'espace après `:` | La valeur est collée à la clé | Écrire `key: value` |
+        | Scalaire ambigu non quoté | `NO`, `yes`, `1.10` mal typés | Mettre des guillemets |
+        | Deux-points dans une valeur | `time: 10:30` casse le parsing | Quoter : `"10:30"` |
+        | Clé dupliquée | La seconde écrase la première en silence | Supprimer le doublon |
+
+        La plus sournoise est la **clé dupliquée** : YAML garde silencieusement la dernière valeur. Votre
+        réglage semble ignoré alors qu'il est simplement écrasé plus bas dans le fichier. Un linter la détecte
+        immédiatement.
+      en: |
+        | Error | Symptom | Fix |
+        |---|---|---|
+        | Tab for indentation | `found character '\t' that cannot start any token` | Replace with spaces |
+        | Inconsistent indentation | `mapping values are not allowed here` | Align to 2 spaces |
+        | No space after `:` | The value sticks to the key | Write `key: value` |
+        | Unquoted ambiguous scalar | `NO`, `yes`, `1.10` mistyped | Add quotes |
+        | Colon inside a value | `time: 10:30` breaks parsing | Quote it: `"10:30"` |
+        | Duplicate key | The second silently overrides the first | Remove the duplicate |
+
+        The sneakiest is the **duplicate key**: YAML silently keeps the last value. Your setting looks ignored
+        when it is simply overridden later in the file. A linter catches it immediately.
+  - heading:
+      fr: "yamllint : lire, configurer, intégrer en CI"
+      en: "yamllint: read, configure, integrate in CI"
+    body:
+      fr: |
+        **yamllint** s'installe avec `pip install yamllint` et s'exécute avec `yamllint fichier.yaml`. Il
+        affiche la ligne, la colonne et le niveau (`warning` ou `error`) de chaque problème :
+
+        ```text
+        config.yaml
+          3:1   error  wrong indentation: expected 2 but found 4  (indentation)
+          5:81  warning  line too long (95 > 80 characters)  (line-length)
+        ```
+
+        On le configure avec un fichier `.yamllint` à la racine du projet :
+
+        ```yaml
+        extends: default
+        rules:
+          line-length:
+            max: 120          # allow longer lines than the default 80
+          truthy:
+            allowed-values: ["true", "false"]  # forbid yes/no/on/off
+        ```
+
+        La règle `truthy` est précieuse : elle **interdit `yes`/`no`/`on`/`off`** et force `true`/`false`,
+        éliminant le piège de la Norvège. En CI, un `yamllint .` qui échoue bloque la fusion : le YAML cassé
+        n'atteint jamais la production.
+      en: |
+        **yamllint** installs with `pip install yamllint` and runs with `yamllint file.yaml`. It prints the line,
+        column and level (`warning` or `error`) of each problem:
+
+        ```text
+        config.yaml
+          3:1   error  wrong indentation: expected 2 but found 4  (indentation)
+          5:81  warning  line too long (95 > 80 characters)  (line-length)
+        ```
+
+        You configure it with a `.yamllint` file at the project root:
+
+        ```yaml
+        extends: default
+        rules:
+          line-length:
+            max: 120          # allow longer lines than the default 80
+          truthy:
+            allowed-values: ["true", "false"]  # forbid yes/no/on/off
+        ```
+
+        The `truthy` rule is precious: it **forbids `yes`/`no`/`on`/`off`** and forces `true`/`false`,
+        eliminating the Norway problem. In CI, a failing `yamllint .` blocks the merge: broken YAML never reaches
+        production.
+
+examples:
+  - title:
+      fr: "Fichier truffé d'erreurs classiques"
+      en: "File riddled with classic errors"
+    file: broken.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # VULNERABLE: several YAML mistakes on purpose
+      service:
+        name:web-api          # BUG: missing space after the colon
+        enabled: yes          # BUG: Norway-style boolean
+        port: 8080
+          replicas: 3         # BUG: over-indented, not aligned with 'port'
+      service:                # BUG: duplicate key, silently overrides the first
+        timeout: "30"
+    output: |
+      broken.yaml
+        3:3   error  missing space after colon
+        6:5   error  wrong indentation: expected 2 but found 4  (indentation)
+        7:1   error  duplicate key "service"  (key-duplicates)
+        4:12  warning  truthy value should be one of [false, true]  (truthy)
+    note:
+      fr: "Fichier volontairement cassé (`kind: vulnerable`) : espace manquant, `yes`, sur-indentation et clé dupliquée. yamllint liste chaque ligne fautive."
+      en: "Intentionally broken file (`kind: vulnerable`): missing space, `yes`, over-indentation and duplicate key. yamllint lists each faulty line."
+
+  - title:
+      fr: "La version corrigée, propre et sans ambiguïté"
+      en: "The fixed version, clean and unambiguous"
+    file: fixed.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # SECURE: every issue above is corrected
+      service:
+        name: web-api         # space after the colon
+        enabled: true         # explicit boolean, no Norway trap
+        port: 8080
+        replicas: 3           # aligned on 2 spaces, same level as 'port'
+        timeout: "30"         # merged into the single 'service' key
+    output: |
+      fixed.yaml
+      (no errors, no warnings)
+    note:
+      fr: "Un seul mapping `service`, indentation à 2 espaces, `true` explicite, valeurs quotées quand il le faut : yamllint ne signale plus rien."
+      en: "A single `service` mapping, 2-space indentation, explicit `true`, quoted values where needed: yamllint reports nothing."
+
+  - title:
+      fr: "Intégrer yamllint dans un pipeline CI"
+      en: "Integrate yamllint into a CI pipeline"
+    file: .github/workflows/lint.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: lint
+
+      on: [push, pull_request]
+
+      permissions:
+        contents: read          # least privilege
+
+      jobs:
+        yamllint:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+            - name: Lint all YAML files
+              run: |
+                pip install yamllint
+                yamllint .        # non-zero exit fails the job and blocks the merge
+    output: |
+      Run yamllint .
+      ./deploy.yaml
+        12:1  error  too many blank lines (2 > 0)  (empty-lines)
+      Error: Process completed with exit code 1.
+    note:
+      fr: "`yamllint .` renvoie un code non nul en cas d'erreur : le job échoue et empêche la fusion. Le YAML cassé n'atteint jamais la production."
+      en: "`yamllint .` returns a non-zero code on error: the job fails and blocks the merge. Broken YAML never reaches production."
+
+mistake:
+  fr: |
+    **Laisser une clé dupliquée ou se fier à l'œil nu plutôt qu'à un linter.**
+
+    Une clé dupliquée ne lève aucune erreur de parsing : YAML garde silencieusement la dernière occurrence. Vous
+    pouvez passer des heures à vous demander pourquoi un réglage « ne marche pas » alors qu'il est écrasé dix
+    lignes plus bas. Plus largement, ne relisez pas vos fichiers « à la main » en espérant repérer un espace de
+    travers : installez **yamllint**, configurez la règle `truthy`, et faites-le tourner en CI.
+  en: |
+    **Leaving a duplicate key, or trusting the naked eye instead of a linter.**
+
+    A duplicate key raises no parsing error: YAML silently keeps the last occurrence. You can spend hours
+    wondering why a setting "does not work" when it is overridden ten lines below. More broadly, do not re-read
+    your files "by hand" hoping to spot a stray space: install **yamllint**, configure the `truthy` rule, and
+    run it in CI.
+
+bestPractice:
+  fr: |
+    - **Lancez `yamllint`** sur chaque fichier avant de le commiter.
+    - **Activez la règle `truthy`** (`allowed-values: ["true", "false"]`) pour tuer le piège de la Norvège.
+    - **Intégrez le linter en CI** : un échec doit bloquer la fusion.
+    - **Traquez les clés dupliquées** : la règle `key-duplicates` les détecte automatiquement.
+    - **Configurez l'éditeur** pour afficher les espaces et convertir toute tabulation en espaces.
+  en: |
+    - **Run `yamllint`** on every file before committing it.
+    - **Enable the `truthy` rule** (`allowed-values: ["true", "false"]`) to kill the Norway problem.
+    - **Integrate the linter in CI**: a failure must block the merge.
+    - **Hunt duplicate keys**: the `key-duplicates` rule catches them automatically.
+    - **Configure your editor** to show whitespace and convert any tab to spaces.
+
+exercise:
+  statement:
+    fr: |
+      Le fichier suivant contient trois erreurs. Listez-les, puis réécrivez une version propre que `yamllint`
+      accepterait sans aucune alerte.
+
+      ```yaml
+      app:
+        name:billing
+        debug: on
+          level: info
+      ```
+    en: |
+      The following file contains three errors. List them, then rewrite a clean version that `yamllint` would
+      accept with no warning.
+
+      ```yaml
+      app:
+        name:billing
+        debug: on
+          level: info
+      ```
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # Errors found:
+      #  1) "name:billing" -> missing space after the colon
+      #  2) "debug: on"    -> Norway trap, 'on' is a boolean
+      #  3) "level"        -> over-indented, not aligned with the other keys
+      app:
+        name: billing       # space after the colon
+        debug: true         # explicit boolean instead of 'on'
+        level: info         # aligned on 2 spaces, same level as 'name'
+    note:
+      fr: "Les trois clés `name`, `debug`, `level` sont alignées sur 2 espaces ; `on` devient `true`. yamllint ne signale plus rien."
+      en: "The three keys `name`, `debug`, `level` align on 2 spaces; `on` becomes `true`. yamllint reports nothing."
+
+quiz:
+  - q:
+      fr: "Pourquoi une clé dupliquée est-elle dangereuse en YAML ?"
+      en: "Why is a duplicate key dangerous in YAML?"
+    options:
+      fr:
+        - "Elle double la taille du fichier"
+        - "La dernière occurrence écrase silencieusement la première"
+        - "Elle empêche le fichier de se charger"
+        - "Elle chiffre les données"
+      en:
+        - "It doubles the file size"
+        - "The last occurrence silently overrides the first"
+        - "It stops the file from loading"
+        - "It encrypts the data"
+    answer: 1
+    why:
+      fr: "YAML ne lève pas d'erreur : il garde la dernière valeur, ce qui fait passer un réglage pour « ignoré »."
+      en: "YAML raises no error: it keeps the last value, which makes a setting look \"ignored\"."
+  - q:
+      fr: "Quelle règle yamllint élimine le piège de la Norvège ?"
+      en: "Which yamllint rule eliminates the Norway problem?"
+    options:
+      fr:
+        - "line-length"
+        - "truthy avec allowed-values: [\"true\", \"false\"]"
+        - "empty-lines"
+        - "comments"
+      en:
+        - "line-length"
+        - "truthy with allowed-values: [\"true\", \"false\"]"
+        - "empty-lines"
+        - "comments"
+    answer: 1
+    why:
+      fr: "La règle `truthy` restreinte à `true`/`false` interdit `yes`/`no`/`on`/`off`, source du piège de la Norvège."
+      en: "The `truthy` rule limited to `true`/`false` forbids `yes`/`no`/`on`/`off`, the source of the Norway problem."
+  - q:
+      fr: "Que signale yamllint pour la ligne `name:web-api` ?"
+      en: "What does yamllint report for the line `name:web-api`?"
+    options:
+      fr:
+        - "Un espace manquant après les deux-points"
+        - "Une ligne trop longue"
+        - "Une clé dupliquée"
+        - "Une tabulation"
+      en:
+        - "A missing space after the colon"
+        - "A line that is too long"
+        - "A duplicate key"
+        - "A tab"
+    answer: 0
+    why:
+      fr: "Il manque l'espace après `:`. YAML exige `name: web-api` pour séparer correctement clé et valeur."
+      en: "The space after `:` is missing. YAML requires `name: web-api` to separate key and value correctly."
+  - q:
+      fr: "Que se passe-t-il quand `yamllint .` trouve une erreur dans un job CI ?"
+      en: "What happens when `yamllint .` finds an error in a CI job?"
+    options:
+      fr:
+        - "Rien, c'est juste informatif"
+        - "Il corrige automatiquement le fichier"
+        - "Il renvoie un code non nul et fait échouer le job, bloquant la fusion"
+        - "Il supprime le fichier fautif"
+      en:
+        - "Nothing, it is just informational"
+        - "It auto-fixes the file"
+        - "It returns a non-zero code and fails the job, blocking the merge"
+        - "It deletes the faulty file"
+    answer: 2
+    why:
+      fr: "Un code de sortie non nul fait échouer l'étape CI : la pull request ne peut pas être fusionnée tant que le YAML est cassé."
+      en: "A non-zero exit code fails the CI step: the pull request cannot be merged while the YAML is broken."
+  - q:
+      fr: "Comment corriger une valeur `time: 10:30` qui casse le parsing ?"
+      en: "How do you fix a value `time: 10:30` that breaks parsing?"
+    options:
+      fr:
+        - "En supprimant la clé"
+        - "En entourant la valeur de guillemets : \"10:30\""
+        - "En remplaçant les deux-points par un tiret"
+        - "En ajoutant une tabulation"
+      en:
+        - "By deleting the key"
+        - "By wrapping the value in quotes: \"10:30\""
+        - "By replacing the colon with a dash"
+        - "By adding a tab"
+    answer: 1
+    why:
+      fr: "Le deux-points dans la valeur trouble le parseur ; les guillemets `\"10:30\"` en font une chaîne sans ambiguïté."
+      en: "The colon inside the value confuses the parser; quotes `\"10:30\"` make it an unambiguous string."

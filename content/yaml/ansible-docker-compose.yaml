@@ -1,0 +1,382 @@
+description:
+  fr: "Lire et écrire le YAML d'Ansible (playbooks) et de Docker Compose, deux outils majeurs de l'automatisation."
+  en: "Read and write the YAML of Ansible (playbooks) and Docker Compose, two major automation tools."
+duration: 24
+
+intro:
+  fr: |
+    Deux outils incontournables du DevSecOps se configurent entièrement en **YAML** : **Ansible** et **Docker
+    Compose**. Ils résolvent des problèmes différents mais partagent la même philosophie déclarative : vous
+    décrivez l'état voulu, l'outil se charge de l'atteindre.
+
+    **Ansible** automatise la configuration de serveurs (installer un paquet, durcir SSH, créer un
+    utilisateur) via des *playbooks*. **Docker Compose** décrit un ensemble de conteneurs qui travaillent
+    ensemble (une application web + sa base de données) dans un fichier `compose.yaml`.
+
+    Imaginez une liste de tâches pour un assistant : « sur ces machines, assure-toi que nginx est installé et
+    démarré ». Dans cette leçon vous apprendrez la structure d'un playbook et d'un fichier Compose, et vous
+    verrez les réglages de sécurité propres à chacun (gestion des secrets, utilisateur non-root, pas de ports
+    inutiles).
+  en: |
+    Two essential DevSecOps tools are configured entirely in **YAML**: **Ansible** and **Docker Compose**. They
+    solve different problems but share the same declarative philosophy: you describe the desired state, the tool
+    makes it happen.
+
+    **Ansible** automates server configuration (install a package, harden SSH, create a user) through
+    *playbooks*. **Docker Compose** describes a set of containers working together (a web app + its database) in
+    a `compose.yaml` file.
+
+    Picture a to-do list for an assistant: "on these machines, make sure nginx is installed and started". In
+    this lesson you will learn the structure of a playbook and a Compose file, and see the security settings
+    specific to each (secret handling, non-root user, no needless ports).
+
+sections:
+  - heading:
+      fr: "Les playbooks Ansible"
+      en: "Ansible playbooks"
+    body:
+      fr: |
+        Un **playbook** est une liste de *plays*. Chaque play cible des machines (`hosts`) et exécute des
+        *tâches* (`tasks`), chacune appelant un *module* (`apt`, `copy`, `service`...) :
+
+        ```yaml
+        - name: Configure web servers
+          hosts: webservers
+          become: true           # run with elevated privileges (sudo)
+          tasks:
+            - name: Install nginx
+              ansible.builtin.apt:
+                name: nginx
+                state: present    # declarative: "should be installed"
+        ```
+
+        Points clés :
+
+        - `become: true` exécute en root (comme `sudo`), à n'utiliser que si nécessaire.
+        - Chaque tâche est **idempotente** : la relancer ne change rien si l'état est déjà correct.
+        - Les secrets ne vont jamais en clair dans un playbook : on utilise **Ansible Vault** pour les chiffrer.
+      en: |
+        A **playbook** is a list of *plays*. Each play targets machines (`hosts`) and runs *tasks* (`tasks`),
+        each calling a *module* (`apt`, `copy`, `service`...):
+
+        ```yaml
+        - name: Configure web servers
+          hosts: webservers
+          become: true           # run with elevated privileges (sudo)
+          tasks:
+            - name: Install nginx
+              ansible.builtin.apt:
+                name: nginx
+                state: present    # declarative: "should be installed"
+        ```
+
+        Key points:
+
+        - `become: true` runs as root (like `sudo`), use it only when needed.
+        - Each task is **idempotent**: re-running it changes nothing if the state is already correct.
+        - Secrets never go in clear text in a playbook: use **Ansible Vault** to encrypt them.
+  - heading:
+      fr: "Docker Compose"
+      en: "Docker Compose"
+    body:
+      fr: |
+        Un fichier **Compose** décrit des `services` (conteneurs), leurs `volumes` et leurs `networks` :
+
+        ```yaml
+        services:
+          web:
+            image: nginx:1.27
+            ports:
+              - "8080:80"        # host:container
+            depends_on:
+              - db
+          db:
+            image: postgres:16
+            environment:
+              POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+        ```
+
+        Bonnes pratiques de sécurité à repérer :
+
+        | Réglage | Pourquoi |
+        |---|---|
+        | `image: postgres:16` | Épingler la version, jamais `:latest` |
+        | `user: "1000:1000"` | Faire tourner le conteneur en non-root |
+        | `read_only: true` | Système de fichiers en lecture seule |
+        | `secrets:` | Injecter les mots de passe sans les mettre dans `environment` en clair |
+        | N'exposer (`ports`) que le strict nécessaire | Réduire la surface d'attaque |
+      en: |
+        A **Compose** file describes `services` (containers), their `volumes` and their `networks`:
+
+        ```yaml
+        services:
+          web:
+            image: nginx:1.27
+            ports:
+              - "8080:80"        # host:container
+            depends_on:
+              - db
+          db:
+            image: postgres:16
+            environment:
+              POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+        ```
+
+        Security best practices to look for:
+
+        | Setting | Why |
+        |---|---|
+        | `image: postgres:16` | Pin the version, never `:latest` |
+        | `user: "1000:1000"` | Run the container as non-root |
+        | `read_only: true` | Read-only filesystem |
+        | `secrets:` | Inject passwords without putting them in `environment` in clear text |
+        | Expose (`ports`) only what is strictly needed | Shrink the attack surface |
+
+examples:
+  - title:
+      fr: "Playbook Ansible : durcir SSH de façon idempotente"
+      en: "Ansible playbook: harden SSH idempotently"
+    file: harden-ssh.yml
+    lang: yaml
+    kind: secure
+    code: |
+      - name: Harden the SSH server
+        hosts: all
+        become: true              # editing sshd_config needs root
+        tasks:
+          - name: Disable root login over SSH
+            ansible.builtin.lineinfile:
+              path: /etc/ssh/sshd_config
+              regexp: "^#?PermitRootLogin"
+              line: "PermitRootLogin no"     # no direct root access
+            notify: Restart sshd
+
+          - name: Disable password authentication
+            ansible.builtin.lineinfile:
+              path: /etc/ssh/sshd_config
+              regexp: "^#?PasswordAuthentication"
+              line: "PasswordAuthentication no"  # keys only
+            notify: Restart sshd
+
+        handlers:
+          - name: Restart sshd
+            ansible.builtin.service:
+              name: sshd
+              state: restarted
+    output: |
+      PLAY [Harden the SSH server] ***
+      TASK [Disable root login over SSH] changed
+      TASK [Disable password authentication] changed
+      RUNNING HANDLER [Restart sshd] changed
+      ok=3 changed=3 failed=0
+    note:
+      fr: "Relancer ce playbook une 2e fois affichera `changed=0` : c'est l'idempotence. Le handler ne redémarre sshd que si un fichier a changé."
+      en: "Running this playbook a 2nd time shows `changed=0`: that is idempotence. The handler restarts sshd only if a file changed."
+
+  - title:
+      fr: "Compose non sécurisé : secret en clair et tout exposé"
+      en: "Insecure Compose: clear-text secret and everything exposed"
+    file: compose_bad.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # VULNERABLE: clear-text password, :latest, database exposed to the host
+      services:
+        db:
+          image: postgres:latest        # BUG: unpinned tag
+          environment:
+            POSTGRES_PASSWORD: "s3cr3t"  # BUG: secret in clear text
+          ports:
+            - "5432:5432"                # BUG: database reachable from outside
+    output: |
+      trivy config: HIGH  secret in environment variable
+      trivy config: MEDIUM  image tag ':latest' should be pinned
+    note:
+      fr: "Fichier volontairement faible (`kind: vulnerable`) : mot de passe en clair, image flottante, base exposée sur le réseau. Trivy alerte."
+      en: "Intentionally weak file (`kind: vulnerable`): clear-text password, floating image, database exposed on the network. Trivy flags it."
+
+  - title:
+      fr: "Compose durci : secrets, non-root, pas de port public inutile"
+      en: "Hardened Compose: secrets, non-root, no needless public port"
+    file: compose_good.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      services:
+        web:
+          image: nginx:1.27
+          user: "101:101"           # run as the non-root nginx user
+          read_only: true           # immutable root filesystem
+          ports:
+            - "8080:80"             # only the web port is public
+          depends_on:
+            - db
+
+        db:
+          image: postgres:16        # pinned version
+          user: "999:999"
+          environment:
+            # read the password from a file, not from a clear-text value
+            POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+          secrets:
+            - db_password
+          # no 'ports': the db is reachable only on the internal network
+
+      secrets:
+        db_password:
+          file: ./db_password.txt   # kept out of the image and out of Git
+    output: |
+      trivy config: no critical/high findings
+      web  -> published on 8080
+      db   -> internal network only
+    note:
+      fr: "La base n'a pas de `ports` : seule l'app web y accède via le réseau interne. Le mot de passe passe par `secrets`, pas par `environment`."
+      en: "The database has no `ports`: only the web app reaches it over the internal network. The password goes through `secrets`, not `environment`."
+
+mistake:
+  fr: |
+    **Mettre des secrets en clair et exposer tous les services au réseau.**
+
+    En Ansible comme en Compose, écrire un mot de passe en clair le fige dans Git et dans les logs : utilisez
+    **Ansible Vault** (`ansible-vault encrypt`) ou le bloc **`secrets:`** de Compose. Autre erreur fréquente :
+    publier un port (`ports:`) pour chaque service « au cas où ». N'exposez que ce qui doit être joignable de
+    l'extérieur ; une base de données ne devrait communiquer qu'avec son application sur le réseau interne.
+  en: |
+    **Putting secrets in clear text and exposing every service to the network.**
+
+    In Ansible as in Compose, writing a password in clear text freezes it in Git and in the logs: use
+    **Ansible Vault** (`ansible-vault encrypt`) or Compose's **`secrets:`** block. Another common error:
+    publishing a port (`ports:`) for every service "just in case". Expose only what must be reachable from
+    outside; a database should only talk to its application over the internal network.
+
+bestPractice:
+  fr: |
+    - **Chiffrez les secrets** : Ansible Vault pour les playbooks, le bloc `secrets:` pour Compose.
+    - **Rendez les tâches idempotentes** (`state: present`) : relancer ne doit rien casser.
+    - **Épinglez les images** (`postgres:16`), jamais `:latest`.
+    - **Faites tourner les conteneurs en non-root** (`user:`) et en lecture seule (`read_only: true`).
+    - **N'exposez (`ports`) que le strict nécessaire** ; gardez les bases sur le réseau interne.
+  en: |
+    - **Encrypt secrets**: Ansible Vault for playbooks, the `secrets:` block for Compose.
+    - **Make tasks idempotent** (`state: present`): re-running must break nothing.
+    - **Pin images** (`postgres:16`), never `:latest`.
+    - **Run containers as non-root** (`user:`) and read-only (`read_only: true`).
+    - **Expose (`ports`) only what is strictly needed**; keep databases on the internal network.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez un fichier Docker Compose qui déclare un service `app` et un service `redis` :
+
+      1. `app` utilise l'image `myapp:1.0`, tourne en `user: "1000:1000"` et publie `"3000:3000"` ;
+      2. `redis` utilise l'image `redis:7` et **n'expose aucun port** (accès interne uniquement) ;
+      3. `app` dépend de `redis`.
+    en: |
+      Write a Docker Compose file declaring an `app` service and a `redis` service:
+
+      1. `app` uses the image `myapp:1.0`, runs as `user: "1000:1000"` and publishes `"3000:3000"`;
+      2. `redis` uses the image `redis:7` and **exposes no port** (internal access only);
+      3. `app` depends on `redis`.
+  solution:
+    file: compose.yaml
+    lang: yaml
+    code: |
+      services:
+        app:
+          image: myapp:1.0        # pinned version
+          user: "1000:1000"       # non-root
+          ports:
+            - "3000:3000"         # only the app is public
+          depends_on:
+            - redis
+
+        redis:
+          image: redis:7
+          # no 'ports': redis is reachable only by 'app' on the internal network
+    note:
+      fr: "Redis n'a pas de `ports`, donc il n'est joignable que par `app` via le réseau Compose interne : moins de surface exposée."
+      en: "Redis has no `ports`, so it is reachable only by `app` over the internal Compose network: less exposed surface."
+
+quiz:
+  - q:
+      fr: "Dans un playbook Ansible, que fait `become: true` ?"
+      en: "In an Ansible playbook, what does `become: true` do?"
+    options:
+      fr:
+        - "Il chiffre le playbook"
+        - "Il exécute les tâches avec des privilèges élevés (sudo)"
+        - "Il relance le serveur"
+        - "Il ignore les erreurs"
+      en:
+        - "It encrypts the playbook"
+        - "It runs the tasks with elevated privileges (sudo)"
+        - "It reboots the server"
+        - "It ignores errors"
+    answer: 1
+    why:
+      fr: "`become: true` exécute la tâche en tant que root, comme `sudo`. À réserver aux tâches qui en ont besoin."
+      en: "`become: true` runs the task as root, like `sudo`. Reserve it for tasks that need it."
+  - q:
+      fr: "Que signifie qu'une tâche Ansible est « idempotente » ?"
+      en: "What does it mean for an Ansible task to be \"idempotent\"?"
+    options:
+      fr:
+        - "Elle ne peut s'exécuter qu'une seule fois"
+        - "La relancer ne change rien si l'état est déjà correct"
+        - "Elle s'exécute en parallèle"
+        - "Elle nécessite internet"
+      en:
+        - "It can run only once"
+        - "Re-running it changes nothing if the state is already correct"
+        - "It runs in parallel"
+        - "It requires the internet"
+    answer: 1
+    why:
+      fr: "L'idempotence garantit qu'appliquer plusieurs fois le même playbook mène toujours au même état sans effet de bord."
+      en: "Idempotence guarantees that applying the same playbook several times always reaches the same state with no side effects."
+  - q:
+      fr: "Comment gérer un mot de passe de base de données dans Docker Compose de façon sûre ?"
+      en: "How do you safely handle a database password in Docker Compose?"
+    options:
+      fr:
+        - "En l'écrivant dans `environment` en clair"
+        - "En le mettant dans le nom de l'image"
+        - "Avec le bloc `secrets:` et un fichier hors de Git"
+        - "En le passant en argument d'URL"
+      en:
+        - "By writing it in `environment` in clear text"
+        - "By putting it in the image name"
+        - "With the `secrets:` block and a file kept out of Git"
+        - "By passing it as a URL argument"
+    answer: 2
+    why:
+      fr: "Le bloc `secrets:` injecte le mot de passe depuis un fichier non commité, au lieu de l'exposer en clair dans `environment`."
+      en: "The `secrets:` block injects the password from an uncommitted file instead of exposing it in clear text in `environment`."
+  - q:
+      fr: "Pourquoi une base de données ne devrait-elle pas publier de port vers l'hôte ?"
+      en: "Why should a database not publish a port to the host?"
+    options:
+      fr:
+        - "Pour économiser de la mémoire"
+        - "Parce que c'est interdit par Docker"
+        - "Pour réduire la surface d'attaque : seule son application y accède en interne"
+        - "Pour accélérer les requêtes"
+      en:
+        - "To save memory"
+        - "Because Docker forbids it"
+        - "To shrink the attack surface: only its app accesses it internally"
+        - "To speed up queries"
+    answer: 2
+    why:
+      fr: "Sans `ports`, la base reste sur le réseau interne : elle n'est pas joignable depuis l'extérieur, ce qui limite les attaques."
+      en: "Without `ports`, the database stays on the internal network: it is not reachable from outside, which limits attacks."
+  - q:
+      fr: "Quel outil chiffre les secrets dans un projet Ansible ?"
+      en: "Which tool encrypts secrets in an Ansible project?"
+    options:
+      fr: ["Ansible Vault", "Docker Secrets", "GitHub Actions", "yamllint"]
+      en: ["Ansible Vault", "Docker Secrets", "GitHub Actions", "yamllint"]
+    answer: 0
+    why:
+      fr: "Ansible Vault chiffre les fichiers de variables sensibles (`ansible-vault encrypt`) pour ne pas les stocker en clair."
+      en: "Ansible Vault encrypts sensitive variable files (`ansible-vault encrypt`) so they are not stored in clear text."

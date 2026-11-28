@@ -1,0 +1,467 @@
+description:
+  fr: "Signer ses commits avec GPG et avec SSH, configurer git config gpg.format ssh et un fichier allowed_signers, puis vérifier une signature avec git log --show-signature."
+  en: "Sign your commits with GPG and with SSH, configure git config gpg.format ssh and an allowed_signers file, then verify a signature with git log --show-signature."
+duration: 25
+
+intro:
+  fr: |
+    Rien, dans Git, ne prouve *qui* a écrit un commit. Le nom et l'e-mail d'un auteur sont de simples
+    champs de texte que n'importe qui peut remplir : il suffit de `git config user.email "ceo@example.com"`
+    pour signer un commit du nom du PDG. C'est le problème de l'**usurpation d'identité** (*spoofing*).
+
+    Signer un commit, c'est comme apposer un sceau de cire personnel sur une lettre : le sceau prouve que
+    la lettre vient bien de vous et qu'elle n'a pas été modifiée en route. En cryptographie, ce sceau
+    s'appelle une **signature numérique** : votre clé **privée** signe, et votre clé **publique** permet à
+    tous de vérifier.
+
+    Dans cette leçon, vous allez signer des commits de deux façons : avec **GPG** (la méthode historique)
+    et avec **SSH** (plus simple, car vous avez déjà une clé SSH pour pousser votre code). Vous configurerez
+    `git config gpg.format ssh`, créerez un fichier **`allowed_signers`** qui liste les clés de confiance,
+    et vérifierez une signature avec `git log --show-signature`.
+  en: |
+    Nothing in Git proves *who* wrote a commit. An author's name and email are plain text fields anyone can
+    fill in: a simple `git config user.email "ceo@example.com"` is enough to sign a commit under the CEO's
+    name. This is the problem of **identity spoofing**.
+
+    Signing a commit is like pressing a personal wax seal on a letter: the seal proves the letter really
+    comes from you and has not been altered on the way. In cryptography, this seal is called a **digital
+    signature**: your **private** key signs, and your **public** key lets everyone verify.
+
+    In this lesson you will sign commits two ways: with **GPG** (the historical method) and with **SSH**
+    (simpler, because you already have an SSH key to push your code). You will configure
+    `git config gpg.format ssh`, create an **`allowed_signers`** file listing the trusted keys, and verify
+    a signature with `git log --show-signature`.
+
+sections:
+  - heading:
+      fr: "Pourquoi signer : le commit n'authentifie personne"
+      en: "Why sign: the commit authenticates no one"
+    body:
+      fr: |
+        Quand vous faites un commit, Git enregistre le champ `Author` tel que configuré en local. Rien ne
+        le vérifie. Un attaquant qui obtient l'accès en écriture à un dépôt (ou qui envoie une pull request)
+        peut se faire passer pour n'importe qui :
+
+        ```bash
+        git config user.name "Alice Admin"
+        git config user.email "alice@example.com"
+        git commit -m "Looks like Alice wrote this"
+        ```
+
+        Le commit apparaît comme écrit par Alice. Sur une plateforme, le badge « Verified » **n'apparaît
+        pas** pour ce commit, car il n'est pas signé — mais encore faut-il regarder.
+
+        Une signature résout ce problème : elle lie cryptographiquement le commit à une clé dont vous êtes
+        le seul détenteur. Impossible de la falsifier sans la clé privée. GitHub et GitLab affichent alors
+        un badge **Verified**, à condition que la clé publique correspondante ait été enregistrée sur votre
+        compte. Signer protège aussi l'**intégrité** : si un octet du commit change, la signature devient
+        invalide.
+      en: |
+        When you make a commit, Git records the `Author` field as configured locally. Nothing verifies it.
+        An attacker who gains write access to a repo (or who sends a pull request) can impersonate anyone:
+
+        ```bash
+        git config user.name "Alice Admin"
+        git config user.email "alice@example.com"
+        git commit -m "Looks like Alice wrote this"
+        ```
+
+        The commit appears to be written by Alice. On a platform, the "Verified" badge **does not appear**
+        for this commit, because it is not signed — but someone still has to look.
+
+        A signature solves this: it cryptographically ties the commit to a key that only you hold. It cannot
+        be forged without the private key. GitHub and GitLab then show a **Verified** badge, provided the
+        matching public key has been registered on your account. Signing also protects **integrity**: if
+        one byte of the commit changes, the signature becomes invalid.
+  - heading:
+      fr: "GPG : la méthode historique"
+      en: "GPG: the historical method"
+    body:
+      fr: |
+        **GPG** (*GNU Privacy Guard*) est l'outil historique de signature. Le principe : vous générez une
+        paire de clés, vous indiquez à Git laquelle utiliser, puis vous signez avec `-S`.
+
+        ```bash
+        gpg --full-generate-key               # create a key (choose RSA 4096 or ed25519)
+        gpg --list-secret-keys --keyid-format=long   # read the key id, e.g. 3AA5C34371567BD2
+        git config --global user.signingkey 3AA5C34371567BD2
+        git config --global commit.gpgsign true       # sign every commit automatically
+        git commit -S -m "Signed with GPG"            # -S is implicit if commit.gpgsign is true
+        ```
+
+        Pour obtenir le badge « Verified », il faut **exporter la clé publique** et la coller dans les
+        réglages du compte :
+
+        ```bash
+        gpg --armor --export 3AA5C34371567BD2    # prints the public key to copy
+        ```
+
+        GPG est puissant mais réputé pénible : gestion des trousseaux, expiration des clés, agent qui
+        redemande la passphrase. C'est pourquoi la signature **SSH**, arrivée avec Git 2.34, l'a largement
+        remplacée pour le simple besoin de signer des commits.
+      en: |
+        **GPG** (*GNU Privacy Guard*) is the historical signing tool. The principle: you generate a key
+        pair, tell Git which one to use, then sign with `-S`.
+
+        ```bash
+        gpg --full-generate-key               # create a key (choose RSA 4096 or ed25519)
+        gpg --list-secret-keys --keyid-format=long   # read the key id, e.g. 3AA5C34371567BD2
+        git config --global user.signingkey 3AA5C34371567BD2
+        git config --global commit.gpgsign true       # sign every commit automatically
+        git commit -S -m "Signed with GPG"            # -S is implicit if commit.gpgsign is true
+        ```
+
+        To get the "Verified" badge, you must **export the public key** and paste it into the account
+        settings:
+
+        ```bash
+        gpg --armor --export 3AA5C34371567BD2    # prints the public key to copy
+        ```
+
+        GPG is powerful but notoriously painful: keyring management, key expiry, an agent that keeps asking
+        for the passphrase. That is why **SSH** signing, introduced in Git 2.34, has largely replaced it for
+        the simple need of signing commits.
+  - heading:
+      fr: "SSH : signer avec la clé que vous avez déjà"
+      en: "SSH: signing with the key you already have"
+    body:
+      fr: |
+        Depuis Git 2.34, vous pouvez signer avec une **clé SSH** — très probablement celle que vous utilisez
+        déjà pour pousser votre code. La configuration tient en trois lignes :
+
+        ```bash
+        git config --global gpg.format ssh
+        git config --global user.signingkey ~/.ssh/id_ed25519.pub
+        git config --global commit.gpgsign true
+        ```
+
+        `gpg.format ssh` dit à Git d'utiliser le format SSH au lieu de GPG (le nom de l'option reste
+        `gpg.format` pour des raisons historiques). La clé pointée est la **clé publique**.
+
+        Pour que Git puisse *vérifier* localement les signatures (et pas seulement en créer), il faut lui
+        dire **à qui** faire confiance, dans un fichier **`allowed_signers`**. Chaque ligne associe un
+        e-mail à une clé publique :
+
+        ```bash
+        # ~/.config/git/allowed_signers
+        alice@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID...
+        ```
+
+        ```bash
+        git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+        ```
+
+        | Critère | GPG | SSH |
+        |---|---|---|
+        | Clé réutilisée | Non (clé dédiée) | Oui (clé de push) |
+        | Mise en place | Lourde | Trois commandes |
+        | Vérification locale | Trousseau GPG | Fichier `allowed_signers` |
+        | Badge Verified | Oui | Oui |
+
+        Comme pour GPG, il faut enregistrer la clé publique **en tant que clé de signature** sur le compte
+        GitHub/GitLab (une clé d'authentification et une clé de signature sont deux entrées distinctes, même
+        si c'est la même clé).
+      en: |
+        Since Git 2.34, you can sign with an **SSH key** — very likely the one you already use to push your
+        code. The configuration fits in three lines:
+
+        ```bash
+        git config --global gpg.format ssh
+        git config --global user.signingkey ~/.ssh/id_ed25519.pub
+        git config --global commit.gpgsign true
+        ```
+
+        `gpg.format ssh` tells Git to use the SSH format instead of GPG (the option is still named
+        `gpg.format` for historical reasons). The key pointed to is the **public key**.
+
+        For Git to *verify* signatures locally (not just create them), you must tell it **whom** to trust,
+        in an **`allowed_signers`** file. Each line maps an email to a public key:
+
+        ```bash
+        # ~/.config/git/allowed_signers
+        alice@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID...
+        ```
+
+        ```bash
+        git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+        ```
+
+        | Criterion | GPG | SSH |
+        |---|---|---|
+        | Key reused | No (dedicated key) | Yes (push key) |
+        | Setup | Heavy | Three commands |
+        | Local verification | GPG keyring | `allowed_signers` file |
+        | Verified badge | Yes | Yes |
+
+        As with GPG, you must register the public key **as a signing key** on the GitHub/GitLab account (an
+        authentication key and a signing key are two separate entries, even if it is the same key).
+
+examples:
+  - title:
+      fr: "Configurer la signature SSH de bout en bout"
+      en: "Configuring SSH signing end to end"
+    file: setup-ssh-signing.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. Reuse (or create) an ed25519 SSH key
+      # ssh-keygen -t ed25519 -C "alice@example.com"   # if you do not have one yet
+
+      # 2. Tell Git to sign with SSH, using the PUBLIC key
+      git config --global gpg.format ssh
+      git config --global user.signingkey ~/.ssh/id_ed25519.pub
+      git config --global commit.gpgsign true          # sign every commit
+      git config --global tag.gpgsign true             # also sign tags
+
+      # 3. Declare whom to trust so Git can VERIFY signatures locally
+      mkdir -p ~/.config/git
+      printf '%s %s\n' "alice@example.com" "$(cat ~/.ssh/id_ed25519.pub)" \
+        > ~/.config/git/allowed_signers
+      git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+
+      # 4. Make a signed commit
+      git commit -m "First signed commit"
+    note:
+      fr: "`user.signingkey` pointe la clé **publique** (`.pub`). Le fichier `allowed_signers` associe l'e-mail de l'auteur à cette clé : sans lui, Git peut signer mais affiche « No principal matched » à la vérification. N'oubliez pas d'enregistrer la clé publique comme clé de **signature** sur votre compte pour le badge Verified."
+      en: "`user.signingkey` points to the **public** key (`.pub`). The `allowed_signers` file maps the author's email to that key: without it, Git can sign but shows \"No principal matched\" on verification. Remember to register the public key as a **signing** key on your account for the Verified badge."
+
+  - title:
+      fr: "Vérifier les signatures avec git log"
+      en: "Verifying signatures with git log"
+    file: verify.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Show the signature status of each commit
+      git log --show-signature -1
+
+      # Or, in a script/CI, print one letter per commit: G = good signature
+      git log --pretty="%h %G? %an %s" -3
+    output: |
+      commit 4f2a9c1 (HEAD -> main)
+      Good "git" signature for alice@example.com with ED25519 key SHA256:9xQ...
+      Author: Alice <alice@example.com>
+      Date:   Mon Mar 09 10:14:02 2026 +0100
+
+          First signed commit
+
+      4f2a9c1 G Alice First signed commit
+      1b7d3e0 N Bob   Unsigned fix
+      a0c5f88 G Alice Add CI
+    note:
+      fr: "`--show-signature` affiche « Good signature » quand la clé est dans `allowed_signers`. Le format `%G?` donne un code compact : `G` (bonne signature), `B` (mauvaise), `N` (aucune), `E` (clé introuvable). En CI, on peut exiger `G` sur chaque commit d'une pull request."
+      en: "`--show-signature` shows \"Good signature\" when the key is in `allowed_signers`. The `%G?` format gives a compact code: `G` (good), `B` (bad), `N` (none), `E` (key not found). In CI you can require `G` on every commit of a pull request."
+
+  - title:
+      fr: "L'usurpation : un commit non signé au nom d'un autre"
+      en: "Spoofing: an unsigned commit under someone else's name"
+    file: spoof.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # Anyone can set any author identity: nothing verifies it
+      git config user.name "Alice Admin"
+      git config user.email "alice@example.com"
+      git commit -m "Grant admin rights"
+
+      # The commit LOOKS like Alice's work...
+      git log --pretty="%an <%ae> | signature: %G?" -1
+    output: |
+      Alice Admin <alice@example.com> | signature: N
+    note:
+      fr: "L'auteur affiché est « Alice », mais `%G?` renvoie `N` : **aucune signature**. Sans signature, le champ auteur ne prouve rien. C'est exactement ce que la signature empêche : un attaquant ne peut pas produire la signature d'Alice sans sa clé privée."
+      en: "The displayed author is \"Alice\", but `%G?` returns `N`: **no signature**. Without a signature the author field proves nothing. This is exactly what signing prevents: an attacker cannot produce Alice's signature without her private key."
+
+  - title:
+      fr: "Exiger des commits signés dans la CI"
+      en: "Requiring signed commits in CI"
+    file: .github/workflows/verify-signatures.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: verify-signatures
+      on: [pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        signatures:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+              with:
+                fetch-depth: 0   # need every commit of the branch
+            - name: Fail if any commit of the PR is not signed
+              run: |
+                base="origin/${{ github.base_ref }}"
+                # List the sign status (%G?) of every commit added by this PR
+                unsigned=$(git log --pretty="%H %G?" "$base..HEAD" | grep -v ' G$' || true)
+                if [ -n "$unsigned" ]; then
+                  echo "These commits are not verified (expected G):"
+                  echo "$unsigned"
+                  exit 1
+                fi
+                echo "All commits are signed and verified."
+    note:
+      fr: "La CI parcourt chaque commit ajouté par la pull request et échoue si l'un d'eux n'a pas le statut `G`. C'est le pendant serveur de la signature : la plateforme peut aussi l'imposer via une règle de protection de branche (leçon suivante)."
+      en: "CI walks every commit added by the pull request and fails if any lacks the `G` status. This is the server-side counterpart of signing: the platform can also enforce it with a branch protection rule (next lesson)."
+
+mistake:
+  fr: |
+    **Pointer la clé privée dans `user.signingkey`, ou croire que configurer l'e-mail « signe » le commit.**
+
+    Deux confusions fréquentes. D'abord, `user.signingkey` doit pointer la clé **publique** (`.pub`) en mode
+    SSH ; la clé privée, elle, ne quitte jamais votre machine. Ensuite, changer `user.name` et
+    `user.email` ne signe rien du tout : ce ne sont que des champs de texte. Seule une vraie signature
+    cryptographique, vérifiable avec la clé publique correspondante, authentifie l'auteur. Sans
+    `allowed_signers`, Git signe mais ne sait pas vérifier.
+  en: |
+    **Pointing `user.signingkey` at the private key, or thinking that setting the email "signs" the commit.**
+
+    Two common confusions. First, `user.signingkey` must point to the **public** key (`.pub`) in SSH mode;
+    the private key never leaves your machine. Second, changing `user.name` and `user.email` signs nothing
+    at all: they are just text fields. Only a real cryptographic signature, verifiable with the matching
+    public key, authenticates the author. Without `allowed_signers`, Git signs but cannot verify.
+
+bestPractice:
+  fr: |
+    - **Activez `commit.gpgsign true`** pour signer automatiquement, afin de ne jamais oublier.
+    - **Préférez SSH** si vous avez déjà une clé de push : trois commandes suffisent.
+    - **Enregistrez la clé publique comme clé de *signature*** sur GitHub/GitLab pour le badge Verified.
+    - **Maintenez un `allowed_signers`** partagé (versionné dans un dépôt d'équipe) pour vérifier localement.
+    - **Imposez la signature côté serveur** : vérification en CI et/ou règle de protection de branche.
+    - **Ne confondez pas identité et authentification** : seul le serveur, qui connaît la clé, tranche.
+  en: |
+    - **Enable `commit.gpgsign true`** to sign automatically, so you never forget.
+    - **Prefer SSH** if you already have a push key: three commands are enough.
+    - **Register the public key as a *signing* key** on GitHub/GitLab for the Verified badge.
+    - **Maintain a shared `allowed_signers`** (versioned in a team repo) to verify locally.
+    - **Enforce signing server-side**: CI verification and/or a branch protection rule.
+    - **Do not confuse identity and authentication**: only the server, which knows the key, decides.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez déjà une clé SSH `~/.ssh/id_ed25519.pub` et votre e-mail Git est `dev@example.com`. Vous
+      voulez signer **tous** vos commits avec cette clé, sans installer GPG, et pouvoir vérifier vos propres
+      signatures localement.
+
+      1. Donnez les commandes de configuration Git (format, clé, signature automatique).
+      2. Créez le fichier `allowed_signers` et indiquez-le à Git.
+      3. Donnez la commande qui affiche le statut de signature du dernier commit et dites quelle lettre de
+         `%G?` vous devez obtenir si tout est correct.
+    en: |
+      You already have an SSH key `~/.ssh/id_ed25519.pub` and your Git email is `dev@example.com`. You want
+      to sign **all** your commits with this key, without installing GPG, and be able to verify your own
+      signatures locally.
+
+      1. Give the Git configuration commands (format, key, automatic signing).
+      2. Create the `allowed_signers` file and point Git to it.
+      3. Give the command that shows the signature status of the last commit and say which `%G?` letter you
+         should get if everything is correct.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Sign with SSH, using the public key, on every commit
+      git config --global gpg.format ssh
+      git config --global user.signingkey ~/.ssh/id_ed25519.pub
+      git config --global commit.gpgsign true
+
+      # 2. Declare the trusted signer so Git can verify locally
+      mkdir -p ~/.config/git
+      printf '%s %s\n' "dev@example.com" "$(cat ~/.ssh/id_ed25519.pub)" \
+        > ~/.config/git/allowed_signers
+      git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+
+      # 3. Verify the last commit; a correct signature shows "G"
+      git log --show-signature -1
+      git log --pretty="%G?" -1    # must print: G
+    note:
+      fr: "La lettre attendue est `G` (*Good signature*). Si vous obtenez `E`, c'est que l'e-mail/clé n'est pas dans `allowed_signers` ; `N` signifie que le commit n'a pas été signé du tout."
+      en: "The expected letter is `G` (*Good signature*). If you get `E`, the email/key is not in `allowed_signers`; `N` means the commit was not signed at all."
+
+quiz:
+  - q:
+      fr: "Pourquoi le champ `Author` d'un commit ne prouve-t-il pas qui l'a écrit ?"
+      en: "Why does a commit's `Author` field not prove who wrote it?"
+    options:
+      fr:
+        - "Parce que c'est un simple champ de texte que chacun peut remplir"
+        - "Parce que Git le chiffre aléatoirement"
+        - "Parce qu'il est effacé après le push"
+        - "Parce qu'il est généré par le serveur"
+      en:
+        - "Because it is a plain text field anyone can fill in"
+        - "Because Git encrypts it randomly"
+        - "Because it is wiped after the push"
+        - "Because it is generated by the server"
+    answer: 0
+    why:
+      fr: "`user.name` et `user.email` sont de simples réglages locaux ; seule une signature cryptographique authentifie réellement l'auteur."
+      en: "`user.name` and `user.email` are just local settings; only a cryptographic signature truly authenticates the author."
+  - q:
+      fr: "Pour signer en SSH, que doit pointer `user.signingkey` ?"
+      en: "For SSH signing, what must `user.signingkey` point to?"
+    options:
+      fr:
+        - "La clé privée `id_ed25519`"
+        - "La clé publique `id_ed25519.pub`"
+        - "Un mot de passe stocké dans le trousseau"
+        - "L'empreinte du dernier commit"
+      en:
+        - "The private key `id_ed25519`"
+        - "The public key `id_ed25519.pub`"
+        - "A password stored in the keyring"
+        - "The fingerprint of the last commit"
+    answer: 1
+    why:
+      fr: "En mode SSH, Git signe avec l'agent et référence la clé **publique** ; la clé privée ne quitte jamais la machine."
+      en: "In SSH mode, Git signs through the agent and references the **public** key; the private key never leaves the machine."
+  - q:
+      fr: "À quoi sert le fichier `allowed_signers` ?"
+      en: "What is the `allowed_signers` file for?"
+    options:
+      fr:
+        - "À stocker la clé privée de façon chiffrée"
+        - "À lister les utilisateurs autorisés à pousser"
+        - "À associer des e-mails à des clés publiques de confiance pour la vérification"
+        - "À configurer l'agent SSH au démarrage"
+      en:
+        - "To store the private key encrypted"
+        - "To list users allowed to push"
+        - "To map emails to trusted public keys for verification"
+        - "To configure the SSH agent at startup"
+    answer: 2
+    why:
+      fr: "`allowed_signers` indique à Git quelles clés publiques font autorité ; sans lui, Git peut signer mais pas vérifier (« No principal matched »)."
+      en: "`allowed_signers` tells Git which public keys are authoritative; without it, Git can sign but not verify (\"No principal matched\")."
+  - q:
+      fr: "Quelle lettre renvoie `%G?` pour une bonne signature ?"
+      en: "Which letter does `%G?` return for a good signature?"
+    options:
+      fr: ["N", "B", "E", "G"]
+      en: ["N", "B", "E", "G"]
+    answer: 3
+    why:
+      fr: "`G` = bonne signature, `B` = mauvaise, `N` = aucune, `E` = clé introuvable. On exige `G` sur chaque commit en CI."
+      en: "`G` = good signature, `B` = bad, `N` = none, `E` = key not found. You require `G` on every commit in CI."
+  - q:
+      fr: "Que configure `git config --global gpg.format ssh` ?"
+      en: "What does `git config --global gpg.format ssh` configure?"
+    options:
+      fr:
+        - "Il force Git à utiliser le format SSH pour signer au lieu de GPG"
+        - "Il convertit toutes les clés GPG en clés SSH"
+        - "Il désactive complètement la signature"
+        - "Il chiffre le dépôt avec SSH"
+      en:
+        - "It makes Git use the SSH format to sign instead of GPG"
+        - "It converts all GPG keys to SSH keys"
+        - "It disables signing entirely"
+        - "It encrypts the repo with SSH"
+    answer: 0
+    why:
+      fr: "L'option s'appelle encore `gpg.format` pour des raisons historiques, mais la valeur `ssh` bascule la signature vers les clés SSH."
+      en: "The option is still named `gpg.format` for historical reasons, but the value `ssh` switches signing to SSH keys."

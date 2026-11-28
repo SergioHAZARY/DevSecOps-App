@@ -1,0 +1,368 @@
+description:
+  fr: "Maîtriser les ancres, alias, fusion, texte multiligne et documents multiples en YAML pour factoriser sans se répéter."
+  en: "Master anchors, aliases, merge keys, multiline text and multi-document YAML to avoid repeating yourself."
+duration: 22
+
+intro:
+  fr: |
+    Une fois la syntaxe de base acquise, YAML offre des fonctionnalités avancées qui évitent la répétition et
+    gèrent proprement les textes longs. Trois sont essentielles en DevSecOps :
+
+    - les **ancres** et **alias**, pour écrire une valeur une fois et la réutiliser ailleurs ;
+    - les **scalaires de blocs** (`|` et `>`), pour insérer un script ou un texte sur plusieurs lignes ;
+    - les **documents multiples**, pour mettre plusieurs objets (par exemple plusieurs ressources Kubernetes)
+      dans un seul fichier.
+
+    Imaginez un formulaire où vous recopiez dix fois la même adresse : les ancres sont le « copier-coller
+    intelligent » qui garantit que tout reste cohérent. Dans cette leçon vous apprendrez à factoriser votre
+    configuration et à écrire du texte multiligne sans casser l'indentation.
+  en: |
+    Once you have the basic syntax, YAML offers advanced features that avoid repetition and handle long text
+    cleanly. Three are essential in DevSecOps:
+
+    - **anchors** and **aliases**, to write a value once and reuse it elsewhere;
+    - **block scalars** (`|` and `>`), to embed a script or multi-line text;
+    - **multiple documents**, to put several objects (for example several Kubernetes resources) in one file.
+
+    Picture a form where you copy the same address ten times: anchors are the "smart copy-paste" that keeps
+    everything consistent. In this lesson you will learn to factor out your configuration and write multi-line
+    text without breaking the indentation.
+
+sections:
+  - heading:
+      fr: "Ancres, alias et fusion"
+      en: "Anchors, aliases and merge"
+    body:
+      fr: |
+        Une **ancre** `&nom` marque une valeur ; un **alias** `*nom` la réutilise. C'est une référence, pas une
+        copie de texte :
+
+        ```yaml
+        default: &base
+          retries: 3
+          timeout: 30
+        service_a: *base      # reuses the whole mapping
+        ```
+
+        La **clé de fusion** `<<` permet de partir d'un bloc commun puis de surcharger certaines clés :
+
+        ```yaml
+        defaults: &defaults
+          retries: 3
+          timeout: 30
+        prod:
+          <<: *defaults       # merge defaults in
+          timeout: 60         # override just this key
+        ```
+
+        Ici `prod` hérite de `retries: 3` mais remplace `timeout` par 60. C'est exactement ce qu'utilisent
+        Docker Compose et de nombreux pipelines CI pour éviter de répéter la même configuration.
+      en: |
+        An **anchor** `&name` marks a value; an **alias** `*name` reuses it. It is a reference, not a text copy:
+
+        ```yaml
+        default: &base
+          retries: 3
+          timeout: 30
+        service_a: *base      # reuses the whole mapping
+        ```
+
+        The **merge key** `<<` lets you start from a shared block and then override some keys:
+
+        ```yaml
+        defaults: &defaults
+          retries: 3
+          timeout: 30
+        prod:
+          <<: *defaults       # merge defaults in
+          timeout: 60         # override just this key
+        ```
+
+        Here `prod` inherits `retries: 3` but replaces `timeout` with 60. This is exactly what Docker Compose and
+        many CI pipelines use to avoid repeating the same configuration.
+  - heading:
+      fr: "Texte multiligne et documents multiples"
+      en: "Multiline text and multiple documents"
+    body:
+      fr: |
+        Pour un texte sur plusieurs lignes, deux styles de **scalaire de bloc** :
+
+        - `|` (*literal*) : conserve les retours à la ligne. Idéal pour un script.
+        - `>` (*folded*) : replie les retours à la ligne en espaces. Idéal pour un long paragraphe.
+
+        ```yaml
+        script: |
+          #!/bin/sh
+          set -eu
+          echo "line 1"
+          echo "line 2"
+        description: >
+          This long sentence will be
+          folded into a single line.
+        ```
+
+        Enfin, un même fichier peut contenir **plusieurs documents** séparés par `---` (et terminés par `...`
+        facultatif). C'est indispensable pour regrouper plusieurs ressources :
+
+        ```yaml
+        ---
+        kind: ConfigMap
+        ---
+        kind: Service
+        ```
+      en: |
+        For text spanning several lines, two **block scalar** styles:
+
+        - `|` (*literal*): keeps the line breaks. Ideal for a script.
+        - `>` (*folded*): folds line breaks into spaces. Ideal for a long paragraph.
+
+        ```yaml
+        script: |
+          #!/bin/sh
+          set -eu
+          echo "line 1"
+          echo "line 2"
+        description: >
+          This long sentence will be
+          folded into a single line.
+        ```
+
+        Finally, one file can hold **several documents** separated by `---` (and optionally ended with `...`).
+        This is essential to group several resources:
+
+        ```yaml
+        ---
+        kind: ConfigMap
+        ---
+        kind: Service
+        ```
+
+examples:
+  - title:
+      fr: "Factoriser avec ancre, alias et fusion"
+      en: "Factor out with anchor, alias and merge"
+    file: anchors.yaml
+    lang: yaml
+    kind: neutral
+    code: |
+      # Define a reusable block once with an anchor
+      common: &common
+        image: nginx:1.27
+        restart: always
+        logging:
+          driver: json-file
+
+      web:
+        <<: *common          # merge the common block
+        ports:
+          - "8080:80"        # web-specific key
+
+      worker:
+        <<: *common          # same base, no duplication
+        command: ["worker"]
+    output: |
+      web.image    = nginx:1.27   (from *common)
+      web.restart  = always       (from *common)
+      web.ports    = ["8080:80"]  (own key)
+      worker.image = nginx:1.27   (from *common)
+    note:
+      fr: "`&common` définit le bloc une fois ; `<<: *common` l'injecte dans `web` et `worker`. Changer l'image une fois met tout à jour."
+      en: "`&common` defines the block once; `<<: *common` injects it into `web` and `worker`. Changing the image once updates everything."
+
+  - title:
+      fr: "Scalaires de blocs : littéral vs replié"
+      en: "Block scalars: literal vs folded"
+    file: block_scalars.yaml
+    lang: yaml
+    kind: neutral
+    code: |
+      # | keeps newlines exactly - use it for scripts
+      startup_script: |
+        #!/bin/sh
+        set -eu
+        echo "Starting service"
+        exec /app/server
+
+      # > folds newlines into spaces - use it for prose
+      banner: >
+        Welcome to the staging
+        environment. Do not store
+        production data here.
+    output: |
+      startup_script -> 4 lines, newlines kept
+      banner         -> "Welcome to the staging environment. Do not store production data here."
+    note:
+      fr: "`|` garde les sauts de ligne (un script reste exécutable) ; `>` les transforme en espaces (une phrase reste sur une ligne logique)."
+      en: "`|` keeps the line breaks (a script stays runnable); `>` turns them into spaces (a sentence stays on one logical line)."
+
+  - title:
+      fr: "Plusieurs documents dans un seul fichier"
+      en: "Several documents in one file"
+    file: multi_doc.yaml
+    lang: yaml
+    kind: neutral
+    code: |
+      # Three independent documents, separated by ---
+      ---
+      name: config-document
+      kind: settings
+      ---
+      name: users-document
+      kind: list
+      users:
+        - alice
+        - bob
+      ---
+      name: empty-document
+      kind: placeholder
+    output: |
+      Parsed 3 documents
+      doc[0].name = config-document
+      doc[1].users = ['alice', 'bob']
+      doc[2].kind = placeholder
+    note:
+      fr: "`---` sépare les documents. Un parseur comme `yaml.safe_load_all()` en Python renvoie la liste des trois objets."
+      en: "`---` separates documents. A parser like Python's `yaml.safe_load_all()` returns the list of all three objects."
+
+mistake:
+  fr: |
+    **Abuser des ancres au point de rendre le fichier illisible, ou mal indenter un scalaire de bloc.**
+
+    Les ancres sont puissantes mais une chaîne d'alias imbriqués devient vite incompréhensible : gardez-les
+    simples et locales à un fichier. Par ailleurs, le contenu d'un bloc `|` ou `>` doit être **indenté plus que
+    la clé** ; une ligne moins indentée que les autres termine le bloc prématurément. Enfin, certains outils
+    (comme `kubectl` côté serveur) ne prennent pas en charge les ancres : vérifiez avant de vous en servir.
+  en: |
+    **Overusing anchors until the file is unreadable, or misindenting a block scalar.**
+
+    Anchors are powerful, but a chain of nested aliases quickly becomes incomprehensible: keep them simple and
+    local to one file. Also, the content of a `|` or `>` block must be **indented more than the key**; a line
+    indented less than the others ends the block early. Finally, some tools (such as server-side `kubectl`) do
+    not support anchors: check before relying on them.
+
+bestPractice:
+  fr: |
+    - **Utilisez `<<: *ancre`** pour factoriser une configuration commune, puis surchargez au besoin.
+    - **Choisissez `|`** pour les scripts (sauts de ligne conservés) et **`>`** pour la prose.
+    - **Séparez les documents par `---`** plutôt que de créer dix fichiers quasi identiques.
+    - **Restez sobre** : si un lecteur humain ne suit plus les alias, revenez à une écriture explicite.
+  en: |
+    - **Use `<<: *anchor`** to factor out shared configuration, then override as needed.
+    - **Choose `|`** for scripts (line breaks preserved) and **`>`** for prose.
+    - **Separate documents with `---`** rather than creating ten near-identical files.
+    - **Stay restrained**: if a human reader can no longer follow the aliases, go back to explicit writing.
+
+exercise:
+  statement:
+    fr: |
+      Vous avez trois services qui partagent `image: redis:7`, `restart: always` et un `healthcheck`. Écrivez
+      un fichier YAML qui :
+
+      1. définit ce bloc commun une seule fois avec une ancre ;
+      2. le réutilise dans `cache` et `queue` via la clé de fusion `<<` ;
+      3. donne à `cache` une clé supplémentaire `ports: ["6379:6379"]`.
+    en: |
+      You have three services sharing `image: redis:7`, `restart: always` and a `healthcheck`. Write a YAML
+      file that:
+
+      1. defines this shared block once with an anchor;
+      2. reuses it in `cache` and `queue` via the merge key `<<`;
+      3. gives `cache` an extra key `ports: ["6379:6379"]`.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # Shared block defined once
+      base: &base
+        image: redis:7
+        restart: always
+        healthcheck:
+          test: ["CMD", "redis-cli", "ping"]
+          interval: 10s
+
+      cache:
+        <<: *base            # inherit the shared block
+        ports:
+          - "6379:6379"      # cache-specific key
+
+      queue:
+        <<: *base            # same base, zero duplication
+    note:
+      fr: "Modifier l'image ou le healthcheck dans `&base` se répercute automatiquement sur `cache` et `queue`."
+      en: "Changing the image or healthcheck in `&base` automatically propagates to `cache` and `queue`."
+
+quiz:
+  - q:
+      fr: "Que fait un alias `*nom` en YAML ?"
+      en: "What does an alias `*name` do in YAML?"
+    options:
+      fr:
+        - "Il supprime une clé"
+        - "Il réutilise la valeur d'une ancre `&nom`"
+        - "Il commente une ligne"
+        - "Il importe un autre fichier"
+      en:
+        - "It deletes a key"
+        - "It reuses the value of an anchor `&name`"
+        - "It comments a line"
+        - "It imports another file"
+    answer: 1
+    why:
+      fr: "Un alias `*nom` pointe vers l'ancre `&nom` et en réutilise la valeur, sans recopier le texte."
+      en: "An alias `*name` points to the anchor `&name` and reuses its value, without copying the text."
+  - q:
+      fr: "Quel style de bloc conserve les retours à la ligne ?"
+      en: "Which block style preserves line breaks?"
+    options:
+      fr: ["Le style replié `>`", "Le style littéral `|`", "Les guillemets simples", "Les accolades"]
+      en: ["The folded style `>`", "The literal style `|`", "Single quotes", "Braces"]
+    answer: 1
+    why:
+      fr: "`|` (littéral) garde les sauts de ligne tels quels ; `>` (replié) les transforme en espaces."
+      en: "`|` (literal) keeps line breaks as-is; `>` (folded) turns them into spaces."
+  - q:
+      fr: "Comment sépare-t-on plusieurs documents dans un même fichier YAML ?"
+      en: "How do you separate multiple documents in one YAML file?"
+    options:
+      fr: ["Par une ligne `---`", "Par une ligne vide", "Par une virgule", "Par un `;`"]
+      en: ["With a `---` line", "With a blank line", "With a comma", "With a `;`"]
+    answer: 0
+    why:
+      fr: "Trois tirets `---` marquent le début d'un nouveau document dans un flux YAML multi-documents."
+      en: "Three dashes `---` mark the start of a new document in a multi-document YAML stream."
+  - q:
+      fr: "À quoi sert la clé de fusion `<<` ?"
+      en: "What is the merge key `<<` used for?"
+    options:
+      fr:
+        - "À concaténer deux chaînes"
+        - "À injecter les clés d'une ancre tout en pouvant les surcharger"
+        - "À comparer deux valeurs"
+        - "À créer un commentaire"
+      en:
+        - "To concatenate two strings"
+        - "To inject an anchor's keys while allowing overrides"
+        - "To compare two values"
+        - "To create a comment"
+    answer: 1
+    why:
+      fr: "`<<: *ancre` fusionne les clés de l'ancre dans le mapping courant, que l'on peut ensuite surcharger."
+      en: "`<<: *anchor` merges the anchor's keys into the current mapping, which you can then override."
+  - q:
+      fr: "Pourquoi éviter d'abuser des ancres et alias ?"
+      en: "Why avoid overusing anchors and aliases?"
+    options:
+      fr:
+        - "Ils ralentissent toujours le parsing"
+        - "Ils sont interdits par la spécification YAML"
+        - "Ils peuvent rendre le fichier illisible et ne sont pas supportés partout"
+        - "Ils chiffrent les données"
+      en:
+        - "They always slow down parsing"
+        - "They are forbidden by the YAML spec"
+        - "They can make the file unreadable and are not supported everywhere"
+        - "They encrypt the data"
+    answer: 2
+    why:
+      fr: "Des alias trop imbriqués nuisent à la lisibilité et certains outils (comme kubectl côté serveur) ne les gèrent pas."
+      en: "Deeply nested aliases hurt readability and some tools (like server-side kubectl) do not handle them."

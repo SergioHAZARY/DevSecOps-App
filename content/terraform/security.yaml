@@ -1,0 +1,566 @@
+description:
+  fr: "Sécuriser son usage de Terraform : pas de secrets dans le code ni le state, authentification de la CI par OIDC plutôt que des clés statiques, et scan de l'IaC avec Trivy et Checkov."
+  en: "Secure your use of Terraform: no secrets in code or state, CI authentication via OIDC instead of static keys, and IaC scanning with Trivy and Checkov."
+duration: 30
+
+intro:
+  fr: |
+    Terraform a un pouvoir énorme : il crée, modifie et détruit toute votre infrastructure. Ce pouvoir
+    attire les attaquants, et quelques erreurs reviennent sans cesse : un secret codé en dur, un port SSH
+    ouvert au monde entier, un bucket public, un disque non chiffré, ou des clés d'accès AWS « éternelles »
+    stockées dans la CI. Cette leçon rassemble les réflexes de sécurité qui comptent le plus.
+
+    L'analogie : les **clés de la maison**. On ne les laisse pas sous le paillasson (secret en dur), on ne
+    distribue pas de passe-partout qui n'expire jamais (clés statiques), et on vérifie que portes et
+    fenêtres sont bien fermées avant de partir (scan de l'IaC). L'objectif : que la configuration la plus
+    simple soit déjà la plus sûre.
+
+    Vous allez comparer une configuration truffée de failles à sa version corrigée (SSH restreint, bucket
+    privé, volume chiffré, IMDSv2, secret référencé et non copié), remplacer des clés AWS statiques par une
+    authentification **OIDC** sans secret depuis GitHub Actions, et passer votre code au crible avec
+    **Trivy** et **Checkov**.
+  en: |
+    Terraform has enormous power: it creates, changes and destroys your whole infrastructure. That power
+    attracts attackers, and a few mistakes keep coming back: a hard-coded secret, an SSH port open to the
+    entire world, a public bucket, an unencrypted disk, or "eternal" AWS access keys stored in CI. This
+    lesson gathers the security reflexes that matter most.
+
+    The analogy: the **house keys**. You do not leave them under the doormat (hard-coded secret), you do not
+    hand out a master key that never expires (static keys), and you check that doors and windows are shut
+    before leaving (IaC scanning). The goal: make the simplest configuration already the safest.
+
+    You will compare a configuration riddled with flaws to its fixed version (SSH restricted, private
+    bucket, encrypted volume, IMDSv2, secret referenced and not copied), replace static AWS keys with
+    secret-less **OIDC** authentication from GitHub Actions, and scrutinise your code with **Trivy** and
+    **Checkov**.
+
+sections:
+  - heading:
+      fr: "Les secrets : jamais dans le code ni le state"
+      en: "Secrets: never in the code or the state"
+    body:
+      fr: |
+        Un secret écrit en dur dans un fichier `.tf` finit dans Git pour toujours, même après suppression.
+        Et rappelez-vous (leçon « providers et state ») : toute valeur passée à une ressource atterrit **en
+        clair dans le state**, `sensitive` ou pas. La stratégie en trois niveaux :
+
+        1. **Ne pas coder le secret** : le lire depuis un gestionnaire (AWS Secrets Manager, Vault) ou une
+           variable d'environnement `TF_VAR_`.
+        2. **Référencer plutôt que copier** : quand c'est possible, passez à l'application l'**ARN** du
+           secret, pour qu'elle le récupère elle-même à l'exécution — ainsi le secret ne transite jamais par
+           le state Terraform.
+        3. **Protéger le state** : chiffré, à accès restreint, jamais dans Git (leçon dédiée).
+
+        Une `data "aws_secretsmanager_secret"` donne l'ARN d'un secret sans en lire la valeur. Si vous devez
+        vraiment injecter une valeur (créer un mot de passe de base de données), générez-la avec
+        `random_password`, marquez-la `sensitive`, et acceptez qu'elle soit dans le state — d'où
+        l'importance de le chiffrer. Le mieux reste de confier la rotation du secret au service managé.
+      en: |
+        A secret hard-coded in a `.tf` file ends up in Git forever, even after deletion. And remember (the
+        "providers and state" lesson): any value passed to a resource lands **in clear in the state**,
+        `sensitive` or not. The three-level strategy:
+
+        1. **Do not code the secret**: read it from a manager (AWS Secrets Manager, Vault) or a `TF_VAR_`
+           environment variable.
+        2. **Reference rather than copy**: where possible, pass the secret's **ARN** to the application so it
+           fetches the value itself at runtime — this way the secret never passes through the Terraform state.
+        3. **Protect the state**: encrypted, access-restricted, never in Git (dedicated lesson).
+
+        A `data "aws_secretsmanager_secret"` gives a secret's ARN without reading its value. If you really
+        must inject a value (create a database password), generate it with `random_password`, mark it
+        `sensitive`, and accept that it sits in the state — hence the need to encrypt it. Best is to hand
+        secret rotation to the managed service.
+  - heading:
+      fr: "OIDC : la fin des clés statiques dans la CI"
+      en: "OIDC: the end of static keys in CI"
+    body:
+      fr: |
+        Pour que la CI applique du Terraform sur AWS, elle doit s'authentifier. La mauvaise méthode : créer
+        un utilisateur IAM, générer une paire de clés d'accès (`AKIA…` + secret) et la coller dans les
+        *secrets* du dépôt. Ces clés sont **statiques** : elles n'expirent pas, ont souvent trop de droits,
+        et une fuite (log, capture, dépôt public) donne un accès durable à l'attaquant.
+
+        La bonne méthode : **OIDC** (*OpenID Connect*). GitHub Actions présente un **jeton d'identité**
+        signé, à durée de vie très courte, qu'AWS vérifie pour accorder un rôle temporaire. Aucune clé
+        secrète n'est stockée nulle part.
+
+        | | Clés statiques IAM | OIDC |
+        |---|---|---|
+        | Secret stocké dans la CI | Oui (`AKIA…` + secret) | **Non** |
+        | Durée de vie | Illimitée | Quelques minutes |
+        | En cas de fuite | Accès durable | Jeton déjà expiré |
+        | Portée | Souvent trop large | Limitée par la *trust policy* (dépôt, branche) |
+
+        La *trust policy* du rôle AWS restreint qui peut l'assumer : seulement le dépôt et la branche
+        attendus, via la condition sur le `sub` du jeton. C'est le standard moderne pour toute CI vers le cloud.
+      en: |
+        For CI to apply Terraform on AWS, it must authenticate. The wrong way: create an IAM user, generate
+        an access key pair (`AKIA…` + secret) and paste it into the repo *secrets*. These keys are
+        **static**: they never expire, often have too many rights, and a leak (log, screenshot, public repo)
+        gives an attacker lasting access.
+
+        The right way: **OIDC** (*OpenID Connect*). GitHub Actions presents a signed, very short-lived
+        **identity token** that AWS verifies to grant a temporary role. No secret key is stored anywhere.
+
+        | | Static IAM keys | OIDC |
+        |---|---|---|
+        | Secret stored in CI | Yes (`AKIA…` + secret) | **No** |
+        | Lifetime | Unlimited | A few minutes |
+        | On leak | Lasting access | Token already expired |
+        | Scope | Often too broad | Restricted by the trust policy (repo, branch) |
+
+        The AWS role's trust policy restricts who can assume it: only the expected repo and branch, via the
+        condition on the token's `sub`. This is the modern standard for any CI-to-cloud access.
+  - heading:
+      fr: "Scanner l'IaC : Trivy et Checkov"
+      en: "Scanning IaC: Trivy and Checkov"
+    body:
+      fr: |
+        Même avec de bonnes intentions, une faille passe toujours. Des scanners **statiques** lisent votre
+        code Terraform et signalent les configurations dangereuses, bien avant l'apply :
+
+        - **Trivy** (Aqua Security) : scanner tout-en-un (vulnérabilités, secrets, IaC). Pour Terraform :
+          `trivy config .`. Il a **absorbé tfsec**, désormais déprécié — si vous voyez `tfsec` dans un vieux
+          projet, migrez vers Trivy.
+        - **Checkov** (Bridgecrew/Prisma) : scanner IaC avec des centaines de règles prêtes à l'emploi
+          (`checkov -d .`), et la possibilité d'écrire ses propres règles.
+
+        Les deux détectent les classiques : bucket public, SG ouvert, volume non chiffré, IMDSv1, secret en
+        dur. On les lance **en local** (retour immédiat) **et en CI** (barrière avant la fusion). Une bonne
+        pratique consiste à faire **échouer** le pipeline sur les règles critiques (sévérité élevée) et à
+        traiter les autres comme des avertissements, pour ne pas noyer l'équipe. Trivy et Checkov complètent
+        — ils ne remplacent pas — les validations et politiques OPA/Conftest vues ailleurs.
+      en: |
+        Even with good intentions, a flaw always slips through. **Static** scanners read your Terraform code
+        and flag dangerous configurations, well before apply:
+
+        - **Trivy** (Aqua Security): all-in-one scanner (vulnerabilities, secrets, IaC). For Terraform:
+          `trivy config .`. It has **absorbed tfsec**, now deprecated — if you see `tfsec` in an old
+          project, migrate to Trivy.
+        - **Checkov** (Bridgecrew/Prisma): IaC scanner with hundreds of ready-made rules (`checkov -d .`),
+          and the ability to write your own.
+
+        Both detect the classics: public bucket, open SG, unencrypted volume, IMDSv1, hard-coded secret. You
+        run them **locally** (immediate feedback) **and in CI** (a gate before merge). A good practice is to
+        **fail** the pipeline on critical rules (high severity) and treat the rest as warnings, so as not to
+        drown the team. Trivy and Checkov complement — they do not replace — the validations and OPA/Conftest
+        policies seen elsewhere.
+
+examples:
+  - title:
+      fr: "Vulnérable : la configuration qui cumule les failles"
+      en: "Vulnerable: the configuration that stacks the flaws"
+    file: insecure.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      # Flaw 1: a secret hard-coded in the source (ends up in Git AND in the state)
+      resource "aws_db_instance" "app" {
+        engine         = "postgres"
+        instance_class = "db.t3.micro"
+        username       = "admin"
+        password       = "SuperSecret123!" # NEVER do this
+      }
+
+      # Flaw 2: SSH open to the entire internet
+      resource "aws_security_group" "web" {
+        name = "web"
+        ingress {
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"] # the whole world can reach SSH
+        }
+      }
+
+      # Flaw 3: a public bucket (no public access block, public-read ACL)
+      resource "aws_s3_bucket" "assets" {
+        bucket = "devsecops-assets-42"
+      }
+      resource "aws_s3_bucket_acl" "assets" {
+        bucket = aws_s3_bucket.assets.id
+        acl    = "public-read" # anyone can list and read objects
+      }
+
+      # Flaw 4: an unencrypted volume, and IMDSv1 left enabled
+      resource "aws_instance" "web" {
+        ami           = "ami-0123456789abcdef0"
+        instance_type = "t3.small"
+        root_block_device {
+          encrypted = false # data at rest in clear
+        }
+        # no metadata_options -> IMDSv1 allowed -> easier SSRF credential theft
+      }
+    note:
+      fr: "Quatre failles classiques : secret en dur, SSH ouvert à `0.0.0.0/0`, bucket public, volume non chiffré avec IMDSv1. Chacune est détectée par Trivy et Checkov. L'exemple suivant corrige les quatre."
+      en: "Four classic flaws: hard-coded secret, SSH open to `0.0.0.0/0`, public bucket, unencrypted volume with IMDSv1. Each is caught by Trivy and Checkov. The next example fixes all four."
+
+  - title:
+      fr: "Sécurisé : la même infrastructure, durcie"
+      en: "Secure: the same infrastructure, hardened"
+    file: secure.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Fix 1: reference the secret's ARN; the app fetches the value at runtime,
+      # so the password never passes through the Terraform state.
+      data "aws_secretsmanager_secret" "db" {
+        name = "app/db/password"
+      }
+
+      # Fix 2: SSH restricted to the corporate range only (HTTPS may stay public)
+      resource "aws_security_group" "web" {
+        name = "web"
+        ingress {
+          description = "SSH from the office only"
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["203.0.113.0/24"] # a known, narrow range
+        }
+      }
+
+      # Fix 3: a private bucket with a full public access block
+      resource "aws_s3_bucket" "assets" {
+        bucket = "devsecops-assets-42"
+      }
+      resource "aws_s3_bucket_public_access_block" "assets" {
+        bucket                  = aws_s3_bucket.assets.id
+        block_public_acls       = true
+        block_public_policy     = true
+        ignore_public_acls      = true
+        restrict_public_buckets = true
+      }
+
+      # Fix 4: encrypted volume + IMDSv2 required
+      resource "aws_instance" "web" {
+        ami           = "ami-0123456789abcdef0"
+        instance_type = "t3.small"
+        root_block_device {
+          encrypted = true # data at rest encrypted
+        }
+        metadata_options {
+          http_tokens = "required" # IMDSv2 only, blocks SSRF credential theft
+        }
+      }
+    note:
+      fr: "Les quatre failles sont corrigées : secret référencé par ARN (hors du state), SSH limité à une plage connue, bucket privé par blocage public, volume chiffré et `http_tokens = \"required\"` qui impose IMDSv2. Le port 443 (HTTPS), lui, peut rester public."
+      en: "All four flaws fixed: secret referenced by ARN (out of the state), SSH limited to a known range, private bucket via public access block, encrypted volume and `http_tokens = \"required\"` enforcing IMDSv2. Port 443 (HTTPS) may stay public."
+
+  - title:
+      fr: "OIDC : GitHub Actions sans clé statique"
+      en: "OIDC: GitHub Actions with no static key"
+    file: .github/workflows/deploy.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: deploy
+
+      on:
+        push:
+          branches: [main]
+
+      permissions:
+        contents: read
+        id-token: write # REQUIRED for the workflow to request an OIDC token
+
+      jobs:
+        apply:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            # No AKIA/secret key anywhere: a short-lived role is assumed via OIDC
+            - name: Configure AWS credentials via OIDC
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                role-to-assume: arn:aws:iam::123456789012:role/github-actions-terraform
+                aws-region: eu-west-3
+
+            - uses: hashicorp/setup-terraform@v3
+            - run: terraform init
+            - run: terraform apply -auto-approve
+    note:
+      fr: "`id-token: write` autorise le workflow à demander un jeton OIDC ; `configure-aws-credentials` l'échange contre des identifiants temporaires. Aucun secret `AKIA…` n'est stocké dans le dépôt : une fuite de logs ne donne rien d'exploitable."
+      en: "`id-token: write` lets the workflow request an OIDC token; `configure-aws-credentials` swaps it for temporary credentials. No `AKIA…` secret is stored in the repo: a log leak yields nothing usable."
+
+  - title:
+      fr: "Le rôle AWS et sa trust policy OIDC"
+      en: "The AWS role and its OIDC trust policy"
+    file: oidc-role.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Register GitHub as an OIDC identity provider (once per account)
+      resource "aws_iam_openid_connect_provider" "github" {
+        url             = "https://token.actions.githubusercontent.com"
+        client_id_list  = ["sts.amazonaws.com"]
+        thumbprint_list = ["ffffffffffffffffffffffffffffffffffffffff"]
+      }
+
+      # The role CI assumes; the trust policy restricts WHO may assume it
+      data "aws_iam_policy_document" "trust" {
+        statement {
+          actions = ["sts:AssumeRoleWithWebIdentity"]
+          effect  = "Allow"
+
+          principals {
+            type        = "Federated"
+            identifiers = [aws_iam_openid_connect_provider.github.arn]
+          }
+
+          # Only this repository, and only the main branch, may assume the role
+          condition {
+            test     = "StringEquals"
+            variable = "token.actions.githubusercontent.com:sub"
+            values   = ["repo:example-org/infra:ref:refs/heads/main"]
+          }
+        }
+      }
+
+      resource "aws_iam_role" "github_actions" {
+        name               = "github-actions-terraform"
+        assume_role_policy = data.aws_iam_policy_document.trust.json
+      }
+    note:
+      fr: "La condition sur `:sub` est la clé de la sécurité OIDC : seul le dépôt `example-org/infra`, sur la branche `main`, peut assumer le rôle. Une *pull request* d'un fork ne pourra jamais obtenir ces droits. Attachez au rôle une politique de moindre privilège (non montrée)."
+      en: "The condition on `:sub` is the heart of OIDC security: only the `example-org/infra` repo, on the `main` branch, can assume the role. A fork's pull request can never obtain these rights. Attach a least-privilege policy to the role (not shown)."
+
+  - title:
+      fr: "Scanner avec Trivy et Checkov"
+      en: "Scanning with Trivy and Checkov"
+    file: scan.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Trivy: IaC misconfiguration scan (tfsec is deprecated and merged into Trivy)
+      trivy config .
+
+      # Checkov: hundreds of built-in Terraform rules
+      checkov -d .
+
+      # In CI, fail only on HIGH/CRITICAL to keep the signal strong:
+      trivy config --severity HIGH,CRITICAL --exit-code 1 .
+    output: |
+      $ trivy config .
+      insecure.tf:12 (aws_security_group.web)
+        HIGH: Security group rule allows ingress from 0.0.0.0/0 on port 22
+      insecure.tf:30 (aws_s3_bucket_acl.assets)
+        CRITICAL: S3 bucket has a public ACL
+      insecure.tf:40 (aws_instance.web)
+        HIGH: Root block device is not encrypted
+        MEDIUM: Instance does not require IMDSv2 (http_tokens)
+
+      Failures: 4 (MEDIUM: 1, HIGH: 2, CRITICAL: 1)
+    note:
+      fr: "Trivy et Checkov attrapent exactement les quatre failles de l'exemple vulnérable. `--exit-code 1` fait échouer la CI sur les sévérités choisies. Lancez-les aussi en local pour corriger avant même de pousser."
+      en: "Trivy and Checkov catch exactly the four flaws of the vulnerable example. `--exit-code 1` fails CI on the chosen severities. Run them locally too, to fix before even pushing."
+
+mistake:
+  fr: |
+    **Stocker des clés d'accès AWS statiques dans les secrets de la CI.**
+
+    C'est l'erreur la plus répandue et la plus coûteuse. Une paire `AKIA…` + secret ne expire jamais, est
+    souvent sur-privilégiée, et finit par fuiter (log de debug, capture d'écran, fork public). L'attaquant
+    obtient alors un accès durable à votre compte. La solution moderne est **OIDC** : des identifiants
+    temporaires, limités au bon dépôt et à la bonne branche, sans aucun secret stocké. Deuxième erreur
+    jumelle : coder un mot de passe en dur « juste pour tester ». Il part dans Git (définitivement) et dans
+    le state (en clair). Lisez le secret depuis un gestionnaire, ou générez-le et chiffrez le state. Enfin,
+    ne vous fiez pas qu'à la relecture humaine : branchez Trivy et Checkov, qui attrapent ce que l'œil rate.
+  en: |
+    **Storing static AWS access keys in the CI secrets.**
+
+    This is the most widespread and most costly mistake. An `AKIA…` + secret pair never expires, is often
+    over-privileged, and eventually leaks (debug log, screenshot, public fork). The attacker then gets
+    lasting access to your account. The modern solution is **OIDC**: temporary credentials, restricted to
+    the right repo and branch, with no stored secret. The twin mistake: hard-coding a password "just to
+    test". It goes to Git (permanently) and to the state (in clear). Read the secret from a manager, or
+    generate it and encrypt the state. Finally, do not rely on human review alone: wire up Trivy and
+    Checkov, which catch what the eye misses.
+
+bestPractice:
+  fr: |
+    - **Aucun secret en dur** : lecture depuis un gestionnaire (Secrets Manager, Vault) ou `TF_VAR_`.
+    - **Référencer l'ARN d'un secret** plutôt que sa valeur, pour qu'il ne transite pas par le state.
+    - **OIDC au lieu de clés statiques** pour la CI : identifiants temporaires, limités au dépôt et à la branche.
+    - **Sûr par défaut** : SSH restreint, bucket privé (blocage public), volume chiffré, IMDSv2 (`http_tokens = "required"`).
+    - **Scannez avec Trivy et Checkov** en local et en CI ; faites échouer sur les sévérités élevées.
+    - **Moindre privilège IAM** pour le rôle de la CI : seulement les actions nécessaires.
+  en: |
+    - **No hard-coded secret**: read from a manager (Secrets Manager, Vault) or `TF_VAR_`.
+    - **Reference a secret's ARN** rather than its value, so it does not pass through the state.
+    - **OIDC instead of static keys** for CI: temporary credentials, scoped to the repo and branch.
+    - **Secure by default**: restricted SSH, private bucket (public access block), encrypted volume, IMDSv2 (`http_tokens = "required"`).
+    - **Scan with Trivy and Checkov** locally and in CI; fail on high severities.
+    - **Least-privilege IAM** for the CI role: only the necessary actions.
+
+exercise:
+  statement:
+    fr: |
+      On vous donne cette ressource vulnérable :
+
+      ```hcl
+      resource "aws_instance" "api" {
+        ami           = "ami-0123456789abcdef0"
+        instance_type = "t3.small"
+        root_block_device {
+          encrypted = false
+        }
+      }
+      ```
+
+      1. Corrigez-la pour chiffrer le volume racine et imposer IMDSv2.
+      2. Ajoutez un *security group* `api` autorisant HTTPS (443) depuis Internet mais SSH (22) uniquement
+         depuis `198.51.100.0/24`.
+      3. Donnez la commande Trivy qui fait échouer la CI sur les sévérités HIGH et CRITICAL.
+    en: |
+      You are given this vulnerable resource:
+
+      ```hcl
+      resource "aws_instance" "api" {
+        ami           = "ami-0123456789abcdef0"
+        instance_type = "t3.small"
+        root_block_device {
+          encrypted = false
+        }
+      }
+      ```
+
+      1. Fix it to encrypt the root volume and enforce IMDSv2.
+      2. Add an `api` security group allowing HTTPS (443) from the internet but SSH (22) only from
+         `198.51.100.0/24`.
+      3. Give the Trivy command that fails CI on HIGH and CRITICAL severities.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      resource "aws_security_group" "api" {
+        name = "api"
+
+        ingress {
+          description = "HTTPS from the internet (public by design)"
+          from_port   = 443
+          to_port     = 443
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+
+        ingress {
+          description = "SSH from the admin range only"
+          from_port   = 22
+          to_port     = 22
+          protocol    = "tcp"
+          cidr_blocks = ["198.51.100.0/24"]
+        }
+      }
+
+      resource "aws_instance" "api" {
+        ami                    = "ami-0123456789abcdef0"
+        instance_type          = "t3.small"
+        vpc_security_group_ids = [aws_security_group.api.id]
+
+        root_block_device {
+          encrypted = true # encrypt data at rest
+        }
+        metadata_options {
+          http_tokens = "required" # IMDSv2 only
+        }
+      }
+
+      # 3. CI gate:
+      #    trivy config --severity HIGH,CRITICAL --exit-code 1 .
+    note:
+      fr: "HTTPS ouvert à tous est normal (c'est le but d'un service web) ; c'est SSH qu'on restreint à une plage connue. `encrypted = true` et `http_tokens = \"required\"` corrigent les deux failles de l'instance. Trivy avec `--exit-code 1` bloque la CI."
+      en: "HTTPS open to all is normal (that is a web service's purpose); it is SSH that you restrict to a known range. `encrypted = true` and `http_tokens = \"required\"` fix the instance's two flaws. Trivy with `--exit-code 1` gates CI."
+
+quiz:
+  - q:
+      fr: "Pourquoi un mot de passe codé en dur dans un `.tf` est-il dangereux, même si on le supprime ensuite ?"
+      en: "Why is a password hard-coded in a `.tf` dangerous, even if you delete it afterwards?"
+    options:
+      fr:
+        - "Il ralentit le plan"
+        - "Il reste dans l'historique Git et aussi en clair dans le state"
+        - "Il empêche l'apply"
+        - "Il n'y a aucun danger"
+      en:
+        - "It slows the plan down"
+        - "It stays in the Git history and also in clear in the state"
+        - "It prevents apply"
+        - "There is no danger"
+    answer: 1
+    why:
+      fr: "Un secret committé persiste dans l'historique Git même après suppression, et toute valeur passée à une ressource est stockée en clair dans le state."
+      en: "A committed secret persists in the Git history even after deletion, and any value passed to a resource is stored in clear in the state."
+  - q:
+      fr: "Quel est l'avantage principal d'OIDC par rapport à des clés AWS statiques dans la CI ?"
+      en: "What is OIDC's main advantage over static AWS keys in CI?"
+    options:
+      fr:
+        - "Aucun secret durable n'est stocké ; les identifiants sont temporaires et à portée limitée"
+        - "C'est plus rapide à configurer"
+        - "Cela chiffre le state"
+        - "Cela supprime le besoin de rôle IAM"
+      en:
+        - "No lasting secret is stored; credentials are temporary and narrowly scoped"
+        - "It is faster to set up"
+        - "It encrypts the state"
+        - "It removes the need for an IAM role"
+    answer: 0
+    why:
+      fr: "OIDC échange un jeton court contre un rôle temporaire : rien à stocker, et une fuite ne donne qu'un jeton déjà expiré, limité au dépôt et à la branche."
+      en: "OIDC swaps a short token for a temporary role: nothing to store, and a leak yields only an already-expired token, scoped to the repo and branch."
+  - q:
+      fr: "Comment imposer IMDSv2 sur une instance EC2 avec Terraform ?"
+      en: "How do you enforce IMDSv2 on an EC2 instance with Terraform?"
+    options:
+      fr:
+        - "`encrypted = true`"
+        - "`imds = \"v2\"`"
+        - "`metadata_options { http_tokens = \"required\" }`"
+        - "`public = false`"
+      en:
+        - "`encrypted = true`"
+        - "`imds = \"v2\"`"
+        - "`metadata_options { http_tokens = \"required\" }`"
+        - "`public = false`"
+    answer: 2
+    why:
+      fr: "`http_tokens = \"required\"` dans `metadata_options` force IMDSv2, ce qui bloque le vol d'identifiants via une attaque SSRF exploitant IMDSv1."
+      en: "`http_tokens = \"required\"` in `metadata_options` forces IMDSv2, blocking credential theft via an SSRF attack exploiting IMDSv1."
+  - q:
+      fr: "Quel outil a absorbé tfsec (désormais déprécié) pour le scan de l'IaC ?"
+      en: "Which tool absorbed tfsec (now deprecated) for IaC scanning?"
+    options:
+      fr:
+        - "Checkov"
+        - "Trivy"
+        - "Terraform validate"
+        - "OPA"
+      en:
+        - "Checkov"
+        - "Trivy"
+        - "Terraform validate"
+        - "OPA"
+    answer: 1
+    why:
+      fr: "Trivy (Aqua Security) a intégré tfsec ; on utilise `trivy config .` pour scanner le Terraform. Checkov est une alternative, pas le successeur de tfsec."
+      en: "Trivy (Aqua Security) merged tfsec; you use `trivy config .` to scan Terraform. Checkov is an alternative, not tfsec's successor."
+  - q:
+      fr: "Dans une trust policy OIDC, à quoi sert la condition sur `:sub` ?"
+      en: "In an OIDC trust policy, what is the condition on `:sub` for?"
+    options:
+      fr:
+        - "À chiffrer le jeton"
+        - "À restreindre quel dépôt et quelle branche peuvent assumer le rôle"
+        - "À définir la région AWS"
+        - "À générer les clés d'accès"
+      en:
+        - "To encrypt the token"
+        - "To restrict which repo and branch may assume the role"
+        - "To set the AWS region"
+        - "To generate the access keys"
+    answer: 1
+    why:
+      fr: "La condition sur `:sub` limite l'assomption du rôle au dépôt et à la branche attendus (`repo:org/infra:ref:refs/heads/main`), empêchant un fork ou une autre branche d'obtenir ces droits."
+      en: "The condition on `:sub` limits role assumption to the expected repo and branch (`repo:org/infra:ref:refs/heads/main`), preventing a fork or another branch from obtaining these rights."

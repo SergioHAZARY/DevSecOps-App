@@ -1,0 +1,499 @@
+description:
+  fr: "Croiser plusieurs tables avec les jointures (JOIN) et résumer des données avec les fonctions d'agrégation (COUNT, SUM, GROUP BY) sur un jeu de données de journaux de sécurité."
+  en: "Combine several tables with joins (JOIN) and summarise data with aggregation functions (COUNT, SUM, GROUP BY) on a security-log dataset."
+duration: 30
+
+intro:
+  fr: |
+    Les données réelles sont réparties sur **plusieurs tables** : une table des utilisateurs, une table des
+    connexions, une table des rôles. Pour répondre à une question comme *« combien de connexions échouées par
+    utilisateur ? »*, il faut **relier** ces tables entre elles (les **jointures**) et **résumer** les
+    résultats (les **agrégations**).
+
+    Reprenons l'image du classeur de tableurs. Une **jointure** (`JOIN`), c'est rapprocher deux feuilles par
+    une colonne commune, comme un publipostage qui relie la feuille « clients » à la feuille « commandes » par
+    le numéro de client. Une **agrégation**, c'est le total au bas d'une colonne : *compter*, *additionner*,
+    *faire la moyenne* d'un groupe de lignes.
+
+    Cette leçon s'appuie sur un jeu de données de **sécurité** : des utilisateurs et leurs tentatives de
+    connexion. Tous les exemples s'exécutent **dans la page** (SQLite) : ils créent leurs tables, les
+    remplissent, puis les interrogent, avec le résultat exact affiché. Vous apprendrez `INNER JOIN` et
+    `LEFT JOIN`, les fonctions `COUNT`, `SUM`, `AVG`, `MAX`, et la clause `GROUP BY` qui transforme des lignes
+    brutes en statistiques — l'outil des rapports d'audit.
+  en: |
+    Real data is spread across **several tables**: a users table, a logins table, a roles table. To answer a
+    question like *"how many failed logins per user?"*, you must **link** these tables (the **joins**) and
+    **summarise** the results (the **aggregations**).
+
+    Back to the binder-of-spreadsheets image. A **join** (`JOIN`) brings two sheets together on a common
+    column, like a mail merge linking the "customers" sheet to the "orders" sheet by customer number. An
+    **aggregation** is the total at the bottom of a column: *count*, *sum*, *average* of a group of rows.
+
+    This lesson builds on a **security** dataset: users and their login attempts. Every example runs **in the
+    page** (SQLite): it creates its tables, fills them, then queries them, with the exact result shown. You
+    will learn `INNER JOIN` and `LEFT JOIN`, the functions `COUNT`, `SUM`, `AVG`, `MAX`, and the `GROUP BY`
+    clause that turns raw rows into statistics — the tool of audit reports.
+
+sections:
+  - heading:
+      fr: "Relier deux tables avec JOIN"
+      en: "Linking two tables with JOIN"
+    body:
+      fr: |
+        Une **jointure** combine les lignes de deux tables qui partagent une valeur. Prenons une table `users`
+        et une table `logins` reliée par `user_id` :
+
+        ```sql
+        SELECT users.username, logins.success, logins.ip
+        FROM logins
+        INNER JOIN users ON users.id = logins.user_id;
+        ```
+
+        La condition `ON users.id = logins.user_id` est la **clé de jointure** : elle dit comment apparier les
+        lignes. On préfixe les colonnes par le nom de leur table (`users.username`) pour lever toute ambiguïté.
+
+        Deux types de jointure à connaître :
+
+        | Type | Résultat |
+        |---|---|
+        | `INNER JOIN` | seulement les lignes qui ont une correspondance dans **les deux** tables |
+        | `LEFT JOIN` | **toutes** les lignes de la table de gauche, avec `NULL` si pas de correspondance |
+
+        La différence est capitale pour un audit. Un `INNER JOIN` entre `users` et `logins` ne montre que les
+        utilisateurs qui se sont connectés au moins une fois. Un `LEFT JOIN` montre **tous** les utilisateurs,
+        y compris ceux qui ne se sont **jamais** connectés (colonnes de `logins` à `NULL`) — précisément les
+        comptes dormants à surveiller. On écrit souvent des **alias** courts (`FROM logins l JOIN users u`)
+        pour alléger la requête.
+      en: |
+        A **join** combines rows from two tables that share a value. Take a `users` table and a `logins` table
+        linked by `user_id`:
+
+        ```sql
+        SELECT users.username, logins.success, logins.ip
+        FROM logins
+        INNER JOIN users ON users.id = logins.user_id;
+        ```
+
+        The condition `ON users.id = logins.user_id` is the **join key**: it says how to pair the rows. You
+        prefix columns with their table name (`users.username`) to remove any ambiguity.
+
+        Two join types to know:
+
+        | Type | Result |
+        |---|---|
+        | `INNER JOIN` | only rows that have a match in **both** tables |
+        | `LEFT JOIN` | **all** rows of the left table, with `NULL` where there is no match |
+
+        The difference is crucial for an audit. An `INNER JOIN` between `users` and `logins` shows only users
+        who logged in at least once. A `LEFT JOIN` shows **all** users, including those who **never** logged in
+        (`logins` columns `NULL`) — precisely the dormant accounts to watch. You often write short **aliases**
+        (`FROM logins l JOIN users u`) to lighten the query.
+  - heading:
+      fr: "Résumer avec les fonctions d'agrégation"
+      en: "Summarising with aggregation functions"
+    body:
+      fr: |
+        Les **fonctions d'agrégation** calculent une valeur unique à partir de plusieurs lignes :
+
+        | Fonction | Calcule |
+        |---|---|
+        | `COUNT(*)` | le nombre de lignes |
+        | `COUNT(col)` | le nombre de valeurs non `NULL` |
+        | `SUM(col)` | la somme |
+        | `AVG(col)` | la moyenne |
+        | `MIN(col)` / `MAX(col)` | le minimum / maximum |
+
+        ```sql
+        SELECT COUNT(*) AS total_logins FROM logins;
+        SELECT COUNT(*) AS failures FROM logins WHERE success = 0;
+        SELECT MAX(attempted_at) AS last_attempt FROM logins;
+        ```
+
+        `AS` donne un **nom** lisible à la colonne de résultat (`total_logins`). Sans agrégation par groupe,
+        ces fonctions renvoient une seule ligne pour toute la table. Pour un rapport de sécurité, elles
+        répondent à des questions directes : combien de connexions au total, combien d'échecs, quelle est la
+        dernière tentative. Combinées à un `WHERE`, elles ciblent un sous-ensemble : *« combien d'échecs depuis
+        cette adresse IP ? »*.
+      en: |
+        **Aggregation functions** compute a single value from several rows:
+
+        | Function | Computes |
+        |---|---|
+        | `COUNT(*)` | the number of rows |
+        | `COUNT(col)` | the number of non-`NULL` values |
+        | `SUM(col)` | the sum |
+        | `AVG(col)` | the average |
+        | `MIN(col)` / `MAX(col)` | the minimum / maximum |
+
+        ```sql
+        SELECT COUNT(*) AS total_logins FROM logins;
+        SELECT COUNT(*) AS failures FROM logins WHERE success = 0;
+        SELECT MAX(attempted_at) AS last_attempt FROM logins;
+        ```
+
+        `AS` gives a readable **name** to the result column (`total_logins`). Without grouping, these functions
+        return a single row for the whole table. For a security report, they answer direct questions: how many
+        logins in total, how many failures, what is the last attempt. Combined with a `WHERE`, they target a
+        subset: *"how many failures from this IP address?"*.
+  - heading:
+      fr: "GROUP BY et HAVING : des statistiques par groupe"
+      en: "GROUP BY and HAVING: statistics per group"
+    body:
+      fr: |
+        `GROUP BY` est le cœur des rapports : il **regroupe** les lignes par une colonne, puis applique une
+        agrégation à chaque groupe. *« Combien d'échecs par utilisateur ? »* se traduit directement :
+
+        ```sql
+        SELECT users.username, COUNT(*) AS failures
+        FROM logins
+        JOIN users ON users.id = logins.user_id
+        WHERE logins.success = 0
+        GROUP BY users.username
+        ORDER BY failures DESC;
+        ```
+
+        Le schéma est toujours le même : on regroupe par une colonne (`GROUP BY users.username`), et chaque
+        fonction d'agrégation (`COUNT(*)`) s'applique **à l'intérieur** de chaque groupe. On trie souvent le
+        résultat par le total (`ORDER BY failures DESC`) pour faire remonter les cas les plus graves.
+
+        Pour **filtrer sur le résultat agrégé**, on utilise `HAVING`, pas `WHERE` :
+
+        ```sql
+        ... GROUP BY users.username HAVING COUNT(*) >= 5;   -- only users with 5+ failures
+        ```
+
+        La règle à retenir : `WHERE` filtre les lignes **avant** le regroupement (sur les données brutes),
+        `HAVING` filtre **après** le regroupement (sur les totaux). *« Les utilisateurs avec au moins 5
+        connexions échouées »* est un `HAVING` : c'est exactement une requête de détection de force brute.
+      en: |
+        `GROUP BY` is the heart of reporting: it **groups** rows by a column, then applies an aggregation to
+        each group. *"How many failures per user?"* translates directly:
+
+        ```sql
+        SELECT users.username, COUNT(*) AS failures
+        FROM logins
+        JOIN users ON users.id = logins.user_id
+        WHERE logins.success = 0
+        GROUP BY users.username
+        ORDER BY failures DESC;
+        ```
+
+        The pattern is always the same: you group by a column (`GROUP BY users.username`), and each aggregation
+        function (`COUNT(*)`) applies **inside** each group. You often sort the result by the total
+        (`ORDER BY failures DESC`) to surface the worst cases.
+
+        To **filter on the aggregated result**, you use `HAVING`, not `WHERE`:
+
+        ```sql
+        ... GROUP BY users.username HAVING COUNT(*) >= 5;   -- only users with 5+ failures
+        ```
+
+        The rule to remember: `WHERE` filters rows **before** grouping (on raw data), `HAVING` filters
+        **after** grouping (on totals). *"Users with at least 5 failed logins"* is a `HAVING`: exactly a
+        brute-force detection query.
+
+examples:
+  - title:
+      fr: "INNER JOIN : relier connexions et utilisateurs"
+      en: "INNER JOIN: linking logins and users"
+    file: inner-join.sql
+    lang: sql
+    kind: neutral
+    code: |
+      CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT);
+      CREATE TABLE logins (
+          id INTEGER PRIMARY KEY, user_id INTEGER, success INTEGER, ip TEXT
+      );
+      INSERT INTO users (id, username) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol');
+      INSERT INTO logins (user_id, success, ip) VALUES
+          (1, 1, '192.0.2.10'), (2, 0, '198.51.100.7'),
+          (2, 0, '198.51.100.7'), (1, 1, '192.0.2.10');
+
+      -- Pair each login with its user via the join key users.id = logins.user_id.
+      SELECT u.username, l.success, l.ip
+      FROM logins l
+      INNER JOIN users u ON u.id = l.user_id
+      ORDER BY u.username, l.id;
+    output: |
+      username  success  ip
+      --------  -------  ------------
+      alice     1        192.0.2.10
+      alice     1        192.0.2.10
+      bob       0        198.51.100.7
+      bob       0        198.51.100.7
+    note:
+      fr: "La jointure remplace `user_id` (un simple numéro) par le vrai nom d'utilisateur. `carol` n'apparaît pas : elle n'a aucune connexion, et `INNER JOIN` ne garde que les lignes ayant une correspondance dans les deux tables."
+      en: "The join replaces `user_id` (a mere number) with the real username. `carol` does not appear: she has no login, and `INNER JOIN` keeps only rows with a match in both tables."
+
+  - title:
+      fr: "LEFT JOIN : trouver les comptes jamais utilisés"
+      en: "LEFT JOIN: finding never-used accounts"
+    file: left-join.sql
+    lang: sql
+    kind: secure
+    code: |
+      CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT);
+      CREATE TABLE logins (id INTEGER PRIMARY KEY, user_id INTEGER, success INTEGER);
+      INSERT INTO users (id, username) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol');
+      INSERT INTO logins (user_id, success) VALUES (1, 1), (2, 0);
+
+      -- LEFT JOIN keeps ALL users; logins columns are NULL when there is no match.
+      -- WHERE l.id IS NULL isolates users who NEVER logged in: dormant accounts.
+      SELECT u.username
+      FROM users u
+      LEFT JOIN logins l ON l.user_id = u.id
+      WHERE l.id IS NULL;
+    output: |
+      username
+      --------
+      carol
+    note:
+      fr: "`LEFT JOIN` garde tous les utilisateurs ; `WHERE l.id IS NULL` ne retient que ceux sans aucune connexion. `carol` est un compte jamais utilisé : candidat idéal à la désactivation. C'est une requête d'audit très courante."
+      en: "`LEFT JOIN` keeps every user; `WHERE l.id IS NULL` retains only those with no login. `carol` is a never-used account: an ideal candidate for disabling. A very common audit query."
+
+  - title:
+      fr: "Agréger : compter les connexions échouées"
+      en: "Aggregating: counting failed logins"
+    file: aggregate.sql
+    lang: sql
+    kind: neutral
+    code: |
+      CREATE TABLE logins (
+          id INTEGER PRIMARY KEY, user_id INTEGER, success INTEGER, ip TEXT
+      );
+      INSERT INTO logins (user_id, success, ip) VALUES
+          (1, 1, '192.0.2.10'), (2, 0, '198.51.100.7'), (2, 0, '198.51.100.7'),
+          (2, 0, '198.51.100.7'), (3, 1, '203.0.113.9');
+
+      -- Three aggregates over the whole table at once.
+      SELECT
+          COUNT(*)                              AS total,
+          SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures,
+          COUNT(DISTINCT ip)                    AS distinct_ips
+      FROM logins;
+    output: |
+      total  failures  distinct_ips
+      -----  --------  ------------
+      5      3         3
+    note:
+      fr: "`COUNT(*)` compte toutes les lignes, `SUM(CASE WHEN ...)` compte les échecs, `COUNT(DISTINCT ip)` compte les adresses uniques. `AS` nomme chaque colonne. Trois statistiques d'un rapport de sécurité en une seule requête."
+      en: "`COUNT(*)` counts all rows, `SUM(CASE WHEN ...)` counts failures, `COUNT(DISTINCT ip)` counts unique addresses. `AS` names each column. Three security-report statistics in a single query."
+
+  - title:
+      fr: "GROUP BY + HAVING : détecter la force brute"
+      en: "GROUP BY + HAVING: detecting brute force"
+    file: group-having.sql
+    lang: sql
+    kind: secure
+    code: |
+      CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT);
+      CREATE TABLE logins (id INTEGER PRIMARY KEY, user_id INTEGER, success INTEGER);
+      INSERT INTO users (id, username) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol');
+      INSERT INTO logins (user_id, success) VALUES
+          (1, 0), (1, 0), (1, 0), (1, 0),      -- alice: 4 failures
+          (2, 0),                               -- bob: 1 failure
+          (3, 0), (3, 0), (3, 0);               -- carol: 3 failures
+
+      -- Count failures per user, keep only those with 3+ (HAVING filters groups).
+      SELECT u.username, COUNT(*) AS failures
+      FROM logins l
+      JOIN users u ON u.id = l.user_id
+      WHERE l.success = 0
+      GROUP BY u.username
+      HAVING COUNT(*) >= 3
+      ORDER BY failures DESC;
+    output: |
+      username  failures
+      --------  --------
+      alice     4
+      carol     3
+    note:
+      fr: "`WHERE l.success = 0` filtre les échecs avant le regroupement ; `GROUP BY` compte par utilisateur ; `HAVING COUNT(*) >= 3` ne garde que les comptes à 3 échecs ou plus. bob (1 échec) est exclu : c'est une détection de force brute en une requête."
+      en: "`WHERE l.success = 0` filters failures before grouping; `GROUP BY` counts per user; `HAVING COUNT(*) >= 3` keeps only accounts with 3 or more failures. bob (1 failure) is excluded: brute-force detection in a single query."
+
+  - title:
+      fr: "Les IP les plus agressives"
+      en: "The most aggressive IPs"
+    file: top-ips.sql
+    lang: sql
+    kind: secure
+    code: |
+      CREATE TABLE logins (
+          id INTEGER PRIMARY KEY, success INTEGER, ip TEXT
+      );
+      INSERT INTO logins (success, ip) VALUES
+          (0, '198.51.100.7'), (0, '198.51.100.7'), (0, '198.51.100.7'),
+          (0, '203.0.113.9'),  (0, '203.0.113.9'),  (1, '192.0.2.10');
+
+      -- Rank source IPs by number of failed attempts: the blocklist candidates.
+      SELECT ip, COUNT(*) AS failed_attempts
+      FROM logins
+      WHERE success = 0
+      GROUP BY ip
+      ORDER BY failed_attempts DESC
+      LIMIT 5;
+    output: |
+      ip            failed_attempts
+      ------------  ---------------
+      198.51.100.7  3
+      203.0.113.9   2
+    note:
+      fr: "On regroupe par adresse IP et on compte les échecs, trié du plus actif au moins actif. `198.51.100.7` concentre 3 tentatives échouées : candidate directe à un blocage par pare-feu ou Fail2Ban. C'est le rapport type d'un SIEM."
+      en: "You group by IP address and count failures, sorted from most to least active. `198.51.100.7` concentrates 3 failed attempts: a direct candidate for a firewall or Fail2Ban block. The typical report of a SIEM."
+
+mistake:
+  fr: |
+    **Confondre `WHERE` et `HAVING`, et mal choisir entre `INNER JOIN` et `LEFT JOIN`.**
+
+    Deux erreurs fréquentes. D'abord, essayer de filtrer un résultat agrégé avec `WHERE` :
+    `WHERE COUNT(*) >= 5` échoue, car `WHERE` agit **avant** le regroupement, sur les lignes brutes. Pour
+    filtrer sur un total, il faut `HAVING`, qui agit **après** le `GROUP BY`. Ensuite, utiliser un
+    `INNER JOIN` quand on veut voir les absents : pour trouver les comptes **jamais** connectés, un
+    `INNER JOIN` les élimine justement, car ils n'ont pas de correspondance. Il faut un `LEFT JOIN` et un test
+    `IS NULL`. Choisir la mauvaise jointure donne un rapport d'audit incomplet, qui passe à côté des comptes
+    dormants.
+  en: |
+    **Confusing `WHERE` and `HAVING`, and misusing `INNER JOIN` versus `LEFT JOIN`.**
+
+    Two frequent mistakes. First, trying to filter an aggregated result with `WHERE`:
+    `WHERE COUNT(*) >= 5` fails, because `WHERE` acts **before** grouping, on raw rows. To filter on a total,
+    you need `HAVING`, which acts **after** the `GROUP BY`. Second, using an `INNER JOIN` when you want to see
+    the absentees: to find accounts that **never** logged in, an `INNER JOIN` eliminates them precisely,
+    because they have no match. You need a `LEFT JOIN` and an `IS NULL` test. Picking the wrong join gives an
+    incomplete audit report that misses the dormant accounts.
+
+bestPractice:
+  fr: |
+    - **Choisissez la jointure selon l'intention** : `INNER JOIN` pour les correspondances, `LEFT JOIN` +
+      `IS NULL` pour trouver les lignes **sans** correspondance (comptes dormants).
+    - **Préfixez les colonnes** par la table ou un alias (`u.username`) pour lever toute ambiguïté dans une
+      jointure.
+    - **Filtrez avant avec `WHERE`, après avec `HAVING`** : `WHERE` sur les lignes brutes, `HAVING` sur les
+      résultats agrégés.
+    - **Nommez vos agrégats avec `AS`** (`COUNT(*) AS failures`) : un rapport lisible est un rapport
+      exploitable.
+    - **Triez par le total** (`ORDER BY ... DESC`) pour faire remonter les cas les plus graves en tête.
+    - **Validez la clé de jointure** : une mauvaise condition `ON` produit des doublons ou un produit cartésien.
+  en: |
+    - **Pick the join by intent**: `INNER JOIN` for matches, `LEFT JOIN` + `IS NULL` to find rows **without** a
+      match (dormant accounts).
+    - **Prefix columns** with the table or an alias (`u.username`) to remove any ambiguity in a join.
+    - **Filter before with `WHERE`, after with `HAVING`**: `WHERE` on raw rows, `HAVING` on aggregated
+      results.
+    - **Name your aggregates with `AS`** (`COUNT(*) AS failures`): a readable report is a usable report.
+    - **Sort by the total** (`ORDER BY ... DESC`) to surface the worst cases first.
+    - **Validate the join key**: a wrong `ON` condition produces duplicates or a cartesian product.
+
+exercise:
+  statement:
+    fr: |
+      À partir d'une table `users` (`id`, `username`) et d'une table `logins` (`id`, `user_id`, `success`),
+      écrivez un script SQL autonome qui, pour **chaque** utilisateur, affiche son nom et son **nombre de
+      connexions réussies** (`success = 1`), y compris les utilisateurs qui n'en ont aucune (ils doivent
+      apparaître avec `0`).
+
+      Indice : il faut un `LEFT JOIN` (pour garder tous les utilisateurs) et compter uniquement les succès,
+      par exemple avec `SUM(CASE WHEN l.success = 1 THEN 1 ELSE 0 END)`, puis `GROUP BY`.
+    en: |
+      From a `users` table (`id`, `username`) and a `logins` table (`id`, `user_id`, `success`), write a
+      self-contained SQL script that, for **each** user, shows their name and their **number of successful
+      logins** (`success = 1`), including users who have none (they must appear with `0`).
+
+      Hint: you need a `LEFT JOIN` (to keep all users) and to count only successes, for example with
+      `SUM(CASE WHEN l.success = 1 THEN 1 ELSE 0 END)`, then `GROUP BY`.
+  solution:
+    file: logins-per-user.sql
+    lang: sql
+    code: |
+      CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT);
+      CREATE TABLE logins (id INTEGER PRIMARY KEY, user_id INTEGER, success INTEGER);
+      INSERT INTO users (id, username) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol');
+      INSERT INTO logins (user_id, success) VALUES (1, 1), (1, 1), (2, 0);
+
+      -- LEFT JOIN keeps carol (no logins). SUM(CASE ...) counts only successes,
+      -- so a user with no row or only failures scores 0.
+      SELECT u.username,
+             SUM(CASE WHEN l.success = 1 THEN 1 ELSE 0 END) AS successful_logins
+      FROM users u
+      LEFT JOIN logins l ON l.user_id = u.id
+      GROUP BY u.username
+      ORDER BY u.username;
+    note:
+      fr: "Le `LEFT JOIN` conserve carol malgré l'absence de connexion ; `SUM(CASE WHEN ...)` compte les succès et renvoie `0` quand il n'y en a pas. bob n'a qu'un échec, donc `0` aussi. C'est la bonne façon de compter par catégorie."
+      en: "The `LEFT JOIN` keeps carol despite having no login; `SUM(CASE WHEN ...)` counts successes and returns `0` when there are none. bob has only a failure, so `0` too. This is the right way to count by category."
+
+quiz:
+  - q:
+      fr: "Quelle jointure conserve toutes les lignes de la table de gauche, même sans correspondance ?"
+      en: "Which join keeps all rows of the left table, even with no match?"
+    options:
+      fr: ["INNER JOIN", "LEFT JOIN", "CROSS JOIN", "EQUI JOIN"]
+      en: ["INNER JOIN", "LEFT JOIN", "CROSS JOIN", "EQUI JOIN"]
+    answer: 1
+    why:
+      fr: "`LEFT JOIN` garde toutes les lignes de gauche et met `NULL` là où il n'y a pas de correspondance à droite : idéal pour trouver les comptes jamais connectés."
+      en: "`LEFT JOIN` keeps all left rows and puts `NULL` where there is no right match: ideal to find never-logged-in accounts."
+  - q:
+      fr: "Quelle clause filtre un résultat après un `GROUP BY` ?"
+      en: "Which clause filters a result after a `GROUP BY`?"
+    options:
+      fr: ["WHERE", "HAVING", "ORDER BY", "LIMIT"]
+      en: ["WHERE", "HAVING", "ORDER BY", "LIMIT"]
+    answer: 1
+    why:
+      fr: "`HAVING` filtre sur les valeurs agrégées (ex. `COUNT(*) >= 5`), après le regroupement. `WHERE` filtre les lignes brutes avant le `GROUP BY`."
+      en: "`HAVING` filters on aggregated values (e.g. `COUNT(*) >= 5`), after grouping. `WHERE` filters raw rows before the `GROUP BY`."
+  - q:
+      fr: "Que calcule `COUNT(DISTINCT ip)` ?"
+      en: "What does `COUNT(DISTINCT ip)` compute?"
+    options:
+      fr:
+        - "Le nombre total de lignes"
+        - "Le nombre d'adresses IP différentes"
+        - "La somme des adresses IP"
+        - "La dernière adresse IP"
+      en:
+        - "The total number of rows"
+        - "The number of distinct IP addresses"
+        - "The sum of IP addresses"
+        - "The last IP address"
+    answer: 1
+    why:
+      fr: "`DISTINCT` élimine les doublons avant de compter : `COUNT(DISTINCT ip)` donne le nombre d'adresses uniques, pas le nombre total de lignes."
+      en: "`DISTINCT` removes duplicates before counting: `COUNT(DISTINCT ip)` gives the number of unique addresses, not the total number of rows."
+  - q:
+      fr: "Pourquoi un `INNER JOIN` ne montre-t-il pas les comptes jamais connectés ?"
+      en: "Why does an `INNER JOIN` not show never-logged-in accounts?"
+    options:
+      fr:
+        - "Parce qu'il ne garde que les lignes ayant une correspondance dans les deux tables"
+        - "Parce qu'il trie les résultats"
+        - "Parce qu'il supprime les doublons"
+        - "Parce qu'il limite à 10 lignes"
+      en:
+        - "Because it keeps only rows with a match in both tables"
+        - "Because it sorts the results"
+        - "Because it removes duplicates"
+        - "Because it limits to 10 rows"
+    answer: 0
+    why:
+      fr: "Un compte sans connexion n'a aucune ligne correspondante dans `logins` ; `INNER JOIN` l'exclut donc. Pour le voir, il faut un `LEFT JOIN` avec un test `IS NULL`."
+      en: "An account with no login has no matching row in `logins`; `INNER JOIN` therefore excludes it. To see it, you need a `LEFT JOIN` with an `IS NULL` test."
+  - q:
+      fr: "À quoi sert `AS` dans `COUNT(*) AS failures` ?"
+      en: "What is `AS` for in `COUNT(*) AS failures`?"
+    options:
+      fr:
+        - "À convertir le type de la colonne"
+        - "À trier le résultat"
+        - "À donner un nom lisible à la colonne de résultat"
+        - "À filtrer les lignes"
+      en:
+        - "To convert the column type"
+        - "To sort the result"
+        - "To give the result column a readable name"
+        - "To filter the rows"
+    answer: 2
+    why:
+      fr: "`AS` crée un alias : la colonne calculée s'appelle `failures` au lieu de `COUNT(*)`, ce qui rend le rapport lisible et exploitable par l'application."
+      en: "`AS` creates an alias: the computed column is called `failures` instead of `COUNT(*)`, making the report readable and usable by the application."

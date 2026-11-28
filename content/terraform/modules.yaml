@@ -1,0 +1,558 @@
+description:
+  fr: "Réutiliser du code Terraform avec des modules : sources locales, de registre et Git, épinglage de version, modules publics et composition de modules."
+  en: "Reuse Terraform code with modules: local, registry and Git sources, version pinning, public modules and module composition."
+duration: 30
+
+intro:
+  fr: |
+    Dès qu'un projet grossit, le copier-coller devient un piège : une faille corrigée dans une copie reste
+    ouverte dans les deux autres. La réponse de Terraform est le **module** — un dossier de code que l'on
+    **appelle** comme une fonction, une fois ou cent fois, en lui passant des arguments. Le cours « HCL » a
+    montré la *syntaxe* d'un module ; cette leçon porte sur l'**outil** : d'où vient le code d'un module
+    (local, registre, Git), comment en **figer la version**, et comment **composer** plusieurs modules.
+
+    L'analogie : des **briques normalisées**. Vous n'inventez pas une nouvelle brique à chaque mur ; vous
+    prenez des briques éprouvées (un réseau, une base de données) et vous les assemblez. Le *Terraform
+    Registry* est un entrepôt de briques publiques prêtes à l'emploi, maintenues par la communauté et les
+    éditeurs cloud.
+
+    Vous allez appeler un module **public** du registry (un VPC AWS) en épinglant sa version, écrire votre
+    propre module **local** réutilisable, puis **composer** les deux en transmettant les sorties de l'un aux
+    entrées de l'autre. L'épinglage de version est ici une question de sécurité de la chaîne
+    d'approvisionnement.
+  en: |
+    As soon as a project grows, copy-paste becomes a trap: a flaw fixed in one copy stays open in the other
+    two. Terraform's answer is the **module** — a directory of code you **call** like a function, once or a
+    hundred times, passing it arguments. The "HCL" course showed a module's *syntax*; this lesson is about
+    the **tool**: where a module's code comes from (local, registry, Git), how to **pin its version**, and
+    how to **compose** several modules.
+
+    The analogy: **standardised bricks**. You do not invent a new brick for each wall; you take proven
+    bricks (a network, a database) and assemble them. The *Terraform Registry* is a warehouse of ready-made
+    public bricks, maintained by the community and cloud vendors.
+
+    You will call a **public** registry module (an AWS VPC) pinning its version, write your own reusable
+    **local** module, then **compose** the two by passing one's outputs into the other's inputs. Version
+    pinning here is a supply-chain security matter.
+
+sections:
+  - heading:
+      fr: "Les sources d'un module"
+      en: "A module's sources"
+    body:
+      fr: |
+        L'argument `source` d'un bloc `module` indique où trouver le code. Trois familles :
+
+        | Source | Exemple | `version` possible ? |
+        |---|---|---|
+        | **Locale** | `source = "./modules/web"` | Non (c'est votre dépôt) |
+        | **Registry** | `source = "terraform-aws-modules/vpc/aws"` | Oui : `version = "~> 5.0"` |
+        | **Git** | `source = "git::https://github.com/org/repo.git//module?ref=v1.2.0"` | Via `?ref=` |
+
+        Une source **locale** (`./` ou `../`) pointe vers un dossier de votre propre dépôt : versionnée avec
+        le reste du code, idéale pour factoriser au sein d'un projet. Une source de **registry** tire un
+        module publié, avec un argument `version`. Une source **Git** cible un dépôt, en précisant la
+        référence avec `?ref=` (un tag ou un commit). Après tout ajout ou changement de `source`, il faut
+        relancer `terraform init` pour que Terraform installe le module.
+
+        Règle de sécurité fondamentale : **toujours épingler** une source distante. Un module de registry
+        sans `version`, ou une source Git sans `?ref=`, tire la dernière version disponible — qui peut
+        changer sous vos pieds et introduire du code non revu dans votre infrastructure.
+      en: |
+        A `module` block's `source` argument says where to find the code. Three families:
+
+        | Source | Example | `version` possible? |
+        |---|---|---|
+        | **Local** | `source = "./modules/web"` | No (it is your repo) |
+        | **Registry** | `source = "terraform-aws-modules/vpc/aws"` | Yes: `version = "~> 5.0"` |
+        | **Git** | `source = "git::https://github.com/org/repo.git//module?ref=v1.2.0"` | Via `?ref=` |
+
+        A **local** source (`./` or `../`) points to a folder in your own repo: versioned with the rest of
+        the code, ideal to factor within a project. A **registry** source pulls a published module, with a
+        `version` argument. A **Git** source targets a repo, specifying the reference with `?ref=` (a tag or
+        a commit). After adding or changing a `source`, rerun `terraform init` so Terraform installs the
+        module.
+
+        Fundamental security rule: **always pin** a remote source. A registry module with no `version`, or a
+        Git source with no `?ref=`, pulls the latest available version — which can change under your feet and
+        introduce unreviewed code into your infrastructure.
+  - heading:
+      fr: "Utiliser un module public du registry"
+      en: "Using a public registry module"
+    body:
+      fr: |
+        Le *Terraform Registry* (registry.terraform.io) héberge des milliers de modules. Les plus réputés
+        sont maintenus par l'organisation `terraform-aws-modules` (VPC, EKS, RDS, S3...). Les réutiliser
+        évite de réécrire — et de mal sécuriser — des briques complexes.
+
+        ```hcl
+        module "vpc" {
+          source  = "terraform-aws-modules/vpc/aws"
+          version = "~> 5.0" # pin: minor updates OK, major (6.0) blocked
+
+          name = "prod-vpc"
+          cidr = "10.0.0.0/16"
+          # ... inputs documented on the registry page
+        }
+        ```
+
+        Avant d'adopter un module public, vérifiez quelques points : le nombre de téléchargements et la
+        fréquence de maintenance, la présence d'une **version** récente, et les valeurs par défaut de
+        sécurité (chiffrement, journaux de flux). Un module très téléchargé n'est pas forcément sûr *par
+        défaut* : lisez sa documentation. Comme pour les providers, le fichier `.terraform.lock.hcl`
+        n'enregistre **pas** les versions de modules — c'est l'argument `version` qui fait foi, d'où son
+        importance.
+      en: |
+        The *Terraform Registry* (registry.terraform.io) hosts thousands of modules. The most reputable are
+        maintained by the `terraform-aws-modules` organisation (VPC, EKS, RDS, S3...). Reusing them avoids
+        rewriting — and mis-securing — complex bricks.
+
+        ```hcl
+        module "vpc" {
+          source  = "terraform-aws-modules/vpc/aws"
+          version = "~> 5.0" # pin: minor updates OK, major (6.0) blocked
+
+          name = "prod-vpc"
+          cidr = "10.0.0.0/16"
+          # ... inputs documented on the registry page
+        }
+        ```
+
+        Before adopting a public module, check a few things: the download count and maintenance cadence, a
+        recent **version**, and the security defaults (encryption, flow logs). A heavily downloaded module is
+        not necessarily safe *by default*: read its documentation. As with providers, the
+        `.terraform.lock.hcl` file does **not** record module versions — the `version` argument is what
+        matters, hence its importance.
+  - heading:
+      fr: "Composer : brancher un module sur un autre"
+      en: "Composing: wiring one module into another"
+    body:
+      fr: |
+        La vraie puissance vient de la **composition** : les *outputs* d'un module alimentent les *inputs*
+        d'un autre. On lit une sortie avec `module.<nom>.<output>` :
+
+        ```hcl
+        module "vpc" {
+          source  = "terraform-aws-modules/vpc/aws"
+          version = "~> 5.0"
+          # ...
+        }
+
+        module "web" {
+          source = "./modules/web-instance"   # your local module
+
+          # The web module receives IDs produced by the vpc module
+          vpc_id    = module.vpc.vpc_id
+          subnet_id = module.vpc.public_subnets[0]
+        }
+        ```
+
+        Terraform déduit automatiquement l'**ordre** : il crée le VPC avant l'instance web, car la seconde
+        dépend des sorties du premier. On n'écrit pas de `depends_on` explicite tant qu'une dépendance de
+        données existe.
+
+        Côté conception, on garde un **module racine mince** (l'assemblage) qui appelle des modules
+        spécialisés. Chaque module expose une interface **étroite et sûre par défaut** (cours « HCL ») : peu
+        de variables, pas d'interrupteur pour désactiver le chiffrement. La composition permet alors de bâtir
+        des infrastructures complexes à partir de briques auditées une seule fois.
+      en: |
+        The real power comes from **composition**: one module's *outputs* feed another's *inputs*. You read
+        an output with `module.<name>.<output>`:
+
+        ```hcl
+        module "vpc" {
+          source  = "terraform-aws-modules/vpc/aws"
+          version = "~> 5.0"
+          # ...
+        }
+
+        module "web" {
+          source = "./modules/web-instance"   # your local module
+
+          # The web module receives IDs produced by the vpc module
+          vpc_id    = module.vpc.vpc_id
+          subnet_id = module.vpc.public_subnets[0]
+        }
+        ```
+
+        Terraform infers the **order** automatically: it creates the VPC before the web instance, because
+        the latter depends on the former's outputs. You do not write an explicit `depends_on` as long as a
+        data dependency exists.
+
+        Design-wise, keep a **thin root module** (the assembly) that calls specialised modules. Each module
+        exposes a **narrow, secure-by-default** interface ("HCL" course): few variables, no switch to turn
+        off encryption. Composition then lets you build complex infrastructures from bricks audited once.
+
+examples:
+  - title:
+      fr: "Vulnérable : un module distant non épinglé"
+      en: "Vulnerable: an unpinned remote module"
+    file: unpinned.tf
+    lang: hcl
+    kind: vulnerable
+    code: |
+      # Registry module with NO version: pulls whatever is latest at init time
+      module "vpc" {
+        source = "terraform-aws-modules/vpc/aws"
+        name   = "prod-vpc"
+        cidr   = "10.0.0.0/16"
+      }
+
+      # Git module with NO ref: tracks the default branch, which can change anytime
+      module "legacy" {
+        source = "git::https://github.com/example-org/tf-modules.git//network"
+      }
+    note:
+      fr: "Sans `version` ni `?ref=`, chaque `init` peut tirer un code différent, potentiellement non revu — un vecteur d'attaque sur la chaîne d'approvisionnement. Deux collègues peuvent aussi obtenir des infrastructures divergentes. Épinglez toujours une source distante."
+      en: "With no `version` or `?ref=`, each `init` can pull different, possibly unreviewed code — a supply-chain attack vector. Two colleagues can also end up with diverging infrastructures. Always pin a remote source."
+
+  - title:
+      fr: "Sécurisé : un module de registry épinglé"
+      en: "Secure: a pinned registry module"
+    file: vpc.tf
+    lang: hcl
+    kind: secure
+    code: |
+      module "vpc" {
+        source  = "terraform-aws-modules/vpc/aws"
+        version = "~> 5.0" # minor updates allowed, major (6.0) blocked
+
+        name = "prod-vpc"
+        cidr = "10.0.0.0/16"
+
+        azs             = ["eu-west-3a", "eu-west-3b"]
+        private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
+        public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+
+        enable_nat_gateway = true
+        enable_flow_log    = true # security: record network traffic metadata
+
+        tags = {
+          Environment = "prod"
+          ManagedBy   = "Terraform"
+        }
+      }
+
+      output "vpc_id" {
+        value = module.vpc.vpc_id
+      }
+    note:
+      fr: "Le module public encapsule des dizaines de ressources (sous-réseaux, tables de routage, NAT). On ne garde que l'interface : quelques variables. `enable_flow_log = true` active la journalisation réseau, une bonne pratique de sécurité à ne pas oublier."
+      en: "The public module wraps dozens of resources (subnets, route tables, NAT). You keep only the interface: a few variables. `enable_flow_log = true` enables network logging, a security best practice not to overlook."
+
+  - title:
+      fr: "Un module local réutilisable"
+      en: "A reusable local module"
+    file: modules/web-instance/main.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # ---------- modules/web-instance/variables.tf ----------
+      variable "vpc_id" {
+        type        = string
+        description = "VPC the instance is attached to"
+      }
+
+      variable "subnet_id" {
+        type        = string
+        description = "Subnet to launch the instance in"
+      }
+
+      variable "ami_id" {
+        type        = string
+        description = "AMI to boot"
+      }
+
+      # ---------- modules/web-instance/main.tf ----------
+      terraform {
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = ">= 6.0" # minimum, so as not to lock the root module
+          }
+        }
+      }
+
+      resource "aws_security_group" "web" {
+        name   = "web-sg"
+        vpc_id = var.vpc_id
+
+        ingress {
+          description = "HTTPS from anywhere"
+          from_port   = 443
+          to_port     = 443
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"] # HTTPS is meant to be public; SSH would not be
+        }
+
+        egress {
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+
+      resource "aws_instance" "web" {
+        ami                    = var.ami_id
+        instance_type          = "t3.small"
+        subnet_id              = var.subnet_id
+        vpc_security_group_ids = [aws_security_group.web.id]
+
+        # Secure by default inside the module, no switch to turn it off
+        metadata_options {
+          http_tokens = "required" # IMDSv2 only
+        }
+        root_block_device {
+          encrypted = true
+        }
+      }
+
+      # ---------- modules/web-instance/outputs.tf ----------
+      output "instance_id" {
+        value = aws_instance.web.id
+      }
+    note:
+      fr: "Ce module local est sûr par défaut (IMDSv2 requis, disque chiffré) et n'offre aucun moyen de désactiver ces protections. Il déclare `required_providers` mais aucun bloc `provider` : la configuration vient du module racine."
+      en: "This local module is secure by default (IMDSv2 required, encrypted disk) and offers no way to turn these protections off. It declares `required_providers` but no `provider` block: the configuration comes from the root module."
+
+  - title:
+      fr: "Composer les deux modules"
+      en: "Composing the two modules"
+    file: main.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      data "aws_ami" "al2023" {
+        most_recent = true
+        owners      = ["amazon"]
+        filter {
+          name   = "name"
+          values = ["al2023-ami-*-x86_64"]
+        }
+      }
+
+      module "vpc" {
+        source  = "terraform-aws-modules/vpc/aws"
+        version = "~> 5.0"
+        name    = "prod-vpc"
+        cidr    = "10.0.0.0/16"
+        azs             = ["eu-west-3a"]
+        public_subnets  = ["10.0.101.0/24"]
+      }
+
+      module "web" {
+        source = "./modules/web-instance"
+
+        # Outputs of the vpc module become inputs of the web module
+        vpc_id    = module.vpc.vpc_id
+        subnet_id = module.vpc.public_subnets[0]
+        ami_id    = data.aws_ami.al2023.id
+      }
+
+      output "web_instance_id" {
+        value = module.web.instance_id
+      }
+    output: |
+      $ terraform init
+      Initializing modules...
+      Downloading registry.terraform.io/terraform-aws-modules/vpc/aws 5.13.0...
+      - web in modules/web-instance
+
+      $ terraform plan
+      Plan: 24 to add, 0 to change, 0 to destroy.
+    note:
+      fr: "`module.vpc.vpc_id` relie la sortie du VPC à l'entrée du module web ; Terraform crée donc le VPC d'abord. Le module racine reste mince : il ne fait qu'assembler deux briques. Un `init` installe le module de registry et le module local."
+      en: "`module.vpc.vpc_id` wires the VPC output into the web module's input; Terraform therefore creates the VPC first. The root module stays thin: it only assembles two bricks. An `init` installs both the registry module and the local one."
+
+  - title:
+      fr: "Épingler une source Git sur un tag"
+      en: "Pinning a Git source to a tag"
+    file: git-module.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Git source: // separates the repo from the subdirectory, ?ref= pins the version
+      module "monitoring" {
+        source = "git::https://github.com/example-org/tf-modules.git//monitoring?ref=v2.4.1"
+
+        alert_email = "ops@example.com"
+      }
+
+      # Even stronger: pin to an immutable commit SHA instead of a movable tag
+      module "monitoring_locked" {
+        source = "git::https://github.com/example-org/tf-modules.git//monitoring?ref=9f2c1ab"
+
+        alert_email = "ops@example.com"
+      }
+    note:
+      fr: "`//` sépare le dépôt du sous-dossier ; `?ref=` fixe un tag (`v2.4.1`) ou, plus sûr encore, un SHA de commit **immuable**. Un tag peut être déplacé par un mainteneur malveillant ; un SHA, non. Pour une sécurité maximale, épinglez un commit."
+      en: "`//` separates the repo from the subfolder; `?ref=` pins a tag (`v2.4.1`) or, even safer, an **immutable** commit SHA. A tag can be moved by a malicious maintainer; a SHA cannot. For maximum security, pin a commit."
+
+mistake:
+  fr: |
+    **Laisser une source de module distante sans version.**
+
+    Un `module "vpc" { source = "terraform-aws-modules/vpc/aws" }` sans `version`, ou une source Git sans
+    `?ref=`, tire la dernière version au moment de l'`init`. Conséquences : deux machines obtiennent du code
+    différent, un plan « sans changement de code » introduit soudain des modifications, et surtout du code
+    non revu entre dans votre infrastructure — un vecteur classique d'attaque sur la chaîne
+    d'approvisionnement. Épinglez toujours : `version = "~> 5.0"` pour le registry, `?ref=v2.4.1` (ou un SHA
+    de commit) pour Git. Rappelez-vous aussi que le `.terraform.lock.hcl` ne verrouille **pas** les
+    modules : seule la contrainte `version`/`ref` les fige.
+  en: |
+    **Leaving a remote module source with no version.**
+
+    A `module "vpc" { source = "terraform-aws-modules/vpc/aws" }` with no `version`, or a Git source with no
+    `?ref=`, pulls the latest version at `init` time. Consequences: two machines get different code, a plan
+    "with no code change" suddenly introduces modifications, and above all unreviewed code enters your
+    infrastructure — a classic supply-chain attack vector. Always pin: `version = "~> 5.0"` for the
+    registry, `?ref=v2.4.1` (or a commit SHA) for Git. Remember too that `.terraform.lock.hcl` does **not**
+    lock modules: only the `version`/`ref` constraint freezes them.
+
+bestPractice:
+  fr: |
+    - **Épinglez toute source distante** : `version` pour le registry, `?ref=` (tag ou SHA) pour Git.
+    - **Préférez un SHA de commit** à un tag pour les modules Git sensibles (un tag peut être déplacé).
+    - **Évaluez un module public** avant adoption : maintenance, téléchargements, valeurs sûres par défaut.
+    - **Module racine mince** qui assemble des modules spécialisés via la composition (`module.x.output`).
+    - **Interface étroite et sûre par défaut** pour vos modules locaux : peu de variables, pas d'interrupteur de sécurité.
+    - **`required_providers` sans `provider`** dans un module enfant ; la configuration vient de la racine.
+  en: |
+    - **Pin every remote source**: `version` for the registry, `?ref=` (tag or SHA) for Git.
+    - **Prefer a commit SHA** over a tag for sensitive Git modules (a tag can be moved).
+    - **Vet a public module** before adopting it: maintenance, downloads, safe defaults.
+    - **Thin root module** assembling specialised modules via composition (`module.x.output`).
+    - **Narrow, secure-by-default interface** for your local modules: few variables, no security switch.
+    - **`required_providers` without `provider`** in a child module; the configuration comes from the root.
+
+exercise:
+  statement:
+    fr: |
+      1. Appelez le module de registry `terraform-aws-modules/s3-bucket/aws` en épinglant sa version en
+         `~> 4.0`, pour créer un bucket nommé `app-assets-42`.
+      2. Appelez un module local `./modules/cdn` en lui passant, via son entrée `bucket_id`, la sortie
+         `s3_bucket_id` du module de bucket.
+      3. Expliquez pourquoi `terraform init` est nécessaire après avoir ajouté ces blocs `module`.
+    en: |
+      1. Call the registry module `terraform-aws-modules/s3-bucket/aws` pinning its version to `~> 4.0`, to
+         create a bucket named `app-assets-42`.
+      2. Call a local module `./modules/cdn`, passing it, via its `bucket_id` input, the `s3_bucket_id`
+         output of the bucket module.
+      3. Explain why `terraform init` is required after adding these `module` blocks.
+  solution:
+    file: solution.tf
+    lang: hcl
+    code: |
+      module "assets" {
+        source  = "terraform-aws-modules/s3-bucket/aws"
+        version = "~> 4.0" # pinned: minor updates OK, major blocked
+
+        bucket = "app-assets-42"
+      }
+
+      module "cdn" {
+        source = "./modules/cdn"
+
+        # Compose: the bucket module's output feeds the cdn module's input
+        bucket_id = module.assets.s3_bucket_id
+      }
+
+      # 3. `terraform init` must run after adding a module block so that Terraform
+      #    downloads the registry module and registers the local one in .terraform/.
+      #    Without it, plan/apply fail with a "Module not installed" error.
+    note:
+      fr: "Le module de registry est épinglé en `~> 4.0`. La composition passe `module.assets.s3_bucket_id` à l'entrée du module `cdn`. `terraform init` installe les modules ; sans lui, on obtient l'erreur *Module not installed*."
+      en: "The registry module is pinned to `~> 4.0`. Composition passes `module.assets.s3_bucket_id` into the `cdn` module's input. `terraform init` installs the modules; without it you get a *Module not installed* error."
+
+quiz:
+  - q:
+      fr: "Quelle source de module peut recevoir un argument `version` ?"
+      en: "Which module source can take a `version` argument?"
+    options:
+      fr:
+        - "Une source locale `./modules/web`"
+        - "Une source de registry comme `terraform-aws-modules/vpc/aws`"
+        - "N'importe quel chemin relatif"
+        - "Aucune, `version` n'existe pas pour les modules"
+      en:
+        - "A local source `./modules/web`"
+        - "A registry source like `terraform-aws-modules/vpc/aws`"
+        - "Any relative path"
+        - "None, `version` does not exist for modules"
+    answer: 1
+    why:
+      fr: "L'argument `version` s'applique aux modules de registry. Une source locale est versionnée avec votre dépôt ; une source Git s'épingle via `?ref=`."
+      en: "The `version` argument applies to registry modules. A local source is versioned with your repo; a Git source is pinned via `?ref=`."
+  - q:
+      fr: "Pourquoi épingler la version d'un module distant est-il une mesure de sécurité ?"
+      en: "Why is pinning a remote module's version a security measure?"
+    options:
+      fr:
+        - "Cela accélère le plan"
+        - "Cela empêche d'introduire du code non revu lors d'un `init` ultérieur"
+        - "Cela chiffre le module"
+        - "Cela réduit la taille du state"
+      en:
+        - "It speeds up the plan"
+        - "It prevents introducing unreviewed code on a later `init`"
+        - "It encrypts the module"
+        - "It reduces the state size"
+    answer: 1
+    why:
+      fr: "Sans épinglage, `init` peut tirer une nouvelle version du module, donc du code non audité, dans votre infrastructure — un risque de chaîne d'approvisionnement."
+      en: "Without pinning, `init` can pull a new module version, hence unaudited code, into your infrastructure — a supply-chain risk."
+  - q:
+      fr: "Comment une entrée d'un module reçoit-elle la sortie d'un autre module ?"
+      en: "How does one module's input receive another module's output?"
+    options:
+      fr:
+        - "`var.vpc.vpc_id`"
+        - "`output.vpc.vpc_id`"
+        - "`module.vpc.vpc_id`"
+        - "`vpc.output.vpc_id`"
+      en:
+        - "`var.vpc.vpc_id`"
+        - "`output.vpc.vpc_id`"
+        - "`module.vpc.vpc_id`"
+        - "`vpc.output.vpc_id`"
+    answer: 2
+    why:
+      fr: "On lit la sortie d'un module avec `module.<nom>.<output>`. Cette référence crée aussi la dépendance qui fixe l'ordre de création."
+      en: "You read a module's output with `module.<name>.<output>`. This reference also creates the dependency that sets the creation order."
+  - q:
+      fr: "Dans une source Git, à quoi sert `?ref=v2.4.1` ?"
+      en: "In a Git source, what is `?ref=v2.4.1` for?"
+    options:
+      fr:
+        - "À indiquer le sous-dossier du module"
+        - "À épingler la référence (tag ou commit) du dépôt à utiliser"
+        - "À fournir un identifiant d'authentification"
+        - "À activer le chiffrement"
+      en:
+        - "To indicate the module's subfolder"
+        - "To pin the repo reference (tag or commit) to use"
+        - "To provide an authentication token"
+        - "To enable encryption"
+    answer: 1
+    why:
+      fr: "`?ref=` fixe la version Git (tag ou SHA). Un SHA de commit est immuable, donc plus sûr qu'un tag qui peut être déplacé. Le sous-dossier, lui, se note avec `//`."
+      en: "`?ref=` pins the Git version (tag or SHA). A commit SHA is immutable, so safer than a tag that can be moved. The subfolder is written with `//`."
+  - q:
+      fr: "Le fichier `.terraform.lock.hcl` verrouille-t-il les versions de modules ?"
+      en: "Does the `.terraform.lock.hcl` file lock module versions?"
+    options:
+      fr:
+        - "Oui, exactement comme les providers"
+        - "Oui, mais seulement les modules locaux"
+        - "Non, il ne verrouille rien"
+        - "Non : seuls les providers y sont verrouillés ; les modules dépendent de `version`/`ref`"
+      en:
+        - "Yes, exactly like providers"
+        - "Yes, but only local modules"
+        - "No, it locks nothing"
+        - "No: only providers are locked there; modules rely on `version`/`ref`"
+    answer: 3
+    why:
+      fr: "Le lock file ne concerne que les providers. Pour les modules, c'est la contrainte `version` (registry) ou `?ref=` (Git) qui fige le code — d'où l'importance de l'épinglage."
+      en: "The lock file only covers providers. For modules, the `version` constraint (registry) or `?ref=` (Git) is what freezes the code — hence the importance of pinning."

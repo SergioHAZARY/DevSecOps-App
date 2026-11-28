@@ -77,7 +77,8 @@ export async function CodeBlock({ code, lang, locale, file, kind = "neutral", ou
           <pre
             data-output
             tabIndex={0}
-            className="overflow-x-auto px-4 pb-3 pt-1.5 font-mono text-[0.84rem] leading-6 text-white/85"
+            style={{ WebkitOverflowScrolling: "touch" }}
+            className="overflow-x-auto px-4 pb-3 pt-1.5 font-mono text-[0.82rem] leading-6 text-white/85 sm:text-[0.84rem]"
           >
             {output.replace(/\s+$/, "")}
           </pre>

@@ -1,0 +1,500 @@
+description:
+  fr: "Automatiser les correctifs sous Linux et Windows, définir des SLA de patch par sévérité et tester avant de déployer en production."
+  en: "Automate patching on Linux and Windows, set patch SLAs by severity and test before rolling out to production."
+duration: 26
+
+intro:
+  fr: |
+    La plupart des intrusions n'exploitent pas une faille inédite (*zero-day*) mais une faille **déjà
+    corrigée** que personne n'a installée. La gestion des correctifs (*patch management*) consiste à
+    appliquer ces correctifs vite, de façon fiable et vérifiable — pas « un dimanche, quand on y pense ».
+
+    Imaginez une flotte de voitures. Un rappel constructeur corrige des freins défectueux : laisser
+    rouler les voitures sans appliquer le rappel, c'est exactement ne pas patcher. L'automatisation, c'est
+    le garage qui applique le rappel la nuit ; les **SLA** (délais maximaux), c'est la règle « frein = sous
+    48 h, essuie-glace = sous 30 jours ».
+
+    Dans cette leçon, vous allez configurer `unattended-upgrades` (Debian/Ubuntu), `dnf-automatic`
+    (RHEL/Fedora), comprendre WSUS côté Windows, et définir une politique de SLA par sévérité.
+  en: |
+    Most breaches do not exploit a brand-new flaw (*zero-day*) but an **already-fixed** flaw that nobody
+    installed. Patch management is about applying those fixes quickly, reliably and verifiably — not "some
+    Sunday, when we remember".
+
+    Picture a fleet of cars. A manufacturer recall fixes faulty brakes: letting the cars keep driving
+    without applying the recall is exactly not patching. Automation is the garage applying the recall
+    overnight; the **SLAs** (maximum delays) are the rule "brakes = within 48h, wiper = within 30 days".
+
+    In this lesson you will configure `unattended-upgrades` (Debian/Ubuntu), `dnf-automatic`
+    (RHEL/Fedora), understand WSUS on the Windows side, and define an SLA policy by severity.
+
+sections:
+  - heading:
+      fr: "Pourquoi un SLA de patch par sévérité ?"
+      en: "Why a patch SLA by severity?"
+    body:
+      fr: |
+        « Tout patcher immédiatement » est irréaliste : certains correctifs cassent des applications, et
+        tester prend du temps. À l'inverse, « patcher quand on peut » laisse des failles critiques
+        exposées pendant des mois. La réponse est un **SLA** (*Service Level Agreement*) : un délai maximal
+        de correction, indexé sur la gravité de la vulnérabilité.
+
+        La gravité se lit sur le score **CVSS** (de 0 à 10) ou sur le classement de l'éditeur. Un exemple
+        de politique :
+
+        | Sévérité | Score CVSS | SLA serveurs exposés | SLA serveurs internes |
+        |---|---|---|---|
+        | Critique | 9.0 – 10.0 | 24 – 48 h | 7 jours |
+        | Élevée | 7.0 – 8.9 | 7 jours | 14 jours |
+        | Moyenne | 4.0 – 6.9 | 30 jours | 30 jours |
+        | Faible | 0.1 – 3.9 | 90 jours | 90 jours |
+
+        Une faille activement exploitée (présente dans le catalogue *KEV* de la CISA) passe en tête, quel
+        que soit son score. Le SLA n'a de valeur que s'il est **mesuré** : il faut savoir, pour chaque
+        serveur, quels correctifs manquent et depuis combien de temps.
+      en: |
+        "Patch everything immediately" is unrealistic: some fixes break applications, and testing takes
+        time. Conversely, "patch when we can" leaves critical flaws exposed for months. The answer is an
+        **SLA** (*Service Level Agreement*): a maximum remediation delay, indexed on the severity of the
+        vulnerability.
+
+        Severity is read from the **CVSS** score (0 to 10) or from the vendor's rating. An example policy:
+
+        | Severity | CVSS score | SLA exposed servers | SLA internal servers |
+        |---|---|---|---|
+        | Critical | 9.0 – 10.0 | 24 – 48 h | 7 days |
+        | High | 7.0 – 8.9 | 7 days | 14 days |
+        | Medium | 4.0 – 6.9 | 30 days | 30 days |
+        | Low | 0.1 – 3.9 | 90 days | 90 days |
+
+        A flaw under active exploitation (listed in CISA's *KEV* catalog) jumps to the front, whatever its
+        score. The SLA only matters if it is **measured**: you must know, per server, which fixes are
+        missing and for how long.
+  - heading:
+      fr: "Linux : mises à jour automatiques et de sécurité"
+      en: "Linux: automatic and security-only updates"
+    body:
+      fr: |
+        Sur **Debian/Ubuntu**, le paquet `unattended-upgrades` applique automatiquement les correctifs.
+        La bonne pratique est de n'activer **que le dépôt de sécurité** en automatique : les mises à jour de
+        fonctionnalités, plus risquées, restent manuelles. Deux fichiers comptent :
+
+        - `/etc/apt/apt.conf.d/50unattended-upgrades` : *quoi* installer (dépôts autorisés), redémarrage
+          automatique éventuel, liste noire de paquets sensibles.
+        - `/etc/apt/apt.conf.d/20auto-upgrades` : *à quelle fréquence* (activation, intervalle).
+
+        Sur **RHEL/Fedora/Rocky**, c'est `dnf-automatic`, piloté par `/etc/dnf/automatic.conf` et un
+        *timer* systemd (`dnf-automatic.timer`). Le réglage clé est `upgrade_type = security` pour ne
+        prendre que les avis de sécurité (RHSA).
+
+        | Distribution | Outil | Fichier principal | Déclencheur |
+        |---|---|---|---|
+        | Debian / Ubuntu | `unattended-upgrades` | `50unattended-upgrades` | timer `apt-daily` |
+        | RHEL / Fedora / Rocky | `dnf-automatic` | `/etc/dnf/automatic.conf` | `dnf-automatic.timer` |
+
+        Dans les deux cas, on distingue **télécharger**, **installer** et **redémarrer**. Beaucoup
+        d'équipes installent automatiquement mais planifient le redémarrage (noyau, `glibc`) dans une
+        fenêtre de maintenance, aidées par `needrestart` (Debian) ou `needs-restarting` (RHEL).
+      en: |
+        On **Debian/Ubuntu**, the `unattended-upgrades` package applies fixes automatically. Best practice
+        is to enable **only the security repository** automatically: feature updates, which are riskier,
+        stay manual. Two files matter:
+
+        - `/etc/apt/apt.conf.d/50unattended-upgrades`: *what* to install (allowed origins), optional
+          automatic reboot, blocklist of sensitive packages.
+        - `/etc/apt/apt.conf.d/20auto-upgrades`: *how often* (enablement, interval).
+
+        On **RHEL/Fedora/Rocky**, it is `dnf-automatic`, driven by `/etc/dnf/automatic.conf` and a systemd
+        *timer* (`dnf-automatic.timer`). The key setting is `upgrade_type = security` to take only security
+        advisories (RHSA).
+
+        | Distribution | Tool | Main file | Trigger |
+        |---|---|---|---|
+        | Debian / Ubuntu | `unattended-upgrades` | `50unattended-upgrades` | `apt-daily` timer |
+        | RHEL / Fedora / Rocky | `dnf-automatic` | `/etc/dnf/automatic.conf` | `dnf-automatic.timer` |
+
+        In both cases, separate **download**, **install** and **reboot**. Many teams install automatically
+        but schedule the reboot (kernel, `glibc`) in a maintenance window, helped by `needrestart` (Debian)
+        or `needs-restarting` (RHEL).
+  - heading:
+      fr: "Windows : WSUS et anneaux de déploiement"
+      en: "Windows: WSUS and deployment rings"
+    body:
+      fr: |
+        Côté Windows, chaque machine peut se mettre à jour depuis Internet, mais en entreprise on
+        **centralise** avec **WSUS** (*Windows Server Update Services*) ou son équivalent cloud (Windows
+        Update for Business via Intune, ou un outil comme Microsoft Configuration Manager).
+
+        WSUS télécharge une seule fois les correctifs Microsoft, puis l'administrateur **approuve** ceux qui
+        seront déployés et sur quels groupes. L'intérêt est double : économie de bande passante et
+        **contrôle**. On déploie par **anneaux** (*rings*) pour limiter le risque :
+
+        1. **Anneau pilote** : quelques machines de test, dès la sortie du correctif.
+        2. **Anneau large** : la production, quelques jours plus tard, si le pilote est sain.
+        3. **Serveurs critiques** : en dernier, dans une fenêtre de maintenance planifiée.
+
+        Cette approche par anneaux s'applique aussi sous Linux : un patch validé sur un environnement de
+        préproduction avant d'atteindre la production. Elle concilie **vitesse** (exigée par le SLA) et
+        **stabilité** (on ne casse pas la production à l'aveugle).
+      en: |
+        On the Windows side, each machine can update from the Internet, but in an enterprise you
+        **centralise** with **WSUS** (*Windows Server Update Services*) or its cloud equivalent (Windows
+        Update for Business via Intune, or a tool like Microsoft Configuration Manager).
+
+        WSUS downloads the Microsoft fixes once, then the administrator **approves** which ones are
+        deployed and to which groups. The benefit is twofold: bandwidth savings and **control**. You deploy
+        in **rings** to limit risk:
+
+        1. **Pilot ring**: a few test machines, as soon as the fix is released.
+        2. **Broad ring**: production, a few days later, if the pilot is healthy.
+        3. **Critical servers**: last, in a planned maintenance window.
+
+        This ring approach also applies on Linux: a patch validated on a staging environment before it
+        reaches production. It reconciles **speed** (required by the SLA) and **stability** (you do not
+        break production blindly).
+
+examples:
+  - title:
+      fr: "Un serveur jamais patché : des failles connues restent ouvertes"
+      en: "A never-patched server: known flaws stay open"
+    file: unpatched.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # No automatic updates configured, and nobody runs apt by hand
+      systemctl is-enabled unattended-upgrades 2>/dev/null || echo "not installed"
+
+      # How many security updates are pending RIGHT NOW?
+      apt-get -s upgrade 2>/dev/null | grep -ci security
+      # -> 37 security updates waiting, some for months
+
+      # The last time this box was updated:
+      ls -l --time-style=long-iso /var/log/apt/history.log
+      # -> last entry: 2026-02-03   (over 9 months ago)
+    output: |
+      not installed
+      37
+      -rw-r--r-- 1 root root 48213 2026-02-03 02:11 /var/log/apt/history.log
+    note:
+      fr: "37 correctifs de sécurité en attente, dont certains critiques, et aucune mise à jour depuis neuf mois : c'est le profil type d'un serveur compromis par une faille ancienne et déjà corrigée ailleurs."
+      en: "37 security fixes pending, some critical, and no update in nine months: this is the textbook profile of a server breached through an old flaw already fixed elsewhere."
+
+  - title:
+      fr: "Ubuntu : installer automatiquement les seuls correctifs de sécurité"
+      en: "Ubuntu: automatically install security fixes only"
+    file: /etc/apt/apt.conf.d/50unattended-upgrades
+    lang: ini
+    kind: secure
+    code: |
+      // Only the security origin is auto-installed. Feature updates stay manual
+      // so a risky change never lands on a server at 3 a.m. unattended.
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+
+      // Never auto-upgrade packages that would break the app mid-day.
+      Unattended-Upgrade::Package-Blacklist {
+          "postgresql-16";
+      };
+
+      // Remove now-unused dependencies to shrink the attack surface.
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+      // Reboot automatically ONLY inside the maintenance window (kernel fixes).
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+
+      // Email a report so a human sees failures.
+      Unattended-Upgrade::Mail "ops@example.com";
+      Unattended-Upgrade::MailReport "on-change";
+    note:
+      fr: "On n'automatise que le dépôt `-security`, on met PostgreSQL en liste noire (mise à jour planifiée à la main) et on cantonne le redémarrage à 03h30. L'e-mail garantit qu'un échec ne passe pas inaperçu."
+      en: "Only the `-security` origin is automated, PostgreSQL is blocklisted (manual, scheduled upgrade) and the reboot is confined to 03:30. The email makes sure a failure is not missed."
+
+  - title:
+      fr: "Activer la fréquence et vérifier le résultat"
+      en: "Enabling the schedule and checking the result"
+    file: enable-auto-updates.sh
+    lang: bash
+    kind: secure
+    code: |
+      sudo apt-get update
+      sudo apt-get install -y unattended-upgrades apt-listchanges
+
+      # 20auto-upgrades: run the lists + the upgrade once a day
+      sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null <<'EOF'
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+      EOF
+
+      # Dry-run to see exactly what WOULD be installed, with no change
+      sudo unattended-upgrade --dry-run --debug | tail -n 5
+
+      # Confirm the systemd timers that trigger it are active
+      systemctl list-timers apt-daily apt-daily-upgrade --no-pager
+    output: |
+      Checking: linux-image-6.8.0-51-generic ([...security])
+      Checking: openssl ([...security])
+      Packages that will be upgraded: openssl libssl3
+      Writing dpkg log to /var/log/unattended-upgrades/...
+      NEXT                        UNIT                 ACTIVATES
+      Fri 2026-11-28 06:12 ...    apt-daily.timer      apt-daily.service
+      Fri 2026-11-28 06:35 ...    apt-daily-upgrade... apt-daily-upgrade.service
+    note:
+      fr: "`--dry-run` est votre filet de sécurité : il montre ce qui serait installé sans rien changer. Les *timers* `apt-daily` déclenchent la mise à jour ; vérifiez qu'ils sont bien `active` après configuration."
+      en: "`--dry-run` is your safety net: it shows what would be installed without changing anything. The `apt-daily` timers trigger the update; check they are `active` after configuration."
+
+  - title:
+      fr: "RHEL / Rocky : dnf-automatic en mode sécurité"
+      en: "RHEL / Rocky: dnf-automatic in security mode"
+    file: /etc/dnf/automatic.conf
+    lang: ini
+    kind: secure
+    code: |
+      [commands]
+      # Take ONLY security advisories (RHSA), not every available update.
+      upgrade_type = security
+      # Download and apply automatically; the timer runs this daily.
+      download_updates = yes
+      apply_updates = yes
+      # Do not reboot automatically: kernel reboots go in a maintenance window.
+      reboot = never
+
+      [emitters]
+      # Send a report so failures reach a human, not just a local log.
+      emit_via = email
+
+      [email]
+      email_from = dnf-automatic@example.com
+      email_to = ops@example.com
+      email_host = smtp.example.com
+    output: |
+      # Enable the daily timer, then confirm it is scheduled:
+      # sudo systemctl enable --now dnf-automatic.timer
+      # systemctl list-timers dnf-automatic.timer
+      NEXT                       UNIT                  ACTIVATES
+      Fri 2026-11-28 06:00 ...   dnf-automatic.timer   dnf-automatic.service
+    note:
+      fr: "`upgrade_type = security` est le réglage qui distingue un patch de sécurité d'une simple montée de version. `reboot = never` évite un redémarrage surprise : on planifie les redémarrages noyau séparément avec `needs-restarting -r`."
+      en: "`upgrade_type = security` is the setting that separates a security patch from a plain version bump. `reboot = never` avoids a surprise restart: kernel reboots are scheduled separately with `needs-restarting -r`."
+
+  - title:
+      fr: "Mesurer le respect du SLA : correctifs en retard par sévérité"
+      en: "Measuring SLA compliance: overdue fixes by severity"
+    file: patch_sla.py
+    lang: python
+    kind: neutral
+    code: |
+      from datetime import date
+
+      # SLA in days by severity, for internet-exposed servers
+      SLA_DAYS = {"critical": 2, "high": 7, "medium": 30, "low": 90}
+
+      # In reality this comes from `apt-get -s`, `dnf updateinfo`, or a scanner.
+      pending = [
+          {"cve": "CVE-2026-0101", "sev": "critical", "age": 5},
+          {"cve": "CVE-2026-0202", "sev": "high",     "age": 3},
+          {"cve": "CVE-2026-0303", "sev": "medium",   "age": 40},
+      ]
+
+      breaches = 0
+      for p in pending:
+          budget = SLA_DAYS[p["sev"]]
+          status = "OK"
+          if p["age"] > budget:
+              status = f"SLA BREACH (+{p['age'] - budget}d)"
+              breaches += 1
+          print(f"{p['cve']:16} {p['sev']:8} age={p['age']:>3}d  budget={budget:>3}d  {status}")
+
+      print(f"\nReport date {date.today()}: {breaches} SLA breach(es)")
+    output: |
+      CVE-2026-0101    critical age=  5d  budget=  2d  SLA BREACH (+3d)
+      CVE-2026-0202    high     age=  3d  budget=  7d  OK
+      CVE-2026-0303    medium   age= 40d  budget= 30d  SLA BREACH (+10d)
+
+      Report date 2026-11-27: 2 SLA breach(es)
+    note:
+      fr: "Automatiser n'est utile que si l'on mesure : ce script transforme une politique écrite en contrôle exécutable. Branché sur un vrai inventaire, il alimente un tableau de bord et déclenche une alerte dès qu'un correctif dépasse son délai."
+      en: "Automating only helps if you measure: this script turns a written policy into an executable check. Wired to a real inventory, it feeds a dashboard and raises an alert as soon as a fix exceeds its deadline."
+
+mistake:
+  fr: |
+    **Activer `apply_updates`/`Automatic-Reboot` partout sans anneaux ni fenêtre de maintenance.**
+
+    Un correctif peut casser une application, et un redémarrage automatique en pleine journée coupe le
+    service. L'erreur inverse est tout aussi fréquente : tout mettre en « télécharger seulement » puis ne
+    jamais installer — on croit être protégé alors que les correctifs dorment sur le disque.
+
+    Troisième piège : automatiser mais **ne rien mesurer**. Sans inventaire des correctifs manquants et de
+    leur ancienneté, personne ne sait si le SLA est respecté, ni qu'une machine est sortie du pilotage
+    (agent arrêté, dépôt injoignable). Testez sur un anneau pilote, planifiez les redémarrages, et surveillez
+    le taux de conformité.
+  en: |
+    **Enabling `apply_updates`/`Automatic-Reboot` everywhere with no rings and no maintenance window.**
+
+    A fix can break an application, and an automatic reboot in the middle of the day takes the service
+    down. The opposite mistake is just as common: set everything to "download only" and then never
+    install — you believe you are protected while the fixes sleep on disk.
+
+    A third trap: automate but **measure nothing**. Without an inventory of missing fixes and their age,
+    nobody knows whether the SLA is met, or that a machine dropped out of management (agent stopped,
+    repository unreachable). Test on a pilot ring, schedule reboots, and watch the compliance rate.
+
+bestPractice:
+  fr: |
+    - **Définissez un SLA par sévérité** (ex. critique 24–48 h, élevé 7 j, moyen 30 j, faible 90 j) et priorisez les failles activement exploitées (catalogue KEV).
+    - **Automatisez le dépôt de sécurité** (`-security`, `upgrade_type = security`) ; gardez les montées de version majeures manuelles.
+    - **Séparez installer et redémarrer** : planifiez les redémarrages noyau dans une fenêtre de maintenance.
+    - **Déployez par anneaux** : pilote, large, serveurs critiques, avec test en préproduction d'abord.
+    - **Mesurez la conformité** : inventaire des correctifs manquants et de leur ancienneté, alerte au dépassement du SLA.
+    - **Envoyez un rapport** (e-mail/SIEM) à chaque exécution ; un échec silencieux est pire qu'une absence d'automatisation.
+    - **Maintenez un inventaire** à jour : une machine inconnue est une machine jamais patchée.
+  en: |
+    - **Define an SLA by severity** (e.g. critical 24–48h, high 7d, medium 30d, low 90d) and prioritise actively exploited flaws (KEV catalog).
+    - **Automate the security repository** (`-security`, `upgrade_type = security`); keep major version upgrades manual.
+    - **Separate install and reboot**: schedule kernel reboots in a maintenance window.
+    - **Deploy in rings**: pilot, broad, critical servers, with staging testing first.
+    - **Measure compliance**: inventory of missing fixes and their age, alert on SLA breach.
+    - **Send a report** (email/SIEM) on every run; a silent failure is worse than no automation.
+    - **Keep an inventory** up to date: an unknown machine is a never-patched machine.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe adopte le SLA suivant pour les serveurs exposés : critique = 2 jours, élevé = 7 jours,
+      moyen = 30 jours, faible = 90 jours.
+
+      Écrivez un script Python qui reçoit une liste de correctifs en attente (chacun avec une sévérité et
+      une ancienneté en jours) et affiche, pour chacun, s'il respecte ou dépasse son SLA, puis le nombre
+      total de dépassements. Un correctif marqué « activement exploité » doit être signalé en priorité
+      quelle que soit sa sévérité.
+    en: |
+      Your team adopts the following SLA for exposed servers: critical = 2 days, high = 7 days,
+      medium = 30 days, low = 90 days.
+
+      Write a Python script that takes a list of pending fixes (each with a severity and an age in days)
+      and prints, for each, whether it meets or breaches its SLA, then the total number of breaches. A fix
+      flagged "actively exploited" must be reported as a priority whatever its severity.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      SLA_DAYS = {"critical": 2, "high": 7, "medium": 30, "low": 90}
+
+      pending = [
+          {"cve": "CVE-2026-1000", "sev": "high",   "age": 10, "exploited": True},
+          {"cve": "CVE-2026-1001", "sev": "medium", "age": 12, "exploited": False},
+          {"cve": "CVE-2026-1002", "sev": "low",    "age": 5,  "exploited": False},
+      ]
+
+      breaches = 0
+      for p in pending:
+          budget = SLA_DAYS[p["sev"]]
+          over = p["age"] - budget
+          # Actively exploited fixes are urgent regardless of the budget
+          flag = " [ACTIVELY EXPLOITED]" if p["exploited"] else ""
+          if over > 0:
+              breaches += 1
+              print(f"{p['cve']} {p['sev']}: BREACH +{over}d{flag}")
+          else:
+              print(f"{p['cve']} {p['sev']}: OK ({-over}d left){flag}")
+
+      print(f"\n{breaches} SLA breach(es)")
+    note:
+      fr: "Le drapeau `exploited` est traité en plus du SLA : une faille exploitée reste signalée même si elle est « dans les temps ». Branchez `pending` sur la sortie de `dnf updateinfo` ou d'un scanner pour un contrôle réel."
+      en: "The `exploited` flag is handled on top of the SLA: an exploited flaw is still flagged even when it is \"within budget\". Wire `pending` to the output of `dnf updateinfo` or a scanner for a real check."
+
+quiz:
+  - q:
+      fr: "Quelle est la justification principale d'un SLA de patch par sévérité ?"
+      en: "What is the main justification for a patch SLA by severity?"
+    options:
+      fr:
+        - "Patcher plus vite les failles graves tout en laissant le temps de tester les moins urgentes"
+        - "Éviter complètement d'installer des correctifs"
+        - "Réduire la taille des journaux système"
+        - "Supprimer le besoin de tester les mises à jour"
+      en:
+        - "Patch serious flaws faster while allowing time to test the less urgent ones"
+        - "Avoid installing fixes altogether"
+        - "Reduce the size of system logs"
+        - "Remove the need to test updates"
+    answer: 0
+    why:
+      fr: "Le SLA équilibre vitesse et stabilité : délai court pour les failles critiques, délai plus long pour les faibles, afin de tester sans laisser une faille grave exposée des mois."
+      en: "The SLA balances speed and stability: a short delay for critical flaws, a longer one for low ones, so you can test without leaving a serious flaw exposed for months."
+  - q:
+      fr: "Pourquoi régler `upgrade_type = security` dans `dnf-automatic` ?"
+      en: "Why set `upgrade_type = security` in `dnf-automatic`?"
+    options:
+      fr:
+        - "Pour chiffrer les paquets téléchargés"
+        - "Pour n'appliquer automatiquement que les avis de sécurité, pas toutes les montées de version"
+        - "Pour désactiver le pare-feu pendant la mise à jour"
+        - "Pour forcer un redémarrage après chaque paquet"
+      en:
+        - "To encrypt downloaded packages"
+        - "To automatically apply only security advisories, not every version bump"
+        - "To disable the firewall during the update"
+        - "To force a reboot after each package"
+    answer: 1
+    why:
+      fr: "On automatise les seuls correctifs de sécurité (RHSA), plus sûrs à appliquer sans surveillance. Les montées de version de fonctionnalités, plus risquées, restent manuelles et testées."
+      en: "You automate only security fixes (RHSA), which are safer to apply unattended. Feature version upgrades, which are riskier, stay manual and tested."
+  - q:
+      fr: "Qu'apporte un déploiement par anneaux (pilote, large, critiques) ?"
+      en: "What does a ring deployment (pilot, broad, critical) provide?"
+    options:
+      fr:
+        - "Il supprime la nécessité d'un SLA"
+        - "Il chiffre le trafic de mise à jour"
+        - "Il valide un correctif sur peu de machines avant de l'étendre, limitant le risque de panne"
+        - "Il installe les correctifs uniquement le week-end"
+      en:
+        - "It removes the need for an SLA"
+        - "It encrypts the update traffic"
+        - "It validates a fix on few machines before extending it, limiting the risk of an outage"
+        - "It installs fixes only on weekends"
+    answer: 2
+    why:
+      fr: "Les anneaux testent le correctif sur un pilote avant la production et les serveurs critiques : on concilie la vitesse exigée par le SLA et la stabilité du service."
+      en: "Rings test the fix on a pilot before production and critical servers: they reconcile the speed required by the SLA with service stability."
+  - q:
+      fr: "Pourquoi `unattended-upgrades` est-il souvent configuré avec `Automatic-Reboot-Time \"03:30\"` plutôt qu'un redémarrage immédiat ?"
+      en: "Why is `unattended-upgrades` often set with `Automatic-Reboot-Time \"03:30\"` rather than an immediate reboot?"
+    options:
+      fr:
+        - "Pour cantonner le redémarrage nécessaire (noyau) à une fenêtre de maintenance et éviter de couper le service en journée"
+        - "Parce que les correctifs ne s'installent que la nuit"
+        - "Pour économiser de l'électricité"
+        - "Parce que `apt` ne fonctionne pas le jour"
+      en:
+        - "To confine the necessary (kernel) reboot to a maintenance window and avoid taking the service down during the day"
+        - "Because fixes only install at night"
+        - "To save electricity"
+        - "Because `apt` does not work during the day"
+    answer: 0
+    why:
+      fr: "Certains correctifs (noyau, glibc) exigent un redémarrage. Le planifier à 03h30 applique la mise à jour tout en évitant une coupure surprise en pleine activité."
+      en: "Some fixes (kernel, glibc) require a reboot. Scheduling it at 03:30 applies the update while avoiding a surprise outage during business hours."
+  - q:
+      fr: "Une vulnérabilité figure dans le catalogue KEV de la CISA avec un score CVSS de 6.5 (moyen). Comment la traiter ?"
+      en: "A vulnerability is in CISA's KEV catalog with a CVSS score of 6.5 (medium). How should you treat it?"
+    options:
+      fr:
+        - "La laisser dans le SLA « moyen » de 30 jours"
+        - "L'ignorer car le score est moyen"
+        - "Attendre qu'elle devienne critique"
+        - "La prioriser immédiatement : elle est activement exploitée malgré un score moyen"
+      en:
+        - "Leave it in the 30-day \"medium\" SLA"
+        - "Ignore it because the score is medium"
+        - "Wait until it becomes critical"
+        - "Prioritise it immediately: it is actively exploited despite a medium score"
+    answer: 3
+    why:
+      fr: "Le catalogue KEV liste les failles réellement exploitées. Une exploitation active passe avant le score CVSS : on corrige sans attendre le délai « moyen »."
+      en: "The KEV catalog lists flaws under real-world exploitation. Active exploitation outranks the CVSS score: you fix it without waiting for the \"medium\" delay."

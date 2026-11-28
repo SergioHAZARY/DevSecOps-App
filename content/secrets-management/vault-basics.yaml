@@ -1,0 +1,461 @@
+description:
+  fr: "Démarrer avec HashiCorp Vault : serveur de dev en Docker, moteur KV v2, politiques HCL, tokens, AppRole et périphérique d'audit."
+  en: "Get started with HashiCorp Vault: dev server in Docker, KV v2 engine, HCL policies, tokens, AppRole and audit device."
+duration: 30
+
+intro:
+  fr: |
+    **HashiCorp Vault** est un coffre-fort central pour les secrets : au lieu de disperser clés et mots de
+    passe dans des fichiers `.env`, les applications les demandent à Vault, qui décide — selon une
+    **politique** — qui a le droit de lire quoi, et journalise chaque accès.
+
+    Imaginez le coffre d'une banque. On n'ouvre pas la salle des coffres à tout le monde : on présente une
+    identité (un **token** ou un couple identifiant/secret via **AppRole**), un agent vérifie vos droits
+    (la **politique**), vous accédez à votre seul casier (un chemin dans le moteur **KV**), et tout est
+    consigné dans un registre (le **périphérique d'audit**).
+
+    Dans cette leçon, vous allez lancer un serveur Vault de développement dans Docker, stocker et lire des
+    secrets avec KV v2, écrire une politique HCL de lecture seule, créer un AppRole pour une application et
+    activer un journal d'audit.
+  en: |
+    **HashiCorp Vault** is a central vault for secrets: instead of scattering keys and passwords across
+    `.env` files, applications ask Vault for them, and Vault decides — according to a **policy** — who may
+    read what, and logs every access.
+
+    Picture a bank vault. You do not open the vault room to everyone: you present an identity (a **token**
+    or an id/secret pair via **AppRole**), an agent checks your rights (the **policy**), you reach your own
+    box only (a path in the **KV** engine), and everything is recorded in a register (the **audit
+    device**).
+
+    In this lesson you will start a Vault development server in Docker, store and read secrets with KV v2,
+    write a read-only HCL policy, create an AppRole for an application and enable an audit log.
+
+sections:
+  - heading:
+      fr: "Le serveur de dev : pratique mais jamais en production"
+      en: "The dev server: handy but never for production"
+    body:
+      fr: |
+        Vault en mode `-dev` démarre un serveur **déjà descellé**, avec un token racine fixe et un stockage
+        **en mémoire**. C'est parfait pour apprendre et tester, mais interdit en production pour trois
+        raisons : tout est perdu au redémarrage, le token racine est connu, et il n'y a aucun chiffrement
+        persistant.
+
+        | Caractéristique | Serveur `-dev` | Serveur de production |
+        |---|---|---|
+        | Stockage | En mémoire (perdu au reboot) | Backend chiffré (Raft, Consul...) |
+        | Scellement | Déjà descellé | Scellé au démarrage, à desceller |
+        | Token racine | Fixe, affiché | Généré une fois, à révoquer après usage |
+        | TLS | Désactivé (HTTP) | Obligatoire (HTTPS) |
+
+        On le lance dans Docker en passant un token racine de démonstration, puis on pointe le client vers
+        lui avec deux variables : `VAULT_ADDR` (l'URL) et `VAULT_TOKEN` (l'identité). Les commandes
+        `vault` et `vault status` confirment la connexion.
+
+        Un concept central : Vault démarre **scellé** (*sealed*) en production. Tant qu'il n'est pas
+        descellé (*unsealed*) avec un quorum de clés, il ne peut rien déchiffrer. Le mode dev saute cette
+        étape pour vous.
+      en: |
+        Vault in `-dev` mode starts a server that is **already unsealed**, with a fixed root token and
+        **in-memory** storage. It is perfect for learning and testing, but forbidden in production for three
+        reasons: everything is lost on restart, the root token is known, and there is no persistent
+        encryption.
+
+        | Feature | `-dev` server | Production server |
+        |---|---|---|
+        | Storage | In memory (lost on reboot) | Encrypted backend (Raft, Consul...) |
+        | Seal | Already unsealed | Sealed at start, must be unsealed |
+        | Root token | Fixed, printed | Generated once, revoke after use |
+        | TLS | Disabled (HTTP) | Mandatory (HTTPS) |
+
+        You start it in Docker with a demo root token, then point the client at it with two variables:
+        `VAULT_ADDR` (the URL) and `VAULT_TOKEN` (the identity). The `vault` and `vault status` commands
+        confirm the connection.
+
+        A central concept: in production Vault starts **sealed**. Until it is **unsealed** with a quorum of
+        keys, it can decrypt nothing. Dev mode skips that step for you.
+  - heading:
+      fr: "KV v2, politiques HCL et tokens"
+      en: "KV v2, HCL policies and tokens"
+    body:
+      fr: |
+        Le moteur **KV** (*Key-Value*) stocke des secrets sous forme de chemins. Sa **version 2** ajoute le
+        **versionnage** : chaque écriture crée une nouvelle version, on peut relire une ancienne ou revenir
+        en arrière. Attention à un piège de la v2 : les commandes API portent un segment `data/` que le CLI
+        `vault kv` masque. Avec `vault kv put secret/myapp`, le secret est en réalité à `secret/data/myapp`
+        — ce qui compte pour écrire les politiques.
+
+        Une **politique** est un document **HCL** qui accorde des *capabilities* (`create`, `read`,
+        `update`, `delete`, `list`) sur des chemins. Le principe de moindre privilège s'applique : une
+        application qui ne fait que lire ne reçoit que `read`.
+
+        Un **token** est l'identité qui porte une ou plusieurs politiques. Le token racine peut tout faire
+        (à n'utiliser que pour l'administration initiale) ; les tokens applicatifs sont limités, ont une
+        **durée de vie** (TTL) et peuvent être révoqués.
+
+        Pour les applications, on évite de distribuer un token à longue durée. On utilise une **méthode
+        d'authentification** comme **AppRole** : l'application présente un `role_id` (public, comme un nom
+        d'utilisateur) et un `secret_id` (confidentiel, à courte vie), et reçoit en échange un token limité
+        par la politique du rôle.
+      en: |
+        The **KV** (*Key-Value*) engine stores secrets as paths. Its **version 2** adds **versioning**:
+        each write creates a new version, you can read an old one or roll back. Beware a v2 pitfall: the API
+        commands carry a `data/` segment that the `vault kv` CLI hides. With `vault kv put secret/myapp`,
+        the secret actually lives at `secret/data/myapp` — which matters when writing policies.
+
+        A **policy** is an **HCL** document that grants *capabilities* (`create`, `read`, `update`,
+        `delete`, `list`) on paths. Least privilege applies: an application that only reads gets only
+        `read`.
+
+        A **token** is the identity that carries one or more policies. The root token can do anything (use
+        it only for initial administration); application tokens are limited, have a **time-to-live** (TTL)
+        and can be revoked.
+
+        For applications, you avoid handing out a long-lived token. You use an **auth method** such as
+        **AppRole**: the application presents a `role_id` (public, like a username) and a `secret_id`
+        (confidential, short-lived), and receives in exchange a token limited by the role's policy.
+
+examples:
+  - title:
+      fr: "Démarrer Vault en dev dans Docker et se connecter"
+      en: "Starting Vault in dev mode in Docker and connecting"
+    file: start-vault-dev.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Dev server: in-memory, already unsealed. NEVER use this in production.
+      docker run -d --name vault-dev --cap-add=IPC_LOCK \
+        -p 8200:8200 \
+        -e 'VAULT_DEV_ROOT_TOKEN_ID=root-demo-token' \
+        -e 'VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200' \
+        hashicorp/vault:1.18
+
+      # Point the CLI at the dev server (HTTP is fine only in dev)
+      export VAULT_ADDR='http://127.0.0.1:8200'
+      export VAULT_TOKEN='root-demo-token'
+
+      # Confirm the server answers and is unsealed
+      vault status
+    output: |
+      Key             Value
+      ---             -----
+      Seal Type       shamir
+      Sealed          false
+      Storage Type    inmem
+      Version         1.18.0
+      HA Enabled      false
+    note:
+      fr: "`Sealed false` et `Storage Type inmem` confirment un serveur de dev : utilisable tout de suite, mais tout disparaît au redémarrage. Le token racine `root-demo-token` ne doit exister qu'en laboratoire."
+      en: "`Sealed false` and `Storage Type inmem` confirm a dev server: usable right away, but everything vanishes on restart. The `root-demo-token` root token must only ever exist in a lab."
+
+  - title:
+      fr: "Écrire, lire et versionner un secret avec KV v2"
+      en: "Writing, reading and versioning a secret with KV v2"
+    file: kv-v2.sh
+    lang: bash
+    kind: secure
+    code: |
+      # In dev mode a KV v2 engine is already mounted at secret/
+      vault secrets list -detailed | grep secret/
+
+      # Write version 1 of a secret (CLI hides the data/ segment of the API)
+      vault kv put secret/myapp/db username=app_user password=changeme-in-vault
+
+      # Update it: KV v2 keeps the old version too
+      vault kv put secret/myapp/db username=app_user password=rotated-value-2
+
+      # Read the current version
+      vault kv get secret/myapp/db
+
+      # Read a SPECIFIC old version (versioning in action)
+      vault kv get -version=1 -field=password secret/myapp/db
+    output: |
+      ====== Metadata ======
+      Key                Value
+      ---                -----
+      version            2
+
+      ====== Data ======
+      Key         Value
+      ---         -----
+      password    rotated-value-2
+      username    app_user
+
+      changeme-in-vault
+    note:
+      fr: "KV v2 conserve l'historique : la version 2 est la valeur courante, mais `-version=1` relit l'ancienne. Utile pour revenir en arrière après une mauvaise rotation. Le chemin API réel est `secret/data/myapp/db`."
+      en: "KV v2 keeps history: version 2 is the current value, but `-version=1` reads the old one back. Handy to roll back after a bad rotation. The real API path is `secret/data/myapp/db`."
+
+  - title:
+      fr: "Une politique HCL de lecture seule (moindre privilège)"
+      en: "A read-only HCL policy (least privilege)"
+    file: myapp-read.hcl
+    lang: hcl
+    kind: secure
+    code: |
+      # Least privilege: this policy can ONLY read one app's secrets.
+      # Note the data/ segment: KV v2 stores values under secret/data/<path>.
+      path "secret/data/myapp/*" {
+        capabilities = ["read"]
+      }
+
+      # Allow listing keys under the app prefix (metadata path, no data/)
+      path "secret/metadata/myapp/*" {
+        capabilities = ["list"]
+      }
+
+      # Everything else is implicitly DENIED. We never grant "delete" or a
+      # wildcard like "secret/*" to an application that only consumes secrets.
+    output: |
+      # Load the policy and verify it exists:
+      $ vault policy write myapp-read myapp-read.hcl
+      Success! Uploaded policy: myapp-read
+      $ vault policy list
+      default
+      myapp-read
+      root
+    note:
+      fr: "La politique n'accorde que `read` sur les secrets de `myapp`, et `list` sur leurs métadonnées. Tout le reste est refusé par défaut. Oublier le segment `data/` est l'erreur n°1 des politiques KV v2 : la lecture échoue silencieusement."
+      en: "The policy grants only `read` on `myapp`'s secrets, and `list` on their metadata. Everything else is denied by default. Forgetting the `data/` segment is the #1 KV v2 policy mistake: reads fail silently."
+
+  - title:
+      fr: "AppRole : une identité machine liée à la politique"
+      en: "AppRole: a machine identity bound to the policy"
+    file: approle.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Enable the AppRole auth method once
+      vault auth enable approle
+
+      # Create a role that hands out tokens limited by the myapp-read policy.
+      # token_ttl keeps those tokens short-lived; secret_id_ttl limits the
+      # credential the app presents to obtain them.
+      vault write auth/approle/role/myapp \
+        token_policies="myapp-read" \
+        token_ttl=15m token_max_ttl=30m \
+        secret_id_ttl=90m
+
+      # role_id is like a username (not secret); secret_id is the password
+      ROLE_ID=$(vault read -field=role_id auth/approle/role/myapp/role-id)
+      SECRET_ID=$(vault write -f -field=secret_id auth/approle/role/myapp/secret-id)
+
+      # The app logs in with the pair and receives a short-lived token
+      vault write -field=token auth/approle/login \
+        role_id="$ROLE_ID" secret_id="$SECRET_ID"
+    output: |
+      hvs.CAESIExampleTokenValueThatExpiresIn15Minutes...
+    note:
+      fr: "L'application ne détient jamais de token longue durée : elle échange `role_id` + `secret_id` contre un token de 15 minutes portant la seule politique `myapp-read`. On fait tourner le `secret_id` régulièrement. C'est la base d'une authentification machine propre."
+      en: "The application never holds a long-lived token: it exchanges `role_id` + `secret_id` for a 15-minute token carrying only the `myapp-read` policy. You rotate the `secret_id` regularly. This is the basis of clean machine authentication."
+
+  - title:
+      fr: "Activer un périphérique d'audit : tout accès est tracé"
+      en: "Enabling an audit device: every access is traced"
+    file: audit.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Send an audit log to a file inside the container (or a syslog/socket)
+      vault audit enable file file_path=/vault/logs/audit.log
+
+      # From now on, every request and response is recorded (secrets hashed)
+      vault kv get secret/myapp/db >/dev/null
+
+      vault audit list
+    output: |
+      Path     Type    Description
+      ----     ----    -----------
+      file/    file    n/a
+
+      # A line in audit.log (secret values are HMAC-hashed, not in clear):
+      # {"type":"response","auth":{"policies":["myapp-read"]},
+      #  "request":{"operation":"read","path":"secret/data/myapp/db"}, ...}
+    note:
+      fr: "Le périphérique d'audit journalise chaque requête : qui, quand, quel chemin, quelle politique. Les valeurs sensibles sont hachées (HMAC), pas en clair. C'est la preuve d'accès indispensable en cas d'incident. Un Vault de production sans audit est aveugle."
+      en: "The audit device logs every request: who, when, which path, which policy. Sensitive values are hashed (HMAC), not in clear. It is the access evidence you need in an incident. A production Vault with no audit is blind."
+
+mistake:
+  fr: |
+    **Oublier le segment `data/` dans les politiques KV v2, et garder le token racine pour les
+    applications.**
+
+    Avec KV v2, un secret écrit via `vault kv put secret/myapp` est accessible à l'API sous
+    `secret/data/myapp`. Une politique qui accorde `read` sur `secret/myapp/*` au lieu de
+    `secret/data/myapp/*` **ne fonctionne pas** : l'application reçoit une erreur `permission denied`
+    déroutante alors que « le chemin a l'air bon ».
+
+    Seconde faute, plus grave : distribuer le **token racine** aux applications ou aux pipelines « parce que
+    ça marche ». Le token racine n'a aucune limite et ne devrait servir qu'à l'amorçage, puis être révoqué.
+    Chaque application reçoit sa propre identité (AppRole, Kubernetes, OIDC) et une politique au plus juste.
+    Enfin, un Vault sans périphérique d'audit ne laisse aucune trace : activez-le dès le départ.
+  en: |
+    **Forgetting the `data/` segment in KV v2 policies, and keeping the root token for applications.**
+
+    With KV v2, a secret written via `vault kv put secret/myapp` is reachable by the API under
+    `secret/data/myapp`. A policy that grants `read` on `secret/myapp/*` instead of `secret/data/myapp/*`
+    **does not work**: the application gets a confusing `permission denied` error even though "the path
+    looks right".
+
+    A second, more serious mistake: handing the **root token** to applications or pipelines "because it
+    works". The root token has no limit and should only serve bootstrapping, then be revoked. Each
+    application gets its own identity (AppRole, Kubernetes, OIDC) and a tightly scoped policy. Finally, a
+    Vault with no audit device leaves no trace: enable it from the start.
+
+bestPractice:
+  fr: |
+    - **Le mode `-dev` reste au laboratoire** : en production, backend chiffré, TLS, et scellement avec quorum de clés.
+    - **Moindre privilège dans les politiques HCL** : accordez `read` seul à qui ne fait que lire ; jamais de wildcard `secret/*` applicatif.
+    - **Attention au segment `data/`** des chemins KV v2 dans les politiques.
+    - **Pas de token racine pour les applications** : utilisez AppRole (ou Kubernetes/OIDC) avec des tokens à TTL court.
+    - **Faites tourner les `secret_id`** et révoquez les identités qui ne servent plus.
+    - **Activez un périphérique d'audit dès le départ** et expédiez les journaux hors de Vault.
+    - **Versionnez les politiques** (fichiers `.hcl` dans Git) : la configuration du coffre devient du code revu.
+  en: |
+    - **`-dev` mode stays in the lab**: in production, encrypted backend, TLS, and sealing with a key quorum.
+    - **Least privilege in HCL policies**: grant `read` alone to read-only consumers; never an application-wide `secret/*` wildcard.
+    - **Mind the `data/` segment** of KV v2 paths in policies.
+    - **No root token for applications**: use AppRole (or Kubernetes/OIDC) with short-TTL tokens.
+    - **Rotate the `secret_id`s** and revoke identities that are no longer used.
+    - **Enable an audit device from the start** and ship the logs off Vault.
+    - **Version the policies** (`.hcl` files in Git): the vault configuration becomes reviewed code.
+
+exercise:
+  statement:
+    fr: |
+      Un serveur Vault de dev tourne déjà (KV v2 monté sur `secret/`). Vous devez donner à une application
+      `billing` un accès en **lecture seule** à ses secrets, via AppRole.
+
+      1. Écrivez une politique HCL `billing-read` qui autorise uniquement la lecture des secrets sous
+         `secret/billing/*` (pensez au segment `data/`) et le listage de leurs métadonnées.
+      2. Chargez la politique, activez AppRole et créez un rôle `billing` qui délivre des tokens de 15
+         minutes portant cette politique.
+      3. Montrez comment récupérer le `role_id` et un `secret_id`.
+    en: |
+      A dev Vault server is already running (KV v2 mounted at `secret/`). You must give a `billing`
+      application **read-only** access to its secrets, via AppRole.
+
+      1. Write an HCL policy `billing-read` that allows only reading secrets under `secret/billing/*`
+         (mind the `data/` segment) and listing their metadata.
+      2. Load the policy, enable AppRole and create a `billing` role that issues 15-minute tokens carrying
+         that policy.
+      3. Show how to retrieve the `role_id` and a `secret_id`.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Read-only policy (data/ for values, metadata/ for listing)
+      cat > billing-read.hcl <<'EOF'
+      path "secret/data/billing/*" {
+        capabilities = ["read"]
+      }
+      path "secret/metadata/billing/*" {
+        capabilities = ["list"]
+      }
+      EOF
+
+      # 2. Load the policy, enable AppRole, create the role
+      vault policy write billing-read billing-read.hcl
+      vault auth enable approle || true   # ignore error if already enabled
+      vault write auth/approle/role/billing \
+        token_policies="billing-read" \
+        token_ttl=15m token_max_ttl=30m secret_id_ttl=90m
+
+      # 3. Retrieve the credentials the app will use to log in
+      vault read -field=role_id auth/approle/role/billing/role-id
+      vault write -f -field=secret_id auth/approle/role/billing/secret-id
+    note:
+      fr: "La politique n'accorde que `read`, et le segment `data/` est présent : sans lui, la lecture échouerait. Le token délivré expire en 15 minutes, limitant la fenêtre d'exposition si le `secret_id` fuite."
+      en: "The policy grants only `read`, and the `data/` segment is present: without it, reads would fail. The issued token expires in 15 minutes, limiting the exposure window if the `secret_id` leaks."
+
+quiz:
+  - q:
+      fr: "Pourquoi le serveur Vault en mode `-dev` est-il interdit en production ?"
+      en: "Why is the Vault `-dev` mode server forbidden in production?"
+    options:
+      fr:
+        - "Parce qu'il stocke en mémoire, est déjà descellé et a un token racine connu"
+        - "Parce qu'il est trop lent"
+        - "Parce qu'il ne supporte pas le moteur KV"
+        - "Parce qu'il exige une licence payante"
+      en:
+        - "Because it stores in memory, is already unsealed and has a known root token"
+        - "Because it is too slow"
+        - "Because it does not support the KV engine"
+        - "Because it requires a paid license"
+    answer: 0
+    why:
+      fr: "Le mode dev perd tout au redémarrage, démarre descellé et utilise un token racine fixe : parfait pour apprendre, inacceptable pour de vrais secrets."
+      en: "Dev mode loses everything on restart, starts unsealed and uses a fixed root token: perfect for learning, unacceptable for real secrets."
+  - q:
+      fr: "Qu'apporte la version 2 du moteur KV par rapport à la version 1 ?"
+      en: "What does version 2 of the KV engine add over version 1?"
+    options:
+      fr:
+        - "Le chiffrement du réseau"
+        - "Le versionnage des secrets (historique et retour en arrière)"
+        - "La suppression du besoin de politique"
+        - "L'authentification biométrique"
+      en:
+        - "Network encryption"
+        - "Secret versioning (history and rollback)"
+        - "Removing the need for a policy"
+        - "Biometric authentication"
+    answer: 1
+    why:
+      fr: "KV v2 conserve chaque version d'un secret : on peut relire une ancienne valeur ou revenir en arrière après une mauvaise rotation. Les chemins API portent alors un segment `data/`."
+      en: "KV v2 keeps every version of a secret: you can read an old value back or roll back after a bad rotation. The API paths then carry a `data/` segment."
+  - q:
+      fr: "Dans une politique KV v2, quel chemin accorde la lecture du secret écrit en `secret/myapp/db` ?"
+      en: "In a KV v2 policy, which path grants read access to the secret written at `secret/myapp/db`?"
+    options:
+      fr:
+        - "`secret/myapp/db`"
+        - "`myapp/db`"
+        - "`secret/data/myapp/db`"
+        - "`kv/secret/myapp`"
+      en:
+        - "`secret/myapp/db`"
+        - "`myapp/db`"
+        - "`secret/data/myapp/db`"
+        - "`kv/secret/myapp`"
+    answer: 2
+    why:
+      fr: "Le CLI masque le segment `data/`, mais l'API (et donc les politiques) l'exige : la lecture se fait sur `secret/data/myapp/db`. L'oublier provoque un `permission denied`."
+      en: "The CLI hides the `data/` segment, but the API (and thus policies) requires it: the read is on `secret/data/myapp/db`. Forgetting it causes a `permission denied`."
+  - q:
+      fr: "Pourquoi utiliser AppRole plutôt qu'un token racine pour une application ?"
+      en: "Why use AppRole rather than a root token for an application?"
+    options:
+      fr:
+        - "AppRole est plus rapide à taper"
+        - "Le token racine ne fonctionne pas avec KV v2"
+        - "AppRole donne un token limité par une politique et à durée de vie courte, au lieu d'un accès illimité"
+        - "AppRole chiffre les secrets une seconde fois"
+      en:
+        - "AppRole is faster to type"
+        - "The root token does not work with KV v2"
+        - "AppRole gives a token limited by a policy and short-lived, instead of unlimited access"
+        - "AppRole encrypts secrets a second time"
+    answer: 2
+    why:
+      fr: "AppRole échange `role_id` + `secret_id` contre un token restreint et temporaire. Le token racine, illimité, ne doit servir qu'à l'amorçage puis être révoqué."
+      en: "AppRole exchanges `role_id` + `secret_id` for a restricted, temporary token. The root token, unlimited, should only serve bootstrapping then be revoked."
+  - q:
+      fr: "À quoi sert un périphérique d'audit Vault ?"
+      en: "What is a Vault audit device for?"
+    options:
+      fr:
+        - "À chiffrer les secrets une fois de plus"
+        - "À journaliser chaque requête (qui, quand, quel chemin), avec les valeurs sensibles hachées"
+        - "À accélérer les lectures de secrets"
+        - "À remplacer les politiques HCL"
+      en:
+        - "To encrypt secrets one more time"
+        - "To log every request (who, when, which path), with sensitive values hashed"
+        - "To speed up secret reads"
+        - "To replace HCL policies"
+    answer: 1
+    why:
+      fr: "Le périphérique d'audit trace chaque accès avec les valeurs hachées (HMAC). C'est la preuve indispensable lors d'un incident ; un Vault sans audit est aveugle."
+      en: "The audit device records every access with values hashed (HMAC). It is the evidence you need during an incident; a Vault with no audit is blind."

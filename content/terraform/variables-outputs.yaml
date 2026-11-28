@@ -1,0 +1,467 @@
+description:
+  fr: "Alimenter une configuration Terraform avec des variables : fichiers tfvars, ordre de priorité des sources, variables d'environnement pour les secrets et exploitation des outputs."
+  en: "Feed a Terraform configuration with variables: tfvars files, the precedence order of sources, environment variables for secrets and consuming outputs."
+duration: 25
+
+intro:
+  fr: |
+    Vous savez *déclarer* une variable en HCL (cours « HCL »). Côté **outil**, la question est différente :
+    d'où Terraform tire-t-il la **valeur** de cette variable ? Ligne de commande, fichier, variable
+    d'environnement ? Et que se passe-t-il quand deux sources donnent deux valeurs ? Cette leçon porte sur
+    le **remplissage** des variables et la récupération des **outputs**.
+
+    L'analogie : un **formulaire à plusieurs sources de pré-remplissage**. Certaines cases ont une valeur
+    par défaut, d'autres sont remplies par un fichier standard, et vous pouvez toujours corriger une case à
+    la main au dernier moment. Terraform suit un ordre de priorité précis entre ces sources — le connaître
+    évite bien des surprises (« pourquoi ma valeur n'est-elle pas prise en compte ? »).
+
+    Vous allez écrire des fichiers `.tfvars`, comprendre l'**ordre de priorité** des sources, injecter un
+    secret par variable d'environnement `TF_VAR_` **sans** l'écrire dans un fichier versionné, et exploiter
+    les `output` avec `terraform output -raw` et `-json` pour relier Terraform à vos scripts.
+  en: |
+    You know how to *declare* a variable in HCL (the "HCL" course). On the **tool** side, the question is
+    different: where does Terraform get the variable's **value** from? Command line, file, environment
+    variable? And what happens when two sources give two values? This lesson is about **filling** variables
+    and retrieving **outputs**.
+
+    The analogy: a **form with several pre-fill sources**. Some fields have a default, others are filled by
+    a standard file, and you can always correct a field by hand at the last moment. Terraform follows a
+    precise precedence order between these sources — knowing it avoids many surprises ("why is my value not
+    taken into account?").
+
+    You will write `.tfvars` files, understand the **precedence order** of sources, inject a secret through
+    a `TF_VAR_` environment variable **without** writing it into a versioned file, and consume `output`
+    values with `terraform output -raw` and `-json` to connect Terraform to your scripts.
+
+sections:
+  - heading:
+      fr: "Les fichiers tfvars"
+      en: "tfvars files"
+    body:
+      fr: |
+        Un fichier `.tfvars` ne contient que des **affectations** `nom = valeur`, sans bloc `variable`. Il
+        sépare le *quoi* (le code, versionné) du *combien* (les valeurs, souvent par environnement) :
+
+        ```hcl
+        # terraform.tfvars
+        region         = "eu-west-3"
+        instance_count = 3
+        tags = {
+          Team = "payments"
+        }
+        ```
+
+        Terraform charge **automatiquement** certains fichiers, sans rien préciser :
+
+        | Fichier | Chargé automatiquement ? |
+        |---|---|
+        | `terraform.tfvars` | Oui |
+        | `terraform.tfvars.json` | Oui |
+        | `*.auto.tfvars` / `*.auto.tfvars.json` | Oui (par ordre alphabétique) |
+        | `prod.tfvars`, `dev.tfvars`... | Non — il faut `-var-file=prod.tfvars` |
+
+        D'où un motif courant : un `terraform.tfvars` pour les valeurs communes, et des `dev.tfvars` /
+        `prod.tfvars` passés explicitement selon l'environnement. **Attention** : un `.tfvars` peut contenir
+        des secrets ; c'est pourquoi `*.tfvars` est dans le `.gitignore`. Pour les valeurs non sensibles que
+        vous *voulez* versionner, utilisez un fichier `.tfvars` dédié que vous excluez du *gitignore* au cas
+        par cas.
+      en: |
+        A `.tfvars` file contains only **assignments** `name = value`, with no `variable` block. It
+        separates the *what* (the code, versioned) from the *how much* (the values, often per environment):
+
+        ```hcl
+        # terraform.tfvars
+        region         = "eu-west-3"
+        instance_count = 3
+        tags = {
+          Team = "payments"
+        }
+        ```
+
+        Terraform loads **some** files **automatically**, with no flag:
+
+        | File | Loaded automatically? |
+        |---|---|
+        | `terraform.tfvars` | Yes |
+        | `terraform.tfvars.json` | Yes |
+        | `*.auto.tfvars` / `*.auto.tfvars.json` | Yes (alphabetical order) |
+        | `prod.tfvars`, `dev.tfvars`... | No — you need `-var-file=prod.tfvars` |
+
+        Hence a common pattern: a `terraform.tfvars` for common values, and `dev.tfvars` / `prod.tfvars`
+        passed explicitly per environment. **Beware**: a `.tfvars` can contain secrets; that is why
+        `*.tfvars` is in the `.gitignore`. For non-sensitive values you *want* versioned, use a dedicated
+        `.tfvars` file excluded from the gitignore case by case.
+  - heading:
+      fr: "L'ordre de priorité des sources"
+      en: "The precedence order of sources"
+    body:
+      fr: |
+        Quand une même variable reçoit une valeur de plusieurs sources, Terraform applique un ordre strict,
+        de la plus faible à la plus forte priorité :
+
+        1. la valeur `default` du bloc `variable` (la plus faible) ;
+        2. les variables d'environnement `TF_VAR_<nom>` ;
+        3. le fichier `terraform.tfvars`, puis `terraform.tfvars.json` ;
+        4. les fichiers `*.auto.tfvars` (ordre alphabétique) ;
+        5. les options `-var` et `-var-file` de la ligne de commande (la plus forte, dans l'ordre d'apparition).
+
+        **La dernière source gagne.** Ainsi, un `-var="region=us-east-1"` en ligne de commande l'emporte
+        toujours sur un fichier `tfvars`, lui-même prioritaire sur un `TF_VAR_region`, lui-même prioritaire
+        sur le `default`. Si une variable sans `default` n'est fournie par aucune source, Terraform
+        **demande** sa valeur en mode interactif (à proscrire en CI : passez-la explicitement).
+
+        Ce classement est un outil de sécurité : on met les valeurs sûres communes dans un `tfvars`
+        versionné, et on **surcharge** ponctuellement un secret ou une valeur d'environnement par
+        `TF_VAR_` ou `-var`, sans jamais l'écrire sur disque.
+      en: |
+        When one variable gets a value from several sources, Terraform applies a strict order, from lowest
+        to highest precedence:
+
+        1. the `variable` block's `default` value (lowest);
+        2. the `TF_VAR_<name>` environment variables;
+        3. the `terraform.tfvars` file, then `terraform.tfvars.json`;
+        4. the `*.auto.tfvars` files (alphabetical order);
+        5. the command-line `-var` and `-var-file` options (highest, in order of appearance).
+
+        **The last source wins.** So a `-var="region=us-east-1"` on the command line always beats a `tfvars`
+        file, itself beating a `TF_VAR_region`, itself beating the `default`. If a variable with no
+        `default` is provided by no source, Terraform **prompts** for it interactively (avoid this in CI:
+        pass it explicitly).
+
+        This ranking is a security tool: you put common safe values in a versioned `tfvars`, and
+        **override** a secret or an environment value with `TF_VAR_` or `-var` on the fly, without ever
+        writing it to disk.
+  - heading:
+      fr: "Exploiter les outputs"
+      en: "Consuming outputs"
+    body:
+      fr: |
+        Un `output` expose une valeur calculée (une URL, un ARN, une IP) après l'apply. On la récupère pour
+        la lire à l'écran, l'enchaîner dans un script, ou la transmettre à un autre système :
+
+        ```bash
+        terraform output                  # all outputs, human-readable
+        terraform output instance_ip      # one output, quoted
+        terraform output -raw instance_ip # one output, raw (no quotes) — for scripts
+        terraform output -json            # all outputs as JSON — for tooling/jq
+        ```
+
+        `-raw` est précieux pour injecter une valeur dans une autre commande (`ssh ec2-user@$(terraform
+        output -raw instance_ip)`). `-json` donne une structure complète, idéale avec `jq`.
+
+        Attention sécurité : un `output` marqué `sensitive` s'affiche comme `(sensitive value)` et n'apparaît
+        pas en clair dans `terraform output` ; mais `terraform output -json` **révèle** sa valeur réelle (le
+        JSON est destiné aux outils). Ne redirigez donc jamais un `output -json` vers un log public ou un
+        artefact de CI non protégé. Enfin, un output n'est pas un canal de secret : préférez transmettre un
+        *identifiant* de secret (ARN dans Secrets Manager) plutôt que le secret lui-même.
+      en: |
+        An `output` exposes a computed value (a URL, an ARN, an IP) after apply. You retrieve it to read on
+        screen, chain it in a script, or pass it to another system:
+
+        ```bash
+        terraform output                  # all outputs, human-readable
+        terraform output instance_ip      # one output, quoted
+        terraform output -raw instance_ip # one output, raw (no quotes) — for scripts
+        terraform output -json            # all outputs as JSON — for tooling/jq
+        ```
+
+        `-raw` is valuable to inject a value into another command (`ssh ec2-user@$(terraform output -raw
+        instance_ip)`). `-json` gives a full structure, ideal with `jq`.
+
+        Security warning: a `sensitive` output shows as `(sensitive value)` and does not appear in clear in
+        `terraform output`; but `terraform output -json` **reveals** its real value (the JSON is meant for
+        tools). So never pipe an `output -json` into a public log or an unprotected CI artifact. Finally, an
+        output is not a secret channel: prefer passing a secret's *identifier* (an ARN in Secrets Manager)
+        rather than the secret itself.
+
+examples:
+  - title:
+      fr: "Déclaration, tfvars et valeurs communes"
+      en: "Declaration, tfvars and common values"
+    file: terraform.tfvars
+    lang: hcl
+    kind: neutral
+    code: |
+      # variables.tf declares: region, instance_count, environment (no default)
+      # This terraform.tfvars is loaded automatically and holds non-secret values:
+
+      region         = "eu-west-3"
+      instance_count = 2
+      environment    = "dev"
+
+      tags = {
+        Team      = "payments"
+        ManagedBy = "Terraform"
+      }
+    note:
+      fr: "Un `.tfvars` ne contient que des affectations, jamais de bloc `variable`. `terraform.tfvars` est chargé sans aucune option. Gardez-y uniquement des valeurs non sensibles, car ce fichier est habituellement ignoré par Git."
+      en: "A `.tfvars` contains only assignments, never a `variable` block. `terraform.tfvars` is loaded with no flag. Keep only non-sensitive values here, since this file is usually ignored by Git."
+
+  - title:
+      fr: "L'ordre de priorité en action"
+      en: "The precedence order in action"
+    file: precedence.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Given: variable "region" has default = "eu-west-1"
+      #        terraform.tfvars sets region = "eu-west-3"
+
+      # 1. No flag: terraform.tfvars wins over the default
+      terraform plan              # region = eu-west-3
+
+      # 2. Environment variable: lower priority than tfvars, so tfvars still wins
+      export TF_VAR_region=eu-central-1
+      terraform plan              # region = eu-west-3 (tfvars beats TF_VAR_)
+
+      # 3. Command line -var: highest priority, overrides everything
+      terraform plan -var="region=us-east-1"   # region = us-east-1
+    note:
+      fr: "La règle « la dernière source gagne » suit l'ordre défaut < `TF_VAR_` < `tfvars` < `-var`. Ici le `tfvars` bat la variable d'environnement, mais `-var` bat tout le monde. Comprendre cet ordre évite les faux mystères de configuration."
+      en: "The \"last source wins\" rule follows the order default < `TF_VAR_` < `tfvars` < `-var`. Here the `tfvars` beats the environment variable, but `-var` beats everyone. Understanding this order avoids phantom configuration mysteries."
+
+  - title:
+      fr: "Sécurisé : injecter un secret sans l'écrire sur disque"
+      en: "Secure: injecting a secret without writing it to disk"
+    file: secret-var.sh
+    lang: bash
+    kind: secure
+    code: |
+      # variable "db_password" { type = string, sensitive = true } has NO default.
+
+      # BAD: writing the secret in a file risks committing it.
+      #   echo 'db_password = "S3cr3t"' > secrets.tfvars   # <- avoid
+
+      # GOOD: pass it through a TF_VAR_ environment variable, pulled from a vault.
+      # It never touches a file and is not shown in plan/apply output.
+      export TF_VAR_db_password="$(vault kv get -field=password secret/app/db)"
+      terraform apply
+
+      # Clean the variable from the shell afterwards
+      unset TF_VAR_db_password
+    note:
+      fr: "Le préfixe `TF_VAR_` relie une variable d'environnement à la variable Terraform du même nom. Récupérer le secret d'un gestionnaire (Vault) et le passer ainsi évite tout fichier sur disque — bien plus sûr qu'un `secrets.tfvars` qu'on risque de committer. Le secret reste toutefois dans le state (leçon « Sécurité »)."
+      en: "The `TF_VAR_` prefix links an environment variable to the Terraform variable of the same name. Pulling the secret from a manager (Vault) and passing it this way avoids any file on disk — far safer than a `secrets.tfvars` you might commit. The secret still ends up in the state (see the \"Security\" lesson)."
+
+  - title:
+      fr: "Choisir un fichier de variables par environnement"
+      en: "Picking a variables file per environment"
+    file: env-select.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Common values in terraform.tfvars (auto-loaded),
+      # environment-specific overrides in prod.tfvars / dev.tfvars (NOT auto-loaded):
+
+      # Plan the dev environment
+      terraform plan -var-file=dev.tfvars
+
+      # Plan the prod environment (explicit file + explicit plan output for review)
+      terraform plan -var-file=prod.tfvars -out=prod.tfplan
+      terraform apply prod.tfplan
+    output: |
+      # prod.tfvars might set:
+      #   instance_count = 6
+      #   instance_type  = "m5.large"
+      # dev.tfvars:
+      #   instance_count = 1
+      #   instance_type  = "t3.small"
+    note:
+      fr: "Un fichier `prod.tfvars` explicite rend l'environnement cible visible dans la commande, ce qui réduit le risque d'appliquer la config de prod par erreur. Couplé à `-out=prod.tfplan`, on applique exactement ce qui a été revu."
+      en: "An explicit `prod.tfvars` file makes the target environment visible in the command, reducing the risk of applying prod config by mistake. Paired with `-out=prod.tfplan`, you apply exactly what was reviewed."
+
+  - title:
+      fr: "Récupérer les outputs pour un script"
+      en: "Retrieving outputs for a script"
+    file: use-outputs.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Human-readable listing
+      terraform output
+
+      # Raw value (no quotes), perfect to chain into another command
+      ssh ec2-user@"$(terraform output -raw instance_ip)"
+
+      # JSON for tooling; extract a field with jq
+      terraform output -json | jq -r '.bucket_name.value'
+    output: |
+      $ terraform output
+      bucket_name = "devsecops-logs-42"
+      instance_ip = "203.0.113.17"
+
+      $ terraform output -raw instance_ip
+      203.0.113.17
+    note:
+      fr: "`-raw` donne la valeur brute (sans guillemets) pour l'injecter dans une commande ; `-json` alimente `jq`. Rappel sécurité : `output -json` révèle même les valeurs `sensitive` — ne le redirigez jamais vers un log public."
+      en: "`-raw` gives the raw value (no quotes) to inject into a command; `-json` feeds `jq`. Security reminder: `output -json` reveals even `sensitive` values — never pipe it into a public log."
+
+mistake:
+  fr: |
+    **Mettre un secret dans un fichier `.tfvars` et le committer.**
+
+    Un `secrets.tfvars` est pratique... jusqu'au `git add .` de trop. Une fois le secret dans l'historique
+    Git, il y reste même après suppression du fichier. Préférez `TF_VAR_<nom>` alimenté depuis un
+    gestionnaire de secrets, ou un *secret* de CI, qui n'écrit rien sur disque. Deuxième piège lié à l'ordre
+    de priorité : s'étonner qu'une valeur de `tfvars` « ne marche pas » alors qu'un `-var` oublié dans un
+    script ou un `TF_VAR_` exporté dans le shell la surcharge. En cas de doute, `terraform plan` affiche la
+    valeur effective — et rappelez-vous : la ligne de commande gagne toujours.
+  en: |
+    **Putting a secret in a `.tfvars` file and committing it.**
+
+    A `secrets.tfvars` is handy... until the one `git add .` too many. Once the secret is in the Git
+    history, it stays there even after deleting the file. Prefer `TF_VAR_<name>` fed from a secret manager,
+    or a CI *secret*, which writes nothing to disk. A second trap tied to precedence: being surprised that a
+    `tfvars` value "does not work" while a forgotten `-var` in a script or a `TF_VAR_` exported in the shell
+    overrides it. When in doubt, `terraform plan` shows the effective value — and remember: the command line
+    always wins.
+
+bestPractice:
+  fr: |
+    - **Code versionné, valeurs dans des `tfvars`** : séparez le *quoi* du *combien*.
+    - **`*.tfvars` dans le `.gitignore`** ; pour une valeur non sensible à versionner, un fichier dédié exclu au cas par cas.
+    - **Secrets par `TF_VAR_` depuis un vault**, jamais dans un fichier sur disque ni dans Git.
+    - **Un `-var-file` explicite par environnement** (`prod.tfvars`) rend la cible visible et réduit les erreurs.
+    - **Connaître l'ordre de priorité** : défaut < `TF_VAR_` < `tfvars` < `-var` ; la dernière source gagne.
+    - **`output -json` révèle les valeurs sensibles** : ne jamais le rediriger vers un log ou artefact public.
+  en: |
+    - **Versioned code, values in `tfvars`**: separate the *what* from the *how much*.
+    - **`*.tfvars` in `.gitignore`**; for a non-sensitive value to version, a dedicated file excluded case by case.
+    - **Secrets via `TF_VAR_` from a vault**, never in a file on disk nor in Git.
+    - **An explicit `-var-file` per environment** (`prod.tfvars`) makes the target visible and reduces mistakes.
+    - **Know the precedence order**: default < `TF_VAR_` < `tfvars` < `-var`; the last source wins.
+    - **`output -json` reveals sensitive values**: never pipe it into a public log or artifact.
+
+exercise:
+  statement:
+    fr: |
+      Un projet déclare les variables `environment` (sans défaut), `instance_count` (défaut 1) et
+      `admin_token` (sensitive, sans défaut).
+
+      1. Écrivez un `prod.tfvars` fixant `environment = "prod"` et `instance_count = 4`.
+      2. Donnez la commande qui planifie l'environnement de prod en fournissant `admin_token` par variable
+         d'environnement (sans l'écrire dans un fichier) et en utilisant `prod.tfvars`.
+      3. Si `instance_count` valait 1 par défaut, 4 dans `prod.tfvars`, et qu'on ajoute
+         `-var="instance_count=6"`, quelle valeur l'emporte et pourquoi ?
+    en: |
+      A project declares the variables `environment` (no default), `instance_count` (default 1) and
+      `admin_token` (sensitive, no default).
+
+      1. Write a `prod.tfvars` setting `environment = "prod"` and `instance_count = 4`.
+      2. Give the command that plans the prod environment, providing `admin_token` via an environment
+         variable (without writing it to a file) and using `prod.tfvars`.
+      3. If `instance_count` were 1 by default, 4 in `prod.tfvars`, and we add `-var="instance_count=6"`,
+         which value wins and why?
+  solution:
+    file: answer.sh
+    lang: bash
+    code: |
+      # 1. prod.tfvars
+      cat > prod.tfvars <<'EOF'
+      environment    = "prod"
+      instance_count = 4
+      EOF
+
+      # 2. admin_token from the environment (not written to any file), prod.tfvars for the rest
+      export TF_VAR_admin_token="$(vault kv get -field=token secret/app/admin)"
+      terraform plan -var-file=prod.tfvars
+      unset TF_VAR_admin_token
+
+      # 3. instance_count = 6 wins.
+      #    The command-line -var has the highest precedence, above tfvars (4) and the default (1).
+      #    The last/strongest source always wins.
+    note:
+      fr: "`TF_VAR_admin_token` injecte le secret sans fichier ; `-var-file=prod.tfvars` fournit le reste. Pour la question 3, `-var` est la source la plus prioritaire : `6` l'emporte sur `4` (tfvars) et sur `1` (défaut)."
+      en: "`TF_VAR_admin_token` injects the secret with no file; `-var-file=prod.tfvars` provides the rest. For question 3, `-var` is the highest-priority source: `6` beats `4` (tfvars) and `1` (default)."
+
+quiz:
+  - q:
+      fr: "Quel fichier de variables Terraform charge-t-il automatiquement, sans option ?"
+      en: "Which variables file does Terraform load automatically, with no flag?"
+    options:
+      fr:
+        - "`prod.tfvars`"
+        - "`terraform.tfvars`"
+        - "`variables.tf`"
+        - "`secrets.env`"
+      en:
+        - "`prod.tfvars`"
+        - "`terraform.tfvars`"
+        - "`variables.tf`"
+        - "`secrets.env`"
+    answer: 1
+    why:
+      fr: "`terraform.tfvars` (et les `*.auto.tfvars`) sont chargés automatiquement ; un fichier nommé autrement, comme `prod.tfvars`, exige `-var-file=prod.tfvars`."
+      en: "`terraform.tfvars` (and `*.auto.tfvars`) are loaded automatically; a differently named file like `prod.tfvars` requires `-var-file=prod.tfvars`."
+  - q:
+      fr: "Entre un `terraform.tfvars` et un `-var` en ligne de commande, lequel l'emporte ?"
+      en: "Between a `terraform.tfvars` and a command-line `-var`, which one wins?"
+    options:
+      fr:
+        - "Le `-var` en ligne de commande"
+        - "Le `terraform.tfvars`"
+        - "La variable d'environnement"
+        - "La valeur par défaut"
+      en:
+        - "The command-line `-var`"
+        - "The `terraform.tfvars`"
+        - "The environment variable"
+        - "The default value"
+    answer: 0
+    why:
+      fr: "La ligne de commande (`-var`, `-var-file`) a la plus forte priorité ; elle surcharge les fichiers tfvars, les variables d'environnement et la valeur par défaut."
+      en: "The command line (`-var`, `-var-file`) has the highest precedence; it overrides tfvars files, environment variables and the default value."
+  - q:
+      fr: "Comment fournir un secret à Terraform sans l'écrire dans un fichier ?"
+      en: "How do you provide a secret to Terraform without writing it to a file?"
+    options:
+      fr:
+        - "En le mettant dans `terraform.tfvars`"
+        - "En le codant en dur dans `variables.tf`"
+        - "Via une variable d'environnement `TF_VAR_<nom>` tirée d'un gestionnaire de secrets"
+        - "En le passant dans un commentaire"
+      en:
+        - "By putting it in `terraform.tfvars`"
+        - "By hard-coding it in `variables.tf`"
+        - "Via a `TF_VAR_<name>` environment variable pulled from a secret manager"
+        - "By passing it in a comment"
+    answer: 2
+    why:
+      fr: "`TF_VAR_<nom>` relie une variable d'environnement à la variable Terraform ; alimentée depuis un vault, elle ne touche aucun fichier et ne risque pas d'être committée."
+      en: "`TF_VAR_<name>` links an environment variable to the Terraform variable; fed from a vault, it touches no file and cannot be committed."
+  - q:
+      fr: "Que fait `terraform output -raw instance_ip` ?"
+      en: "What does `terraform output -raw instance_ip` do?"
+    options:
+      fr:
+        - "Il affiche tous les outputs en JSON"
+        - "Il affiche la valeur de `instance_ip` sans guillemets, pour l'enchaîner dans un script"
+        - "Il supprime l'output"
+        - "Il chiffre l'output"
+      en:
+        - "It prints all outputs as JSON"
+        - "It prints the value of `instance_ip` without quotes, to chain into a script"
+        - "It deletes the output"
+        - "It encrypts the output"
+    answer: 1
+    why:
+      fr: "`-raw` renvoie la valeur brute d'un seul output, sans guillemets : idéal pour l'injecter dans une autre commande (`ssh ec2-user@$(...)`)."
+      en: "`-raw` returns a single output's raw value, without quotes: ideal to inject into another command (`ssh ec2-user@$(...)`)."
+  - q:
+      fr: "Quel risque pose `terraform output -json` sur un output marqué `sensitive` ?"
+      en: "What risk does `terraform output -json` pose on a `sensitive` output?"
+    options:
+      fr:
+        - "Aucun, le JSON masque aussi la valeur"
+        - "Il révèle la valeur réelle en clair ; ne pas le rediriger vers un log public"
+        - "Il supprime la sensibilité de façon permanente"
+        - "Il échoue toujours sur un output sensible"
+      en:
+        - "None, JSON also hides the value"
+        - "It reveals the real value in clear; do not pipe it to a public log"
+        - "It permanently removes the sensitivity"
+        - "It always fails on a sensitive output"
+    answer: 1
+    why:
+      fr: "`output -json` est destiné aux outils et affiche la valeur réelle, même sensible. Il ne faut jamais le rediriger vers un log ou un artefact de CI accessible publiquement."
+      en: "`output -json` is meant for tooling and prints the real value, even when sensitive. Never pipe it into a publicly accessible log or CI artifact."

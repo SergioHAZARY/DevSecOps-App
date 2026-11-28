@@ -1,0 +1,414 @@
+description:
+  fr: "Utiliser les fichiers .env sans les faire fuir : .gitignore, .env.example, injection au démarrage et secrets Docker Compose."
+  en: "Use .env files without leaking them: .gitignore, .env.example, start-time injection and Docker Compose secrets."
+duration: 24
+
+intro:
+  fr: |
+    Le fichier **`.env`** est la façon la plus répandue de fournir sa configuration à une application : une
+    liste de `CLÉ=valeur` lue au démarrage. C'est pratique et conforme à la méthodologie *12-factor* (qui
+    recommande de stocker la configuration dans l'environnement). Mais mal utilisé, le `.env` est aussi la
+    première source de fuite de secrets.
+
+    Pensez à une télécommande universelle : un seul fichier qui pilote toute l'application. Très utile chez
+    soi, désastreux si on l'oublie dans le taxi — ou si on en fait des copies qu'on distribue à tout le
+    monde. Le `.env` doit rester sur la machine qui en a besoin, jamais dans le dépôt Git ni dans l'image.
+
+    Dans cette leçon, vous allez apprendre à ignorer le `.env` dans Git, à fournir un `.env.example` sans
+    secret, à ne jamais le figer dans une image, et à passer aux **secrets Docker Compose** pour le faire
+    proprement.
+  en: |
+    The **`.env`** file is the most common way to supply configuration to an application: a list of
+    `KEY=value` read at startup. It is convenient and matches the *12-factor* methodology (which
+    recommends storing configuration in the environment). But misused, the `.env` is also the number-one
+    source of secret leaks.
+
+    Think of a universal remote: a single file that drives the whole application. Very handy at home,
+    disastrous if left in the taxi — or if you make copies and hand them to everyone. The `.env` must stay
+    on the machine that needs it, never in the Git repo or in the image.
+
+    In this lesson you will learn to ignore the `.env` in Git, to ship a secret-free `.env.example`, to
+    never freeze it into an image, and to move to **Docker Compose secrets** to do it cleanly.
+
+sections:
+  - heading:
+      fr: "Variables d'environnement et principe 12-factor"
+      en: "Environment variables and the 12-factor principle"
+    body:
+      fr: |
+        La méthodologie *12-factor* énonce : **la configuration vit dans l'environnement**, pas dans le
+        code. Pourquoi ? Parce que le même code doit tourner en développement, en test et en production avec
+        des valeurs différentes (URL de base, clés) sans être recompilé. La variable d'environnement est le
+        canal standard, lu de la même façon par Python (`os.environ`), Node (`process.env`), Go
+        (`os.Getenv`), etc.
+
+        Le fichier `.env` n'est qu'une **commodité locale** : il remplit ces variables sans qu'on les tape à
+        la main. Des outils comme `python-dotenv`, `dotenv` (Node) ou Docker Compose le lisent. Mais il faut
+        distinguer deux types de valeurs :
+
+        | Type | Exemple | Dans le dépôt ? |
+        |---|---|---|
+        | Configuration non sensible | `LOG_LEVEL=info`, `PORT=8080` | Possible, dans un fichier versionné |
+        | Secret | `DB_PASSWORD`, `API_KEY` | Jamais : injecté par un coffre/CI |
+
+        La règle : un `.env` contenant des secrets ne doit **jamais** entrer dans Git ni dans une image. Ce
+        qu'on versionne, c'est un modèle sans valeur sensible.
+      en: |
+        The *12-factor* methodology states: **configuration lives in the environment**, not in the code.
+        Why? Because the same code must run in development, test and production with different values (base
+        URL, keys) without being recompiled. The environment variable is the standard channel, read the same
+        way by Python (`os.environ`), Node (`process.env`), Go (`os.Getenv`), etc.
+
+        The `.env` file is only a **local convenience**: it fills those variables so you do not type them by
+        hand. Tools such as `python-dotenv`, `dotenv` (Node) or Docker Compose read it. But you must
+        distinguish two kinds of values:
+
+        | Type | Example | In the repo? |
+        |---|---|---|
+        | Non-sensitive config | `LOG_LEVEL=info`, `PORT=8080` | Possible, in a versioned file |
+        | Secret | `DB_PASSWORD`, `API_KEY` | Never: injected by a vault/CI |
+
+        The rule: a `.env` holding secrets must **never** enter Git or an image. What you version is a
+        template with no sensitive value.
+  - heading:
+      fr: "Les trois réflexes : .gitignore, .env.example, injection"
+      en: "The three reflexes: .gitignore, .env.example, injection"
+    body:
+      fr: |
+        1. **Ignorer** : ajoutez `.env` (et ses variantes `.env.*`) à `.gitignore` **avant** le premier
+           commit. Si le `.env` a déjà été commité, l'ignorer ensuite ne le retire pas de l'historique : il
+           faut le nettoyer et renouveler les secrets.
+        2. **Documenter sans secret** : versionnez un `.env.example` listant toutes les clés attendues, avec
+           des valeurs vides ou factices. Un nouveau développeur le copie en `.env` et le remplit. Personne
+           ne devine quelles variables manquent.
+        3. **Injecter au bon moment** : en local, le `.env` suffit ; en production, les secrets viennent
+           d'un coffre (Vault) ou du gestionnaire du cloud, injectés comme variables d'environnement par
+           l'orchestrateur — jamais figés dans l'image.
+
+        Pour les conteneurs, Docker Compose propose mieux qu'une variable d'environnement : les **secrets
+        Compose**. Le secret est monté comme un **fichier** dans `/run/secrets/<nom>` (en `tmpfs`, en
+        mémoire), au lieu d'être exposé dans l'environnement du processus — où `docker inspect` ou un
+        `/proc/<pid>/environ` le révéleraient. C'est la différence entre `environment:` (visible) et
+        `secrets:` (monté, isolé).
+      en: |
+        1. **Ignore**: add `.env` (and its `.env.*` variants) to `.gitignore` **before** the first commit.
+           If the `.env` was already committed, ignoring it afterwards does not remove it from history: you
+           must clean it and rotate the secrets.
+        2. **Document without secrets**: version a `.env.example` listing every expected key, with empty or
+           fake values. A new developer copies it to `.env` and fills it in. Nobody has to guess which
+           variables are missing.
+        3. **Inject at the right time**: locally, the `.env` is enough; in production, secrets come from a
+           vault (Vault) or the cloud manager, injected as environment variables by the orchestrator — never
+           frozen into the image.
+
+        For containers, Docker Compose offers better than an environment variable: **Compose secrets**. The
+        secret is mounted as a **file** in `/run/secrets/<name>` (on `tmpfs`, in memory), instead of being
+        exposed in the process environment — where `docker inspect` or a `/proc/<pid>/environ` would reveal
+        it. That is the difference between `environment:` (visible) and `secrets:` (mounted, isolated).
+
+examples:
+  - title:
+      fr: "Le .env commité : la fuite la plus banale"
+      en: "The committed .env: the most mundane leak"
+    file: committed-env.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # The project has a .env full of real secrets, and NO .gitignore entry
+      cat .env
+      # DB_PASSWORD=S3cr3tP@ss
+      # STRIPE_KEY=sk_live_REDACTED_EXAMPLE_ONLY
+
+      # The developer commits "everything" without looking
+      git add -A
+      git commit -m "initial project"
+      git push origin main
+
+      # The secrets are now in the remote history, readable by anyone with
+      # access, and already scraped by bots if the repo is public.
+      git log --stat -1 | grep -A1 env
+    output: |
+      [main 3f9a1c2] initial project
+       5 files changed, 83 insertions(+)
+       create mode 100644 .env
+    note:
+      fr: "`git add -A` a emporté le `.env` avec ses secrets. Ils sont maintenant dans l'historique distant. Même si vous supprimez le fichier au prochain commit, les secrets restent récupérables : il faut les renouveler."
+      en: "`git add -A` swept up the `.env` with its secrets. They are now in the remote history. Even if you delete the file in the next commit, the secrets stay recoverable: you must rotate them."
+
+  - title:
+      fr: "Ignorer le .env et fournir un modèle sans secret"
+      en: "Ignoring the .env and shipping a secret-free template"
+    file: .gitignore
+    lang: ini
+    kind: secure
+    code: |
+      # Ignore every real env file BEFORE the first commit.
+      # The real values live only on the machine that runs the app.
+      .env
+      .env.*
+      # ...but keep the template, which contains NO secret, under version control.
+      !.env.example
+    output: |
+      # .env.example (committed): documents the keys, holds no secret
+      #   DB_PASSWORD=
+      #   STRIPE_KEY=
+      #   LOG_LEVEL=info
+      #
+      # A new dev runs:  cp .env.example .env   then fills in the blanks.
+      $ git status --short
+      ?? .env.example
+    note:
+      fr: "Le motif `!.env.example` ré-inclut le modèle malgré la règle `.env.*`. On versionne la *liste* des clés, jamais leurs *valeurs* sensibles. `git status` confirme que seul le modèle est suivi."
+      en: "The `!.env.example` pattern re-includes the template despite the `.env.*` rule. You version the *list* of keys, never their sensitive *values*. `git status` confirms only the template is tracked."
+
+  - title:
+      fr: "Charger le .env en local, l'environnement en production"
+      en: "Loading the .env locally, the environment in production"
+    file: config.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+
+      # In local development, python-dotenv loads .env into the environment.
+      # In production, the .env does not exist: the orchestrator/vault has
+      # already set these variables, so we read them the SAME way everywhere.
+      try:
+          from dotenv import load_dotenv
+          load_dotenv()  # no-op if there is no .env file
+      except ImportError:
+          pass  # dotenv is a dev-only dependency; production injects directly
+
+      def required(name):
+          value = os.environ.get(name)
+          if not value:
+              # Fail fast and loud, never fall back to a default secret
+              raise RuntimeError(f"Missing required environment variable: {name}")
+          return value
+
+      DB_PASSWORD = required("DB_PASSWORD")
+      STRIPE_KEY = required("STRIPE_KEY")
+
+      print("Config loaded:", {"db_password_set": bool(DB_PASSWORD)})
+    output: |
+      Config loaded: {'db_password_set': True}
+    note:
+      fr: "Le code lit `os.environ` de la même manière partout. `load_dotenv()` n'est utile qu'en local ; en production, les variables sont injectées par l'extérieur. `required()` échoue tôt si un secret manque, au lieu d'utiliser une valeur par défaut dangereuse."
+      en: "The code reads `os.environ` the same way everywhere. `load_dotenv()` only helps locally; in production the variables are injected from outside. `required()` fails early if a secret is missing, instead of using a dangerous default."
+
+  - title:
+      fr: "Docker Compose : secrets montés en fichier, pas en variable"
+      en: "Docker Compose: secrets mounted as files, not variables"
+    file: docker-compose.yml
+    lang: yaml
+    kind: secure
+    code: |
+      services:
+        app:
+          image: myapp:1.4.0
+          # Non-sensitive config can stay here, visible in docker inspect.
+          environment:
+            LOG_LEVEL: info
+            PORT: "8080"
+          # Secrets are MOUNTED as files in /run/secrets/<name> (tmpfs),
+          # never exposed in the process environment.
+          secrets:
+            - db_password
+            - stripe_key
+
+      secrets:
+        # Local file on the host, kept out of the image and out of Git.
+        db_password:
+          file: ./secrets/db_password.txt
+        # Or managed externally (Swarm / an orchestrator), never in this repo.
+        stripe_key:
+          external: true
+    output: |
+      # Inside the container the app reads the secret from a file:
+      $ docker compose exec app cat /run/secrets/db_password
+      changeme-in-vault
+      # And it is NOT visible in the environment:
+      $ docker compose exec app printenv | grep -i password
+      (no output)
+    note:
+      fr: "Avec `secrets:`, le mot de passe est un fichier en mémoire (`/run/secrets/db_password`), absent de l'environnement et de `docker inspect`. L'application lit le fichier. C'est nettement plus sûr qu'`environment: DB_PASSWORD=...`."
+      en: "With `secrets:`, the password is an in-memory file (`/run/secrets/db_password`), absent from the environment and from `docker inspect`. The app reads the file. This is markedly safer than `environment: DB_PASSWORD=...`."
+
+mistake:
+  fr: |
+    **Ajouter `.env` à `.gitignore` après l'avoir déjà commité, et croire le problème réglé.**
+
+    `.gitignore` n'agit que sur les fichiers **non encore suivis**. Si le `.env` est déjà dans l'historique,
+    l'ignorer ne le retire pas : les secrets restent récupérables dans les anciens commits. Il faut alors le
+    retirer du suivi (`git rm --cached .env`), nettoyer l'historique, **et renouveler tous les secrets qu'il
+    contenait**.
+
+    Autre erreur : figer le `.env` dans une image Docker avec `COPY .env .`. Le fichier devient une couche
+    de l'image, distribuée à quiconque la télécharge et lisible via `docker history`. Les secrets d'une
+    image s'injectent au **démarrage** (variable d'environnement, secret monté), jamais à la construction.
+  en: |
+    **Adding `.env` to `.gitignore` after already committing it, and believing the problem is solved.**
+
+    `.gitignore` only affects files **not yet tracked**. If the `.env` is already in history, ignoring it
+    does not remove it: the secrets stay recoverable in the old commits. You then have to untrack it
+    (`git rm --cached .env`), clean the history, **and rotate every secret it contained**.
+
+    Another mistake: freezing the `.env` into a Docker image with `COPY .env .`. The file becomes an image
+    layer, distributed to anyone who pulls it and readable via `docker history`. Image secrets are injected
+    at **start** (environment variable, mounted secret), never at build.
+
+bestPractice:
+  fr: |
+    - **`.gitignore` d'abord** : ajoutez `.env` et `.env.*` avant le premier commit ; gardez `!.env.example`.
+    - **Versionnez un `.env.example`** sans secret, listant toutes les clés attendues.
+    - **Lisez la configuration depuis l'environnement** partout ; `python-dotenv` reste un outil de développement.
+    - **Jamais de secret à la construction d'image** : pas de `COPY .env`, pas de `ARG SECRET` ; injectez au démarrage.
+    - **Préférez les secrets Compose/orchestrateur** (fichier monté en `tmpfs`) à `environment:` pour les valeurs sensibles.
+    - **En production, remplacez le `.env`** par un coffre (Vault) ou un gestionnaire cloud (Secrets Manager).
+    - **Un `.env` qui a fuité = secrets à renouveler**, pas seulement un fichier à supprimer.
+  en: |
+    - **`.gitignore` first**: add `.env` and `.env.*` before the first commit; keep `!.env.example`.
+    - **Version a `.env.example`** with no secret, listing every expected key.
+    - **Read configuration from the environment** everywhere; `python-dotenv` stays a development tool.
+    - **Never a secret at image build**: no `COPY .env`, no `ARG SECRET`; inject at start.
+    - **Prefer Compose/orchestrator secrets** (file mounted on `tmpfs`) over `environment:` for sensitive values.
+    - **In production, replace the `.env`** with a vault (Vault) or a cloud manager (Secrets Manager).
+    - **A leaked `.env` = secrets to rotate**, not just a file to delete.
+
+exercise:
+  statement:
+    fr: |
+      Vous rejoignez un projet dont le dépôt contient un fichier `.env` versionné avec de vrais secrets, et
+      pas de `.gitignore`.
+
+      Décrivez et écrivez les commandes pour :
+
+      1. retirer le `.env` du suivi Git sans le supprimer de votre disque ;
+      2. créer un `.gitignore` qui ignore `.env` mais conserve `.env.example` ;
+      3. générer un `.env.example` sans valeurs sensibles à partir des clés du `.env`.
+
+      Indiquez aussi l'action à mener en plus des commandes, puisque les secrets ont déjà été poussés.
+    en: |
+      You join a project whose repo contains a versioned `.env` file with real secrets, and no `.gitignore`.
+
+      Describe and write the commands to:
+
+      1. remove the `.env` from Git tracking without deleting it from your disk;
+      2. create a `.gitignore` that ignores `.env` but keeps `.env.example`;
+      3. generate a secret-free `.env.example` from the keys of the `.env`.
+
+      Also state the action to take in addition to the commands, since the secrets were already pushed.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Stop tracking .env but keep the local file (--cached)
+      git rm --cached .env
+
+      # 2. Ignore real env files, keep the template
+      printf '.env\n.env.*\n!.env.example\n' > .gitignore
+
+      # 3. Build .env.example: keep the KEYS, blank out the VALUES
+      sed -E 's/=.*/=/' .env > .env.example
+
+      git add .gitignore .env.example
+      git commit -m "stop tracking .env, add template and gitignore"
+
+      # IMPORTANT extra action: the secrets were already pushed, so they are
+      # compromised. Rotate EVERY secret the .env contained at its issuer,
+      # and clean the Git history (git filter-repo) to remove old copies.
+    note:
+      fr: "`git rm --cached` suffit à cesser le suivi, mais ne protège rien en soi : comme les secrets ont été poussés, l'étape décisive reste de les **renouveler** chez leurs émetteurs et de nettoyer l'historique."
+      en: "`git rm --cached` stops tracking but protects nothing by itself: since the secrets were pushed, the decisive step is still to **rotate** them at their issuers and clean the history."
+
+quiz:
+  - q:
+      fr: "Que recommande la méthodologie 12-factor pour la configuration ?"
+      en: "What does the 12-factor methodology recommend for configuration?"
+    options:
+      fr:
+        - "La stocker dans l'environnement, pas dans le code"
+        - "La compiler dans le binaire"
+        - "La coder en dur pour aller plus vite"
+        - "La stocker dans la base de données uniquement"
+      en:
+        - "Store it in the environment, not in the code"
+        - "Compile it into the binary"
+        - "Hard-code it to go faster"
+        - "Store it only in the database"
+    answer: 0
+    why:
+      fr: "12-factor place la configuration dans l'environnement : le même code tourne en dev, test et prod avec des valeurs différentes, sans recompilation."
+      en: "12-factor puts configuration in the environment: the same code runs in dev, test and prod with different values, without recompilation."
+  - q:
+      fr: "À quoi sert un fichier `.env.example` versionné ?"
+      en: "What is a versioned `.env.example` file for?"
+    options:
+      fr:
+        - "À stocker les secrets de production chiffrés"
+        - "À remplacer le pare-feu"
+        - "À documenter les clés attendues sans contenir de valeur sensible"
+        - "À accélérer le démarrage de l'application"
+      en:
+        - "To store encrypted production secrets"
+        - "To replace the firewall"
+        - "To document the expected keys without holding any sensitive value"
+        - "To speed up the application startup"
+    answer: 2
+    why:
+      fr: "`.env.example` liste toutes les variables attendues avec des valeurs vides ou factices. Un nouveau développeur le copie et le remplit, sans jamais commiter de secret."
+      en: "`.env.example` lists every expected variable with empty or fake values. A new developer copies and fills it, without ever committing a secret."
+  - q:
+      fr: "Un `.env` a déjà été commité. Ajouter `.env` à `.gitignore` suffit-il à protéger les secrets ?"
+      en: "A `.env` was already committed. Is adding `.env` to `.gitignore` enough to protect the secrets?"
+    options:
+      fr:
+        - "Oui, `.gitignore` supprime le fichier de l'historique"
+        - "Non : les secrets restent dans l'historique ; il faut les renouveler et nettoyer"
+        - "Oui, si le dépôt est privé"
+        - "Oui, après un simple `git commit`"
+      en:
+        - "Yes, `.gitignore` removes the file from history"
+        - "No: the secrets stay in history; you must rotate and clean"
+        - "Yes, if the repo is private"
+        - "Yes, after a simple `git commit`"
+    answer: 1
+    why:
+      fr: "`.gitignore` n'agit que sur les fichiers non suivis. Le `.env` déjà commité reste dans l'historique : les secrets sont compromis et doivent être renouvelés."
+      en: "`.gitignore` only affects untracked files. The already-committed `.env` stays in history: the secrets are compromised and must be rotated."
+  - q:
+      fr: "Quel est l'avantage des `secrets:` de Docker Compose par rapport à `environment:` ?"
+      en: "What is the advantage of Docker Compose `secrets:` over `environment:`?"
+    options:
+      fr:
+        - "Ils chiffrent le réseau du conteneur"
+        - "Ils sont montés en fichier (tmpfs) et absents de l'environnement et de `docker inspect`"
+        - "Ils rendent l'image plus petite"
+        - "Ils suppriment le besoin de mot de passe"
+      en:
+        - "They encrypt the container network"
+        - "They are mounted as a file (tmpfs) and absent from the environment and from `docker inspect`"
+        - "They make the image smaller"
+        - "They remove the need for a password"
+    answer: 1
+    why:
+      fr: "Un secret Compose est un fichier en mémoire dans `/run/secrets/`, pas une variable d'environnement. Il n'apparaît ni dans `printenv`, ni dans `docker inspect`."
+      en: "A Compose secret is an in-memory file under `/run/secrets/`, not an environment variable. It appears neither in `printenv` nor in `docker inspect`."
+  - q:
+      fr: "Pourquoi ne jamais faire `COPY .env .` dans un Dockerfile ?"
+      en: "Why never do `COPY .env .` in a Dockerfile?"
+    options:
+      fr:
+        - "Parce que `COPY` est plus lent que `ADD`"
+        - "Parce que le fichier devient une couche de l'image, distribuée et lisible via `docker history`"
+        - "Parce que Docker refuse de copier des fichiers cachés"
+        - "Parce que cela double la taille du conteneur"
+      en:
+        - "Because `COPY` is slower than `ADD`"
+        - "Because the file becomes an image layer, distributed and readable via `docker history`"
+        - "Because Docker refuses to copy hidden files"
+        - "Because it doubles the container size"
+    answer: 1
+    why:
+      fr: "Le `.env` copié est figé dans l'image et voyage avec elle. Les secrets d'exécution s'injectent au démarrage (variable ou secret monté), jamais à la construction."
+      en: "The copied `.env` is frozen into the image and travels with it. Runtime secrets are injected at start (variable or mounted secret), never at build."
