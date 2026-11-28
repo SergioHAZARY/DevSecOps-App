@@ -1,0 +1,460 @@
+description:
+  fr: "Comprendre les trois piliers de l'observabilité (métriques, logs, traces), les SLI/SLO, et savoir ce qu'il faut journaliser pour la sécurité et surtout ce qu'il ne faut JAMAIS logger."
+  en: "Understand the three pillars of observability (metrics, logs, traces), SLIs/SLOs, and know what to log for security and above all what you must NEVER log."
+duration: 30
+
+intro:
+  fr: |
+    Faire tourner un système, c'est bien ; **savoir** ce qu'il fait, c'est indispensable. L'**observabilité**
+    (*observability*) est la capacité à comprendre l'état interne d'un système à partir de ce qu'il émet
+    vers l'extérieur. Sans elle, on pilote à l'aveugle : on ne voit un incident qu'une fois que les
+    utilisateurs se plaignent, et on ne sait pas pourquoi.
+
+    L'image classique est celle du tableau de bord d'une voiture : le compteur de vitesse (une **métrique**),
+    le voyant qui s'allume avec un message (un **log**), et le carnet d'entretien qui retrace tout un trajet
+    (une **trace**). Les trois ensemble racontent l'histoire complète.
+
+    Dans cette leçon, vous allez distinguer ces **trois piliers**, découvrir les **SLI/SLO** qui
+    transforment « ça marche » en objectifs mesurables, et surtout aborder un point de sécurité capital :
+    **quoi journaliser** pour détecter une attaque, et **quoi ne JAMAIS journaliser** (mots de passe,
+    jetons, données personnelles). Un exemple Python exécutable illustrera la version dangereuse et la
+    version sûre.
+  en: |
+    Running a system is one thing; **knowing** what it does is essential. **Observability** is the ability
+    to understand a system's internal state from what it emits to the outside. Without it, you fly blind:
+    you only see an incident once users complain, and you do not know why.
+
+    The classic image is a car's dashboard: the speedometer (a **metric**), the warning light that comes on
+    with a message (a **log**), and the service book that traces a whole trip (a **trace**). The three
+    together tell the complete story.
+
+    In this lesson you will distinguish these **three pillars**, discover the **SLIs/SLOs** that turn "it
+    works" into measurable goals, and above all tackle a crucial security point: **what to log** to detect
+    an attack, and **what to NEVER log** (passwords, tokens, personal data). A runnable Python example will
+    illustrate the dangerous version and the safe one.
+
+sections:
+  - heading:
+      fr: "Les trois piliers"
+      en: "The three pillars"
+    body:
+      fr: |
+        L'observabilité repose sur trois types de signaux, complémentaires :
+
+        | Pilier | Ce que c'est | Répond à | Outil typique |
+        |---|---|---|---|
+        | **Métriques** | Des nombres agrégés dans le temps | « Combien ? À quelle vitesse ? » | Prometheus |
+        | **Logs** | Des événements horodatés et détaillés | « Que s'est-il passé exactement ? » | Loki, ELK |
+        | **Traces** | Le parcours d'une requête à travers les services | « Où est le ralentissement ? » | Jaeger, Tempo |
+
+        Les **métriques** sont légères et parfaites pour les tableaux de bord et les alertes (ex. « taux
+        d'erreurs HTTP 500 »). Les **logs** donnent le détail d'un événement précis (ex. « échec de
+        connexion pour l'utilisateur X depuis l'IP Y »). Les **traces** suivent une seule requête à travers
+        une architecture distribuée pour localiser un goulot d'étranglement.
+
+        En sécurité, on s'appuie surtout sur les **logs** (qui alimentent un SIEM) et sur des **métriques**
+        de sécurité (nombre d'échecs d'authentification, requêtes bloquées par le WAF). Les trois piliers
+        doivent être **horodatés de façon cohérente** (même fuseau, horloges synchronisées) pour être
+        corrélables.
+      en: |
+        Observability rests on three complementary signal types:
+
+        | Pillar | What it is | Answers | Typical tool |
+        |---|---|---|---|
+        | **Metrics** | Numbers aggregated over time | "How many? How fast?" | Prometheus |
+        | **Logs** | Timestamped, detailed events | "What exactly happened?" | Loki, ELK |
+        | **Traces** | A request's path across services | "Where is the slowdown?" | Jaeger, Tempo |
+
+        **Metrics** are lightweight and perfect for dashboards and alerts (e.g. "HTTP 500 error rate").
+        **Logs** give the detail of a precise event (e.g. "login failure for user X from IP Y"). **Traces**
+        follow a single request across a distributed architecture to locate a bottleneck.
+
+        In security you rely mostly on **logs** (feeding a SIEM) and on security **metrics** (number of auth
+        failures, requests blocked by the WAF). All three pillars must be **consistently timestamped** (same
+        zone, synchronised clocks) to be correlatable.
+  - heading:
+      fr: "SLI, SLO et ce qui compte"
+      en: "SLI, SLO and what matters"
+    body:
+      fr: |
+        Mesurer, oui, mais mesurer **quoi** ? Deux sigles structurent la réponse :
+
+        - Un **SLI** (*Service Level Indicator*) est une mesure concrète de la qualité du service :
+          disponibilité, latence, taux d'erreurs.
+        - Un **SLO** (*Service Level Objective*) est l'objectif chiffré qu'on se fixe sur un SLI : « 99,9 %
+          des requêtes répondent en moins de 300 ms sur 30 jours ».
+
+        | Terme | Signification | Exemple |
+        |---|---|---|
+        | SLI | L'indicateur mesuré | Latence au 95e centile |
+        | SLO | L'objectif visé | < 300 ms pour 99,9 % des requêtes |
+        | Budget d'erreur | Ce qu'on s'autorise à rater | 0,1 % des requêtes sur 30 jours |
+
+        Les SLO évitent deux écueils : alerter sur tout (bruit, fatigue d'alerte) ou n'alerter sur rien. On
+        alerte quand on consomme trop vite son **budget d'erreur**. Côté sécurité, on définit aussi des
+        objectifs : « 100 % des échecs d'authentification sont journalisés », « toute élévation de privilège
+        déclenche une alerte ». Ce qui n'est pas mesuré ne peut pas être amélioré — ni défendu.
+      en: |
+        Measuring, yes, but measuring **what**? Two acronyms frame the answer:
+
+        - An **SLI** (*Service Level Indicator*) is a concrete measure of service quality: availability,
+          latency, error rate.
+        - An **SLO** (*Service Level Objective*) is the numeric target you set on an SLI: "99.9% of requests
+          respond in under 300 ms over 30 days".
+
+        | Term | Meaning | Example |
+        |---|---|---|
+        | SLI | The measured indicator | 95th-percentile latency |
+        | SLO | The target | < 300 ms for 99.9% of requests |
+        | Error budget | What you allow yourself to miss | 0.1% of requests over 30 days |
+
+        SLOs avoid two pitfalls: alerting on everything (noise, alert fatigue) or alerting on nothing. You
+        alert when you burn your **error budget** too fast. On the security side you also define goals: "100%
+        of auth failures are logged", "any privilege escalation triggers an alert". What is not measured
+        cannot be improved — nor defended.
+  - heading:
+      fr: "Journaliser pour la sécurité, sans tout exposer"
+      en: "Logging for security, without exposing everything"
+    body:
+      fr: |
+        Les logs sont la matière première de la détection. Il faut journaliser **assez** pour comprendre une
+        attaque, mais **jamais** de données sensibles, car les journaux sont copiés, centralisés, lus par de
+        nombreuses personnes et conservés longtemps.
+
+        | À JOURNALISER (sécurité) | À NE JAMAIS JOURNALISER |
+        |---|---|
+        | Connexions réussies **et échouées** (avec l'IP source) | Mots de passe, même hachés |
+        | Changements de privilèges, créations de comptes | Jetons de session, clés d'API, JWT complets |
+        | Accès aux ressources sensibles | Numéros de carte, données de santé |
+        | Échecs d'autorisation (403) | Contenu complet des requêtes avec données personnelles |
+        | Actions d'administration | Secrets, variables d'environnement |
+
+        Deux principes guident la mise en œuvre :
+
+        - **Logs structurés** (JSON) : chaque événement est un objet avec des champs (`event`, `user`,
+          `src_ip`, `outcome`). Un SIEM peut alors filtrer et corréler, ce qui est impossible avec du texte
+          libre.
+        - **Minimisation et masquage** : on ne logge que les champs utiles, et on **masque** ou **tronque**
+          tout ce qui est sensible (`****`, ou seulement les 4 derniers chiffres). Logger un mot de passe,
+          c'est le dupliquer dans tous les systèmes de journalisation : une fuite de logs devient une fuite
+          de secrets.
+      en: |
+        Logs are the raw material of detection. You must log **enough** to understand an attack, but
+        **never** sensitive data, because logs are copied, centralised, read by many people and kept for a
+        long time.
+
+        | TO LOG (security) | NEVER LOG |
+        |---|---|
+        | Successful **and failed** logins (with source IP) | Passwords, even hashed |
+        | Privilege changes, account creations | Session tokens, API keys, full JWTs |
+        | Access to sensitive resources | Card numbers, health data |
+        | Authorization failures (403) | Full request bodies with personal data |
+        | Administration actions | Secrets, environment variables |
+
+        Two principles guide the implementation:
+
+        - **Structured logs** (JSON): each event is an object with fields (`event`, `user`, `src_ip`,
+          `outcome`). A SIEM can then filter and correlate, which is impossible with free text.
+        - **Minimisation and masking**: log only the useful fields, and **mask** or **truncate** anything
+          sensitive (`****`, or only the last 4 digits). Logging a password duplicates it across every
+          logging system: a log leak becomes a secret leak.
+
+examples:
+  - title:
+      fr: "VULNÉRABLE : des logs qui divulguent des secrets"
+      en: "VULNERABLE: logs that leak secrets"
+    file: logging_bad.py
+    lang: python
+    kind: vulnerable
+    code: |
+      import logging
+
+      logging.basicConfig(level=logging.INFO)
+      log = logging.getLogger("auth")
+
+
+      def login(username, password, api_token):
+          # DANGER 1: the password is written to the logs in clear text
+          log.info("Login attempt user=%s password=%s", username, password)
+
+          # DANGER 2: the full API token is logged -> anyone reading logs can reuse it
+          log.info("Using token=%s", api_token)
+
+          if password == "correct-horse":
+              log.info("Login OK for %s", username)
+              return True
+          # DANGER 3: unstructured text -> a SIEM cannot reliably parse or alert on it
+          log.warning("Login FAILED for %s", username)
+          return False
+
+
+      login("alice", "correct-horse", "tok_live_9f8e7d6c5b4a")
+    output: |
+      INFO:auth:Login attempt user=alice password=correct-horse
+      INFO:auth:Using token=tok_live_9f8e7d6c5b4a
+      INFO:auth:Login OK for alice
+    note:
+      fr: "Le mot de passe et le jeton sont écrits en clair dans les journaux, copiés partout ensuite. Le texte libre empêche toute corrélation automatique. Trois erreurs que la version sûre corrige."
+      en: "The password and the token are written in clear text to the logs, then copied everywhere. Free text prevents any automatic correlation. Three mistakes the safe version fixes."
+
+  - title:
+      fr: "SÉCURISÉ : logs JSON structurés, secrets masqués"
+      en: "SECURE: structured JSON logs, masked secrets"
+    file: logging_good.py
+    lang: python
+    kind: secure
+    code: |
+      import json
+      import logging
+
+
+      class JsonFormatter(logging.Formatter):
+          def format(self, record):
+              # One JSON object per event: a SIEM can filter and correlate fields
+              return json.dumps({
+                  "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+                  "level": record.levelname,
+                  "event": record.getMessage(),
+                  **getattr(record, "fields", {}),
+              })
+
+
+      handler = logging.StreamHandler()
+      handler.setFormatter(JsonFormatter())
+      log = logging.getLogger("auth")
+      log.addHandler(handler)
+      log.setLevel(logging.INFO)
+
+
+      def mask(secret):
+          # Keep only the last 4 chars for correlation, never the full value
+          return "****" + secret[-4:] if secret else ""
+
+
+      def login(username, password, api_token):
+          # Log the SECURITY-relevant facts, never the password or the full token
+          log.info("login", extra={"fields": {
+              "user": username,
+              "src_ip": "192.0.2.10",
+              "token_ref": mask(api_token),  # masked, not the real token
+              "outcome": "success" if password == "correct-horse" else "failure",
+          }})
+
+
+      login("alice", "correct-horse", "tok_live_9f8e7d6c5b4a")
+      login("alice", "wrong", "tok_live_9f8e7d6c5b4a")
+    output: |
+      {"ts": "2026-01-15T10:00:00+0000", "level": "INFO", "event": "login", "user": "alice", "src_ip": "192.0.2.10", "token_ref": "****5b4a", "outcome": "success"}
+      {"ts": "2026-01-15T10:00:01+0000", "level": "INFO", "event": "login", "user": "alice", "src_ip": "192.0.2.10", "token_ref": "****5b4a", "outcome": "failure"}
+    note:
+      fr: "Chaque événement est un objet JSON : un SIEM filtre sur `outcome=failure` et compte les échecs par `src_ip`. Le mot de passe n'apparaît jamais, le jeton est masqué (`****5b4a`). Lancez-le avec Run."
+      en: "Each event is a JSON object: a SIEM filters on `outcome=failure` and counts failures by `src_ip`. The password never appears, the token is masked (`****5b4a`). Run it with Run."
+
+  - title:
+      fr: "Choisir le bon pilier selon la question"
+      en: "Pick the right pillar for the question"
+    file: pillars.py
+    lang: python
+    kind: neutral
+    code: |
+      # A simple decision helper: which pillar answers which question?
+      questions = {
+          "How many requests failed in the last 5 min?": "metric",
+          "Why did user alice's login fail at 10:00?": "log",
+          "Which service made the checkout slow?": "trace",
+          "Is the 500 error rate above the SLO?": "metric",
+          "Who deleted the admin account?": "log",
+      }
+
+      for q, pillar in questions.items():
+          print(f"{pillar.upper():7} <- {q}")
+    output: |
+      METRIC  <- How many requests failed in the last 5 min?
+      LOG     <- Why did user alice's login fail at 10:00?
+      TRACE   <- Which service made the checkout slow?
+      METRIC  <- Is the 500 error rate above the SLO?
+      LOG     <- Who deleted the admin account?
+    note:
+      fr: "Les métriques comptent et mesurent (alertes, SLO), les logs expliquent un événement précis (enquête, sécurité), les traces localisent un ralentissement dans une architecture distribuée."
+      en: "Metrics count and measure (alerts, SLOs), logs explain a precise event (investigation, security), traces locate a slowdown in a distributed architecture."
+
+mistake:
+  fr: |
+    **Journaliser des secrets « pour faciliter le débogage ».**
+
+    C'est tentant et catastrophique. Dès qu'un mot de passe, un jeton de session ou une clé d'API est écrit
+    dans un log, il est aussitôt dupliqué : copié vers le système de centralisation, indexé par le SIEM,
+    sauvegardé, lu par les développeurs et les opérateurs, conservé des mois. Une seule fuite de ces
+    journaux expose alors **tous** ces secrets. Le même raisonnement vaut pour les données personnelles
+    (RGPD). Journalisez les **faits de sécurité** (qui, quand, d'où, succès ou échec), en **JSON structuré**
+    pour qu'un SIEM puisse corréler, et **masquez ou tronquez** tout ce qui est sensible. Un bon log raconte
+    l'événement sans jamais révéler le secret.
+  en: |
+    **Logging secrets "to make debugging easier".**
+
+    It is tempting and catastrophic. The moment a password, a session token or an API key is written to a
+    log, it is immediately duplicated: copied to the central system, indexed by the SIEM, backed up, read by
+    developers and operators, kept for months. A single leak of those logs then exposes **all** those
+    secrets. The same reasoning applies to personal data (GDPR). Log the **security facts** (who, when, from
+    where, success or failure), in **structured JSON** so a SIEM can correlate, and **mask or truncate**
+    anything sensitive. A good log tells the event without ever revealing the secret.
+
+bestPractice:
+  fr: |
+    - **Trois piliers complémentaires** : métriques (compter/alerter), logs (expliquer), traces (localiser).
+    - **SLI/SLO** pour transformer « ça marche » en objectifs mesurables et alerter sur le budget d'erreur.
+    - **Logs structurés (JSON)** : indispensables pour qu'un SIEM filtre et corrèle.
+    - **Journaliser les faits de sécurité** : connexions réussies ET échouées, IP source, changements de privilèges.
+    - **NE JAMAIS journaliser** mots de passe, jetons, clés, données personnelles ; masquer/tronquer le reste.
+    - **Horloges synchronisées (NTP)** et horodatage cohérent pour pouvoir corréler les signaux.
+  en: |
+    - **Three complementary pillars**: metrics (count/alert), logs (explain), traces (locate).
+    - **SLI/SLO** to turn "it works" into measurable goals and alert on the error budget.
+    - **Structured logs (JSON)**: essential for a SIEM to filter and correlate.
+    - **Log the security facts**: successful AND failed logins, source IP, privilege changes.
+    - **NEVER log** passwords, tokens, keys, personal data; mask/truncate the rest.
+    - **Synchronised clocks (NTP)** and consistent timestamping so signals can be correlated.
+
+exercise:
+  statement:
+    fr: |
+      1. Associez chaque question au bon pilier (métrique, log ou trace) :
+         a. « Le taux d'erreurs 500 dépasse-t-il 1 % ? »
+         b. « Pourquoi l'appel de paiement a-t-il mis 4 secondes à traverser nos services ? »
+         c. « Qui a modifié le rôle admin à 3 h du matin ? »
+      2. Dans ce code, **deux** champs ne doivent jamais être journalisés. Lesquels, et comment corriger ?
+
+      ```python
+      log.info("auth user=%s pwd=%s jwt=%s ip=%s", user, pwd, jwt, ip)
+      ```
+    en: |
+      1. Match each question to the right pillar (metric, log or trace):
+         a. "Is the 500 error rate above 1%?"
+         b. "Why did the payment call take 4 seconds across our services?"
+         c. "Who changed the admin role at 3 a.m.?"
+      2. In this code, **two** fields must never be logged. Which ones, and how do you fix it?
+
+      ```python
+      log.info("auth user=%s pwd=%s jwt=%s ip=%s", user, pwd, jwt, ip)
+      ```
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      # 1. Pillar mapping:
+      #    a. metric  (a rate over time, used for alerting against an SLO)
+      #    b. trace   (a single request's path across services)
+      #    c. log     (a precise, attributable security event)
+      #
+      # 2. "pwd" (the password) and "jwt" (the session token) must NEVER be logged.
+      #    Log the security facts instead, structured, with the secrets removed:
+      import json
+      import logging
+
+      log = logging.getLogger("auth")
+
+
+      def safe_auth_log(user, jwt, ip, ok):
+          log.info(json.dumps({
+              "event": "auth",
+              "user": user,
+              "src_ip": ip,
+              "token_ref": "****" + jwt[-4:],  # masked reference, not the token
+              "outcome": "success" if ok else "failure",
+          }))
+      # The password is simply absent; the JWT is reduced to a masked reference.
+    note:
+      fr: "`pwd` et `jwt` sont des secrets : on supprime le mot de passe et on réduit le jeton à une référence masquée (`****...`). On garde l'utilisateur, l'IP et le résultat pour la détection."
+      en: "`pwd` and `jwt` are secrets: drop the password and reduce the token to a masked reference (`****...`). Keep the user, the IP and the outcome for detection."
+
+quiz:
+  - q:
+      fr: "Lequel de ces trois piliers répond le mieux à « combien de requêtes ont échoué en 5 minutes » ?"
+      en: "Which of the three pillars best answers \"how many requests failed in 5 minutes\"?"
+    options:
+      fr:
+        - "Les métriques"
+        - "Les logs"
+        - "Les traces"
+        - "Aucun des trois"
+      en:
+        - "Metrics"
+        - "Logs"
+        - "Traces"
+        - "None of the three"
+    answer: 0
+    why:
+      fr: "Les métriques agrègent des nombres dans le temps : elles sont idéales pour compter, mesurer des taux et déclencher des alertes."
+      en: "Metrics aggregate numbers over time: they are ideal to count, measure rates and trigger alerts."
+  - q:
+      fr: "Que définit un SLO ?"
+      en: "What does an SLO define?"
+    options:
+      fr:
+        - "Le nom du serveur"
+        - "Un objectif chiffré de qualité de service sur un indicateur (SLI)"
+        - "Le mot de passe du tableau de bord"
+        - "La version de Prometheus"
+      en:
+        - "The server name"
+        - "A numeric service-quality target on an indicator (SLI)"
+        - "The dashboard password"
+        - "The Prometheus version"
+    answer: 1
+    why:
+      fr: "Un SLO (Service Level Objective) fixe un objectif mesurable sur un SLI, par ex. « 99,9 % des requêtes sous 300 ms » ; dépasser le budget d'erreur déclenche l'alerte."
+      en: "An SLO (Service Level Objective) sets a measurable target on an SLI, e.g. \"99.9% of requests under 300 ms\"; burning the error budget triggers the alert."
+  - q:
+      fr: "Lequel de ces éléments ne doit JAMAIS apparaître dans les logs ?"
+      en: "Which of these must NEVER appear in logs?"
+    options:
+      fr:
+        - "L'adresse IP source d'une connexion"
+        - "Le résultat (succès/échec) d'une authentification"
+        - "Un jeton de session complet"
+        - "L'horodatage de l'événement"
+      en:
+        - "The source IP of a connection"
+        - "The outcome (success/failure) of an authentication"
+        - "A full session token"
+        - "The event timestamp"
+    answer: 2
+    why:
+      fr: "Un jeton de session est un secret réutilisable : journalisé, il est dupliqué partout et une fuite de logs devient une fuite de secrets. L'IP, le résultat et l'horodatage, eux, sont utiles à la détection."
+      en: "A session token is a reusable secret: once logged it is duplicated everywhere, and a log leak becomes a secret leak. The IP, outcome and timestamp are useful for detection."
+  - q:
+      fr: "Pourquoi préférer des logs au format JSON structuré ?"
+      en: "Why prefer structured JSON-format logs?"
+    options:
+      fr:
+        - "Parce que c'est plus joli"
+        - "Parce qu'un SIEM peut filtrer et corréler les champs, impossible avec du texte libre"
+        - "Parce que JSON chiffre les données"
+        - "Parce que JSON occupe moins de place que tout autre format"
+      en:
+        - "Because it looks nicer"
+        - "Because a SIEM can filter and correlate the fields, impossible with free text"
+        - "Because JSON encrypts the data"
+        - "Because JSON takes less space than any other format"
+    answer: 1
+    why:
+      fr: "Chaque événement devient un objet à champs (`user`, `src_ip`, `outcome`) ; un SIEM peut alors requêter et corréler, ce que du texte libre ne permet pas de façon fiable."
+      en: "Each event becomes a field-based object (`user`, `src_ip`, `outcome`); a SIEM can then query and correlate, which free text does not allow reliably."
+  - q:
+      fr: "Quel pilier suit le parcours d'une seule requête à travers plusieurs services ?"
+      en: "Which pillar follows a single request's path across several services?"
+    options:
+      fr:
+        - "Les métriques"
+        - "Les SLO"
+        - "Les logs"
+        - "Les traces"
+      en:
+        - "Metrics"
+        - "SLOs"
+        - "Logs"
+        - "Traces"
+    answer: 3
+    why:
+      fr: "Une trace relie toutes les étapes d'une même requête à travers les services, idéale pour localiser un ralentissement dans une architecture distribuée."
+      en: "A trace links all the steps of a single request across services, ideal to locate a slowdown in a distributed architecture."

@@ -1,0 +1,529 @@
+description:
+  fr: "Auditer la sécurité d'Azure avec le module Az en PowerShell : comptes de stockage exposés publiquement, règles NSG ouvertes à Internet et attributions de rôles RBAC à hauts privilèges."
+  en: "Audit Azure security with the Az PowerShell module: publicly exposed storage accounts, NSG rules open to the Internet and high-privilege RBAC role assignments."
+duration: 30
+
+intro:
+  fr: |
+    Le cloud **Azure** héberge des machines, des bases et des fichiers accessibles depuis le monde entier.
+    Sa commodité est aussi son danger : une case mal cochée, et un conteneur de stockage privé devient
+    lisible par n'importe qui. L'audit cloud consiste à détecter ces **mauvaises configurations** avant les
+    attaquants.
+
+    L'analogie : Azure, c'est un immeuble de bureaux où chaque équipe loue des pièces. Par défaut, certaines
+    portes peuvent rester grandes ouvertes sur la rue (accès public), des badges donnent plus d'accès que
+    nécessaire (rôles trop larges), et le gardien laisse parfois entrer tout le monde (règle réseau
+    `0.0.0.0/0`). PowerShell, avec le module **`Az`**, est la clé qui permet d'inspecter chaque pièce.
+
+    Dans cette leçon, tous les contrôles sont **en lecture seule**. Vous vous connecterez avec
+    `Connect-AzAccount`, puis auditerez trois risques majeurs du cloud : les **comptes de stockage**
+    autorisant l'accès public, les **groupes de sécurité réseau (NSG)** ouvrant un port d'administration à
+    **tout Internet**, et les **attributions de rôles** (`Owner`, `Contributor`) trop nombreuses. Utilisez
+    uniquement un abonnement de test qui vous appartient.
+  en: |
+    The **Azure** cloud hosts machines, databases and files reachable from anywhere in the world. Its
+    convenience is also its danger: one wrongly ticked box, and a private storage container becomes readable
+    by anyone. Cloud auditing means detecting these **misconfigurations** before attackers do.
+
+    The analogy: Azure is an office building where each team rents rooms. By default, some doors can be left
+    wide open onto the street (public access), badges grant more access than needed (overly broad roles),
+    and the guard sometimes lets everyone in (`0.0.0.0/0` network rule). PowerShell, with the **`Az`**
+    module, is the key to inspect every room.
+
+    In this lesson, every check is **read-only**. You will connect with `Connect-AzAccount`, then audit
+    three major cloud risks: **storage accounts** allowing public access, **network security groups (NSGs)**
+    opening an admin port to **the whole Internet**, and **role assignments** (`Owner`, `Contributor`) that
+    are too numerous. Use only a test subscription you own.
+
+sections:
+  - heading:
+      fr: "Se connecter et cadrer l'abonnement"
+      en: "Connecting and scoping the subscription"
+    body:
+      fr: |
+        Le module **`Az`** s'installe une fois (`Install-Module Az -Scope CurrentUser`) et s'importe au
+        besoin. On s'authentifie avec :
+
+        ```powershell
+        Connect-AzAccount                      # interactive (MFA pris en charge)
+        Set-AzContext -Subscription 'Prod'     # choisir l'abonnement à auditer
+        ```
+
+        Pour l'**automatisation** (tâche planifiée, pipeline CI), on n'utilise **pas** un mot de passe en
+        clair : on privilégie une **identité managée** (sur une ressource Azure) ou un **service principal**
+        authentifié par certificat, ou encore une fédération OIDC. Jamais de secret en dur dans le script.
+
+        Les cmdlets d'audit suivent la logique `Get-Az*` :
+
+        | Cmdlet | Objet audité |
+        |---|---|
+        | `Get-AzStorageAccount` | comptes de stockage |
+        | `Get-AzNetworkSecurityGroup` | pare-feu réseau (NSG) |
+        | `Get-AzRoleAssignment` | attributions de rôles RBAC |
+        | `Get-AzResource` | toute ressource |
+
+        Comme en Windows, ces cmdlets renvoient des **objets** : on filtre sur leurs propriétés avec
+        `Where-Object`, on exporte en CSV ou JSON, sans jamais analyser de texte brut.
+      en: |
+        The **`Az`** module is installed once (`Install-Module Az -Scope CurrentUser`) and imported as
+        needed. You authenticate with:
+
+        ```powershell
+        Connect-AzAccount                      # interactive (MFA supported)
+        Set-AzContext -Subscription 'Prod'     # choose the subscription to audit
+        ```
+
+        For **automation** (scheduled task, CI pipeline), do **not** use a clear-text password: prefer a
+        **managed identity** (on an Azure resource) or a **service principal** authenticated by certificate,
+        or an OIDC federation. Never a hard-coded secret in the script.
+
+        The audit cmdlets follow the `Get-Az*` logic:
+
+        | Cmdlet | Audited object |
+        |---|---|
+        | `Get-AzStorageAccount` | storage accounts |
+        | `Get-AzNetworkSecurityGroup` | network firewall (NSG) |
+        | `Get-AzRoleAssignment` | RBAC role assignments |
+        | `Get-AzResource` | any resource |
+
+        As in Windows, these cmdlets return **objects**: you filter on their properties with `Where-Object`,
+        export to CSV or JSON, without ever parsing raw text.
+  - heading:
+      fr: "Stockage exposé et NSG ouverts"
+      en: "Exposed storage and open NSGs"
+    body:
+      fr: |
+        Un **compte de stockage** Azure mal configuré est l'une des fuites de données les plus fréquentes.
+        Deux propriétés clés : `AllowBlobPublicAccess` (autorise-t-il l'accès public aux blobs ?) et
+        `EnableHttpsTrafficOnly` (impose-t-il HTTPS ?).
+
+        ```powershell
+        Get-AzStorageAccount |
+          Where-Object { $_.AllowBlobPublicAccess -eq $true } |
+          Select-Object StorageAccountName, ResourceGroupName
+        ```
+
+        Tout compte avec `AllowBlobPublicAccess = $true` mérite une vérification : un conteneur public y
+        expose potentiellement des fichiers à Internet.
+
+        Un **NSG** (Network Security Group) est le pare-feu d'un réseau Azure. La règle dangereuse type
+        autorise le trafic entrant depuis **n'importe quelle source** (`0.0.0.0/0`, `*` ou `Internet`) vers
+        un port sensible comme **3389** (RDP) ou **22** (SSH) :
+
+        ```powershell
+        Get-AzNetworkSecurityGroup | ForEach-Object {
+          $_.SecurityRules | Where-Object {
+            $_.Access -eq 'Allow' -and $_.Direction -eq 'Inbound' -and
+            $_.SourceAddressPrefix -in @('*','0.0.0.0/0','Internet')
+          }
+        }
+        ```
+
+        Exposer RDP ou SSH à tout Internet, c'est inviter les attaques par force brute. L'audit remonte ces
+        règles ; la correction consiste à restreindre la source à un réseau de confiance ou à passer par un
+        bastion / Azure Bastion.
+      en: |
+        A misconfigured Azure **storage account** is one of the most common data leaks. Two key properties:
+        `AllowBlobPublicAccess` (does it allow public blob access?) and `EnableHttpsTrafficOnly` (does it
+        enforce HTTPS?).
+
+        ```powershell
+        Get-AzStorageAccount |
+          Where-Object { $_.AllowBlobPublicAccess -eq $true } |
+          Select-Object StorageAccountName, ResourceGroupName
+        ```
+
+        Any account with `AllowBlobPublicAccess = $true` deserves a check: a public container there
+        potentially exposes files to the Internet.
+
+        An **NSG** (Network Security Group) is the firewall of an Azure network. The typical dangerous rule
+        allows inbound traffic from **any source** (`0.0.0.0/0`, `*` or `Internet`) to a sensitive port like
+        **3389** (RDP) or **22** (SSH):
+
+        ```powershell
+        Get-AzNetworkSecurityGroup | ForEach-Object {
+          $_.SecurityRules | Where-Object {
+            $_.Access -eq 'Allow' -and $_.Direction -eq 'Inbound' -and
+            $_.SourceAddressPrefix -in @('*','0.0.0.0/0','Internet')
+          }
+        }
+        ```
+
+        Exposing RDP or SSH to the whole Internet is an invitation to brute-force attacks. The audit surfaces
+        these rules; the fix is to restrict the source to a trusted network or go through a bastion / Azure
+        Bastion.
+  - heading:
+      fr: "RBAC : attributions de rôles"
+      en: "RBAC: role assignments"
+    body:
+      fr: |
+        Azure contrôle les droits avec **RBAC** (Role-Based Access Control) : on attribue des **rôles** à des
+        utilisateurs, groupes ou identités, sur un **périmètre** (abonnement, groupe de ressources,
+        ressource). Les rôles les plus puissants :
+
+        | Rôle | Pouvoir |
+        |---|---|
+        | `Owner` | tout, y compris déléguer des droits |
+        | `Contributor` | tout gérer, sauf déléguer des droits |
+        | `User Access Administrator` | gérer les accès des autres |
+
+        On liste les attributions sensibles avec :
+
+        ```powershell
+        Get-AzRoleAssignment |
+          Where-Object RoleDefinitionName -in @('Owner','User Access Administrator') |
+          Select-Object DisplayName, RoleDefinitionName, Scope
+        ```
+
+        Deux signaux d'alerte : **trop** de titulaires du rôle `Owner` (le moindre privilège voudrait très
+        peu), et des attributions à un **périmètre trop large** (un rôle `Owner` sur tout l'abonnement alors
+        qu'un groupe de ressources suffirait). On surveille aussi les attributions à des **principaux
+        invités** ou à des identités inattendues.
+
+        Comme pour Windows et AD, l'audit se limite à **lire** (`Get-AzRoleAssignment`). Retirer ou réduire
+        un rôle (`Remove-AzRoleAssignment`) relève d'une remédiation planifiée, jamais exécutée à l'aveugle
+        pendant l'inventaire.
+      en: |
+        Azure controls rights with **RBAC** (Role-Based Access Control): you assign **roles** to users,
+        groups or identities, over a **scope** (subscription, resource group, resource). The most powerful
+        roles:
+
+        | Role | Power |
+        |---|---|
+        | `Owner` | everything, including delegating rights |
+        | `Contributor` | manage everything, except delegating rights |
+        | `User Access Administrator` | manage others' access |
+
+        You list sensitive assignments with:
+
+        ```powershell
+        Get-AzRoleAssignment |
+          Where-Object RoleDefinitionName -in @('Owner','User Access Administrator') |
+          Select-Object DisplayName, RoleDefinitionName, Scope
+        ```
+
+        Two alert signals: **too many** holders of the `Owner` role (least privilege would want very few),
+        and assignments at **too broad a scope** (an `Owner` role over the whole subscription when a resource
+        group would suffice). You also watch assignments to **guest principals** or unexpected identities.
+
+        As with Windows and AD, the audit limits itself to **reading** (`Get-AzRoleAssignment`). Removing or
+        reducing a role (`Remove-AzRoleAssignment`) is a planned remediation, never run blindly during the
+        inventory.
+
+examples:
+  - title:
+      fr: "Comptes de stockage exposés publiquement"
+      en: "Publicly exposed storage accounts"
+    file: public_storage.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # Assumes: Connect-AzAccount and Set-AzContext already done.
+      # READ-ONLY audit of storage account exposure.
+      Get-AzStorageAccount |
+          Select-Object StorageAccountName, ResourceGroupName,
+              AllowBlobPublicAccess, EnableHttpsTrafficOnly, MinimumTlsVersion |
+          Where-Object {
+              $_.AllowBlobPublicAccess -eq $true -or
+              $_.EnableHttpsTrafficOnly -ne $true
+          } |
+          Sort-Object StorageAccountName
+    output: |
+      StorageAccountName  ResourceGroupName  AllowBlobPublicAccess  EnableHttpsTrafficOnly  MinimumTlsVersion
+      ------------------  -----------------  ---------------------  ----------------------  -----------------
+      stappdata01         rg-app             True                   True                    TLS1_2
+      stlegacy02          rg-legacy          False                  False                   TLS1_0
+    note:
+      fr: "Deux défauts ressortent : `stappdata01` autorise l'accès public aux blobs, et `stlegacy02` n'impose pas HTTPS (`EnableHttpsTrafficOnly = False`) tout en acceptant TLS 1.0. On lit des **propriétés d'objet**, jamais du texte. La correction désactive l'accès public et force HTTPS/TLS 1.2."
+      en: "Two faults surface: `stappdata01` allows public blob access, and `stlegacy02` does not enforce HTTPS (`EnableHttpsTrafficOnly = False`) while accepting TLS 1.0. We read **object properties**, never text. The fix disables public access and forces HTTPS/TLS 1.2."
+
+  - title:
+      fr: "Règles NSG ouvertes à Internet"
+      en: "NSG rules open to the Internet"
+    file: open_nsg.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # Sensitive admin ports that must NOT face the Internet.
+      $sensitivePorts = '22', '3389', '3306', '5432'
+      $anySource = @('*', '0.0.0.0/0', 'Internet')
+
+      Get-AzNetworkSecurityGroup | ForEach-Object {
+          $nsg = $_.Name
+          $_.SecurityRules | Where-Object {
+              $_.Access -eq 'Allow' -and
+              $_.Direction -eq 'Inbound' -and
+              $_.SourceAddressPrefix -in $anySource -and
+              ($_.DestinationPortRange | Where-Object { $_ -in $sensitivePorts -or $_ -eq '*' })
+          } | ForEach-Object {
+              [PSCustomObject]@{
+                  NSG      = $nsg
+                  Rule     = $_.Name
+                  Port     = ($_.DestinationPortRange -join ',')
+                  Source   = ($_.SourceAddressPrefix -join ',')
+              }
+          }
+      }
+    output: |
+      NSG         Rule           Port  Source
+      ---         ----           ----  ------
+      nsg-web     allow-rdp-any  3389  *
+      nsg-db      allow-any      *     0.0.0.0/0
+    note:
+      fr: "On cherche les règles `Allow` + `Inbound` dont la **source** est Internet (`*`, `0.0.0.0/0`) vers un **port sensible**. Ici, RDP (3389) et un `*` (tous les ports) sont ouverts au monde entier : deux défauts graves. La remédiation restreint la source ou passe par Azure Bastion."
+      en: "We look for `Allow` + `Inbound` rules whose **source** is the Internet (`*`, `0.0.0.0/0`) toward a **sensitive port**. Here, RDP (3389) and a `*` (all ports) are open to the whole world: two serious faults. Remediation restricts the source or uses Azure Bastion."
+
+  - title:
+      fr: "Attributions de rôles à hauts privilèges"
+      en: "High-privilege role assignments"
+    file: role_assignments.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # READ-ONLY: list holders of the most powerful RBAC roles.
+      $highRoles = 'Owner', 'User Access Administrator'
+
+      $assignments = Get-AzRoleAssignment |
+          Where-Object { $_.RoleDefinitionName -in $highRoles } |
+          Select-Object DisplayName, SignInName, RoleDefinitionName, Scope
+
+      $assignments | Sort-Object RoleDefinitionName, DisplayName | Format-Table -AutoSize
+
+      # Too many Owners is a least-privilege red flag.
+      $ownerCount = ($assignments | Where-Object RoleDefinitionName -eq 'Owner' | Measure-Object).Count
+      Write-Output "Owner assignments: $ownerCount (keep this number very small)"
+    output: |
+      DisplayName   SignInName            RoleDefinitionName         Scope
+      -----------   ----------            ------------------         -----
+      Alice Admin   alice@example.com     Owner                      /subscriptions/0000-.../rg-app
+      Bob Guest     bob@contoso.com       Owner                      /subscriptions/0000-...
+      Ops Team      (group)               User Access Administrator  /subscriptions/0000-.../rg-app
+
+      Owner assignments: 2 (keep this number very small)
+    note:
+      fr: "`Bob Guest` détient `Owner` sur **tout l'abonnement** (périmètre `/subscriptions/0000-...`) : périmètre trop large, et un invité externe de surcroît. On lit le `Scope` pour repérer les droits excessifs. L'audit **signale** ; `Remove-AzRoleAssignment` serait une étape de remédiation séparée."
+      en: "`Bob Guest` holds `Owner` over the **whole subscription** (scope `/subscriptions/0000-...`): too broad a scope, and an external guest at that. We read the `Scope` to spot excessive rights. The audit **flags**; `Remove-AzRoleAssignment` would be a separate remediation step."
+
+  - title:
+      fr: "Authentification sûre pour l'automatisation"
+      en: "Safe authentication for automation"
+    file: connect_safe.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # In a pipeline or on an Azure VM/runner, use a managed identity:
+      # no secret is ever stored or passed around.
+      Connect-AzAccount -Identity | Out-Null
+
+      # If a service principal is unavoidable, authenticate by CERTIFICATE,
+      # never by a plaintext password in the script. The thumbprint refers to
+      # a cert in the machine/user store; the secret stays out of the code.
+      # Connect-AzAccount -ServicePrincipal `
+      #   -Tenant $env:AZURE_TENANT_ID `
+      #   -ApplicationId $env:AZURE_CLIENT_ID `
+      #   -CertificateThumbprint $env:AZURE_CERT_THUMBPRINT
+
+      Set-AzContext -Subscription $env:AZURE_SUBSCRIPTION_ID | Out-Null
+      Write-Output "Connected as: $((Get-AzContext).Account.Id)"
+    output: |
+      Connected as: msi@managed-identity
+    note:
+      fr: "`Connect-AzAccount -Identity` utilise une **identité managée** : aucun secret n'est stocké. Si un service principal est indispensable, on l'authentifie par **certificat** (empreinte), pas par mot de passe en clair. Les identifiants d'abonnement et de tenant viennent de l'environnement, jamais du code."
+      en: "`Connect-AzAccount -Identity` uses a **managed identity**: no secret is stored. If a service principal is unavoidable, authenticate it by **certificate** (thumbprint), not by a clear-text password. Subscription and tenant IDs come from the environment, never the code."
+
+mistake:
+  fr: |
+    **Ne vérifier que l'accès public du stockage en oubliant le périmètre des rôles et la source des règles
+    réseau.**
+
+    Beaucoup d'audits cloud s'arrêtent à `AllowBlobPublicAccess` et ratent les deux plus gros risques :
+    une règle NSG qui ouvre RDP (3389) à `0.0.0.0/0`, et une attribution `Owner` sur **tout l'abonnement**
+    au lieu d'un simple groupe de ressources. Un attaquant exploite d'abord ces chemins-là. Autre erreur
+    grave : s'authentifier pour l'automatisation avec un **mot de passe de service principal en clair** dans
+    le script ou une variable non protégée — il finit dans Git ou dans les journaux. On utilise une identité
+    managée ou un certificat. Enfin, un audit cloud reste **en lecture seule** : on ne retire pas un rôle ni
+    une règle à la volée pendant l'inventaire.
+  en: |
+    **Checking only storage public access and forgetting role scope and network rule sources.**
+
+    Many cloud audits stop at `AllowBlobPublicAccess` and miss the two biggest risks: an NSG rule opening
+    RDP (3389) to `0.0.0.0/0`, and an `Owner` assignment over the **whole subscription** instead of a single
+    resource group. An attacker exploits those paths first. Another serious mistake: authenticating for
+    automation with a **clear-text service principal password** in the script or an unprotected variable —
+    it ends up in Git or in logs. Use a managed identity or a certificate. Finally, a cloud audit stays
+    **read-only**: you do not remove a role or a rule on the fly during the inventory.
+
+bestPractice:
+  fr: |
+    - **Authentifiez-vous sans secret** : identité managée (`-Identity`) ou service principal par
+      certificat ; jamais de mot de passe en clair.
+    - **Auditez trois axes** : stockage public, NSG ouverts à Internet, attributions de rôles à hauts
+      privilèges.
+    - **Regardez le périmètre (`Scope`)** des rôles, pas seulement leur nom : `Owner` sur l'abonnement est
+      bien pire que sur un groupe de ressources.
+    - **Signalez les ports sensibles** (22, 3389, bases) ouverts depuis `*`, `0.0.0.0/0` ou `Internet`.
+    - **Lisez les propriétés d'objet** (`AllowBlobPublicAccess`, `SourceAddressPrefix`), pas du texte.
+    - **Restez en lecture seule** (`Get-Az*`) ; la remédiation est une étape distincte et validée.
+    - **Complétez avec un CSPM** (Microsoft Defender for Cloud, Prowler) et n'auditez que vos abonnements.
+  en: |
+    - **Authenticate without a secret**: managed identity (`-Identity`) or service principal by certificate;
+      never a clear-text password.
+    - **Audit three axes**: public storage, NSGs open to the Internet, high-privilege role assignments.
+    - **Look at the role `Scope`**, not only its name: `Owner` over the subscription is far worse than over
+      a resource group.
+    - **Flag sensitive ports** (22, 3389, databases) open from `*`, `0.0.0.0/0` or `Internet`.
+    - **Read object properties** (`AllowBlobPublicAccess`, `SourceAddressPrefix`), not text.
+    - **Stay read-only** (`Get-Az*`); remediation is a separate, approved step.
+    - **Complement with a CSPM** (Microsoft Defender for Cloud, Prowler) and only audit your own
+      subscriptions.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez une fonction en lecture seule `Get-OpenAdminPorts` qui parcourt tous les groupes de sécurité
+      réseau (NSG) de l'abonnement courant et signale les règles dangereuses. Elle doit :
+
+      1. récupérer les NSG avec `Get-AzNetworkSecurityGroup` ;
+      2. pour chaque règle, ne retenir que celles qui sont `Allow`, `Inbound`, dont la source est `*`,
+         `0.0.0.0/0` ou `Internet`, et dont le port de destination est `22` ou `3389` ;
+      3. renvoyer un `[PSCustomObject]` par règle fautive avec le nom du NSG, le nom de la règle, le port et
+         la source ;
+      4. rester strictement en lecture seule.
+    en: |
+      Write a read-only function `Get-OpenAdminPorts` that walks every network security group (NSG) in the
+      current subscription and flags dangerous rules. It must:
+
+      1. retrieve the NSGs with `Get-AzNetworkSecurityGroup`;
+      2. for each rule, keep only those that are `Allow`, `Inbound`, whose source is `*`, `0.0.0.0/0` or
+         `Internet`, and whose destination port is `22` or `3389`;
+      3. return one `[PSCustomObject]` per offending rule with the NSG name, the rule name, the port and the
+         source;
+      4. stay strictly read-only.
+  solution:
+    file: Get-OpenAdminPorts.ps1
+    lang: powershell
+    code: |
+      function Get-OpenAdminPorts {
+          [CmdletBinding()]
+          param()
+
+          $anySource = @('*', '0.0.0.0/0', 'Internet')
+          $adminPorts = @('22', '3389')
+
+          # READ-ONLY: only Get-AzNetworkSecurityGroup is used.
+          Get-AzNetworkSecurityGroup | ForEach-Object {
+              $nsgName = $_.Name
+              foreach ($rule in $_.SecurityRules) {
+                  $portHit = $rule.DestinationPortRange |
+                      Where-Object { $_ -in $adminPorts -or $_ -eq '*' }
+                  if ($rule.Access -eq 'Allow' -and
+                      $rule.Direction -eq 'Inbound' -and
+                      ($rule.SourceAddressPrefix | Where-Object { $_ -in $anySource }) -and
+                      $portHit) {
+                      [PSCustomObject]@{
+                          NSG    = $nsgName
+                          Rule   = $rule.Name
+                          Port   = ($rule.DestinationPortRange -join ',')
+                          Source = ($rule.SourceAddressPrefix -join ',')
+                      }
+                  }
+              }
+          }
+      }
+
+      Get-OpenAdminPorts | Format-Table -AutoSize
+    note:
+      fr: "La fonction n'utilise que `Get-AzNetworkSecurityGroup` : lecture seule. On combine quatre conditions (`Allow`, `Inbound`, source Internet, port admin) et chaque règle fautive devient un `[PSCustomObject]`. Un port `*` est inclus car « tous les ports » englobe 22 et 3389. `Format-Table` reste en dernier."
+      en: "The function uses only `Get-AzNetworkSecurityGroup`: read-only. We combine four conditions (`Allow`, `Inbound`, Internet source, admin port) and each offending rule becomes a `[PSCustomObject]`. A `*` port is included because \"all ports\" covers 22 and 3389. `Format-Table` stays last."
+
+quiz:
+  - q:
+      fr: "Quelle propriété d'un compte de stockage signale un risque d'exposition publique ?"
+      en: "Which storage account property signals a public exposure risk?"
+    options:
+      fr:
+        - "MinimumTlsVersion"
+        - "AllowBlobPublicAccess"
+        - "ResourceGroupName"
+        - "StorageAccountName"
+      en:
+        - "MinimumTlsVersion"
+        - "AllowBlobPublicAccess"
+        - "ResourceGroupName"
+        - "StorageAccountName"
+    answer: 1
+    why:
+      fr: "`AllowBlobPublicAccess = $true` autorise l'accès public aux blobs : un conteneur public y expose des fichiers à Internet. C'est une cause fréquente de fuite de données cloud."
+      en: "`AllowBlobPublicAccess = $true` allows public blob access: a public container exposes files to the Internet. It is a frequent cause of cloud data leaks."
+  - q:
+      fr: "Qu'est-ce qui rend une règle NSG dangereuse ?"
+      en: "What makes an NSG rule dangerous?"
+    options:
+      fr:
+        - "Autoriser du trafic entrant depuis `0.0.0.0/0` vers un port d'administration comme 3389"
+        - "Bloquer tout le trafic sortant"
+        - "Utiliser TLS 1.2"
+        - "Avoir un nom trop long"
+      en:
+        - "Allowing inbound traffic from `0.0.0.0/0` to an admin port like 3389"
+        - "Blocking all outbound traffic"
+        - "Using TLS 1.2"
+        - "Having a too-long name"
+    answer: 0
+    why:
+      fr: "Une règle `Allow`/`Inbound` avec source `0.0.0.0/0` (tout Internet) vers RDP (3389) ou SSH (22) expose la machine aux attaques par force brute : c'est le défaut cloud le plus exploité."
+      en: "An `Allow`/`Inbound` rule with source `0.0.0.0/0` (the whole Internet) to RDP (3389) or SSH (22) exposes the machine to brute-force attacks: the most exploited cloud fault."
+  - q:
+      fr: "Pour l'automatisation, comment s'authentifier à Azure sans secret en clair ?"
+      en: "For automation, how do you authenticate to Azure without a clear-text secret?"
+    options:
+      fr:
+        - "En écrivant le mot de passe dans le script"
+        - "Avec une identité managée ou un service principal par certificat"
+        - "En désactivant l'authentification"
+        - "En partageant le compte Owner"
+      en:
+        - "By writing the password in the script"
+        - "With a managed identity or a service principal by certificate"
+        - "By disabling authentication"
+        - "By sharing the Owner account"
+    answer: 1
+    why:
+      fr: "`Connect-AzAccount -Identity` (identité managée) ou un service principal authentifié par certificat évitent tout secret stocké. Un mot de passe en clair finirait dans Git ou les journaux."
+      en: "`Connect-AzAccount -Identity` (managed identity) or a service principal authenticated by certificate avoid any stored secret. A clear-text password would end up in Git or logs."
+  - q:
+      fr: "Pourquoi examiner le `Scope` d'une attribution de rôle, et pas seulement le rôle ?"
+      en: "Why examine a role assignment's `Scope`, not just the role?"
+    options:
+      fr:
+        - "Parce que le Scope chiffre le rôle"
+        - "Parce qu'un rôle Owner sur tout l'abonnement est bien plus dangereux que sur un groupe de ressources"
+        - "Parce que le Scope accélère l'audit"
+        - "Parce que le rôle n'a pas d'importance"
+      en:
+        - "Because the Scope encrypts the role"
+        - "Because an Owner role over the whole subscription is far more dangerous than over a resource group"
+        - "Because the Scope speeds up the audit"
+        - "Because the role does not matter"
+    answer: 1
+    why:
+      fr: "Le périmètre détermine l'étendue des droits : `Owner` sur un groupe de ressources est limité, alors que `Owner` sur l'abonnement donne le contrôle de toutes ses ressources. Le moindre privilège vise le périmètre le plus étroit."
+      en: "The scope determines how far the rights reach: `Owner` over a resource group is limited, whereas `Owner` over the subscription grants control of all its resources. Least privilege aims for the narrowest scope."
+  - q:
+      fr: "Quel doit être le comportement d'un script d'audit Azure vis-à-vis des ressources ?"
+      en: "How should an Azure audit script behave toward resources?"
+    options:
+      fr:
+        - "Corriger automatiquement toutes les failles trouvées"
+        - "Supprimer les comptes de stockage publics"
+        - "Rester en lecture seule (Get-Az*) et laisser la remédiation à une étape distincte"
+        - "Attribuer le rôle Owner à l'auditeur"
+      en:
+        - "Automatically fix every flaw found"
+        - "Delete public storage accounts"
+        - "Stay read-only (Get-Az*) and leave remediation to a separate step"
+        - "Assign the Owner role to the auditor"
+    answer: 2
+    why:
+      fr: "Un audit observe et documente sans rien changer : il n'utilise que des cmdlets `Get-Az*`. La correction (retrait de rôle, fermeture de port) est planifiée et validée séparément, jamais exécutée à l'aveugle."
+      en: "An audit observes and documents without changing anything: it uses only `Get-Az*` cmdlets. The fix (role removal, port closure) is planned and approved separately, never run blindly."

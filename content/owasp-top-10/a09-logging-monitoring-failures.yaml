@@ -1,0 +1,421 @@
+description:
+  fr: "A09 Journalisation et surveillance insuffisantes : enregistrer les bons événements, ne pas fuiter de secrets et alerter à temps."
+  en: "A09 Security Logging and Monitoring Failures: log the right events, avoid leaking secrets and alert in time."
+duration: 20
+
+intro:
+  fr: |
+    **A09 - Security Logging and Monitoring Failures** (journalisation et surveillance insuffisantes) ne
+    provoque pas directement une intrusion, mais la rend **invisible**. Sans journaux de sécurité, sans
+    surveillance et sans alertes, une attaque peut durer des mois sans que personne ne la remarque. Le délai
+    moyen de détection d'une compromission se compte souvent en **semaines**.
+
+    Pensez à un magasin équipé de caméras... éteintes. Le cambriolage a bien lieu, mais il n'existe aucune
+    trace pour le détecter pendant qu'il se produit, ni pour comprendre après coup ce qui s'est passé. Des
+    caméras allumées, dont quelqu'un regarde les images et qui déclenchent une alarme, changent tout.
+
+    Dans cette leçon, vous verrez comment **journaliser les bons événements** de sécurité (connexions,
+    échecs, accès refusés), comment **éviter de consigner des secrets** (erreur fréquente et grave), et comment
+    ces journaux alimentent l'**alerte** et le **SIEM**. L'édition 2025 élargit cette catégorie à l'**alerting**.
+  en: |
+    **A09 - Security Logging and Monitoring Failures** does not directly cause a breach, but it makes one
+    **invisible**. Without security logs, without monitoring and without alerts, an attack can last months
+    unnoticed. The average time to detect a compromise is often measured in **weeks**.
+
+    Think of a shop fitted with cameras... that are switched off. The burglary happens, but there is no trace
+    to detect it while it occurs, nor to understand afterwards what happened. Cameras that are on, watched by
+    someone and wired to an alarm, change everything.
+
+    In this lesson you will see how to **log the right security events** (logins, failures, denied access),
+    how to **avoid logging secrets** (a frequent and serious mistake), and how these logs feed **alerting** and
+    the **SIEM**. The 2025 edition broadens this category to **alerting**.
+
+sections:
+  - heading:
+      fr: "Quoi journaliser, et quoi ne jamais journaliser"
+      en: "What to log, and what never to log"
+    body:
+      fr: |
+        Un bon journal de sécurité enregistre **qui** a fait **quoi**, **quand** et avec quel **résultat** :
+
+        | À journaliser | Exemple |
+        |---|---|
+        | Connexions réussies et échouées | `login success user=alice ip=192.0.2.10` |
+        | Accès refusés (403) | `access denied user=bob resource=/admin` |
+        | Changements sensibles | Modification de rôle, de mot de passe, de configuration |
+        | Erreurs serveur et exceptions | Pour le diagnostic et la détection d'anomalies |
+
+        | À ne JAMAIS journaliser | Pourquoi |
+        |---|---|
+        | Mots de passe, jetons, clés | Le journal devient une base de secrets en clair |
+        | Numéros de carte, données de santé | Fuite de données personnelles, non-conformité |
+        | Le contenu complet des requêtes sensibles | Peut contenir les éléments ci-dessus |
+
+        Un journal doit être **structuré** (JSON), **horodaté** (UTC), **corrélable** (identifiant de requête),
+        et **inviolable** (envoyé à un stockage centralisé que l'attaquant ne peut pas effacer). Journaliser un
+        mot de passe « pour déboguer » est une faille à part entière : le journal est souvent moins protégé que
+        la base de données.
+      en: |
+        A good security log records **who** did **what**, **when** and with what **result**:
+
+        | To log | Example |
+        |---|---|
+        | Successful and failed logins | `login success user=alice ip=192.0.2.10` |
+        | Denied access (403) | `access denied user=bob resource=/admin` |
+        | Sensitive changes | Role, password, configuration changes |
+        | Server errors and exceptions | For diagnosis and anomaly detection |
+
+        | To NEVER log | Why |
+        |---|---|
+        | Passwords, tokens, keys | The log becomes a database of clear-text secrets |
+        | Card numbers, health data | Personal-data leak, non-compliance |
+        | The full body of sensitive requests | May contain the items above |
+
+        A log must be **structured** (JSON), **timestamped** (UTC), **correlatable** (request id), and
+        **tamper-resistant** (shipped to central storage the attacker cannot erase). Logging a password "for
+        debugging" is a vulnerability in itself: the log is often less protected than the database.
+  - heading:
+      fr: "De la journalisation à l'alerte"
+      en: "From logging to alerting"
+    body:
+      fr: |
+        Journaliser ne suffit pas : il faut **surveiller** et **alerter**. Des journaux que personne ne
+        regarde sont des caméras éteintes. La chaîne complète :
+
+        1. **Collecte** centralisée (tous les services envoient leurs journaux au même endroit) ;
+        2. **Corrélation** dans un **SIEM** (*Security Information and Event Management* : ELK, Wazuh, Splunk) ;
+        3. **Règles de détection** (ex. 10 échecs de connexion en une minute → alerte force brute) ;
+        4. **Alerte** vers une personne ou un canal, avec un délai court ;
+        5. **Réponse** et conservation des journaux pour l'analyse forensique.
+
+        | Étape | Outil | Rôle |
+        |---|---|---|
+        | Collecte | Fluent Bit, Promtail, Filebeat | Acheminer les journaux |
+        | Stockage / recherche | Elasticsearch, Loki | Centraliser et interroger |
+        | Détection / SIEM | Wazuh, ELK, Splunk | Corréler et déclencher des alertes |
+        | Alerte | Alertmanager, webhook | Prévenir au bon moment |
+
+        Côté pipeline, on **teste** que les événements de sécurité sont bien émis (tests d'intégration), on
+        vérifie par **SAST/revue** qu'aucun secret n'est journalisé, et on configure des **alertes** sur les
+        motifs d'attaque. L'absence d'alerte à temps est précisément ce que l'édition 2025 met en avant.
+      en: |
+        Logging is not enough: you must **monitor** and **alert**. Logs nobody looks at are switched-off
+        cameras. The full chain:
+
+        1. **Centralised collection** (every service ships its logs to one place);
+        2. **Correlation** in a **SIEM** (*Security Information and Event Management*: ELK, Wazuh, Splunk);
+        3. **Detection rules** (e.g. 10 login failures in a minute → brute-force alert);
+        4. **Alert** to a person or channel, with a short delay;
+        5. **Response** and log retention for forensic analysis.
+
+        | Stage | Tool | Role |
+        |---|---|---|
+        | Collection | Fluent Bit, Promtail, Filebeat | Ship the logs |
+        | Storage / search | Elasticsearch, Loki | Centralise and query |
+        | Detection / SIEM | Wazuh, ELK, Splunk | Correlate and trigger alerts |
+        | Alerting | Alertmanager, webhook | Warn at the right time |
+
+        On the pipeline side, you **test** that security events are actually emitted (integration tests), check
+        by **SAST/review** that no secret is logged, and configure **alerts** on attack patterns. The absence
+        of timely alerting is exactly what the 2025 edition highlights.
+
+examples:
+  - title:
+      fr: "Journalisation : silencieuse ou bavarde vs structurée et sûre"
+      en: "Logging: silent or chatty vs structured and safe"
+    file: audit_log.py
+    lang: python
+    kind: secure
+    code: |
+      import json
+      import logging
+      from datetime import datetime, timezone
+
+      logging.basicConfig(level=logging.INFO, format="%(message)s")
+      log = logging.getLogger("security")
+
+      # ---------- VULNERABLE ----------
+      def login_vulnerable(user, password, ok):
+          # Problem 1: logs the PASSWORD (the log becomes a secret store)
+          # Problem 2: on failure, logs nothing useful for detection
+          if ok:
+              log.info(f"login ok {user} pw={password}")
+
+      # ---------- FIXED ----------
+      def security_event(event: str, **fields):
+          # Structured, timestamped (UTC), no secrets. Easy to parse in a SIEM.
+          record = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **fields}
+          log.info(json.dumps(record))
+
+      def login(user, ip, ok):
+          # Log BOTH success and failure, with who/where/result - never the password
+          security_event("login", user=user, ip=ip, result="success" if ok else "failure")
+
+      login("alice", "192.0.2.10", True)
+      login("bob", "192.0.2.55", False)
+    output: |
+      {"ts": "2026-01-15T10:00:00+00:00", "event": "login", "user": "alice", "ip": "192.0.2.10", "result": "success"}
+      {"ts": "2026-01-15T10:00:01+00:00", "event": "login", "user": "bob", "ip": "192.0.2.55", "result": "failure"}
+    note:
+      fr: "Cliquez sur Run (l'horodatage variera). La version corrigée journalise succès ET échec, en JSON structuré, sans jamais le mot de passe. Un SIEM peut alors compter les échecs et alerter."
+      en: "Press Run (the timestamp will vary). The fixed version logs success AND failure, in structured JSON, never the password. A SIEM can then count failures and alert."
+
+  - title:
+      fr: "Détection : compter les échecs et déclencher une alerte"
+      en: "Detection: counting failures and triggering an alert"
+    file: brute_force_alert.py
+    lang: python
+    kind: secure
+    code: |
+      import time
+      from collections import deque
+
+      class BruteForceDetector:
+          # A detection rule a SIEM would run: N failures from one IP within a window
+          def __init__(self, threshold=5, window_seconds=60):
+              self.threshold = threshold
+              self.window = window_seconds
+              self.failures: dict = {}
+
+          def record_failure(self, ip: str) -> bool:
+              now = time.time()
+              dq = self.failures.setdefault(ip, deque())
+              dq.append(now)
+              while dq and dq[0] < now - self.window:
+                  dq.popleft()                      # drop old events outside the window
+              if len(dq) >= self.threshold:
+                  return True                        # raise an alert
+              return False
+
+      detector = BruteForceDetector(threshold=5, window_seconds=60)
+      for i in range(1, 7):
+          alert = detector.record_failure("192.0.2.55")
+          print(f"failure {i} from 192.0.2.55 -> {'ALERT' if alert else 'ok'}")
+    output: |
+      failure 1 from 192.0.2.55 -> ok
+      failure 2 from 192.0.2.55 -> ok
+      failure 3 from 192.0.2.55 -> ok
+      failure 4 from 192.0.2.55 -> ok
+      failure 5 from 192.0.2.55 -> ALERT
+      failure 6 from 192.0.2.55 -> ALERT
+    note:
+      fr: "Cliquez sur Run. Journaliser les échecs ne sert que si une règle les surveille. Ici, 5 échecs en 60 s depuis une IP déclenchent une alerte : c'est le rôle du SIEM."
+      en: "Press Run. Logging failures only helps if a rule watches them. Here, 5 failures in 60 s from one IP trigger an alert: that is the SIEM's job."
+
+  - title:
+      fr: "Expédier les journaux vers une pile centralisée (Loki)"
+      en: "Shipping logs to a centralised stack (Loki)"
+    file: docker-compose.yml
+    lang: yaml
+    kind: secure
+    code: |
+      # Centralised, tamper-resistant logging: the app ships logs to Loki, queried in
+      # Grafana. An attacker on the app host cannot erase logs already shipped away.
+      services:
+        app:
+          image: example-app:1.0
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"      # rotate so disk never fills
+              max-file: "3"
+
+        promtail:
+          image: grafana/promtail:3.2.0
+          command: -config.file=/etc/promtail/config.yml
+          volumes:
+            - /var/log:/var/log:ro          # read-only access to host logs
+            - ./promtail.yml:/etc/promtail/config.yml:ro
+
+        loki:
+          image: grafana/loki:3.2.0
+          ports:
+            - "127.0.0.1:3100:3100"         # bound to localhost, not public
+
+        grafana:
+          image: grafana/grafana:11.3.0
+          ports:
+            - "127.0.0.1:3000:3000"
+    note:
+      fr: "Promtail collecte les journaux et les envoie à Loki, interrogeable dans Grafana. Centraliser hors de la machine attaquée est essentiel : des journaux locaux peuvent être effacés par l'intrus."
+      en: "Promtail collects the logs and sends them to Loki, queryable in Grafana. Centralising away from the attacked host is essential: local logs can be wiped by the intruder."
+
+mistake:
+  fr: |
+    **Journaliser des secrets, ou ne pas journaliser du tout.**
+
+    Deux extrêmes opposés, aussi dangereux l'un que l'autre. D'un côté, écrire mots de passe, jetons ou numéros
+    de carte dans les journaux « pour déboguer » : le journal, souvent moins protégé que la base, devient une
+    mine de secrets en clair et une violation de conformité. De l'autre, ne rien journaliser des événements de
+    sécurité : une attaque passe alors totalement inaperçue, et l'analyse après incident est impossible. Le bon
+    équilibre : journaliser **les événements de sécurité** (qui, quoi, quand, résultat), **jamais les secrets**,
+    puis surveiller et alerter.
+  en: |
+    **Logging secrets, or not logging at all.**
+
+    Two opposite extremes, each as dangerous as the other. On one side, writing passwords, tokens or card
+    numbers to the logs "for debugging": the log, often less protected than the database, becomes a trove of
+    clear-text secrets and a compliance breach. On the other, logging nothing about security events: an attack
+    then goes entirely unnoticed, and post-incident analysis is impossible. The right balance: log **security
+    events** (who, what, when, result), **never secrets**, then monitor and alert.
+
+bestPractice:
+  fr: |
+    - **Journalisez les événements de sécurité** : connexions, échecs, accès refusés, changements sensibles.
+    - **Jamais de secrets** dans les journaux (mots de passe, jetons, cartes, données personnelles).
+    - **Journaux structurés** (JSON), horodatés en UTC, corrélables par identifiant de requête.
+    - **Centralisation inviolable** : expédier vers un stockage que l'attaquant ne peut pas effacer.
+    - **Détection et alerte** via un SIEM (Wazuh, ELK, Splunk) avec des règles et un délai court.
+    - **Testez** en CI que les événements sont bien émis et qu'aucun secret ne fuit dans les logs.
+  en: |
+    - **Log security events**: logins, failures, denied access, sensitive changes.
+    - **Never log secrets** (passwords, tokens, cards, personal data).
+    - **Structured logs** (JSON), timestamped in UTC, correlatable by request id.
+    - **Tamper-resistant centralisation**: ship to storage the attacker cannot erase.
+    - **Detection and alerting** via a SIEM (Wazuh, ELK, Splunk) with rules and a short delay.
+    - **Test in CI** that events are emitted and that no secret leaks into the logs.
+
+exercise:
+  statement:
+    fr: |
+      Voici un extrait de journalisation d'une API :
+
+      ```python
+      def handle_login(user, password, success):
+          if success:
+              logger.info("Login for %s with password %s", user, password)
+          # nothing is logged on failure
+      ```
+
+      1. Relevez les deux problèmes (un de confidentialité, un de détection).
+      2. Réécrivez la fonction : journal structuré sans secret, succès ET échec, prêt pour une alerte de force
+         brute.
+    en: |
+      Here is a logging snippet from an API:
+
+      ```python
+      def handle_login(user, password, success):
+          if success:
+              logger.info("Login for %s with password %s", user, password)
+          # nothing is logged on failure
+      ```
+
+      1. Spot the two problems (one of confidentiality, one of detection).
+      2. Rewrite the function: structured log without secrets, success AND failure, ready for a brute-force
+         alert.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import json
+      import logging
+      from datetime import datetime, timezone
+
+      logger = logging.getLogger("security")
+
+      def handle_login(user: str, ip: str, success: bool):
+          # Problem 1: the password was logged -> secret leak. Fix: never log it.
+          # Problem 2: failures were not logged -> brute force invisible. Fix: log both.
+          logger.info(json.dumps({
+              "ts": datetime.now(timezone.utc).isoformat(),
+              "event": "login",
+              "user": user,
+              "ip": ip,
+              "result": "success" if success else "failure",
+          }))
+          # A SIEM rule then counts "result=failure" per ip/user to alert on brute force.
+    note:
+      fr: "On supprime le mot de passe du journal (confidentialité) et on journalise aussi les échecs (détection), en JSON structuré exploitable par un SIEM."
+      en: "We remove the password from the log (confidentiality) and also log failures (detection), in structured JSON a SIEM can consume."
+
+quiz:
+  - q:
+      fr: "Quelle est la conséquence principale d'une journalisation insuffisante ?"
+      en: "What is the main consequence of insufficient logging?"
+    options:
+      fr:
+        - "L'application devient plus lente"
+        - "Une attaque peut passer inaperçue et rester longtemps indétectée"
+        - "Les mots de passe deviennent plus faibles"
+        - "Le certificat TLS expire"
+      en:
+        - "The application becomes slower"
+        - "An attack can go unnoticed and remain undetected for a long time"
+        - "Passwords become weaker"
+        - "The TLS certificate expires"
+    answer: 1
+    why:
+      fr: "Sans journaux ni surveillance, une intrusion n'est ni détectée pendant qu'elle a lieu, ni analysable après coup."
+      en: "Without logs or monitoring, an intrusion is neither detected while it happens nor analysable afterwards."
+  - q:
+      fr: "Lequel de ces éléments ne doit JAMAIS apparaître dans un journal ?"
+      en: "Which of these must NEVER appear in a log?"
+    options:
+      fr:
+        - "L'identifiant de l'utilisateur"
+        - "L'adresse IP source"
+        - "Le mot de passe en clair"
+        - "Le résultat (succès/échec)"
+      en:
+        - "The user id"
+        - "The source IP address"
+        - "The clear-text password"
+        - "The result (success/failure)"
+    answer: 2
+    why:
+      fr: "Journaliser un mot de passe transforme le journal en base de secrets, souvent moins protégée que la base de données."
+      en: "Logging a password turns the log into a secret store, often less protected than the database."
+  - q:
+      fr: "Pourquoi centraliser les journaux hors de la machine applicative ?"
+      en: "Why centralise logs away from the application host?"
+    options:
+      fr:
+        - "Pour que l'attaquant ne puisse pas les effacer"
+        - "Pour réduire la taille des cookies"
+        - "Pour accélérer l'application"
+        - "Pour éviter d'utiliser HTTPS"
+      en:
+        - "So the attacker cannot erase them"
+        - "To reduce cookie size"
+        - "To speed up the application"
+        - "To avoid using HTTPS"
+    answer: 0
+    why:
+      fr: "Un intrus sur la machine peut supprimer les journaux locaux ; les expédier vers un stockage centralisé préserve les preuves."
+      en: "An intruder on the host can delete local logs; shipping them to central storage preserves the evidence."
+  - q:
+      fr: "Que fait un SIEM ?"
+      en: "What does a SIEM do?"
+    options:
+      fr:
+        - "Il chiffre les bases de données"
+        - "Il remplace le pare-feu"
+        - "Il corrèle les journaux et déclenche des alertes selon des règles"
+        - "Il compile le code source"
+      en:
+        - "It encrypts databases"
+        - "It replaces the firewall"
+        - "It correlates logs and triggers alerts based on rules"
+        - "It compiles the source code"
+    answer: 2
+    why:
+      fr: "Le SIEM (ELK, Wazuh, Splunk) centralise et corrèle les journaux, puis déclenche des alertes sur les motifs d'attaque."
+      en: "The SIEM (ELK, Wazuh, Splunk) centralises and correlates logs, then triggers alerts on attack patterns."
+  - q:
+      fr: "Pourquoi journaliser aussi les connexions en échec ?"
+      en: "Why also log failed logins?"
+    options:
+      fr:
+        - "Pour ralentir les attaquants"
+        - "Pour détecter la force brute et le credential stuffing"
+        - "Parce que la loi l'impose partout"
+        - "Pour économiser de l'espace disque"
+      en:
+        - "To slow attackers down"
+        - "To detect brute force and credential stuffing"
+        - "Because the law requires it everywhere"
+        - "To save disk space"
+    answer: 1
+    why:
+      fr: "Une rafale d'échecs révèle une attaque par force brute ; sans journaliser les échecs, aucune règle ne peut la détecter."
+      en: "A burst of failures reveals a brute-force attack; without logging failures, no rule can detect it."

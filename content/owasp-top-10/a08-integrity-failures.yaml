@@ -1,0 +1,388 @@
+description:
+  fr: "A08 Manque d'intégrité des données et du logiciel : désérialisation non sûre, mises à jour non signées et CDN sans SRI, avec correctifs."
+  en: "A08 Software and Data Integrity Failures: insecure deserialization, unsigned updates and CDN without SRI, with fixes."
+duration: 25
+
+intro:
+  fr: |
+    **A08 - Software and Data Integrity Failures** (manque d'intégrité des données et du logiciel) est une
+    catégorie **nouvelle en 2021**. Elle concerne tout ce qui est accepté **sans vérifier qu'il n'a pas été
+    modifié** : un objet désérialisé, une mise à jour logicielle, un script chargé depuis un CDN, un artefact
+    produit par un pipeline. L'ancienne faille *Insecure Deserialization* y a été intégrée.
+
+    Imaginez que vous receviez un colis « de la part du fabricant » et que vous le branchiez directement sur
+    votre réseau, sans vérifier ni l'expéditeur ni le sceau. Si un intermédiaire a ouvert et trafiqué le colis,
+    vous installez vous-même la menace. L'intégrité, c'est vérifier le **sceau** (signature, somme de contrôle)
+    avant d'accorder sa confiance, à chaque étape.
+
+    Dans cette leçon, vous verrez trois formes - **désérialisation non sûre** (pickle), **mise à jour non
+    signée** et **script CDN sans SRI** - en version vulnérable puis corrigée, et comment le pipeline protège
+    la chaîne d'approvisionnement (signature Sigstore/cosign, vérification de hachage, SRI).
+  en: |
+    **A08 - Software and Data Integrity Failures** is a **new category in 2021**. It is about anything accepted
+    **without verifying it has not been modified**: a deserialized object, a software update, a script loaded
+    from a CDN, an artifact produced by a pipeline. The former *Insecure Deserialization* flaw was folded into
+    it.
+
+    Picture receiving a parcel "from the manufacturer" and plugging it straight into your network without
+    checking the sender or the seal. If someone in between opened and tampered with it, you install the threat
+    yourself. Integrity means checking the **seal** (signature, checksum) before granting trust, at every step.
+
+    In this lesson you will see three forms - **insecure deserialization** (pickle), **unsigned update** and
+    **CDN script without SRI** - vulnerable then fixed, and how the pipeline protects the supply chain
+    (Sigstore/cosign signing, hash verification, SRI).
+
+sections:
+  - heading:
+      fr: "Les formes de manque d'intégrité"
+      en: "The forms of integrity failure"
+    body:
+      fr: |
+        | Forme | Exemple | Risque | Correction |
+        |---|---|---|---|
+        | Désérialisation non sûre | `pickle.loads` sur une entrée externe | Exécution de code arbitraire | Format de données sans code (JSON) |
+        | Mise à jour non signée | Télécharger et exécuter un binaire | Binaire trafiqué, backdoor | Signature vérifiée (cosign, GPG) |
+        | Dépendance non vérifiée | `curl ... | bash` sans contrôle | Chaîne d'approvisionnement compromise | Hachage épinglé, dépôt de confiance |
+        | Script CDN sans SRI | `<script src="cdn...">` nu | CDN compromis = XSS sur tous les visiteurs | Attribut `integrity` (SRI) |
+        | Pipeline CI/CD non protégé | Artefact modifiable entre build et déploiement | Code malveillant injecté | Attestations, provenance (SLSA) |
+
+        Le point commun : on **fait confiance** à un contenu sans prouver son origine ni son intégrité. La
+        désérialisation est le cas le plus dangereux car certains formats (pickle Python, `ObjectInputStream`
+        Java, `unserialize` PHP, YAML non sûr) peuvent **instancier des objets et exécuter du code** au moment
+        de la lecture. La règle : ne jamais désérialiser une donnée **non fiable** avec un format qui porte du
+        code ; préférer un format **de données pures** (JSON) et valider le schéma.
+      en: |
+        | Form | Example | Risk | Fix |
+        |---|---|---|---|
+        | Insecure deserialization | `pickle.loads` on external input | Arbitrary code execution | Code-free data format (JSON) |
+        | Unsigned update | Download and run a binary | Tampered binary, backdoor | Verified signature (cosign, GPG) |
+        | Unverified dependency | `curl ... | bash` with no check | Compromised supply chain | Pinned hash, trusted registry |
+        | CDN script without SRI | A bare `<script src="cdn...">` | Compromised CDN = XSS on all visitors | `integrity` attribute (SRI) |
+        | Unprotected CI/CD pipeline | Artifact mutable between build and deploy | Injected malicious code | Attestations, provenance (SLSA) |
+
+        The common thread: you **trust** content without proving its origin or integrity. Deserialization is the
+        most dangerous case because some formats (Python pickle, Java `ObjectInputStream`, PHP `unserialize`,
+        unsafe YAML) can **instantiate objects and execute code** on read. The rule: never deserialize
+        **untrusted** data with a format that carries code; prefer a **pure-data** format (JSON) and validate
+        the schema.
+  - heading:
+      fr: "Protéger la chaîne d'approvisionnement"
+      en: "Protecting the supply chain"
+    body:
+      fr: |
+        L'intégrité se vérifie par la **cryptographie** : signatures et sommes de contrôle.
+
+        - **Désérialisation** : JSON pour les données externes ; si un format binaire est nécessaire, signer le
+          message (HMAC) et vérifier la signature **avant** de le lire.
+        - **Mises à jour et artefacts** : signer avec **cosign/Sigstore** (ou GPG) et vérifier la signature
+          avant d'exécuter ; épingler les hachages des dépendances (lockfiles).
+        - **Scripts tiers** : ajouter l'attribut **SRI** (`integrity="sha384-..."`) pour que le navigateur
+          refuse un script dont le hachage ne correspond pas.
+        - **Provenance** : le cadre **SLSA** décrit des niveaux d'attestation prouvant *comment* un artefact a
+          été construit.
+
+        Côté pipeline, le **SAST** repère `pickle.loads`/`yaml.load` non sûrs ; le **SCA** et la signature
+        (**cosign verify**) protègent la chaîne d'approvisionnement ; la vérification des hachages et SLSA
+        garantissent qu'un artefact déployé est bien celui qui a été construit et testé. Cette catégorie
+        recoupe le thème **Software Supply Chain** devenu central dans l'édition 2025.
+      en: |
+        Integrity is verified with **cryptography**: signatures and checksums.
+
+        - **Deserialization**: JSON for external data; if a binary format is required, sign the message (HMAC)
+          and verify the signature **before** reading it.
+        - **Updates and artifacts**: sign with **cosign/Sigstore** (or GPG) and verify the signature before
+          executing; pin dependency hashes (lockfiles).
+        - **Third-party scripts**: add the **SRI** attribute (`integrity="sha384-..."`) so the browser refuses
+          a script whose hash does not match.
+        - **Provenance**: the **SLSA** framework describes attestation levels proving *how* an artifact was
+          built.
+
+        On the pipeline side, **SAST** spots unsafe `pickle.loads`/`yaml.load`; **SCA** and signing (**cosign
+        verify**) protect the supply chain; hash verification and SLSA guarantee that a deployed artifact is
+        the one that was built and tested. This category overlaps the **Software Supply Chain** theme that
+        became central in the 2025 edition.
+
+examples:
+  - title:
+      fr: "Désérialisation : pickle vulnérable vs JSON corrigé"
+      en: "Deserialization: vulnerable pickle vs fixed JSON"
+    file: deserialize.py
+    lang: python
+    kind: secure
+    code: |
+      import json
+      import pickle
+      import base64
+
+      # ---------- VULNERABLE ----------
+      def load_vulnerable(data: bytes):
+          # pickle can instantiate arbitrary objects and run code on load.
+          # A crafted payload executes commands the moment this line runs.
+          return pickle.loads(data)              # Bandit flags this (B301)
+
+      # ---------- FIXED ----------
+      def load_fixed(text: str) -> dict:
+          # JSON only carries data (dict, list, str, number) - never code.
+          obj = json.loads(text)
+          if not isinstance(obj, dict) or "user" not in obj:
+              raise ValueError("unexpected payload")   # validate the shape
+          return obj
+
+      # Safe demonstration: a benign dict, serialized both ways
+      safe = {"user": "alice", "role": "user"}
+      pickled = base64.b64encode(pickle.dumps(safe)).decode()
+      print("pickle round-trip (trusted only):", load_vulnerable(base64.b64decode(pickled)))
+      print("json   round-trip (untrusted ok):", load_fixed(json.dumps(safe)))
+    output: |
+      pickle round-trip (trusted only): {'user': 'alice', 'role': 'user'}
+      json   round-trip (untrusted ok): {'user': 'alice', 'role': 'user'}
+    note:
+      fr: "Cliquez sur Run. Les deux lisent le même dictionnaire, mais `pickle` sur une entrée externe permet l'exécution de code. Pour des données non fiables, utilisez JSON et validez la structure."
+      en: "Press Run. Both read the same dict, but `pickle` on external input allows code execution. For untrusted data, use JSON and validate the shape."
+
+  - title:
+      fr: "Mise à jour : exécuter sans vérifier vs signature vérifiée"
+      en: "Update: run without checking vs verified signature"
+    file: update.py
+    lang: python
+    kind: secure
+    code: |
+      import hashlib
+      import hmac
+
+      # ---------- VULNERABLE ----------
+      def apply_update_vulnerable(binary: bytes):
+          # Executes a downloaded binary with no integrity check: a tampered or
+          # man-in-the-middle payload becomes a backdoor you install yourself.
+          run(binary)  # pseudo-code
+
+      # ---------- FIXED ----------
+      # The publisher shares an expected hash over a trusted channel.
+      EXPECTED_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+      def verify_and_apply(binary: bytes) -> bool:
+          digest = hashlib.sha256(binary).hexdigest()
+          # compare_digest avoids a timing side channel on the comparison
+          if not hmac.compare_digest(digest, EXPECTED_SHA256):
+              raise ValueError("integrity check failed - update rejected")
+          # In real pipelines: cosign verify <artifact> against a Sigstore signature
+          return True
+
+      # Demo: an empty payload matches the well-known empty-SHA256 above
+      print("empty payload verified:", verify_and_apply(b""))
+    output: |
+      empty payload verified: True
+    note:
+      fr: "On vérifie le hachage (idéalement une **signature** cosign/GPG) avant d'exécuter. `compare_digest` évite une fuite temporelle. Un binaire modifié échoue le contrôle et est rejeté."
+      en: "We verify the hash (ideally a cosign/GPG **signature**) before executing. `compare_digest` avoids a timing leak. A modified binary fails the check and is rejected."
+
+  - title:
+      fr: "Script CDN : sans SRI vulnérable vs avec integrity"
+      en: "CDN script: without SRI vulnerable vs with integrity"
+    file: index.html
+    lang: html
+    kind: secure
+    code: |
+      <!doctype html>
+      <html>
+        <head>
+          <!-- VULNERABLE: if the CDN is compromised, the swapped script runs on
+               every visitor's page with full access to the DOM and cookies. -->
+          <!-- <script src="https://cdn.example.com/lib.js"></script> -->
+
+          <!-- FIXED: Subresource Integrity (SRI). The browser computes the hash of
+               the fetched file and refuses to run it unless it matches. -->
+          <script
+            src="https://cdn.example.com/lib.js"
+            integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC"
+            crossorigin="anonymous"></script>
+        </head>
+        <body>
+          <p>Page using a pinned, integrity-checked third-party script.</p>
+        </body>
+      </html>
+    note:
+      fr: "L'attribut `integrity` (SRI) lie le script à un hachage attendu : un CDN compromis qui modifie `lib.js` verra le navigateur **refuser** de l'exécuter. `crossorigin` est requis pour la vérification."
+      en: "The `integrity` attribute (SRI) binds the script to an expected hash: a compromised CDN that alters `lib.js` will have the browser **refuse** to run it. `crossorigin` is required for the check."
+
+mistake:
+  fr: |
+    **Désérialiser une donnée non fiable avec un format qui porte du code.**
+
+    `pickle.loads`, `yaml.load` (non sûr), `ObjectInputStream` en Java ou `unserialize` en PHP ne font pas que
+    reconstruire des données : ils peuvent **instancier des objets et déclencher du code** pendant la lecture.
+    Appliqués à une entrée venant d'un utilisateur, d'un cookie ou d'un message de file, ils offrent une
+    exécution de code à distance. La règle est simple : pour toute donnée externe, utilisez un format **de
+    données pures** (JSON) et validez sa structure ; réservez les formats qui portent du code aux échanges
+    **internes et de confiance**, idéalement signés.
+  en: |
+    **Deserializing untrusted data with a format that carries code.**
+
+    `pickle.loads`, unsafe `yaml.load`, Java `ObjectInputStream` or PHP `unserialize` do not merely rebuild
+    data: they can **instantiate objects and trigger code** during the read. Applied to input from a user, a
+    cookie or a queue message, they offer remote code execution. The rule is simple: for any external data,
+    use a **pure-data** format (JSON) and validate its shape; reserve code-carrying formats for **internal,
+    trusted** exchanges, ideally signed.
+
+bestPractice:
+  fr: |
+    - **Pas de désérialisation non sûre** sur des données externes : JSON + validation de schéma.
+    - **Signez et vérifiez** les mises à jour et artefacts (cosign/Sigstore, GPG) avant exécution.
+    - **Épinglez les hachages** des dépendances (lockfiles) et installez depuis des dépôts de confiance.
+    - **SRI** (`integrity`) sur tout script ou feuille de style chargés depuis un CDN tiers.
+    - **Protégez le pipeline CI/CD** : attestations de provenance (SLSA), artefacts immuables, accès restreint.
+    - **SAST + SCA en CI** pour détecter `pickle.loads`/`yaml.load` non sûrs et les dépendances non vérifiées.
+  en: |
+    - **No insecure deserialization** of external data: JSON + schema validation.
+    - **Sign and verify** updates and artifacts (cosign/Sigstore, GPG) before execution.
+    - **Pin dependency hashes** (lockfiles) and install from trusted registries.
+    - **SRI** (`integrity`) on every script or stylesheet loaded from a third-party CDN.
+    - **Protect the CI/CD pipeline**: provenance attestations (SLSA), immutable artifacts, restricted access.
+    - **SAST + SCA in CI** to detect unsafe `pickle.loads`/`yaml.load` and unverified dependencies.
+
+exercise:
+  statement:
+    fr: |
+      Un microservice reçoit des messages d'une file et exécute :
+
+      ```python
+      import pickle
+      def handle(message_bytes):
+          task = pickle.loads(message_bytes)   # message from an external queue
+          run(task)
+      ```
+
+      Par ailleurs, l'équipe charge jQuery depuis un CDN avec `<script src="https://cdn.example.com/jquery.js">`.
+
+      1. Expliquez la faille d'intégrité dans chaque cas (désérialisation, script CDN).
+      2. Proposez une correction pour chacun.
+    en: |
+      A microservice receives messages from a queue and runs:
+
+      ```python
+      import pickle
+      def handle(message_bytes):
+          task = pickle.loads(message_bytes)   # message from an external queue
+          run(task)
+      ```
+
+      Separately, the team loads jQuery from a CDN with `<script src="https://cdn.example.com/jquery.js">`.
+
+      1. Explain the integrity flaw in each case (deserialization, CDN script).
+      2. Propose a fix for each.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import json
+
+      # 1a. pickle.loads on an external message allows remote code execution.
+      #     Fix: use JSON (data only) and validate the structure before acting.
+      ALLOWED_TASKS = {"resize", "email", "report"}
+
+      def handle(message_text: str):
+          task = json.loads(message_text)
+          if not isinstance(task, dict) or task.get("type") not in ALLOWED_TASKS:
+              raise ValueError("invalid task")      # deny unknown shapes/types
+          run(task)
+
+      # 1b. Bare CDN <script> has no integrity check: a compromised CDN runs on
+      #     every page. Fix: add Subresource Integrity + crossorigin, e.g.
+      #   <script src="https://cdn.example.com/jquery.js"
+      #           integrity="sha384-<hash-of-the-exact-file>"
+      #           crossorigin="anonymous"></script>
+    note:
+      fr: "On remplace `pickle` par JSON validé (données pures, pas de code) et on ajoute SRI au script CDN pour que le navigateur refuse un fichier modifié. Les deux rétablissent la vérification d'intégrité."
+      en: "We replace `pickle` with validated JSON (pure data, no code) and add SRI to the CDN script so the browser refuses a modified file. Both restore integrity verification."
+
+quiz:
+  - q:
+      fr: "Pourquoi `pickle.loads` sur une entrée externe est-il dangereux ?"
+      en: "Why is `pickle.loads` on external input dangerous?"
+    options:
+      fr:
+        - "Il est trop lent"
+        - "Il peut instancier des objets et exécuter du code à la lecture"
+        - "Il ne gère pas l'UTF-8"
+        - "Il consomme trop de mémoire"
+      en:
+        - "It is too slow"
+        - "It can instantiate objects and execute code on read"
+        - "It does not handle UTF-8"
+        - "It uses too much memory"
+    answer: 1
+    why:
+      fr: "pickle reconstruit des objets arbitraires et peut déclencher du code ; une charge forgée donne une exécution de code à distance."
+      en: "pickle rebuilds arbitrary objects and can trigger code; a crafted payload yields remote code execution."
+  - q:
+      fr: "Quel format préférer pour désérialiser une donnée non fiable ?"
+      en: "Which format is preferable to deserialize untrusted data?"
+    options:
+      fr:
+        - "pickle"
+        - "Java ObjectInputStream"
+        - "JSON avec validation de schéma"
+        - "YAML non sûr (load)"
+      en:
+        - "pickle"
+        - "Java ObjectInputStream"
+        - "JSON with schema validation"
+        - "Unsafe YAML (load)"
+    answer: 2
+    why:
+      fr: "JSON ne transporte que des données (pas de code) ; en validant la structure, on évite l'exécution et les objets inattendus."
+      en: "JSON carries only data (no code); validating the shape avoids execution and unexpected objects."
+  - q:
+      fr: "À quoi sert l'attribut `integrity` (SRI) sur une balise script ?"
+      en: "What is the `integrity` attribute (SRI) on a script tag for?"
+    options:
+      fr:
+        - "À accélérer le chargement du script"
+        - "À faire refuser par le navigateur un script dont le hachage ne correspond pas"
+        - "À chiffrer le script"
+        - "À minifier le script"
+      en:
+        - "To speed up loading the script"
+        - "To make the browser refuse a script whose hash does not match"
+        - "To encrypt the script"
+        - "To minify the script"
+    answer: 1
+    why:
+      fr: "Le SRI lie le script à un hachage attendu : si un CDN compromis le modifie, le navigateur refuse de l'exécuter."
+      en: "SRI binds the script to an expected hash: if a compromised CDN alters it, the browser refuses to run it."
+  - q:
+      fr: "Comment garantir l'intégrité d'une mise à jour logicielle avant de l'exécuter ?"
+      en: "How do you guarantee the integrity of a software update before running it?"
+    options:
+      fr:
+        - "En vérifiant sa signature ou son hachage (cosign, GPG)"
+        - "En la téléchargeant plus vite"
+        - "En l'exécutant dans le navigateur"
+        - "En la renommant"
+      en:
+        - "By verifying its signature or hash (cosign, GPG)"
+        - "By downloading it faster"
+        - "By running it in the browser"
+        - "By renaming it"
+    answer: 0
+    why:
+      fr: "Une signature (ou un hachage de confiance) prouve que l'artefact n'a pas été modifié depuis sa publication ; on vérifie avant d'exécuter."
+      en: "A signature (or a trusted hash) proves the artifact was not modified since publication; you verify before executing."
+  - q:
+      fr: "Quelle ancienne faille l'édition 2021 a-t-elle intégrée dans A08 ?"
+      en: "Which former flaw did the 2021 edition fold into A08?"
+    options:
+      fr:
+        - "L'injection SQL"
+        - "Le CSRF"
+        - "La désérialisation non sûre (Insecure Deserialization)"
+        - "Le clickjacking"
+      en:
+        - "SQL injection"
+        - "CSRF"
+        - "Insecure Deserialization"
+        - "Clickjacking"
+    answer: 2
+    why:
+      fr: "La désérialisation non sûre est devenue une composante d'A08, aux côtés des mises à jour et pipelines non vérifiés."
+      en: "Insecure deserialization became a component of A08, alongside unverified updates and pipelines."

@@ -1,0 +1,408 @@
+description:
+  fr: "Comprendre comment le web fonctionne avec HTTP, pourquoi HTTPS le chiffre avec TLS, et comment lire une requête et un certificat."
+  en: "Understand how the web works with HTTP, why HTTPS encrypts it with TLS, and how to read a request and a certificate."
+duration: 24
+
+intro:
+  fr: |
+    Chaque fois que vous ouvrez une page web, deux machines dialoguent avec un langage précis : **HTTP**
+    (*HyperText Transfer Protocol*). Votre navigateur **demande** une page, le serveur **répond**. C'est une
+    conversation en questions-réponses, et savoir la lire est fondamental : les failles web les plus courantes
+    se jouent dans ces échanges.
+
+    Imaginez commander dans un restaurant. Vous passez commande (la **requête**), le serveur apporte le plat
+    (la **réponse**). Avec HTTP, tout se dit à voix haute dans la salle : n'importe qui peut écouter. Avec
+    **HTTPS**, la même conversation se tient dans une **cabine insonorisée et chiffrée** : personne ne peut ni
+    écouter, ni se faire passer pour le restaurant. Le `s` de HTTPS, c'est *secure*.
+
+    Dans cette leçon, vous allez voir la structure d'une requête et d'une réponse HTTP, comprendre les fameux
+    codes (200, 404, 403…), découvrir comment **TLS** chiffre la connexion dans HTTPS, et inspecter un
+    certificat avec de vraies commandes.
+  en: |
+    Every time you open a web page, two machines talk using a precise language: **HTTP** (*HyperText Transfer
+    Protocol*). Your browser **requests** a page, the server **responds**. It is a question-and-answer
+    conversation, and reading it is fundamental: the most common web flaws play out in these exchanges.
+
+    Picture ordering at a restaurant. You place an order (the **request**), the waiter brings the dish (the
+    **response**). With HTTP, everything is said out loud in the room: anyone can listen. With **HTTPS**, the
+    same conversation happens in a **soundproof, encrypted booth**: no one can eavesdrop, nor impersonate the
+    restaurant. The `s` in HTTPS stands for *secure*.
+
+    In this lesson you will see the structure of an HTTP request and response, understand the famous codes
+    (200, 404, 403…), discover how **TLS** encrypts the connection in HTTPS, and inspect a certificate with
+    real commands.
+
+sections:
+  - heading:
+      fr: "Requête, réponse et méthodes"
+      en: "Request, response and methods"
+    body:
+      fr: |
+        Un échange HTTP a toujours deux temps : une **requête** du client, une **réponse** du serveur. La
+        requête commence par une **méthode**, qui dit quelle action on veut :
+
+        | Méthode | Intention | Exemple |
+        |---|---|---|
+        | `GET` | **Lire** une ressource | Afficher une page |
+        | `POST` | **Envoyer** des données | Soumettre un formulaire |
+        | `PUT` | **Remplacer** une ressource | Mettre à jour un profil |
+        | `DELETE` | **Supprimer** une ressource | Effacer un compte |
+
+        Une distinction de sécurité importante : `GET` ne devrait **que lire**, jamais modifier. Les paramètres
+        d'un `GET` apparaissent dans l'URL (`/recherche?q=chat`), donc dans les journaux et l'historique : on n'y
+        met **jamais** de mot de passe ni de donnée sensible. Les données sensibles passent par `POST`, dans le
+        corps de la requête.
+
+        La requête et la réponse se composent d'une ligne de départ, d'**en-têtes** (*headers*) — des couples
+        `Nom: valeur` qui décrivent l'échange — puis éventuellement d'un **corps** (le contenu). On va voir tout
+        cela sur un vrai échange.
+      en: |
+        An HTTP exchange always has two beats: a **request** from the client, a **response** from the server.
+        The request begins with a **method**, which states the action wanted:
+
+        | Method | Intent | Example |
+        |---|---|---|
+        | `GET` | **Read** a resource | Display a page |
+        | `POST` | **Send** data | Submit a form |
+        | `PUT` | **Replace** a resource | Update a profile |
+        | `DELETE` | **Delete** a resource | Remove an account |
+
+        An important security distinction: `GET` should **only read**, never modify. A `GET`'s parameters appear
+        in the URL (`/search?q=cat`), hence in logs and history: you **never** put a password or sensitive data
+        there. Sensitive data goes through `POST`, in the request body.
+
+        The request and response are made of a start line, **headers** — `Name: value` pairs describing the
+        exchange — then possibly a **body** (the content). We will see all of this on a real exchange.
+  - heading:
+      fr: "Les codes de statut"
+      en: "Status codes"
+    body:
+      fr: |
+        Le serveur répond toujours avec un **code de statut** à trois chiffres, qui résume le résultat. Le
+        premier chiffre donne la famille :
+
+        | Famille | Sens | Exemples |
+        |---|---|---|
+        | `2xx` | **Succès** | `200 OK`, `201 Created` |
+        | `3xx` | **Redirection** | `301 Moved Permanently`, `302 Found` |
+        | `4xx` | **Erreur du client** | `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found` |
+        | `5xx` | **Erreur du serveur** | `500 Internal Server Error`, `503 Service Unavailable` |
+
+        Deux codes à bien distinguer en sécurité :
+
+        - **401 Unauthorized** : « je ne sais pas qui tu es, authentifie-toi d'abord ».
+        - **403 Forbidden** : « je sais qui tu es, mais tu n'as pas le droit ».
+
+        Un point d'attention : les messages d'erreur `5xx` ne doivent **jamais** révéler de détails techniques
+        (chemin de fichier, requête SQL, version du serveur) à l'utilisateur. Ces informations aident un
+        attaquant à préparer son intrusion. On affiche un message générique et on garde le détail dans les
+        journaux internes.
+      en: |
+        The server always answers with a three-digit **status code** summarising the result. The first digit
+        gives the family:
+
+        | Family | Meaning | Examples |
+        |---|---|---|
+        | `2xx` | **Success** | `200 OK`, `201 Created` |
+        | `3xx` | **Redirection** | `301 Moved Permanently`, `302 Found` |
+        | `4xx` | **Client error** | `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found` |
+        | `5xx` | **Server error** | `500 Internal Server Error`, `503 Service Unavailable` |
+
+        Two codes to tell apart in security:
+
+        - **401 Unauthorized**: "I do not know who you are, authenticate first".
+        - **403 Forbidden**: "I know who you are, but you are not allowed".
+
+        A point of attention: `5xx` error messages must **never** reveal technical details (file path, SQL
+        query, server version) to the user. Such information helps an attacker prepare their intrusion. You show
+        a generic message and keep the detail in the internal logs.
+  - heading:
+      fr: "HTTPS : chiffrer et prouver l'identité avec TLS"
+      en: "HTTPS: encrypting and proving identity with TLS"
+    body:
+      fr: |
+        **HTTPS** est HTTP enveloppé dans **TLS** (*Transport Layer Security*), le successeur de SSL. TLS
+        apporte trois garanties :
+
+        1. **Confidentialité** : la conversation est chiffrée ; un espion sur le réseau ne voit que du charabia.
+        2. **Intégrité** : si un intermédiaire modifie les données en route, c'est détecté.
+        3. **Authenticité** : le serveur prouve son identité avec un **certificat**, signé par une autorité de
+           confiance (*Certificate Authority*, CA). On est sûr de parler au vrai site, pas à un imposteur.
+
+        À l'ouverture d'une connexion HTTPS, client et serveur réalisent une **poignée de main TLS** : le serveur
+        présente son certificat, le navigateur le vérifie (est-il valide ? signé par une CA connue ? au bon nom
+        de domaine ?), puis ils se mettent d'accord sur une clé pour chiffrer la suite.
+
+        | | HTTP | HTTPS |
+        |---|---|---|
+        | Chiffré | Non | Oui (TLS) |
+        | Identité vérifiée | Non | Oui (certificat) |
+        | Port par défaut | 80 | 443 |
+        | Mot de passe interceptable | Oui | Non |
+
+        Aujourd'hui, **HTTPS partout** (*HTTPS everywhere*) est la règle, même pour un simple blog. Les
+        certificats sont gratuits (via Let's Encrypt) et se renouvellent automatiquement. Un site encore en HTTP
+        simple expose les mots de passe et les cookies de ses visiteurs à quiconque écoute le réseau.
+      en: |
+        **HTTPS** is HTTP wrapped in **TLS** (*Transport Layer Security*), the successor to SSL. TLS brings three
+        guarantees:
+
+        1. **Confidentiality**: the conversation is encrypted; an eavesdropper on the network sees only
+           gibberish.
+        2. **Integrity**: if a middleman alters the data in transit, it is detected.
+        3. **Authenticity**: the server proves its identity with a **certificate**, signed by a trusted
+           authority (*Certificate Authority*, CA). You are sure you are talking to the real site, not an
+           impostor.
+
+        When an HTTPS connection opens, client and server perform a **TLS handshake**: the server presents its
+        certificate, the browser checks it (is it valid? signed by a known CA? for the right domain name?), then
+        they agree on a key to encrypt the rest.
+
+        | | HTTP | HTTPS |
+        |---|---|---|
+        | Encrypted | No | Yes (TLS) |
+        | Identity verified | No | Yes (certificate) |
+        | Default port | 80 | 443 |
+        | Password interceptable | Yes | No |
+
+        Today, **HTTPS everywhere** is the rule, even for a simple blog. Certificates are free (via Let's
+        Encrypt) and renew automatically. A site still on plain HTTP exposes its visitors' passwords and cookies
+        to anyone listening on the network.
+
+examples:
+  - title:
+      fr: "Voir une vraie requête et sa réponse avec curl"
+      en: "Seeing a real request and its response with curl"
+    file: curl-http.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # -v (verbose) shows the full request (>) and response (<), headers included
+      curl -v https://example.com
+    output: |
+      > GET / HTTP/2
+      > Host: example.com
+      > User-Agent: curl/8.5.0
+      > Accept: */*
+      >
+      < HTTP/2 200
+      < content-type: text/html; charset=UTF-8
+      < date: Tue, 03 Jun 2027 13:10:44 GMT
+      < content-length: 1256
+      <
+      <!doctype html>
+      <html>...</html>
+    note:
+      fr: "Les lignes `>` sont la requête (méthode `GET`, en-tête `Host`), les lignes `<` la réponse (code `200`, en-têtes, puis le corps HTML). `curl -v` est l'outil idéal pour voir exactement ce qui circule, sans l'habillage du navigateur."
+      en: "The `>` lines are the request (method `GET`, `Host` header), the `<` lines the response (code `200`, headers, then the HTML body). `curl -v` is the ideal tool to see exactly what travels, without the browser's dressing."
+
+  - title:
+      fr: "Lire uniquement le code de statut et les en-têtes"
+      en: "Reading only the status code and headers"
+    file: curl-headers.sh
+    lang: bash
+    kind: secure
+    code: |
+      # -I sends a HEAD request: headers only, no body. Great for a quick check.
+      curl -I https://example.com
+
+      # Check a page that requires login: expect 401 or 403
+      curl -s -o /dev/null -w "%{http_code}\n" https://example.com/admin
+    output: |
+      HTTP/2 200
+      content-type: text/html; charset=UTF-8
+      strict-transport-security: max-age=63072000
+      content-length: 1256
+
+      403
+    note:
+      fr: "L'en-tête `strict-transport-security` force le navigateur à n'utiliser que HTTPS : une bonne pratique de sécurité. Le `403` sur `/admin` confirme que l'accès est refusé. `-w \"%{http_code}\"` n'affiche que le code, pratique pour un script."
+      en: "The `strict-transport-security` header forces the browser to use only HTTPS: a good security practice. The `403` on `/admin` confirms access is denied. `-w \"%{http_code}\"` prints only the code, handy in a script."
+
+  - title:
+      fr: "Inspecter le certificat TLS d'un site"
+      en: "Inspecting a site's TLS certificate"
+    file: inspect-cert.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Connect over TLS and show the certificate dates and subject
+      echo | openssl s_client -connect example.com:443 -servername example.com 2>/dev/null \
+        | openssl x509 -noout -subject -issuer -dates
+    output: |
+      subject=CN=example.com
+      issuer=C=US, O=Let's Encrypt, CN=R3
+      notBefore=May  2 00:00:00 2027 GMT
+      notAfter=Jul 31 23:59:59 2027 GMT
+    note:
+      fr: "Le certificat indique le domaine (`CN=example.com`), l'autorité qui l'a signé (`Let's Encrypt`) et sa période de validité. Vérifier `notAfter` évite la panne classique : un certificat **expiré** fait afficher une alerte de sécurité à tous les visiteurs."
+      en: "The certificate shows the domain (`CN=example.com`), the authority that signed it (`Let's Encrypt`) and its validity window. Checking `notAfter` avoids the classic outage: an **expired** certificate shows a security warning to every visitor."
+
+mistake:
+  fr: |
+    **Croire qu'un cadenas HTTPS signifie « site de confiance », ou laisser un site en HTTP simple.**
+
+    Le cadenas de HTTPS garantit que la connexion est **chiffrée** et que le certificat correspond bien au
+    domaine affiché — rien de plus. Un site d'hameçonnage peut parfaitement avoir un certificat valide : HTTPS
+    protège le *transport*, pas l'honnêteté du site. Vérifiez toujours le **nom de domaine**, pas seulement le
+    cadenas. À l'inverse, laisser un site en HTTP simple est une faute : mots de passe, cookies et données
+    circulent en clair, lisibles par quiconque est sur le même réseau Wi-Fi. HTTPS partout, avec des certificats
+    gratuits qui se renouvellent automatiquement, est aujourd'hui la norme minimale.
+  en: |
+    **Believing an HTTPS padlock means "trusted site", or leaving a site on plain HTTP.**
+
+    The HTTPS padlock guarantees the connection is **encrypted** and the certificate matches the domain shown —
+    nothing more. A phishing site can perfectly well have a valid certificate: HTTPS protects the *transport*,
+    not the site's honesty. Always check the **domain name**, not just the padlock. Conversely, leaving a site
+    on plain HTTP is a fault: passwords, cookies and data travel in clear, readable by anyone on the same Wi-Fi.
+    HTTPS everywhere, with free auto-renewing certificates, is today the minimum standard.
+
+bestPractice:
+  fr: |
+    - **HTTPS partout** : même un simple site a besoin de TLS ; les certificats sont gratuits et automatiques.
+    - **Jamais de secret dans une URL** : mots de passe et jetons passent par `POST`, pas en paramètre `GET`.
+    - **Messages d'erreur génériques** : une réponse `5xx` ne doit pas révéler de chemin, de requête SQL ni de version.
+    - **Surveillez l'expiration des certificats** : un certificat expiré coupe l'accès et alarme les visiteurs.
+    - **Activez `Strict-Transport-Security`** : force le navigateur à n'utiliser que HTTPS pour votre domaine.
+    - **Vérifiez le domaine, pas que le cadenas** : HTTPS prouve le transport, pas l'honnêteté du site.
+  en: |
+    - **HTTPS everywhere**: even a simple site needs TLS; certificates are free and automatic.
+    - **Never a secret in a URL**: passwords and tokens go through `POST`, not a `GET` parameter.
+    - **Generic error messages**: a `5xx` response must not reveal a path, a SQL query or a version.
+    - **Watch certificate expiry**: an expired certificate cuts access and alarms visitors.
+    - **Enable `Strict-Transport-Security`**: forces the browser to use only HTTPS for your domain.
+    - **Check the domain, not just the padlock**: HTTPS proves transport, not the site's honesty.
+
+exercise:
+  statement:
+    fr: |
+      En utilisant `curl` et `openssl` contre un site public que vous avez le droit de tester (par exemple
+      `example.com`), répondez aux points suivants :
+
+      1. Affichez uniquement les en-têtes de la réponse de la page d'accueil.
+      2. Récupérez le code de statut HTTP d'une page qui n'existe pas (par exemple `/page-inexistante`).
+      3. Affichez la date d'expiration (`notAfter`) du certificat TLS du site.
+      4. Expliquez en une phrase la différence entre un code `401` et un code `403`.
+
+      Notez vos commandes et vos réponses dans votre dépôt de suivi.
+    en: |
+      Using `curl` and `openssl` against a public site you are allowed to test (for example `example.com`),
+      answer the following:
+
+      1. Show only the response headers of the home page.
+      2. Get the HTTP status code of a page that does not exist (for example `/nonexistent-page`).
+      3. Show the expiry date (`notAfter`) of the site's TLS certificate.
+      4. Explain in one sentence the difference between a `401` and a `403` code.
+
+      Record your commands and answers in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Response headers only (HEAD request)
+      curl -I https://example.com
+
+      # 2. Status code of a missing page (expect 404)
+      curl -s -o /dev/null -w "%{http_code}\n" https://example.com/nonexistent-page
+
+      # 3. Certificate expiry date
+      echo | openssl s_client -connect example.com:443 -servername example.com 2>/dev/null \
+        | openssl x509 -noout -enddate
+
+      # 4. 401 = "authenticate first, I don't know who you are";
+      #    403 = "I know who you are, but you are not allowed here".
+    note:
+      fr: "`curl -I` ne récupère que les en-têtes, `-w \"%{http_code}\"` isole le code. `openssl x509 -enddate` donne la date d'expiration. 401 concerne l'authentification, 403 l'autorisation : deux étapes de sécurité différentes."
+      en: "`curl -I` fetches only the headers, `-w \"%{http_code}\"` isolates the code. `openssl x509 -enddate` gives the expiry date. 401 is about authentication, 403 about authorisation: two different security steps."
+
+quiz:
+  - q:
+      fr: "Quelle méthode HTTP sert à envoyer des données sensibles comme un mot de passe ?"
+      en: "Which HTTP method is used to send sensitive data like a password?"
+    options:
+      fr:
+        - "GET, dans l'URL"
+        - "POST, dans le corps de la requête"
+        - "DELETE"
+        - "HEAD"
+      en:
+        - "GET, in the URL"
+        - "POST, in the request body"
+        - "DELETE"
+        - "HEAD"
+    answer: 1
+    why:
+      fr: "Les paramètres d'un GET apparaissent dans l'URL (journaux, historique) : on utilise POST, qui place les données dans le corps, pour toute information sensible."
+      en: "A GET's parameters appear in the URL (logs, history): you use POST, which puts the data in the body, for any sensitive information."
+  - q:
+      fr: "Que signifie un code de statut `403` ?"
+      en: "What does a `403` status code mean?"
+    options:
+      fr:
+        - "La page n'existe pas"
+        - "Le serveur a planté"
+        - "Tu es identifié, mais tu n'as pas le droit d'accéder à cette ressource"
+        - "La requête a réussi"
+      en:
+        - "The page does not exist"
+        - "The server crashed"
+        - "You are identified, but not allowed to access this resource"
+        - "The request succeeded"
+    answer: 2
+    why:
+      fr: "`403 Forbidden` signifie que l'identité est connue mais l'accès refusé ; `401` demande d'abord de s'authentifier, et `404` indique une ressource inexistante."
+      en: "`403 Forbidden` means the identity is known but access denied; `401` asks to authenticate first, and `404` indicates a missing resource."
+  - q:
+      fr: "Qu'apporte TLS à HTTPS par rapport à HTTP ?"
+      en: "What does TLS add to HTTPS compared with HTTP?"
+    options:
+      fr:
+        - "Chiffrement, intégrité et vérification de l'identité du serveur"
+        - "Un chargement plus rapide des pages"
+        - "La suppression des codes d'erreur"
+        - "Un meilleur référencement garanti"
+      en:
+        - "Encryption, integrity and verification of the server's identity"
+        - "Faster page loading"
+        - "The removal of error codes"
+        - "A guaranteed better search ranking"
+    answer: 0
+    why:
+      fr: "TLS chiffre la conversation, détecte toute altération en route et prouve l'identité du serveur via un certificat signé par une autorité de confiance."
+      en: "TLS encrypts the conversation, detects any tampering in transit and proves the server's identity through a certificate signed by a trusted authority."
+  - q:
+      fr: "Un site d'hameçonnage affiche un cadenas HTTPS valide. Qu'est-ce que cela prouve ?"
+      en: "A phishing site shows a valid HTTPS padlock. What does that prove?"
+    options:
+      fr:
+        - "Que le site est honnête et de confiance"
+        - "Seulement que la connexion est chiffrée et correspond au domaine affiché"
+        - "Que le site est certifié par le gouvernement"
+        - "Que le site ne peut pas être malveillant"
+      en:
+        - "That the site is honest and trustworthy"
+        - "Only that the connection is encrypted and matches the shown domain"
+        - "That the site is government-certified"
+        - "That the site cannot be malicious"
+    answer: 1
+    why:
+      fr: "HTTPS garantit le chiffrement du transport et la correspondance avec le domaine, pas l'honnêteté du site : il faut toujours vérifier le nom de domaine."
+      en: "HTTPS guarantees transport encryption and a match with the domain, not the site's honesty: you must always check the domain name."
+  - q:
+      fr: "Pourquoi un message d'erreur `500` ne doit-il pas révéler de détails techniques ?"
+      en: "Why should a `500` error message not reveal technical details?"
+    options:
+      fr:
+        - "Pour que la page se charge plus vite"
+        - "Parce que c'est interdit par HTTP"
+        - "Pour économiser de la bande passante"
+        - "Parce que ces détails (chemins, requêtes SQL, versions) aident un attaquant"
+      en:
+        - "To make the page load faster"
+        - "Because HTTP forbids it"
+        - "To save bandwidth"
+        - "Because those details (paths, SQL queries, versions) help an attacker"
+    answer: 3
+    why:
+      fr: "Un message d'erreur verbeux renseigne un attaquant sur la structure interne du système ; on affiche un message générique et on garde le détail dans les journaux internes."
+      en: "A verbose error message informs an attacker about the system's internal structure; you show a generic message and keep the detail in internal logs."

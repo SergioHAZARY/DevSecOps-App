@@ -1,0 +1,418 @@
+description:
+  fr: "Écrire l'application Node.js / Express sécurisée : Helmet, endpoint de santé, aucune donnée secrète en dur, tests supertest et image Docker durcie non-root."
+  en: "Write the secure Node.js / Express application: Helmet, a health endpoint, no hard-coded secrets, supertest tests and a hardened non-root Docker image."
+duration: 25
+
+intro:
+  fr: |
+    Avant de bâtir l'infrastructure AWS, il faut l'application à déployer. Ce sera une petite API
+    **Express** (le framework web le plus courant de Node.js). Comme pour le projet Flask, l'application
+    est volontairement simple : l'important, c'est qu'elle soit **sécurisée dès le code** et
+    **conteneurisée proprement**.
+
+    Trois endpoints : la racine `/` renvoie un message, `/healthz` sert de sonde de santé pour l'ALB, et
+    c'est tout. Pas de base de données, pas de secret : l'application lit sa configuration depuis
+    l'environnement.
+
+    Analogie : avant d'installer une boutique dans un grand centre commercial (AWS), on prépare un stand
+    propre, solide et aux normes (l'app + son conteneur). Dans cette leçon, on construit ce stand : le
+    code, ses tests et son image Docker durcie.
+  en: |
+    Before building the AWS infrastructure, we need the application to deploy. It will be a small
+    **Express** API (Node.js's most common web framework). As with the Flask project, the application is
+    deliberately simple: what matters is that it is **secure from the code** and **cleanly containerized**.
+
+    Three endpoints: the root `/` returns a message, `/healthz` serves as a health probe for the ALB, and
+    that is it. No database, no secret: the application reads its configuration from the environment.
+
+    Analogy: before setting up a shop in a big mall (AWS), you prepare a clean, solid, compliant stand
+    (the app + its container). In this lesson we build that stand: the code, its tests and its hardened
+    Docker image.
+
+sections:
+  - heading:
+      fr: "Express sécurisé avec Helmet"
+      en: "Secure Express with Helmet"
+    body:
+      fr: |
+        **Helmet** est un middleware qui ajoute automatiquement une douzaine d'**en-têtes de sécurité
+        HTTP** (CSP, `X-Content-Type-Options`, `X-Frame-Options`, HSTS…). Une seule ligne,
+        `app.use(helmet())`, et l'application est bien mieux protégée contre le clickjacking, le sniffing
+        de type MIME et plusieurs attaques courantes.
+
+        On désactive aussi l'en-tête `X-Powered-By: Express` (`app.disable("x-powered-by")`) pour ne pas
+        annoncer la technologie utilisée : un attaquant qui connaît votre pile cherche plus vite les
+        failles connues. Enfin, le port d'écoute vient de l'environnement (`process.env.PORT`), jamais
+        écrit en dur.
+      en: |
+        **Helmet** is a middleware that automatically adds a dozen **HTTP security headers** (CSP,
+        `X-Content-Type-Options`, `X-Frame-Options`, HSTS…). A single line, `app.use(helmet())`, and the
+        application is far better protected against clickjacking, MIME-type sniffing and several common
+        attacks.
+
+        We also disable the `X-Powered-By: Express` header (`app.disable("x-powered-by")`) so as not to
+        advertise the technology used: an attacker who knows your stack finds known flaws faster. Finally,
+        the listening port comes from the environment (`process.env.PORT`), never hard-coded.
+  - heading:
+      fr: "L'endpoint de santé, clé du déploiement"
+      en: "The health endpoint, key to deployment"
+    body:
+      fr: |
+        L'endpoint **`/healthz`** renvoie un simple `200 OK`. Il paraît anodin mais il est central :
+        l'**ALB** l'interroge en continu pour savoir si un conteneur est prêt à recevoir du trafic. Si un
+        conteneur ne répond pas `200` sur `/healthz`, l'ALB cesse de lui envoyer des requêtes et ECS le
+        remplace.
+
+        C'est le mécanisme qui rend le déploiement **sans interruption** possible : une nouvelle version
+        n'est mise en ligne que lorsque ses conteneurs sont « sains ». On reverra la configuration de ce
+        *health check* côté infrastructure dans la leçon 3.
+      en: |
+        The **`/healthz`** endpoint returns a plain `200 OK`. It looks trivial but it is central: the
+        **ALB** polls it continuously to know whether a container is ready to receive traffic. If a
+        container does not answer `200` on `/healthz`, the ALB stops sending it requests and ECS replaces
+        it.
+
+        This is the mechanism that makes **zero-downtime** deployment possible: a new version goes live
+        only once its containers are "healthy". We will see this *health check* configured on the
+        infrastructure side in lesson 3.
+  - heading:
+      fr: "Un conteneur Node.js durci"
+      en: "A hardened Node.js container"
+    body:
+      fr: |
+        Le `Dockerfile` reprend les principes du projet Flask, adaptés à Node :
+
+        - image de base **`node:20-slim`** (légère) et **multi-stage** : on installe les dépendances de
+          production avec `npm ci --omit=dev`, sans les outils de test ;
+        - **utilisateur non-root** : l'image officielle Node fournit déjà un utilisateur `node`, on passe
+          dessus avec `USER node` ;
+        - `NODE_ENV=production` pour désactiver les traces de débogage et optimiser Express.
+
+        `npm ci` (au lieu de `npm install`) installe **exactement** les versions du `package-lock.json` :
+        c'est reproductible et auditable, exactement comme les versions figées en Python.
+      en: |
+        The `Dockerfile` reuses the Flask project's principles, adapted to Node:
+
+        - base image **`node:20-slim`** (lightweight) and **multi-stage**: we install production
+          dependencies with `npm ci --omit=dev`, without the test tools;
+        - **non-root user**: the official Node image already provides a `node` user; we switch to it with
+          `USER node`;
+        - `NODE_ENV=production` to disable debug traces and optimise Express.
+
+        `npm ci` (instead of `npm install`) installs **exactly** the versions from `package-lock.json`:
+        it is reproducible and auditable, just like pinned versions in Python.
+
+examples:
+  - title:
+      fr: "server.js : Express durci avec Helmet et /healthz"
+      en: "server.js: hardened Express with Helmet and /healthz"
+    file: app/server.js
+    lang: javascript
+    kind: secure
+    code: |
+      const express = require("express");
+      const helmet = require("helmet");
+
+      const app = express();
+
+      // Do not advertise the framework (information disclosure).
+      app.disable("x-powered-by");
+      // Add ~a dozen security headers in one line.
+      app.use(helmet());
+      app.use(express.json({ limit: "10kb" })); // cap body size (anti-DoS)
+
+      app.get("/", (_req, res) => {
+        res.json({ service: "node-aws", status: "running" });
+      });
+
+      // Liveness probe polled by the ALB health check.
+      app.get("/healthz", (_req, res) => {
+        res.status(200).json({ status: "ok" });
+      });
+
+      // Port comes from the environment; never hard-code it.
+      const port = Number(process.env.PORT) || 3000;
+
+      // Export the app for tests; only listen when run directly.
+      if (require.main === module) {
+        app.listen(port, () => console.log(`listening on ${port}`));
+      }
+
+      module.exports = app;
+    note:
+      fr: "`helmet()` et `disable('x-powered-by')` durcissent l'app en deux lignes. Exporter `app` (sans écouter) permet aux tests de l'importer. Le port vient de l'environnement."
+      en: "`helmet()` and `disable('x-powered-by')` harden the app in two lines. Exporting `app` (without listening) lets tests import it. The port comes from the environment."
+
+  - title:
+      fr: "package.json : dépendances et scripts"
+      en: "package.json: dependencies and scripts"
+    file: app/package.json
+    lang: json
+    kind: secure
+    code: |
+      {
+        "name": "node-aws",
+        "version": "1.0.0",
+        "private": true,
+        "main": "server.js",
+        "scripts": {
+          "start": "node server.js",
+          "test": "node --test"
+        },
+        "dependencies": {
+          "express": "4.21.2",
+          "helmet": "8.0.0"
+        },
+        "devDependencies": {
+          "supertest": "7.0.0"
+        }
+      }
+    note:
+      fr: "Les versions sont figées (pas de `^` ni `~`) : `npm ci` installera exactement celles-ci. `supertest` est en `devDependencies` pour ne pas finir dans l'image de production."
+      en: "Versions are pinned (no `^` or `~`): `npm ci` will install exactly these. `supertest` is in `devDependencies` so it never ends up in the production image."
+
+  - title:
+      fr: "server.test.js : tests fonctionnels avec supertest"
+      en: "server.test.js: functional tests with supertest"
+    file: app/server.test.js
+    lang: javascript
+    kind: secure
+    code: |
+      const test = require("node:test");
+      const assert = require("node:assert");
+      const request = require("supertest");
+      const app = require("./server");
+
+      test("GET /healthz returns 200 ok", async () => {
+        const res = await request(app).get("/healthz");
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.status, "ok");
+      });
+
+      test("GET / returns the service name", async () => {
+        const res = await request(app).get("/");
+        assert.strictEqual(res.body.service, "node-aws");
+      });
+
+      test("Helmet sets the nosniff header", async () => {
+        const res = await request(app).get("/");
+        // Security check: Helmet must set X-Content-Type-Options.
+        assert.strictEqual(res.headers["x-content-type-options"], "nosniff");
+      });
+
+      test("X-Powered-By header is hidden", async () => {
+        const res = await request(app).get("/");
+        assert.strictEqual(res.headers["x-powered-by"], undefined);
+      });
+    output: |
+      $ npm test
+      ✔ GET /healthz returns 200 ok
+      ✔ GET / returns the service name
+      ✔ Helmet sets the nosniff header
+      ✔ X-Powered-By header is hidden
+      # tests 4
+      # pass 4
+    note:
+      fr: "On teste le fonctionnel ET la sécurité : présence de l'en-tête `nosniff` (Helmet) et absence de `X-Powered-By`. Le runner `node --test` est intégré, sans dépendance de test lourde."
+      en: "We test functionality AND security: presence of the `nosniff` header (Helmet) and absence of `X-Powered-By`. The `node --test` runner is built in, with no heavy test dependency."
+
+  - title:
+      fr: "Dockerfile : multi-stage, non-root, production"
+      en: "Dockerfile: multi-stage, non-root, production"
+    file: app/Dockerfile
+    lang: dockerfile
+    kind: secure
+    code: |
+      # ---- Stage 1: install production dependencies only ----
+      FROM node:20-slim AS deps
+      WORKDIR /app
+      COPY package.json package-lock.json ./
+      # npm ci installs EXACTLY the locked versions; --omit=dev drops test tools.
+      RUN npm ci --omit=dev
+
+      # ---- Stage 2: minimal runtime ----
+      FROM node:20-slim AS runtime
+      ENV NODE_ENV=production
+      WORKDIR /app
+      COPY --from=deps /app/node_modules ./node_modules
+      COPY server.js ./
+      # The official node image ships a non-root "node" user: use it.
+      USER node
+      EXPOSE 3000
+      HEALTHCHECK --interval=30s --timeout=3s \
+        CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      CMD ["node", "server.js"]
+    note:
+      fr: "Image slim, dépendances de prod uniquement, utilisateur `node` non-root, `NODE_ENV=production`. Le port 3000 est cohérent avec `server.js` et la configuration Terraform."
+      en: "Slim image, production dependencies only, non-root `node` user, `NODE_ENV=production`. Port 3000 is consistent with `server.js` and the Terraform configuration."
+
+mistake:
+  fr: |
+    **Écrire des secrets ou des URL en dur et tourner en root.**
+
+    ```javascript
+    const DB_URL = "postgres://admin:P@ssw0rd@prod-db:5432/app"; // DANGER: secret en clair
+    app.listen(3000); // port figé, et conteneur par défaut en root
+    ```
+
+    Un secret dans le code part dans Git et sera détecté par Gitleaks — ou pire, exploité. La
+    configuration (port, URL, identifiants) doit venir de l'environnement, et le conteneur doit tourner
+    en utilisateur non-root. Ici, l'application ne contient **aucun** secret.
+  en: |
+    **Hard-coding secrets or URLs and running as root.**
+
+    ```javascript
+    const DB_URL = "postgres://admin:P@ssw0rd@prod-db:5432/app"; // DANGER: clear-text secret
+    app.listen(3000); // fixed port, and container runs as root by default
+    ```
+
+    A secret in the code goes into Git and will be caught by Gitleaks — or worse, exploited.
+    Configuration (port, URL, credentials) must come from the environment, and the container must run as
+    a non-root user. Here, the application contains **no** secret.
+
+bestPractice:
+  fr: |
+    - **Helmet** dès la première ligne : en-têtes de sécurité automatiques.
+    - **Masquer la pile** : `disable('x-powered-by')`.
+    - **Configuration par environnement** : aucun secret ni port en dur.
+    - **Endpoint `/healthz`** pour le health check de l'ALB.
+    - **`npm ci --omit=dev`** : versions verrouillées, pas d'outils de test en prod.
+    - **Image multi-stage, slim, utilisateur `node` non-root**, `NODE_ENV=production`.
+  en: |
+    - **Helmet** from the first line: automatic security headers.
+    - **Hide the stack**: `disable('x-powered-by')`.
+    - **Environment-based configuration**: no secret or port hard-coded.
+    - **`/healthz` endpoint** for the ALB health check.
+    - **`npm ci --omit=dev`**: locked versions, no test tools in production.
+    - **Multi-stage, slim image, non-root `node` user**, `NODE_ENV=production`.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez un middleware de **limitation du débit** (*rate limiting*) pour protéger l'API des abus.
+
+      Contraintes :
+      - utilisez le paquet `express-rate-limit` ;
+      - autorisez au maximum **100 requêtes par IP toutes les 15 minutes** ;
+      - ajoutez la dépendance (version figée) au `package.json`.
+    en: |
+      Add a **rate limiting** middleware to protect the API from abuse.
+
+      Constraints:
+      - use the `express-rate-limit` package;
+      - allow at most **100 requests per IP every 15 minutes**;
+      - add the (pinned) dependency to `package.json`.
+  solution:
+    file: rate-limit.js
+    lang: javascript
+    code: |
+      // --- in app/server.js, after `const helmet = require("helmet");` ---
+      const rateLimit = require("express-rate-limit");
+
+      // Allow 100 requests per IP per 15-minute window.
+      const limiter = rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 100,
+        standardHeaders: true, // expose RateLimit-* headers
+        legacyHeaders: false,
+      });
+
+      app.use(limiter); // apply before the routes
+
+      // --- in app/package.json, under "dependencies" ---
+      // "express-rate-limit": "7.4.1"
+    note:
+      fr: "Le rate limiting protège contre la force brute et le déni de service applicatif. On le place avant les routes pour qu'il s'applique à toutes les requêtes. La version est figée."
+      en: "Rate limiting protects against brute force and application-level denial of service. It is placed before the routes so it applies to every request. The version is pinned."
+
+quiz:
+  - q:
+      fr: "Que fait `app.use(helmet())` dans l'application Express ?"
+      en: "What does `app.use(helmet())` do in the Express application?"
+    options:
+      fr:
+        - "Il ajoute automatiquement plusieurs en-têtes de sécurité HTTP"
+        - "Il chiffre la base de données"
+        - "Il démarre le serveur"
+        - "Il installe les dépendances"
+      en:
+        - "It automatically adds several HTTP security headers"
+        - "It encrypts the database"
+        - "It starts the server"
+        - "It installs the dependencies"
+    answer: 0
+    why:
+      fr: "Helmet pose en une ligne une douzaine d'en-têtes de sécurité (nosniff, X-Frame-Options, CSP, etc.)."
+      en: "Helmet sets a dozen security headers in one line (nosniff, X-Frame-Options, CSP, etc.)."
+  - q:
+      fr: "À quoi sert l'endpoint `/healthz` ?"
+      en: "What is the `/healthz` endpoint for?"
+    options:
+      fr:
+        - "À afficher la page d'accueil"
+        - "À permettre à l'ALB de savoir si un conteneur est prêt à recevoir du trafic"
+        - "À stocker les logs"
+        - "À authentifier les utilisateurs"
+      en:
+        - "To display the home page"
+        - "To let the ALB know whether a container is ready to receive traffic"
+        - "To store logs"
+        - "To authenticate users"
+    answer: 1
+    why:
+      fr: "L'ALB interroge `/healthz` ; un conteneur qui ne répond pas `200` est retiré de la rotation et remplacé."
+      en: "The ALB polls `/healthz`; a container that does not answer `200` is taken out of rotation and replaced."
+  - q:
+      fr: "Pourquoi utiliser `npm ci --omit=dev` dans le Dockerfile ?"
+      en: "Why use `npm ci --omit=dev` in the Dockerfile?"
+    options:
+      fr:
+        - "Pour installer la dernière version de chaque paquet"
+        - "Pour lancer les tests automatiquement"
+        - "Pour installer exactement les versions verrouillées, sans les outils de test"
+        - "Pour mettre à jour le package-lock.json"
+      en:
+        - "To install the latest version of each package"
+        - "To run the tests automatically"
+        - "To install exactly the locked versions, without the test tools"
+        - "To update the package-lock.json"
+    answer: 2
+    why:
+      fr: "`npm ci` installe précisément le `package-lock.json` (reproductible) et `--omit=dev` exclut les devDependencies de l'image."
+      en: "`npm ci` installs exactly the `package-lock.json` (reproducible) and `--omit=dev` excludes devDependencies from the image."
+  - q:
+      fr: "D'où vient le port d'écoute de l'application ?"
+      en: "Where does the application's listening port come from?"
+    options:
+      fr:
+        - "Il est écrit en dur dans server.js"
+        - "Il est choisi aléatoirement"
+        - "Il est défini par Helmet"
+        - "De l'environnement via `process.env.PORT`"
+      en:
+        - "It is hard-coded in server.js"
+        - "It is chosen at random"
+        - "It is set by Helmet"
+        - "From the environment via `process.env.PORT`"
+    answer: 3
+    why:
+      fr: "Le port vient de `process.env.PORT` (avec 3000 par défaut) : la configuration reste hors du code."
+      en: "The port comes from `process.env.PORT` (defaulting to 3000): configuration stays out of the code."
+  - q:
+      fr: "Pourquoi désactiver l'en-tête `X-Powered-By` ?"
+      en: "Why disable the `X-Powered-By` header?"
+    options:
+      fr:
+        - "Pour ne pas révéler la technologie utilisée à un attaquant"
+        - "Pour accélérer les réponses"
+        - "Parce que Helmet l'exige"
+        - "Pour réduire la taille de l'image"
+      en:
+        - "To avoid revealing the technology used to an attacker"
+        - "To speed up responses"
+        - "Because Helmet requires it"
+        - "To reduce the image size"
+    answer: 0
+    why:
+      fr: "Annoncer « Express » aide un attaquant à cibler des failles connues : on masque donc cette information."
+      en: "Advertising 'Express' helps an attacker target known flaws: so we hide that information."

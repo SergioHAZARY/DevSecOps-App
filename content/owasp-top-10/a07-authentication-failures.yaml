@@ -1,0 +1,397 @@
+description:
+  fr: "A07 Défaillances d'authentification : mots de passe faibles, sessions mal gérées, credential stuffing et absence de MFA, avec correctifs."
+  en: "A07 Authentication Failures: weak passwords, poor session management, credential stuffing and missing MFA, with fixes."
+duration: 25
+
+intro:
+  fr: |
+    **A07 - Identification and Authentication Failures** (défaillances d'identification et d'authentification)
+    rassemble les faiblesses qui permettent de se faire passer pour un autre utilisateur : mots de passe mal
+    protégés ou trop faibles, connexions sans limite de tentatives, sessions prévisibles ou éternelles, absence
+    de second facteur. En 2017, cette catégorie était à la 2e place sous le nom *Broken Authentication*.
+
+    Reprenons l'image du videur à l'entrée d'un club. Un contrôle solide vérifie la carte (le mot de passe),
+    refuse après plusieurs mauvais codes (limitation), remet un bracelet unique à chaque entrée (session) et,
+    pour les zones sensibles, demande une deuxième preuve (MFA). Si l'une de ces étapes manque, un intrus passe.
+
+    Dans cette leçon, vous verrez les défaillances classiques - stockage faible, absence de verrouillage,
+    session non régénérée, pas de MFA - en version vulnérable puis corrigée, et comment le pipeline (SAST pour
+    le code, DAST pour l'exécution) aide à les repérer.
+  en: |
+    **A07 - Identification and Authentication Failures** gathers the weaknesses that let someone impersonate
+    another user: badly protected or too-weak passwords, logins without an attempt limit, predictable or
+    eternal sessions, no second factor. In 2017 this category sat at number 2 under the name *Broken
+    Authentication*.
+
+    Back to the bouncer at a club door. A solid check verifies the card (the password), refuses after several
+    wrong codes (rate limiting), hands out a unique wristband on each entry (session) and, for sensitive
+    areas, asks for a second proof (MFA). If any of these steps is missing, an intruder gets through.
+
+    In this lesson you will see the classic failures - weak storage, no lockout, non-regenerated session, no
+    MFA - vulnerable then fixed, and how the pipeline (SAST for the code, DAST at runtime) helps spot them.
+
+sections:
+  - heading:
+      fr: "Les défaillances d'authentification"
+      en: "The authentication failures"
+    body:
+      fr: |
+        | Défaillance | Exemple | Correction |
+        |---|---|---|
+        | Stockage faible | Mot de passe en MD5 ou en clair | argon2id / bcrypt, salés |
+        | Pas de limite de tentatives | Force brute, credential stuffing | Limitation + verrouillage temporaire |
+        | Session prévisible ou éternelle | ID devinable, pas d'expiration | ID aléatoire, expiration, régénération |
+        | Session fixée | Même ID avant et après login | Régénérer l'ID à la connexion |
+        | Mots de passe faibles autorisés | `123456`, mots fuités | Politique + refus des mots de passe connus |
+        | Pas de second facteur | Mot de passe volé = compte perdu | MFA (TOTP, passkeys) |
+
+        Deux notions à distinguer. **Credential stuffing** : l'attaquant rejoue des millions de couples
+        e-mail/mot de passe issus de fuites d'autres sites (beaucoup réutilisent le même mot de passe). **Force
+        brute** : il teste toutes les combinaisons sur un compte. Les deux sont neutralisés par la **limitation
+        des tentatives** et, surtout, par la **MFA** : un mot de passe volé ne suffit alors plus.
+      en: |
+        | Failure | Example | Fix |
+        |---|---|---|
+        | Weak storage | Password in MD5 or clear text | argon2id / bcrypt, salted |
+        | No attempt limit | Brute force, credential stuffing | Rate limiting + temporary lockout |
+        | Predictable or eternal session | Guessable id, no expiry | Random id, expiry, regeneration |
+        | Fixed session | Same id before and after login | Regenerate the id on login |
+        | Weak passwords allowed | `123456`, leaked words | Policy + refusal of known passwords |
+        | No second factor | Stolen password = lost account | MFA (TOTP, passkeys) |
+
+        Two notions to distinguish. **Credential stuffing**: the attacker replays millions of email/password
+        pairs from other sites' breaches (many people reuse the same password). **Brute force**: they try every
+        combination on one account. Both are neutralised by **attempt limiting** and, above all, by **MFA**: a
+        stolen password then no longer suffices.
+  - heading:
+      fr: "Sessions et détection"
+      en: "Sessions and detection"
+    body:
+      fr: |
+        Une session sûre respecte plusieurs règles :
+
+        - **ID aléatoire** et imprévisible, généré par un CSPRNG, jamais un compteur ;
+        - **régénération** de l'ID après connexion et à chaque élévation de privilège (anti-fixation) ;
+        - **cookie** `HttpOnly`, `Secure`, `SameSite` ;
+        - **expiration** par inactivité et durée absolue, et **invalidation côté serveur** à la déconnexion ;
+        - **jamais l'ID de session dans l'URL** (il fuit par les journaux, l'historique, le `Referer`).
+
+        Côté pipeline, l'authentification se vérifie à deux niveaux :
+
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST | Bandit, Semgrep, CodeQL | Hachage faible, comparaison non constante, secret en dur |
+        | DAST | OWASP ZAP | Absence de verrouillage, cookie sans attributs, ID de session dans l'URL |
+        | Tests | Tests d'intégration | Verrouillage après N échecs, régénération de session |
+
+        La MFA et la détection des mots de passe fuités (par exemple via l'API *Have I Been Pwned* en mode
+        *k-anonymity*) complètent ces contrôles.
+      en: |
+        A safe session follows several rules:
+
+        - **random, unpredictable id**, generated by a CSPRNG, never a counter;
+        - **regeneration** of the id after login and on every privilege elevation (anti-fixation);
+        - **cookie** `HttpOnly`, `Secure`, `SameSite`;
+        - **expiry** by inactivity and absolute lifetime, and **server-side invalidation** on logout;
+        - **never the session id in the URL** (it leaks via logs, history, the `Referer`).
+
+        On the pipeline side, authentication is checked at two levels:
+
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | SAST | Bandit, Semgrep, CodeQL | Weak hashing, non-constant comparison, hard-coded secret |
+        | DAST | OWASP ZAP | No lockout, cookie without attributes, session id in the URL |
+        | Tests | Integration tests | Lockout after N failures, session regeneration |
+
+        MFA and leaked-password detection (for example via the *Have I Been Pwned* API in *k-anonymity* mode)
+        complete these controls.
+
+examples:
+  - title:
+      fr: "Connexion : stockage faible et pas de limite vs durci"
+      en: "Login: weak storage and no limit vs hardened"
+    file: login.py
+    lang: python
+    kind: secure
+    code: |
+      import hashlib
+      import hmac
+
+      # ---------- VULNERABLE ----------
+      USERS_WEAK = {"alice@example.com": hashlib.md5(b"password1").hexdigest()}
+
+      def login_vulnerable(email, password):
+          stored = USERS_WEAK.get(email)
+          # MD5, no salt, == comparison, unlimited attempts, chatty errors
+          return stored == hashlib.md5(password.encode()).hexdigest()
+
+      # ---------- FIXED ----------
+      # Real environment: pip install argon2-cffi
+      # from argon2 import PasswordHasher ; ph = PasswordHasher()
+      attempts: dict = {}
+
+      def login(email, password, stored_hash, verify):
+          if attempts.get(email, 0) >= 5:
+              return "invalid username or password"   # locked after 5 failures
+          ok = verify(stored_hash, password)           # argon2 verify: slow + constant time
+          if not ok:
+              attempts[email] = attempts.get(email, 0) + 1
+              return "invalid username or password"     # generic message
+          attempts[email] = 0
+          return "welcome"
+
+      # Illustrate the weak path only (argon2 needs the real library):
+      print("weak MD5 match:", login_vulnerable("alice@example.com", "password1"))
+      print("constant-time compare demo:", hmac.compare_digest("abc", "abc"))
+    output: |
+      weak MD5 match: True
+      constant-time compare demo: True
+    note:
+      fr: "La version faible accepte un mot de passe haché en MD5, sans limite. La version corrigée utilise argon2 (lent, salé), limite les tentatives et renvoie un message générique."
+      en: "The weak version accepts an MD5-hashed password, with no limit. The fixed version uses argon2 (slow, salted), limits attempts and returns a generic message."
+
+  - title:
+      fr: "Session : ID prévisible vs aléatoire et régénéré"
+      en: "Session: predictable id vs random and regenerated"
+    file: session.py
+    lang: python
+    kind: secure
+    code: |
+      import secrets
+
+      # ---------- VULNERABLE ----------
+      _counter = 1000
+      def new_session_vulnerable():
+          global _counter
+          _counter += 1
+          # Sequential id: an attacker guesses other users' sessions (1001, 1002...)
+          return str(_counter)
+
+      # ---------- FIXED ----------
+      SESSIONS: dict = {}
+
+      def login(user: str) -> str:
+          # Random, unpredictable id from a CSPRNG; regenerated on each login so a
+          # pre-set (fixed) id cannot survive authentication (anti session fixation).
+          sid = secrets.token_urlsafe(32)
+          SESSIONS[sid] = user
+          return sid
+
+      print("predictable:", new_session_vulnerable(), new_session_vulnerable())
+      sid = login("alice")
+      print("random     :", sid[:12] + "...  (unpredictable, 256-bit)")
+    output: |
+      predictable: 1001 1002
+      random     : 7Qx3pR9vK2mN...  (unpredictable, 256-bit)
+    note:
+      fr: "Cliquez sur Run. Un ID séquentiel se devine (1001, 1002) ; un ID tiré par `secrets` est imprévisible. Le cookie associé doit être `HttpOnly`, `Secure`, `SameSite`."
+      en: "Press Run. A sequential id is guessable (1001, 1002); an id drawn by `secrets` is unpredictable. The associated cookie must be `HttpOnly`, `Secure`, `SameSite`."
+
+  - title:
+      fr: "Java (Spring Security) : verrouillage et session régénérée"
+      en: "Java (Spring Security): lockout and session regeneration"
+    file: SecurityConfig.java
+    lang: java
+    kind: secure
+    code: |
+      import org.springframework.context.annotation.Bean;
+      import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+      import org.springframework.security.crypto.password.PasswordEncoder;
+
+      public class SecurityConfig {
+
+          @Bean
+          public PasswordEncoder passwordEncoder() {
+              // bcrypt with cost 12: slow + salted, constant-time matches()
+              return new BCryptPasswordEncoder(12);
+          }
+
+          // Session fixation protection is ON by default in Spring Security:
+          // on successful login a NEW session id is issued (changeSessionId).
+          //   http.sessionManagement(s -> s.sessionFixation().changeSessionId());
+          //
+          // Lockout after repeated failures is handled by an AuthenticationFailureHandler
+          // that increments a counter and locks the account (UserDetails.isAccountNonLocked).
+          //
+          // Cookie hardening (application.yml):
+          //   server.servlet.session.cookie.http-only: true
+          //   server.servlet.session.cookie.secure: true
+          //   server.servlet.session.cookie.same-site: lax
+      }
+    note:
+      fr: "`BCryptPasswordEncoder` gère sel et comparaison en temps constant. Spring Security régénère l'ID de session à la connexion par défaut ; le verrouillage se branche via `isAccountNonLocked` et un gestionnaire d'échec."
+      en: "`BCryptPasswordEncoder` handles salt and constant-time comparison. Spring Security regenerates the session id on login by default; lockout is wired via `isAccountNonLocked` and a failure handler."
+
+mistake:
+  fr: |
+    **Croire qu'un mot de passe « fort » suffit, et négliger la session et la MFA.**
+
+    Même un excellent hachage ne protège pas si l'utilisateur a réutilisé son mot de passe sur un autre site
+    déjà compromis : le credential stuffing réussit alors du premier coup. De même, une authentification solide
+    ne sert à rien si la session reste valide éternellement, si son ID est devinable, ou s'il circule dans
+    l'URL. La défense tient à la **chaîne complète** : stockage fort, limitation des tentatives, session bien
+    gérée et surtout **MFA**, qui rend un mot de passe volé insuffisant à lui seul.
+  en: |
+    **Believing a "strong" password is enough, and neglecting the session and MFA.**
+
+    Even excellent hashing does not help if the user reused their password on another already-breached site:
+    credential stuffing then succeeds on the first try. Likewise, solid authentication is useless if the
+    session stays valid forever, if its id is guessable, or if it travels in the URL. Defense rests on the
+    **whole chain**: strong storage, attempt limiting, well-managed sessions and, above all, **MFA**, which
+    makes a stolen password insufficient on its own.
+
+bestPractice:
+  fr: |
+    - **Stockage fort** : argon2id ou bcrypt, salé, comparaison en temps constant.
+    - **Limitation des tentatives** par compte et par IP, avec verrouillage temporaire et message générique.
+    - **Sessions** : ID aléatoire, régénéré au login, cookies `HttpOnly`/`Secure`/`SameSite`, expiration.
+    - **Jamais l'ID de session dans l'URL** ni de secret d'authentification en dur.
+    - **MFA** (TOTP, passkeys) sur les comptes sensibles, et refus des mots de passe connus comme fuités.
+    - **SAST + DAST en CI** pour repérer hachage faible, absence de verrouillage et cookies mal configurés.
+  en: |
+    - **Strong storage**: argon2id or bcrypt, salted, constant-time comparison.
+    - **Attempt limiting** per account and per IP, with a temporary lockout and a generic message.
+    - **Sessions**: random id, regenerated on login, `HttpOnly`/`Secure`/`SameSite` cookies, expiry.
+    - **Never the session id in the URL** nor a hard-coded authentication secret.
+    - **MFA** (TOTP, passkeys) on sensitive accounts, and refusal of known-leaked passwords.
+    - **SAST + DAST in CI** to catch weak hashing, missing lockout and misconfigured cookies.
+
+exercise:
+  statement:
+    fr: |
+      Une application de banque en ligne présente ces caractéristiques :
+
+      1. Les mots de passe sont stockés en SHA-256 nu.
+      2. Il n'y a aucune limite de tentatives de connexion.
+      3. L'identifiant de session est un entier qui s'incrémente, visible dans l'URL `?sid=1042`.
+      4. Aucune MFA n'est proposée.
+
+      Pour chaque point, donnez le risque concret et la correction. Indiquez quelle mesure a le plus d'impact
+      face au credential stuffing.
+    en: |
+      An online banking application has these characteristics:
+
+      1. Passwords are stored as bare SHA-256.
+      2. There is no login attempt limit.
+      3. The session id is an incrementing integer, visible in the URL `?sid=1042`.
+      4. No MFA is offered.
+
+      For each point, give the concrete risk and the fix. State which measure has the most impact against
+      credential stuffing.
+  solution:
+    file: solution.md
+    lang: markdown
+    code: |
+      1. Bare SHA-256 passwords
+         Risk: fast, unsalted -> crackable in bulk if the database leaks.
+         Fix: argon2id or bcrypt (slow, salted), constant-time verification.
+
+      2. No attempt limit
+         Risk: brute force and credential stuffing run unthrottled.
+         Fix: rate limit per account + per IP, temporary lockout, generic error.
+
+      3. Incrementing session id in the URL
+         Risk: guessable (1041, 1043...) and leaked via logs/history/Referer -> hijack.
+         Fix: random CSPRNG id in an HttpOnly/Secure/SameSite cookie, never in the URL.
+
+      4. No MFA
+         Risk: any stolen/guessed password equals full account takeover.
+         Fix: offer/require MFA (TOTP or passkeys).
+
+      Most impactful against credential stuffing: MFA, because a valid stolen password
+      is no longer sufficient on its own (rate limiting helps but MFA is decisive).
+    note:
+      fr: "La MFA est la mesure la plus décisive contre le credential stuffing : même un mot de passe correct ne suffit plus. Les autres corrections renforcent l'ensemble de la chaîne."
+      en: "MFA is the most decisive measure against credential stuffing: even a correct password no longer suffices. The other fixes strengthen the whole chain."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que le credential stuffing ?"
+      en: "What is credential stuffing?"
+    options:
+      fr:
+        - "Tester toutes les combinaisons de mot de passe sur un compte"
+        - "Rejouer des couples e-mail/mot de passe issus de fuites d'autres sites"
+        - "Injecter du SQL dans le formulaire de connexion"
+        - "Voler un cookie via XSS"
+      en:
+        - "Trying every password combination on one account"
+        - "Replaying email/password pairs from other sites' breaches"
+        - "Injecting SQL into the login form"
+        - "Stealing a cookie via XSS"
+    answer: 1
+    why:
+      fr: "Le credential stuffing exploite la réutilisation des mots de passe : l'attaquant rejoue des identifiants déjà fuités ailleurs."
+      en: "Credential stuffing exploits password reuse: the attacker replays credentials already leaked elsewhere."
+  - q:
+      fr: "Pourquoi régénérer l'identifiant de session après la connexion ?"
+      en: "Why regenerate the session id after login?"
+    options:
+      fr:
+        - "Pour éviter la fixation de session"
+        - "Pour réduire la taille du cookie"
+        - "Pour accélérer les requêtes"
+        - "Pour chiffrer la session"
+      en:
+        - "To prevent session fixation"
+        - "To shrink the cookie size"
+        - "To speed up requests"
+        - "To encrypt the session"
+    answer: 0
+    why:
+      fr: "Si l'ID ne change pas, un identifiant fixé avant la connexion reste valide après ; la régénération le neutralise."
+      en: "If the id does not change, an id fixed before login stays valid after; regeneration neutralises it."
+  - q:
+      fr: "Quelle mesure est la plus décisive contre le vol de compte par mot de passe volé ?"
+      en: "Which measure is most decisive against account takeover via a stolen password?"
+    options:
+      fr:
+        - "Un cookie plus grand"
+        - "Un identifiant de session plus long"
+        - "La MFA (second facteur)"
+        - "Un certificat TLS renouvelé"
+      en:
+        - "A bigger cookie"
+        - "A longer session id"
+        - "MFA (a second factor)"
+        - "A renewed TLS certificate"
+    answer: 2
+    why:
+      fr: "Avec la MFA, un mot de passe volé ne suffit plus : il manque le second facteur à l'attaquant."
+      en: "With MFA, a stolen password no longer suffices: the attacker still lacks the second factor."
+  - q:
+      fr: "Pourquoi ne faut-il jamais mettre l'identifiant de session dans l'URL ?"
+      en: "Why should the session id never be placed in the URL?"
+    options:
+      fr:
+        - "Parce que l'URL est trop courte"
+        - "Parce qu'il fuit via les journaux, l'historique et l'en-tête Referer"
+        - "Parce que cela ralentit le site"
+        - "Parce que les URL ne supportent pas les chiffres"
+      en:
+        - "Because the URL is too short"
+        - "Because it leaks via logs, history and the Referer header"
+        - "Because it slows the site down"
+        - "Because URLs do not support digits"
+    answer: 1
+    why:
+      fr: "Un ID dans l'URL se retrouve dans les journaux serveur, l'historique du navigateur et le Referer envoyé à d'autres sites, facilitant le détournement."
+      en: "An id in the URL ends up in server logs, browser history and the Referer sent to other sites, enabling hijacking."
+  - q:
+      fr: "Quel stockage de mot de passe est correct ?"
+      en: "Which password storage is correct?"
+    options:
+      fr:
+        - "SHA-256 nu"
+        - "MD5 avec un sel fixe partagé"
+        - "En clair, mais dans une base chiffrée"
+        - "argon2id ou bcrypt, salés"
+      en:
+        - "Bare SHA-256"
+        - "MD5 with a shared fixed salt"
+        - "Clear text, but in an encrypted database"
+        - "argon2id or bcrypt, salted"
+    answer: 3
+    why:
+      fr: "Seules des fonctions lentes et salées conçues pour les mots de passe (argon2id, bcrypt) résistent à la force brute en cas de fuite."
+      en: "Only slow, salted functions designed for passwords (argon2id, bcrypt) resist brute force if the database leaks."

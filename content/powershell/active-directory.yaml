@@ -1,0 +1,499 @@
+description:
+  fr: "Auditer Active Directory en lecture seule avec PowerShell : comptes inactifs, mots de passe sans expiration, membres des groupes privilégiés et comptes de service exposés au Kerberoasting (SPN)."
+  en: "Audit Active Directory read-only with PowerShell: stale accounts, passwords that never expire, privileged group members and service accounts exposed to Kerberoasting (SPNs)."
+duration: 30
+
+intro:
+  fr: |
+    **Active Directory** (AD) est l'annuaire qui gère les identités, les groupes et les droits de la plupart
+    des entreprises Windows. C'est le cœur du système d'information — et donc la cible numéro un des
+    attaquants : s'emparer d'AD, c'est s'emparer de tout le domaine.
+
+    Imaginez le **registre central** d'une grande administration : chaque employé, chaque service, chaque
+    badge y est inscrit. Si ce registre contient des badges d'anciens employés jamais désactivés, des passes
+    « valables à vie », ou des comptes techniques faciles à usurper, l'ensemble du bâtiment est vulnérable.
+    L'audit AD consiste à parcourir ce registre pour débusquer ces faiblesses.
+
+    Le module **`ActiveDirectory`** fournit des cmdlets dédiées (`Get-ADUser`, `Get-ADGroupMember`...). Tous
+    les exemples de cette leçon sont **en lecture seule** : on **observe** sans jamais modifier l'annuaire.
+    Vous apprendrez à repérer les **comptes inactifs**, les **mots de passe qui n'expirent jamais**, les
+    membres des **groupes à hauts privilèges** (Domain Admins, Enterprise Admins), et les comptes de service
+    porteurs d'un **SPN**, cibles du **Kerberoasting**. Exécutez ces audits uniquement sur un domaine de
+    laboratoire qui vous appartient.
+  en: |
+    **Active Directory** (AD) is the directory that manages identities, groups and rights in most Windows
+    enterprises. It is the heart of the information system — and therefore attackers' number-one target:
+    seizing AD means seizing the whole domain.
+
+    Picture the **central register** of a large administration: every employee, every department, every
+    badge is recorded in it. If that register holds badges of former employees never disabled, "lifetime"
+    passes, or technical accounts easy to impersonate, the entire building is vulnerable. AD auditing means
+    walking this register to flush out those weaknesses.
+
+    The **`ActiveDirectory`** module provides dedicated cmdlets (`Get-ADUser`, `Get-ADGroupMember`...).
+    Every example in this lesson is **read-only**: you **observe** without ever modifying the directory. You
+    will learn to spot **stale accounts**, **passwords that never expire**, members of **high-privilege
+    groups** (Domain Admins, Enterprise Admins), and service accounts carrying an **SPN**, the targets of
+    **Kerberoasting**. Run these audits only on a lab domain you own.
+
+sections:
+  - heading:
+      fr: "Comptes inactifs et mots de passe sans expiration"
+      en: "Stale accounts and non-expiring passwords"
+    body:
+      fr: |
+        Un **compte inactif** (un salarié parti, un compte de test oublié) qui reste activé est une porte
+        dérobée idéale : personne ne surveille son usage. On les repère grâce à la propriété
+        `LastLogonDate` :
+
+        ```powershell
+        $cutoff = (Get-Date).AddDays(-90)
+        Get-ADUser -Filter 'Enabled -eq $true' -Properties LastLogonDate |
+          Where-Object { $_.LastLogonDate -lt $cutoff }
+        ```
+
+        Par défaut, `Get-ADUser` ne renvoie que quelques attributs ; il faut demander explicitement les
+        autres avec `-Properties`. Le `-Filter` s'exécute **côté serveur** (comme une clause `WHERE`) et doit
+        être privilégié pour la performance ; le `Where-Object` affine ensuite côté client.
+
+        Les **mots de passe qui n'expirent jamais** (`PasswordNeverExpires = $true`) échappent à la rotation
+        et restent vulnérables indéfiniment. Pire, les comptes `PasswordNotRequired` peuvent n'avoir **aucun**
+        mot de passe :
+
+        ```powershell
+        Get-ADUser -Filter 'PasswordNeverExpires -eq $true -and Enabled -eq $true' -Properties PasswordNeverExpires
+        ```
+
+        Ces deux contrôles figurent dans tout rapport d'hygiène AD : ils révèlent des comptes à corriger
+        avant qu'un attaquant ne les trouve.
+      en: |
+        A **stale account** (a departed employee, a forgotten test account) left enabled is an ideal
+        backdoor: nobody watches its use. You spot them via the `LastLogonDate` property:
+
+        ```powershell
+        $cutoff = (Get-Date).AddDays(-90)
+        Get-ADUser -Filter 'Enabled -eq $true' -Properties LastLogonDate |
+          Where-Object { $_.LastLogonDate -lt $cutoff }
+        ```
+
+        By default, `Get-ADUser` returns only a few attributes; you must explicitly request the others with
+        `-Properties`. The `-Filter` runs **server-side** (like a `WHERE` clause) and should be preferred
+        for performance; the `Where-Object` then refines client-side.
+
+        **Passwords that never expire** (`PasswordNeverExpires = $true`) escape rotation and stay vulnerable
+        indefinitely. Worse, `PasswordNotRequired` accounts may have **no** password at all:
+
+        ```powershell
+        Get-ADUser -Filter 'PasswordNeverExpires -eq $true -and Enabled -eq $true' -Properties PasswordNeverExpires
+        ```
+
+        Both checks belong in any AD hygiene report: they reveal accounts to fix before an attacker finds
+        them.
+  - heading:
+      fr: "Groupes privilégiés"
+      en: "Privileged groups"
+    body:
+      fr: |
+        Les attaquants visent les **groupes à hauts privilèges**, car en devenir membre donne le contrôle du
+        domaine :
+
+        | Groupe | Pouvoir |
+        |---|---|
+        | `Domain Admins` | administration complète du domaine |
+        | `Enterprise Admins` | administration de **toute la forêt** |
+        | `Schema Admins` | modification du schéma AD |
+        | `Administrators` (domaine) | droits d'administration sur les contrôleurs |
+
+        On énumère leurs membres, idéalement de façon **récursive** (un groupe peut en contenir un autre) :
+
+        ```powershell
+        Get-ADGroupMember -Identity 'Domain Admins' -Recursive |
+          Select-Object Name, objectClass, distinguishedName
+        ```
+
+        Le principe : **le moins de membres possible**. Chaque compte dans `Domain Admins` est un maillon
+        critique. On surveille les ajouts inattendus, on bannit les comptes de service de ces groupes (ils ne
+        devraient jamais y figurer), et on applique le modèle de **niveaux (tiering)** où les comptes
+        d'administration sont séparés des comptes bureautiques. Un audit récurrent compare la liste des
+        membres à une référence approuvée et alerte sur toute dérive.
+      en: |
+        Attackers aim at **high-privilege groups**, because becoming a member grants control of the domain:
+
+        | Group | Power |
+        |---|---|
+        | `Domain Admins` | full domain administration |
+        | `Enterprise Admins` | administration of the **whole forest** |
+        | `Schema Admins` | modification of the AD schema |
+        | `Administrators` (domain) | admin rights on the controllers |
+
+        You enumerate their members, ideally **recursively** (a group can contain another):
+
+        ```powershell
+        Get-ADGroupMember -Identity 'Domain Admins' -Recursive |
+          Select-Object Name, objectClass, distinguishedName
+        ```
+
+        The principle: **as few members as possible**. Every account in `Domain Admins` is a critical link.
+        You watch for unexpected additions, ban service accounts from these groups (they should never belong
+        there), and apply the **tiering** model where admin accounts are separated from office accounts. A
+        recurring audit compares the member list to an approved baseline and alerts on any drift.
+  - heading:
+      fr: "SPN et Kerberoasting"
+      en: "SPNs and Kerberoasting"
+    body:
+      fr: |
+        Un **SPN** (Service Principal Name) identifie un service dans Kerberos. Quand un **compte
+        utilisateur** (et non un compte machine) porte un SPN, il devient vulnérable au **Kerberoasting** :
+        n'importe quel utilisateur authentifié peut demander un ticket de service pour ce compte, puis tenter
+        de **casser hors ligne** le mot de passe du compte à partir du ticket chiffré. Si le mot de passe est
+        faible, l'attaquant le retrouve sans déclencher la moindre alerte.
+
+        On identifie ces comptes **en lecture seule** :
+
+        ```powershell
+        Get-ADUser -Filter 'ServicePrincipalName -like "*"' -Properties ServicePrincipalName, PasswordLastSet |
+          Select-Object Name, ServicePrincipalName, PasswordLastSet
+        ```
+
+        Un compte de service avec SPN et un mot de passe ancien ou court est une cible de choix. Les
+        défenses, elles, ne relèvent **pas** de ce script d'audit mais de la remédiation :
+
+        - utiliser des **gMSA** (group Managed Service Accounts), dont le mot de passe long (120+ caractères)
+          est géré et tourné automatiquement par AD ;
+        - imposer des mots de passe longs et aléatoires aux comptes de service restants ;
+        - surveiller l'événement **4769** (demande de ticket de service) pour détecter le Kerberoasting.
+
+        L'audit **repère** le risque ; il ne l'exploite ni ne le corrige. Ne testez jamais ces techniques
+        hors d'un laboratoire autorisé.
+      en: |
+        An **SPN** (Service Principal Name) identifies a service in Kerberos. When a **user account** (not a
+        machine account) carries an SPN, it becomes vulnerable to **Kerberoasting**: any authenticated user
+        can request a service ticket for that account, then attempt to **crack it offline** to recover the
+        account's password from the encrypted ticket. If the password is weak, the attacker recovers it
+        without triggering a single alert.
+
+        You identify these accounts **read-only**:
+
+        ```powershell
+        Get-ADUser -Filter 'ServicePrincipalName -like "*"' -Properties ServicePrincipalName, PasswordLastSet |
+          Select-Object Name, ServicePrincipalName, PasswordLastSet
+        ```
+
+        A service account with an SPN and an old or short password is a prime target. The defences, however,
+        belong **not** to this audit script but to remediation:
+
+        - use **gMSA** (group Managed Service Accounts), whose long password (120+ characters) is managed and
+          rotated automatically by AD;
+        - enforce long, random passwords on the remaining service accounts;
+        - monitor event **4769** (service ticket request) to detect Kerberoasting.
+
+        The audit **spots** the risk; it neither exploits nor fixes it. Never test these techniques outside
+        an authorised lab.
+
+examples:
+  - title:
+      fr: "Comptes inactifs depuis 90 jours"
+      en: "Accounts inactive for 90 days"
+    file: stale_accounts.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      Import-Module ActiveDirectory
+
+      $cutoff = (Get-Date).AddDays(-90)
+
+      # Server-side filter on Enabled, then client-side on LastLogonDate.
+      # LastLogonDate is a replicated, convenient approximation of last logon.
+      Get-ADUser -Filter 'Enabled -eq $true' -Properties LastLogonDate |
+          Where-Object { $_.LastLogonDate -and $_.LastLogonDate -lt $cutoff } |
+          Select-Object Name, SamAccountName, LastLogonDate |
+          Sort-Object LastLogonDate
+    output: |
+      Name            SamAccountName  LastLogonDate
+      ----            --------------  -------------
+      Old Contractor  jdoe            2026-05-02 09:14:00
+      Test Account    testsvc         2026-06-18 11:03:00
+    note:
+      fr: "On filtre d'abord `Enabled -eq $true` **côté serveur** (`-Filter`), puis on compare `LastLogonDate` côté client. On demande explicitement cette propriété avec `-Properties`, sinon elle est vide. Ces comptes activés mais inutilisés depuis 90 jours sont des cibles à désactiver."
+      en: "We first filter `Enabled -eq $true` **server-side** (`-Filter`), then compare `LastLogonDate` client-side. We explicitly request that property with `-Properties`, otherwise it is empty. These enabled but unused-for-90-days accounts are targets to disable."
+
+  - title:
+      fr: "Mots de passe qui n'expirent jamais"
+      en: "Passwords that never expire"
+    file: never_expire.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      Import-Module ActiveDirectory
+
+      # Enabled accounts whose password never expires: they escape rotation.
+      Get-ADUser -Filter 'PasswordNeverExpires -eq $true -and Enabled -eq $true' `
+                 -Properties PasswordNeverExpires, PasswordLastSet |
+          Select-Object Name, SamAccountName, PasswordLastSet |
+          Sort-Object PasswordLastSet
+
+      # Even worse: accounts that require NO password at all.
+      $noPw = Get-ADUser -Filter 'PasswordNotRequired -eq $true -and Enabled -eq $true' |
+          Measure-Object
+      Write-Output "Accounts with PasswordNotRequired: $($noPw.Count)"
+    output: |
+      Name          SamAccountName  PasswordLastSet
+      ----          --------------  ---------------
+      SQL Service   sqlsvc          2021-03-10 08:00:00
+      Legacy App    legacyapp       2020-11-22 14:30:00
+
+      Accounts with PasswordNotRequired: 1
+    note:
+      fr: "`PasswordNeverExpires` révèle des comptes dont le mot de passe de 2020-2021 n'a jamais changé : un risque majeur. `PasswordNotRequired` est pire encore (connexion sans mot de passe). On filtre les deux côté serveur, et on compte le second avec `Measure-Object`."
+      en: "`PasswordNeverExpires` reveals accounts whose 2020-2021 password never changed: a major risk. `PasswordNotRequired` is worse still (login with no password). We filter both server-side, and count the second with `Measure-Object`."
+
+  - title:
+      fr: "Membres des groupes privilégiés (récursif)"
+      en: "Privileged group members (recursive)"
+    file: privileged_groups.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      Import-Module ActiveDirectory
+
+      $privilegedGroups = 'Domain Admins', 'Enterprise Admins', 'Schema Admins'
+
+      foreach ($group in $privilegedGroups) {
+          # -Recursive expands nested groups, revealing indirect members too.
+          $members = Get-ADGroupMember -Identity $group -Recursive -ErrorAction SilentlyContinue |
+              Where-Object objectClass -eq 'user' |
+              Select-Object -ExpandProperty SamAccountName
+          [PSCustomObject]@{
+              Group   = $group
+              Count   = @($members).Count
+              Members = ($members -join ', ')
+          }
+      }
+    output: |
+      Group             Count Members
+      -----             ----- -------
+      Domain Admins         3 administrator, alice.admin, sqlsvc
+      Enterprise Admins     1 administrator
+      Schema Admins         1 administrator
+      Members of Domain Admins should be few; sqlsvc (a service account) must be removed.
+    note:
+      fr: "`-Recursive` révèle aussi les membres indirects (via des groupes imbriqués). On produit un `[PSCustomObject]` par groupe. Ici, le compte de service `sqlsvc` figure dans `Domain Admins` : une faute grave, car un compte de service ne doit jamais détenir de privilèges d'administration du domaine."
+      en: "`-Recursive` also reveals indirect members (via nested groups). We emit one `[PSCustomObject]` per group. Here, the service account `sqlsvc` is in `Domain Admins`: a serious fault, because a service account must never hold domain admin privileges."
+
+  - title:
+      fr: "Comptes exposés au Kerberoasting (SPN)"
+      en: "Accounts exposed to Kerberoasting (SPNs)"
+    file: kerberoast_exposure.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      Import-Module ActiveDirectory
+
+      # READ-ONLY: list USER accounts carrying an SPN (Kerberoastable targets).
+      # We do NOT request tickets or crack anything - this only reports exposure.
+      Get-ADUser -Filter 'ServicePrincipalName -like "*"' `
+                 -Properties ServicePrincipalName, PasswordLastSet, PasswordNeverExpires |
+          Select-Object Name, SamAccountName,
+              @{ Name = 'SPNs';         Expression = { $_.ServicePrincipalName -join '; ' } },
+              PasswordLastSet, PasswordNeverExpires |
+          Sort-Object PasswordLastSet
+    output: |
+      Name         SamAccountName  SPNs                          PasswordLastSet      PasswordNeverExpires
+      ----         --------------  ----                          ---------------      --------------------
+      SQL Service  sqlsvc          MSSQLSvc/db01.corp.local:1433 2020-11-22 14:30:00  True
+      Web Service  websvc          HTTP/web01.corp.local         2023-02-01 10:00:00  False
+    note:
+      fr: "Un compte **utilisateur** avec SPN est kerberoastable. `sqlsvc` cumule les risques : SPN, mot de passe de 2020 et `PasswordNeverExpires`. La parade est un **gMSA** (mot de passe long, tourné par AD), pas ce script : l'audit se contente de **signaler** l'exposition, en lecture seule."
+      en: "A **user** account with an SPN is Kerberoastable. `sqlsvc` stacks the risks: SPN, a 2020 password and `PasswordNeverExpires`. The fix is a **gMSA** (long password, rotated by AD), not this script: the audit only **reports** the exposure, read-only."
+
+mistake:
+  fr: |
+    **Oublier `-Properties` et croire que les attributs manquants valent `$null`, ou confondre audit et
+    remédiation.**
+
+    `Get-ADUser` ne renvoie qu'un jeu minimal d'attributs par défaut. Si vous filtrez sur `LastLogonDate` ou
+    `PasswordNeverExpires` sans les avoir demandés via `-Properties`, ils apparaissent vides et vous ratez
+    les comptes à risque — un faux sentiment de sécurité. Autre erreur : vouloir « tester » le Kerberoasting
+    en demandant réellement des tickets, ou désactiver des comptes à la volée pendant l'audit. Un audit est
+    **en lecture seule** : il observe et documente. La correction (désactivation, passage en gMSA, rotation
+    de mot de passe) est une étape distincte, planifiée, validée, et menée uniquement sur vos propres
+    systèmes.
+  en: |
+    **Forgetting `-Properties` and assuming missing attributes are `$null`, or confusing audit with
+    remediation.**
+
+    `Get-ADUser` returns only a minimal set of attributes by default. If you filter on `LastLogonDate` or
+    `PasswordNeverExpires` without requesting them via `-Properties`, they appear empty and you miss the
+    risky accounts — a false sense of security. Another mistake: trying to "test" Kerberoasting by actually
+    requesting tickets, or disabling accounts on the fly during the audit. An audit is **read-only**: it
+    observes and documents. The fix (disabling, moving to gMSA, password rotation) is a separate step,
+    planned, approved, and carried out only on your own systems.
+
+bestPractice:
+  fr: |
+    - **Gardez l'audit en lecture seule** : `Get-*` uniquement ; la remédiation est une étape distincte.
+    - **Demandez explicitement les attributs** avec `-Properties` ; vérifiez qu'ils ne sont pas vides.
+    - **Filtrez côté serveur** avec `-Filter` (performant), affinez côté client avec `Where-Object`.
+    - **Énumérez les groupes privilégiés de façon récursive** et comparez à une référence approuvée.
+    - **Repérez les SPN sur des comptes utilisateurs** ; remédiez avec des **gMSA** et des mots de passe
+      longs.
+    - **Surveillez les événements AD** (4769 pour le Kerberoasting, 4728/4732 pour les ajouts aux groupes).
+    - **N'auditez que votre propre domaine de laboratoire** et n'exploitez jamais les failles détectées.
+  en: |
+    - **Keep the audit read-only**: `Get-*` only; remediation is a separate step.
+    - **Explicitly request attributes** with `-Properties`; check they are not empty.
+    - **Filter server-side** with `-Filter` (performant), refine client-side with `Where-Object`.
+    - **Enumerate privileged groups recursively** and compare to an approved baseline.
+    - **Spot SPNs on user accounts**; remediate with **gMSAs** and long passwords.
+    - **Monitor AD events** (4769 for Kerberoasting, 4728/4732 for group additions).
+    - **Only audit your own lab domain** and never exploit the flaws you find.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez une fonction en lecture seule `Get-RiskyServiceAccounts` qui construit un rapport des comptes
+      de service à risque dans Active Directory. Elle doit :
+
+      1. récupérer les comptes **utilisateurs** porteurs d'un SPN (`ServicePrincipalName -like "*"`), en
+         demandant les propriétés `ServicePrincipalName`, `PasswordLastSet` et `PasswordNeverExpires` ;
+      2. ne garder que ceux dont le mot de passe date de **plus de 365 jours** ou dont le mot de passe
+         n'expire jamais ;
+      3. renvoyer, pour chaque compte, un `[PSCustomObject]` avec le nom, le `SamAccountName`, la date du
+         mot de passe et un champ booléen `NeverExpires` ;
+      4. rester strictement en lecture seule (aucune modification de l'annuaire).
+    en: |
+      Write a read-only function `Get-RiskyServiceAccounts` that builds a report of risky service accounts
+      in Active Directory. It must:
+
+      1. retrieve **user** accounts carrying an SPN (`ServicePrincipalName -like "*"`), requesting the
+         `ServicePrincipalName`, `PasswordLastSet` and `PasswordNeverExpires` properties;
+      2. keep only those whose password is **over 365 days** old or whose password never expires;
+      3. return, for each account, a `[PSCustomObject]` with the name, the `SamAccountName`, the password
+         date and a boolean `NeverExpires` field;
+      4. stay strictly read-only (no change to the directory).
+  solution:
+    file: Get-RiskyServiceAccounts.ps1
+    lang: powershell
+    code: |
+      Import-Module ActiveDirectory
+
+      function Get-RiskyServiceAccounts {
+          [CmdletBinding()]
+          param([int]$MaxPasswordAgeDays = 365)
+
+          $cutoff = (Get-Date).AddDays(-$MaxPasswordAgeDays)
+
+          # READ-ONLY: only Get-ADUser, no Set/Disable anywhere.
+          Get-ADUser -Filter 'ServicePrincipalName -like "*"' `
+                     -Properties ServicePrincipalName, PasswordLastSet, PasswordNeverExpires |
+              Where-Object {
+                  $_.PasswordNeverExpires -or
+                  ($_.PasswordLastSet -and $_.PasswordLastSet -lt $cutoff)
+              } |
+              ForEach-Object {
+                  [PSCustomObject]@{
+                      Name            = $_.Name
+                      SamAccountName  = $_.SamAccountName
+                      PasswordLastSet = $_.PasswordLastSet
+                      NeverExpires    = [bool]$_.PasswordNeverExpires
+                  }
+              } |
+              Sort-Object PasswordLastSet
+      }
+
+      Get-RiskyServiceAccounts | Format-Table -AutoSize
+    note:
+      fr: "La fonction n'utilise que `Get-ADUser` : strictement en lecture seule. Le `-Filter` cible les SPN côté serveur, le `Where-Object` applique les deux critères de risque, et chaque compte devient un `[PSCustomObject]` exportable. `Format-Table` reste la toute dernière étape. La remédiation (gMSA, rotation) viendra séparément."
+      en: "The function uses only `Get-ADUser`: strictly read-only. The `-Filter` targets SPNs server-side, the `Where-Object` applies both risk criteria, and each account becomes an exportable `[PSCustomObject]`. `Format-Table` stays the very last step. Remediation (gMSA, rotation) comes separately."
+
+quiz:
+  - q:
+      fr: "Pourquoi faut-il ajouter `-Properties LastLogonDate` à `Get-ADUser` ?"
+      en: "Why must you add `-Properties LastLogonDate` to `Get-ADUser`?"
+    options:
+      fr:
+        - "Parce que Get-ADUser ne renvoie qu'un jeu minimal d'attributs par défaut"
+        - "Pour modifier la date de dernière connexion"
+        - "Pour chiffrer la requête"
+        - "Parce que LastLogonDate est obligatoire"
+      en:
+        - "Because Get-ADUser returns only a minimal set of attributes by default"
+        - "To change the last logon date"
+        - "To encrypt the query"
+        - "Because LastLogonDate is mandatory"
+    answer: 0
+    why:
+      fr: "Sans `-Properties`, les attributs non renvoyés par défaut (comme `LastLogonDate`) apparaissent vides, et le filtre les rate. Il faut donc les demander explicitement."
+      en: "Without `-Properties`, attributes not returned by default (like `LastLogonDate`) appear empty, and the filter misses them. You must request them explicitly."
+  - q:
+      fr: "Qu'est-ce que le Kerberoasting exploite ?"
+      en: "What does Kerberoasting exploit?"
+    options:
+      fr:
+        - "Un mot de passe administrateur par défaut"
+        - "Un compte utilisateur porteur d'un SPN, dont on casse le mot de passe hors ligne via un ticket de service"
+        - "Une faille du pare-feu"
+        - "Un certificat TLS expiré"
+      en:
+        - "A default administrator password"
+        - "A user account carrying an SPN, whose password is cracked offline via a service ticket"
+        - "A firewall flaw"
+        - "An expired TLS certificate"
+    answer: 1
+    why:
+      fr: "Tout utilisateur authentifié peut demander un ticket de service pour un compte utilisateur avec SPN, puis tenter de casser son mot de passe hors ligne. Un mot de passe faible tombe sans alerte."
+      en: "Any authenticated user can request a service ticket for a user account with an SPN, then try to crack its password offline. A weak password falls with no alert."
+  - q:
+      fr: "Quelle est la bonne remédiation contre le Kerberoasting des comptes de service ?"
+      en: "What is the right remediation against Kerberoasting of service accounts?"
+    options:
+      fr:
+        - "Désactiver le pare-feu"
+        - "Utiliser des gMSA au mot de passe long et tourné automatiquement par AD"
+        - "Mettre le compte dans Domain Admins"
+        - "Supprimer tous les SPN du domaine"
+      en:
+        - "Disable the firewall"
+        - "Use gMSAs with a long password rotated automatically by AD"
+        - "Put the account in Domain Admins"
+        - "Delete every SPN in the domain"
+    answer: 1
+    why:
+      fr: "Un gMSA possède un mot de passe de 120+ caractères géré et tourné par AD : il devient impossible à casser hors ligne, ce qui neutralise le Kerberoasting."
+      en: "A gMSA has a 120+ character password managed and rotated by AD: it becomes impossible to crack offline, which neutralises Kerberoasting."
+  - q:
+      fr: "Pourquoi énumérer les groupes privilégiés avec `-Recursive` ?"
+      en: "Why enumerate privileged groups with `-Recursive`?"
+    options:
+      fr:
+        - "Pour supprimer les membres imbriqués"
+        - "Pour révéler aussi les membres indirects via des groupes imbriqués"
+        - "Pour accélérer la requête"
+        - "Pour chiffrer la liste"
+      en:
+        - "To delete nested members"
+        - "To also reveal indirect members via nested groups"
+        - "To speed up the query"
+        - "To encrypt the list"
+    answer: 1
+    why:
+      fr: "Un groupe peut contenir un autre groupe. `-Recursive` déplie ces imbrications et révèle les utilisateurs qui obtiennent les privilèges de façon indirecte, qu'un audit non récursif manquerait."
+      en: "A group can contain another group. `-Recursive` unfolds these nestings and reveals users who gain the privileges indirectly, which a non-recursive audit would miss."
+  - q:
+      fr: "Quelle propriété signale un compte dont le mot de passe échappe à la rotation ?"
+      en: "Which property flags an account whose password escapes rotation?"
+    options:
+      fr:
+        - "LastLogonDate"
+        - "objectClass"
+        - "PasswordNeverExpires"
+        - "distinguishedName"
+      en:
+        - "LastLogonDate"
+        - "objectClass"
+        - "PasswordNeverExpires"
+        - "distinguishedName"
+    answer: 2
+    why:
+      fr: "`PasswordNeverExpires = $true` signifie que le mot de passe ne sera jamais exigé de changer : il peut rester faible et inchangé pendant des années, un risque classique relevé par l'audit."
+      en: "`PasswordNeverExpires = $true` means the password will never be required to change: it can stay weak and unchanged for years, a classic risk flagged by the audit."

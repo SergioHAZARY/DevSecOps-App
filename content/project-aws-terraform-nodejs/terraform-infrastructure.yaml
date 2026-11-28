@@ -1,0 +1,656 @@
+description:
+  fr: "Décrire l'infrastructure AWS en Terraform : VPC public/privé, groupes de sécurité restreints, ECR avec scan au push et tags immuables, ECS Fargate en sous-réseaux privés et rôles IAM au moindre privilège."
+  en: "Describe the AWS infrastructure in Terraform: public/private VPC, restricted security groups, ECR with scan-on-push and immutable tags, ECS Fargate in private subnets and least-privilege IAM roles."
+duration: 35
+
+intro:
+  fr: |
+    C'est le cœur du projet : écrire, en Terraform, toute l'infrastructure AWS qui fera tourner notre
+    application. On part d'un compte vide et on décrit, fichier par fichier, le réseau, le registre
+    d'images, les conteneurs et les droits.
+
+    Chaque ressource applique un principe de sécurité : réseau **segmenté** (public/privé), groupes de
+    sécurité **restreints** (le conteneur n'accepte que l'ALB), registre qui **scanne** les images et
+    **refuse** d'écraser un tag, conteneurs en **sous-réseaux privés**, et rôles IAM au **moindre
+    privilège**.
+
+    Analogie : on construit un immeuble sécurisé. Le hall d'accueil (ALB) est ouvert au public, mais les
+    bureaux (conteneurs) sont à des étages privés, accessibles uniquement via l'ascenseur contrôlé
+    (groupe de sécurité). Chaque employé (rôle IAM) n'a que les clés strictement nécessaires.
+  en: |
+    This is the heart of the project: writing, in Terraform, all the AWS infrastructure that will run our
+    application. We start from an empty account and describe, file by file, the network, the image
+    registry, the containers and the permissions.
+
+    Each resource applies a security principle: a **segmented** network (public/private), **restricted**
+    security groups (the container only accepts the ALB), a registry that **scans** images and **refuses**
+    to overwrite a tag, containers in **private subnets**, and least-privilege IAM roles.
+
+    Analogy: we build a secure office block. The lobby (ALB) is open to the public, but the offices
+    (containers) are on private floors, reachable only via a controlled lift (security group). Each
+    employee (IAM role) holds only the keys strictly needed.
+
+sections:
+  - heading:
+      fr: "Le réseau : VPC segmenté et groupes de sécurité"
+      en: "The network: segmented VPC and security groups"
+    body:
+      fr: |
+        `network.tf` crée un **VPC** (10.0.0.0/16) avec, sur deux zones de disponibilité, des
+        **sous-réseaux publics** (pour l'ALB) et **privés** (pour les conteneurs). Une **Internet
+        Gateway** donne un accès sortant aux sous-réseaux publics ; une **NAT Gateway** permet aux
+        conteneurs privés de télécharger des mises à jour **sans** être joignables depuis internet.
+
+        La sécurité repose sur deux **groupes de sécurité** (pare-feu virtuels) :
+
+        - celui de l'**ALB** autorise le port 80 depuis internet (`0.0.0.0/0`) ;
+        - celui de l'**ECS** n'autorise le port 3000 **que** depuis le groupe de l'ALB
+          (`security_groups = [alb.id]`), pas depuis internet.
+
+        Référencer un groupe par son ID plutôt que par une plage d'adresses est la bonne pratique : la
+        règle reste valable même si les adresses changent.
+      en: |
+        `network.tf` creates a **VPC** (10.0.0.0/16) with, across two availability zones, **public
+        subnets** (for the ALB) and **private subnets** (for the containers). An **Internet Gateway**
+        gives outbound access to the public subnets; a **NAT Gateway** lets private containers download
+        updates **without** being reachable from the internet.
+
+        Security rests on two **security groups** (virtual firewalls):
+
+        - the **ALB**'s one allows port 80 from the internet (`0.0.0.0/0`);
+        - the **ECS** one allows port 3000 **only** from the ALB's group
+          (`security_groups = [alb.id]`), not from the internet.
+
+        Referencing a group by its ID rather than an address range is the good practice: the rule stays
+        valid even if addresses change.
+  - heading:
+      fr: "Le registre ECR : scan au push et tags immuables"
+      en: "The ECR registry: scan-on-push and immutable tags"
+    body:
+      fr: |
+        `ecr.tf` crée un **registre privé** pour l'image Docker. Deux réglages de sécurité essentiels :
+
+        - **`scan_on_push = true`** : chaque image poussée est automatiquement scannée à la recherche de
+          CVE ;
+        - **`image_tag_mutability = "IMMUTABLE"`** : un tag ne peut **jamais** être écrasé. Impossible
+          qu'une image `v1.2.3` soit silencieusement remplacée par une autre — garantie d'intégrité et de
+          traçabilité.
+
+        Une **lifecycle policy** supprime les vieilles images pour maîtriser les coûts. Le chiffrement
+        au repos (`AES256`) est activé.
+      en: |
+        `ecr.tf` creates a **private registry** for the Docker image. Two essential security settings:
+
+        - **`scan_on_push = true`**: every pushed image is automatically scanned for CVEs;
+        - **`image_tag_mutability = "IMMUTABLE"`**: a tag can **never** be overwritten. An image `v1.2.3`
+          can never be silently replaced by another — a guarantee of integrity and traceability.
+
+        A **lifecycle policy** deletes old images to keep costs under control. Encryption at rest
+        (`AES256`) is enabled.
+  - heading:
+      fr: "ECS Fargate et rôles IAM au moindre privilège"
+      en: "ECS Fargate and least-privilege IAM roles"
+    body:
+      fr: |
+        `ecs.tf` décrit le **cluster**, la **task definition** (le gabarit du conteneur) et le
+        **service** (qui maintient 2 conteneurs actifs). Points de sécurité : conteneurs en
+        **sous-réseaux privés**, `assign_public_ip = false`, système de fichiers racine en **lecture
+        seule**, et journaux envoyés à **CloudWatch**.
+
+        `iam.tf` définit deux rôles distincts, conformément au moindre privilège :
+
+        | Rôle | Qui l'utilise | Droits |
+        |---|---|---|
+        | **Execution role** | ECS (l'agent) | Tirer l'image, écrire les logs |
+        | **Task role** | L'application | *Aucun* ici (elle n'appelle aucune API AWS) |
+
+        Séparer ces deux rôles est fondamental : même si l'application est compromise, elle n'hérite
+        **pas** des droits de l'agent ECS.
+      en: |
+        `ecs.tf` describes the **cluster**, the **task definition** (the container blueprint) and the
+        **service** (which keeps 2 containers running). Security points: containers in **private
+        subnets**, `assign_public_ip = false`, a **read-only** root filesystem, and logs sent to
+        **CloudWatch**.
+
+        `iam.tf` defines two distinct roles, following least privilege:
+
+        | Role | Who uses it | Rights |
+        |---|---|---|
+        | **Execution role** | ECS (the agent) | Pull the image, write logs |
+        | **Task role** | The application | *None* here (it calls no AWS API) |
+
+        Separating these two roles is fundamental: even if the application is compromised, it does **not**
+        inherit the ECS agent's rights.
+
+examples:
+  - title:
+      fr: "network.tf : VPC public/privé, ALB et groupes de sécurité"
+      en: "network.tf: public/private VPC, ALB and security groups"
+    file: network.tf
+    lang: hcl
+    kind: secure
+    code: |
+      data "aws_availability_zones" "available" {
+        state = "available"
+      }
+
+      locals {
+        azs = slice(data.aws_availability_zones.available.names, 0, 2)
+      }
+
+      resource "aws_vpc" "main" {
+        cidr_block           = "10.0.0.0/16"
+        enable_dns_support   = true
+        enable_dns_hostnames = true
+        tags                 = { Name = "${var.project}-vpc" }
+      }
+
+      resource "aws_internet_gateway" "igw" {
+        vpc_id = aws_vpc.main.id
+      }
+
+      resource "aws_subnet" "public" {
+        count                   = 2
+        vpc_id                  = aws_vpc.main.id
+        cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+        availability_zone       = local.azs[count.index]
+        map_public_ip_on_launch = true
+        tags                    = { Name = "${var.project}-public-${count.index}" }
+      }
+
+      resource "aws_subnet" "private" {
+        count             = 2
+        vpc_id            = aws_vpc.main.id
+        cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index + 10)
+        availability_zone = local.azs[count.index]
+        tags              = { Name = "${var.project}-private-${count.index}" }
+      }
+
+      resource "aws_eip" "nat" {
+        domain = "vpc"
+      }
+
+      resource "aws_nat_gateway" "nat" {
+        allocation_id = aws_eip.nat.id
+        subnet_id     = aws_subnet.public[0].id
+        depends_on    = [aws_internet_gateway.igw]
+      }
+
+      resource "aws_route_table" "public" {
+        vpc_id = aws_vpc.main.id
+        route {
+          cidr_block = "0.0.0.0/0"
+          gateway_id = aws_internet_gateway.igw.id
+        }
+      }
+
+      resource "aws_route_table_association" "public" {
+        count          = 2
+        subnet_id      = aws_subnet.public[count.index].id
+        route_table_id = aws_route_table.public.id
+      }
+
+      resource "aws_route_table" "private" {
+        vpc_id = aws_vpc.main.id
+        route {
+          cidr_block     = "0.0.0.0/0"
+          nat_gateway_id = aws_nat_gateway.nat.id
+        }
+      }
+
+      resource "aws_route_table_association" "private" {
+        count          = 2
+        subnet_id      = aws_subnet.private[count.index].id
+        route_table_id = aws_route_table.private.id
+      }
+
+      # ALB security group: HTTP open to the world.
+      resource "aws_security_group" "alb" {
+        name        = "${var.project}-alb-sg"
+        description = "Allow inbound HTTP to the ALB"
+        vpc_id      = aws_vpc.main.id
+        ingress {
+          description = "HTTP from anywhere"
+          from_port   = 80
+          to_port     = 80
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+        egress {
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+
+      # ECS security group: app port reachable ONLY from the ALB group.
+      resource "aws_security_group" "ecs" {
+        name        = "${var.project}-ecs-sg"
+        description = "Allow the app port only from the ALB"
+        vpc_id      = aws_vpc.main.id
+        ingress {
+          description     = "App port from the ALB only"
+          from_port       = var.container_port
+          to_port         = var.container_port
+          protocol        = "tcp"
+          security_groups = [aws_security_group.alb.id]
+        }
+        egress {
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+
+      resource "aws_lb" "main" {
+        name                       = "${var.project}-alb"
+        internal                   = false
+        load_balancer_type         = "application"
+        security_groups            = [aws_security_group.alb.id]
+        subnets                    = aws_subnet.public[*].id
+        drop_invalid_header_fields = true # drop malformed headers (hardening)
+      }
+
+      resource "aws_lb_target_group" "app" {
+        name        = "${var.project}-tg"
+        port        = var.container_port
+        protocol    = "HTTP"
+        vpc_id      = aws_vpc.main.id
+        target_type = "ip" # Fargate tasks register by IP
+        health_check {
+          path    = "/healthz"
+          matcher = "200"
+        }
+      }
+
+      resource "aws_lb_listener" "http" {
+        load_balancer_arn = aws_lb.main.arn
+        port              = 80
+        protocol          = "HTTP"
+        default_action {
+          type             = "forward"
+          target_group_arn = aws_lb_target_group.app.arn
+        }
+      }
+    note:
+      fr: "Le groupe ECS référence le groupe ALB (`security_groups = [alb.id]`), pas une plage d'IP : le conteneur n'accepte que le trafic venant de l'ALB. Le health check vise `/healthz`."
+      en: "The ECS group references the ALB group (`security_groups = [alb.id]`), not an IP range: the container only accepts traffic coming from the ALB. The health check targets `/healthz`."
+
+  - title:
+      fr: "ecr.tf : registre avec scan au push et tags immuables"
+      en: "ecr.tf: registry with scan-on-push and immutable tags"
+    file: ecr.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_ecr_repository" "app" {
+        name                 = "${var.project}-app"
+        image_tag_mutability = "IMMUTABLE" # a tag can NEVER be overwritten
+        force_delete         = true        # lets `terraform destroy` empty the repo
+
+        image_scanning_configuration {
+          scan_on_push = true # scan every pushed image for CVEs
+        }
+        encryption_configuration {
+          encryption_type = "AES256" # encrypt images at rest
+        }
+      }
+
+      # Keep only the 10 most recent images to control storage cost.
+      resource "aws_ecr_lifecycle_policy" "app" {
+        repository = aws_ecr_repository.app.name
+        policy = jsonencode({
+          rules = [{
+            rulePriority = 1
+            description  = "Keep only the last 10 images"
+            selection = {
+              tagStatus   = "any"
+              countType   = "imageCountMoreThan"
+              countNumber = 10
+            }
+            action = { type = "expire" }
+          }]
+        })
+      }
+    note:
+      fr: "`IMMUTABLE` + `scan_on_push` sont les deux réglages de sécurité clés. `force_delete = true` autorise la destruction du registre même s'il contient des images (utile en leçon 5)."
+      en: "`IMMUTABLE` + `scan_on_push` are the two key security settings. `force_delete = true` allows destroying the registry even if it holds images (useful in lesson 5)."
+
+  - title:
+      fr: "ecs.tf : cluster, task et service Fargate en privé"
+      en: "ecs.tf: Fargate cluster, task and service in private"
+    file: ecs.tf
+    lang: hcl
+    kind: secure
+    code: |
+      resource "aws_cloudwatch_log_group" "app" {
+        name              = "/ecs/${var.project}"
+        retention_in_days = 30 # do not keep logs forever
+      }
+
+      resource "aws_ecs_cluster" "main" {
+        name = "${var.project}-cluster"
+        setting {
+          name  = "containerInsights"
+          value = "enabled"
+        }
+      }
+
+      resource "aws_ecs_task_definition" "app" {
+        family                   = "${var.project}-task"
+        requires_compatibilities = ["FARGATE"]
+        network_mode             = "awsvpc"
+        cpu                      = 256
+        memory                   = 512
+        execution_role_arn       = aws_iam_role.ecs_execution.arn
+        task_role_arn            = aws_iam_role.ecs_task.arn
+
+        container_definitions = jsonencode([{
+          name                   = "app"
+          image                  = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+          essential              = true
+          readonlyRootFilesystem = true # app cannot write to its own filesystem
+          portMappings           = [{ containerPort = var.container_port }]
+          logConfiguration = {
+            logDriver = "awslogs"
+            options = {
+              "awslogs-group"         = aws_cloudwatch_log_group.app.name
+              "awslogs-region"        = var.aws_region
+              "awslogs-stream-prefix" = "app"
+            }
+          }
+        }])
+      }
+
+      resource "aws_ecs_service" "app" {
+        name            = "${var.project}-svc"
+        cluster         = aws_ecs_cluster.main.id
+        task_definition = aws_ecs_task_definition.app.arn
+        desired_count   = 2
+        launch_type     = "FARGATE"
+
+        network_configuration {
+          subnets          = aws_subnet.private[*].id
+          security_groups  = [aws_security_group.ecs.id]
+          assign_public_ip = false # tasks have NO public IP
+        }
+
+        load_balancer {
+          target_group_arn = aws_lb_target_group.app.arn
+          container_name   = "app"
+          container_port   = var.container_port
+        }
+
+        depends_on = [aws_lb_listener.http]
+      }
+    note:
+      fr: "Les conteneurs tournent en sous-réseaux privés sans IP publique, avec un système de fichiers racine en lecture seule. L'image déployée est `...:${var.image_tag}`, fixé par le pipeline."
+      en: "Containers run in private subnets with no public IP and a read-only root filesystem. The deployed image is `...:${var.image_tag}`, set by the pipeline."
+
+  - title:
+      fr: "iam.tf : deux rôles séparés (execution et task)"
+      en: "iam.tf: two separate roles (execution and task)"
+    file: iam.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Trust policy shared by both ECS task roles.
+      data "aws_iam_policy_document" "ecs_assume" {
+        statement {
+          actions = ["sts:AssumeRole"]
+          principals {
+            type        = "Service"
+            identifiers = ["ecs-tasks.amazonaws.com"]
+          }
+        }
+      }
+
+      # Execution role: used by ECS to pull the image and write logs.
+      resource "aws_iam_role" "ecs_execution" {
+        name               = "${var.project}-ecs-execution"
+        assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+      }
+
+      resource "aws_iam_role_policy_attachment" "ecs_execution" {
+        role       = aws_iam_role.ecs_execution.name
+        policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+      }
+
+      # Task role: the permissions the APPLICATION itself holds.
+      # Empty here = least privilege (the app calls no AWS API).
+      resource "aws_iam_role" "ecs_task" {
+        name               = "${var.project}-ecs-task"
+        assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+      }
+    note:
+      fr: "Deux rôles distincts : l'agent ECS (execution) peut tirer l'image et logguer ; l'application (task) n'a aucun droit AWS. Si l'app est piratée, elle n'hérite pas des droits de l'agent."
+      en: "Two distinct roles: the ECS agent (execution) can pull the image and log; the application (task) has no AWS rights. If the app is hacked, it does not inherit the agent's rights."
+
+  - title:
+      fr: "outputs.tf : les informations utiles après déploiement"
+      en: "outputs.tf: the useful information after deployment"
+    file: outputs.tf
+    lang: hcl
+    kind: neutral
+    code: |
+      output "alb_dns_name" {
+        description = "Public URL of the application"
+        value       = "http://${aws_lb.main.dns_name}"
+      }
+
+      output "ecr_repository_url" {
+        description = "ECR repository to push the image to"
+        value       = aws_ecr_repository.app.repository_url
+      }
+
+      output "ecs_cluster_name" {
+        description = "ECS cluster name (used by the deploy pipeline)"
+        value       = aws_ecs_cluster.main.name
+      }
+
+      output "ecs_service_name" {
+        description = "ECS service name (used by the deploy pipeline)"
+        value       = aws_ecs_service.app.name
+      }
+    note:
+      fr: "Après `terraform apply`, ces sorties affichent l'URL publique et les noms des ressources dont le pipeline aura besoin pour déployer l'image."
+      en: "After `terraform apply`, these outputs print the public URL and the names of the resources the pipeline needs to deploy the image."
+
+mistake:
+  fr: |
+    **Ouvrir le groupe de sécurité ECS à `0.0.0.0/0` « pour que ça marche ».**
+
+    ```hcl
+    ingress {
+      from_port   = 3000
+      to_port     = 3000
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"] # DANGER: conteneurs exposés à internet
+    }
+    ```
+
+    Cela rend les conteneurs directement joignables depuis internet et annule la segmentation. La règle
+    correcte autorise le port **uniquement depuis le groupe de l'ALB** (`security_groups = [alb.id]`).
+    De même, ne donnez jamais de droits inutiles au task role « au cas où ».
+  en: |
+    **Opening the ECS security group to `0.0.0.0/0` "to make it work".**
+
+    ```hcl
+    ingress {
+      from_port   = 3000
+      to_port     = 3000
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"] # DANGER: containers exposed to the internet
+    }
+    ```
+
+    This makes the containers directly reachable from the internet and defeats the segmentation. The
+    correct rule allows the port **only from the ALB's group** (`security_groups = [alb.id]`). Likewise,
+    never grant the task role unnecessary rights "just in case".
+
+bestPractice:
+  fr: |
+    - **Réseau segmenté** : ALB public, conteneurs en sous-réseaux privés, `assign_public_ip = false`.
+    - **Groupe ECS référençant le groupe ALB**, pas une plage d'IP.
+    - **ECR** : `scan_on_push = true` et `image_tag_mutability = "IMMUTABLE"`.
+    - **Rôles séparés** : execution (agent ECS) ≠ task (application), chacun au strict minimum.
+    - **Système de fichiers en lecture seule** et **logs centralisés** avec rétention.
+    - **Tout en variables** : nom, région, port réutilisés depuis `variables.tf`.
+  en: |
+    - **Segmented network**: public ALB, containers in private subnets, `assign_public_ip = false`.
+    - **ECS group referencing the ALB group**, not an IP range.
+    - **ECR**: `scan_on_push = true` and `image_tag_mutability = "IMMUTABLE"`.
+    - **Separate roles**: execution (ECS agent) ≠ task (application), each at the strict minimum.
+    - **Read-only filesystem** and **centralised logs** with retention.
+    - **Everything in variables**: name, region, port reused from `variables.tf`.
+
+exercise:
+  statement:
+    fr: |
+      La **task definition** actuelle ne force pas HTTPS mais tourne en HTTP via l'ALB. Pour renforcer la
+      posture, ajoutez à la **task definition** une variable d'environnement et une limite :
+
+      1. injectez `NODE_ENV=production` au conteneur (clé `environment`) ;
+      2. ajoutez un `healthCheck` conteneur qui appelle `/healthz` toutes les 30 secondes.
+
+      Écrivez le bloc `container_definitions` modifié.
+    en: |
+      The current **task definition** does not force HTTPS but runs over HTTP via the ALB. To strengthen
+      the posture, add an environment variable and a limit to the **task definition**:
+
+      1. inject `NODE_ENV=production` into the container (the `environment` key);
+      2. add a container `healthCheck` that calls `/healthz` every 30 seconds.
+
+      Write the modified `container_definitions` block.
+  solution:
+    file: task-definition.tf
+    lang: hcl
+    code: |
+      container_definitions = jsonencode([{
+        name                   = "app"
+        image                  = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+        essential              = true
+        readonlyRootFilesystem = true
+        portMappings           = [{ containerPort = var.container_port }]
+
+        # 1. Inject configuration via environment, never hard-coded.
+        environment = [
+          { name = "NODE_ENV", value = "production" },
+          { name = "PORT", value = tostring(var.container_port) }
+        ]
+
+        # 2. Container-level health check hitting /healthz.
+        healthCheck = {
+          command     = ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:${var.container_port}/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+          interval    = 30
+          timeout     = 5
+          retries     = 3
+          startPeriod = 10
+        }
+
+        logConfiguration = {
+          logDriver = "awslogs"
+          options = {
+            "awslogs-group"         = aws_cloudwatch_log_group.app.name
+            "awslogs-region"        = var.aws_region
+            "awslogs-stream-prefix" = "app"
+          }
+        }
+      }])
+    note:
+      fr: "Le `healthCheck` conteneur double celui de l'ALB : ECS redémarre un conteneur malade même avant que l'ALB ne le retire. La configuration passe par `environment`, jamais en dur."
+      en: "The container `healthCheck` complements the ALB's: ECS restarts an unhealthy container even before the ALB removes it. Configuration goes through `environment`, never hard-coded."
+
+quiz:
+  - q:
+      fr: "Comment le groupe de sécurité ECS protège-t-il les conteneurs ?"
+      en: "How does the ECS security group protect the containers?"
+    options:
+      fr:
+        - "Il chiffre le trafic"
+        - "Il n'autorise le port de l'app que depuis le groupe de l'ALB, pas depuis internet"
+        - "Il bloque tout le trafic sortant"
+        - "Il ouvre le port 3000 à `0.0.0.0/0`"
+      en:
+        - "It encrypts the traffic"
+        - "It allows the app port only from the ALB's group, not from the internet"
+        - "It blocks all outbound traffic"
+        - "It opens port 3000 to `0.0.0.0/0`"
+    answer: 1
+    why:
+      fr: "`security_groups = [alb.id]` fait que seul le trafic venant de l'ALB atteint les conteneurs : ils restent injoignables depuis internet."
+      en: "`security_groups = [alb.id]` means only traffic from the ALB reaches the containers: they stay unreachable from the internet."
+  - q:
+      fr: "Que garantit `image_tag_mutability = \"IMMUTABLE\"` sur le registre ECR ?"
+      en: "What does `image_tag_mutability = \"IMMUTABLE\"` guarantee on the ECR registry?"
+    options:
+      fr:
+        - "Les images sont chiffrées"
+        - "Les images sont scannées automatiquement"
+        - "Un tag d'image ne peut jamais être écrasé"
+        - "Seules 10 images sont conservées"
+      en:
+        - "Images are encrypted"
+        - "Images are scanned automatically"
+        - "An image tag can never be overwritten"
+        - "Only 10 images are kept"
+    answer: 2
+    why:
+      fr: "Un tag immuable interdit qu'une image soit silencieusement remplacée : garantie d'intégrité et de traçabilité."
+      en: "An immutable tag forbids an image from being silently replaced: a guarantee of integrity and traceability."
+  - q:
+      fr: "Pourquoi séparer l'execution role et le task role dans ECS ?"
+      en: "Why separate the execution role and the task role in ECS?"
+    options:
+      fr:
+        - "Pour que l'application n'hérite pas des droits de l'agent ECS si elle est compromise"
+        - "Pour accélérer le démarrage des conteneurs"
+        - "Parce qu'AWS facture chaque rôle"
+        - "Pour utiliser deux régions"
+      en:
+        - "So the application does not inherit the ECS agent's rights if it is compromised"
+        - "To speed up container startup"
+        - "Because AWS charges per role"
+        - "To use two regions"
+    answer: 0
+    why:
+      fr: "L'execution role (tirer l'image, logs) est distinct du task role (droits de l'app). Séparer applique le moindre privilège."
+      en: "The execution role (pull image, logs) is distinct from the task role (app rights). Separating them enforces least privilege."
+  - q:
+      fr: "À quoi sert la NAT Gateway dans cette architecture ?"
+      en: "What is the NAT Gateway for in this architecture?"
+    options:
+      fr:
+        - "À exposer les conteneurs à internet"
+        - "À chiffrer le state Terraform"
+        - "À permettre aux conteneurs privés d'accéder à internet en sortie sans être joignables en entrée"
+        - "À répartir le trafic entrant"
+      en:
+        - "To expose the containers to the internet"
+        - "To encrypt the Terraform state"
+        - "To let private containers reach the internet outbound without being reachable inbound"
+        - "To balance incoming traffic"
+    answer: 2
+    why:
+      fr: "La NAT Gateway donne un accès sortant aux sous-réseaux privés (mises à jour, ECR) tout en gardant les conteneurs injoignables depuis internet."
+      en: "The NAT Gateway gives outbound access to private subnets (updates, ECR) while keeping the containers unreachable from the internet."
+  - q:
+      fr: "Pourquoi activer `readonlyRootFilesystem = true` sur le conteneur ?"
+      en: "Why enable `readonlyRootFilesystem = true` on the container?"
+    options:
+      fr:
+        - "Pour accélérer l'application"
+        - "Pour réduire la facture AWS"
+        - "Pour chiffrer les logs"
+        - "Pour empêcher un attaquant d'écrire des fichiers (malware, webshell) dans le conteneur"
+      en:
+        - "To speed up the application"
+        - "To reduce the AWS bill"
+        - "To encrypt the logs"
+        - "To stop an attacker from writing files (malware, webshell) in the container"
+    answer: 3
+    why:
+      fr: "Un système de fichiers en lecture seule empêche l'écriture de code malveillant persistant si l'application est compromise."
+      en: "A read-only filesystem prevents writing persistent malicious code if the application is compromised."

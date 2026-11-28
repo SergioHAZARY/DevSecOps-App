@@ -1,0 +1,414 @@
+description:
+  fr: "Reconnaître les attaques réseau les plus courantes (balayage, force brute, MITM, DDoS, usurpation) et comprendre les défenses de base."
+  en: "Recognise the most common network attacks (scanning, brute force, MITM, DDoS, spoofing) and understand the basic defences."
+duration: 26
+
+intro:
+  fr: |
+    Pour défendre un système, il faut d'abord comprendre comment on l'attaque. Pas pour attaquer soi-même, mais
+    pour **reconnaître** les signes d'une intrusion et savoir quelle défense dresser. Un pompier connaît le feu ;
+    un défenseur réseau connaît les attaques.
+
+    Imaginez un cambrioleur. Il commence par repérer la maison (quelles fenêtres, quelles portes), puis essaie
+    les serrures, et parfois intercepte le courrier pour voler des informations. Les attaques réseau suivent la
+    même logique : **repérer** (balayage de ports), **forcer** (attaque par force brute), **intercepter**
+    (*man-in-the-middle*), ou **submerger** (déni de service). Chaque attaque laisse des traces, et chacune a
+    ses parades.
+
+    Dans cette leçon, vous allez découvrir les familles d'attaques réseau les plus fréquentes, apprendre à
+    **repérer leurs traces** dans les journaux, et surtout connaître la **défense** adaptée à chacune. Tout est
+    présenté du point de vue du défenseur, avec des exemples sur votre propre lab uniquement.
+  en: |
+    To defend a system, you must first understand how it is attacked. Not to attack yourself, but to
+    **recognise** the signs of an intrusion and know which defence to raise. A firefighter knows fire; a network
+    defender knows attacks.
+
+    Picture a burglar. They first scout the house (which windows, which doors), then try the locks, and
+    sometimes intercept the mail to steal information. Network attacks follow the same logic: **scout** (port
+    scanning), **force** (brute-force attack), **intercept** (*man-in-the-middle*), or **overwhelm** (denial of
+    service). Each attack leaves traces, and each has its counters.
+
+    In this lesson you will discover the most frequent families of network attacks, learn to **spot their
+    traces** in logs, and above all know the **defence** fitted to each. Everything is shown from the defender's
+    viewpoint, with examples on your own lab only.
+
+sections:
+  - heading:
+      fr: "Les grandes familles d'attaques"
+      en: "The main families of attacks"
+    body:
+      fr: |
+        La plupart des attaques réseau se rangent dans quelques familles. En voici les principales, avec leur
+        but et leur défense de base :
+
+        | Attaque | But de l'attaquant | Défense principale |
+        |---|---|---|
+        | **Balayage de ports** (*scan*) | Repérer les services ouverts | Pare-feu, fermer les ports inutiles |
+        | **Force brute** | Deviner un mot de passe par essais répétés | Clés SSH, mots de passe forts, fail2ban |
+        | **Man-in-the-middle** (MITM) | Intercepter la conversation | Chiffrement (HTTPS, TLS) |
+        | **Déni de service** (DoS/DDoS) | Rendre un service indisponible | Filtrage, limitation de débit, services anti-DDoS |
+        | **Usurpation** (*spoofing*) | Se faire passer pour un autre | Authentification, vérification d'identité |
+        | **Hameçonnage** (*phishing*) | Tromper un humain pour obtenir un accès | Vigilance, double authentification |
+
+        Deux idées transversales valent pour presque toutes ces attaques. D'abord, **le chiffrement** neutralise
+        l'interception : une donnée chiffrée interceptée reste illisible. Ensuite, **l'authentification forte**
+        (clés, double facteur) rend l'usurpation et la force brute beaucoup plus difficiles. La sécurité se
+        construit par couches : aucune défense unique ne suffit, mais empilées, elles découragent l'attaquant.
+      en: |
+        Most network attacks fall into a few families. Here are the main ones, with their goal and basic
+        defence:
+
+        | Attack | Attacker's goal | Main defence |
+        |---|---|---|
+        | **Port scanning** | Spot the open services | Firewall, close useless ports |
+        | **Brute force** | Guess a password through repeated tries | SSH keys, strong passwords, fail2ban |
+        | **Man-in-the-middle** (MITM) | Intercept the conversation | Encryption (HTTPS, TLS) |
+        | **Denial of service** (DoS/DDoS) | Make a service unavailable | Filtering, rate limiting, anti-DDoS services |
+        | **Spoofing** | Impersonate someone else | Authentication, identity verification |
+        | **Phishing** | Trick a human into giving access | Vigilance, two-factor authentication |
+
+        Two cross-cutting ideas apply to almost all these attacks. First, **encryption** neutralises
+        interception: an intercepted encrypted datum stays unreadable. Second, **strong authentication** (keys,
+        two-factor) makes spoofing and brute force far harder. Security is built in layers: no single defence is
+        enough, but stacked, they discourage the attacker.
+  - heading:
+      fr: "Force brute et interception, de près"
+      en: "Brute force and interception, up close"
+    body:
+      fr: |
+        Deux attaques méritent un regard détaillé, car on les rencontre tout le temps.
+
+        **L'attaque par force brute** consiste à essayer des milliers de mots de passe jusqu'à trouver le bon.
+        Sur un serveur SSH exposé, des robots tentent sans relâche les couples courants (`admin/admin`,
+        `root/123456`). La trace est caractéristique : des rafales de `Failed password` dans `/var/log/auth.log`
+        depuis une même adresse. Les défenses se cumulent :
+
+        - **Clés SSH** au lieu de mots de passe : il n'y a plus rien à deviner.
+        - **fail2ban** : un outil qui lit les journaux et **bannit** automatiquement (via le pare-feu) une
+          adresse après trop d'échecs.
+        - **Limiter l'exposition** : n'ouvrir SSH qu'aux réseaux de confiance.
+
+        **L'attaque de l'homme du milieu** (*man-in-the-middle*) consiste à se placer **entre** deux
+        interlocuteurs pour lire, voire modifier, leur conversation. Sur un Wi-Fi public, un attaquant peut
+        intercepter le trafic non chiffré. La défense est simple et radicale : **le chiffrement de bout en
+        bout**. En HTTPS, même intercepté, l'échange reste illisible et toute modification est détectée. C'est
+        pourquoi « HTTPS partout » n'est pas un luxe mais une nécessité.
+      en: |
+        Two attacks deserve a closer look, because you meet them all the time.
+
+        **The brute-force attack** consists of trying thousands of passwords until the right one is found. On an
+        exposed SSH server, bots relentlessly try common pairs (`admin/admin`, `root/123456`). The trace is
+        characteristic: bursts of `Failed password` in `/var/log/auth.log` from the same address. The defences
+        stack up:
+
+        - **SSH keys** instead of passwords: there is nothing left to guess.
+        - **fail2ban**: a tool that reads the logs and automatically **bans** (via the firewall) an address after
+          too many failures.
+        - **Limit exposure**: open SSH only to trusted networks.
+
+        **The man-in-the-middle attack** consists of placing yourself **between** two parties to read, or even
+        alter, their conversation. On public Wi-Fi, an attacker can intercept unencrypted traffic. The defence
+        is simple and radical: **end-to-end encryption**. With HTTPS, even intercepted, the exchange stays
+        unreadable and any alteration is detected. This is why "HTTPS everywhere" is not a luxury but a
+        necessity.
+  - heading:
+      fr: "Déni de service et défense en profondeur"
+      en: "Denial of service and defence in depth"
+    body:
+      fr: |
+        Le **déni de service** (*Denial of Service*, DoS) ne cherche pas à entrer : il vise à **rendre le
+        service indisponible** en le submergeant de requêtes. Dans sa version distribuée (**DDoS**), l'attaque
+        provient de milliers de machines à la fois (souvent un *botnet*), ce qui la rend très difficile à
+        bloquer par simple filtrage d'adresse.
+
+        Les défenses se situent à plusieurs niveaux :
+
+        - **Limitation de débit** (*rate limiting*) : brider le nombre de requêtes par seconde et par adresse.
+        - **Pare-feu et filtrage** : rejeter le trafic manifestement malveillant.
+        - **Services spécialisés anti-DDoS** : des réseaux capables d'absorber d'énormes volumes.
+
+        Au-delà du DDoS, ces cas illustrent le principe central de la sécurité réseau : la **défense en
+        profondeur**. On n'empile pas une muraille unique, mais plusieurs couches complémentaires :
+
+        | Couche | Rôle |
+        |---|---|
+        | Pare-feu | Ne laisser entrer que le nécessaire |
+        | Chiffrement (TLS) | Rendre l'interception inutile |
+        | Authentification forte | Empêcher l'usurpation et la force brute |
+        | Journaux + surveillance | Repérer et réagir à une attaque |
+        | Mises à jour | Fermer les failles connues |
+
+        Si une couche cède, les autres tiennent. C'est l'opposé de la « sécurité par l'obscurité » (compter sur
+        le secret d'une configuration) : on construit des défenses solides, visibles, et qui se renforcent
+        mutuellement.
+      en: |
+        **Denial of service** (DoS) does not try to get in: it aims to **make the service unavailable** by
+        overwhelming it with requests. In its distributed form (**DDoS**), the attack comes from thousands of
+        machines at once (often a *botnet*), making it very hard to block by simple address filtering.
+
+        Defences sit at several levels:
+
+        - **Rate limiting**: cap the number of requests per second per address.
+        - **Firewall and filtering**: reject clearly malicious traffic.
+        - **Specialised anti-DDoS services**: networks able to absorb enormous volumes.
+
+        Beyond DDoS, these cases illustrate the central principle of network security: **defence in depth**. You
+        do not stack a single wall, but several complementary layers:
+
+        | Layer | Role |
+        |---|---|
+        | Firewall | Let in only what is needed |
+        | Encryption (TLS) | Make interception useless |
+        | Strong authentication | Prevent spoofing and brute force |
+        | Logs + monitoring | Spot and react to an attack |
+        | Updates | Close known flaws |
+
+        If one layer gives way, the others hold. This is the opposite of "security through obscurity" (relying on
+        a configuration's secrecy): you build solid, visible defences that reinforce one another.
+
+examples:
+  - title:
+      fr: "Repérer une attaque par force brute dans les journaux"
+      en: "Spotting a brute-force attack in the logs"
+    file: detect-bruteforce.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Count failed SSH logins and find the most aggressive source
+      grep "Failed password" /var/log/auth.log \
+        | grep -oE "from [0-9.]+" | awk '{print $2}' \
+        | sort | uniq -c | sort -nr | head -n 3
+    output: |
+          248 203.0.113.42
+           17 198.51.100.7
+            3 192.0.2.55
+    note:
+      fr: "248 échecs depuis une seule adresse en peu de temps : c'est sans ambiguïté une attaque par force brute. La réponse immédiate : bannir cette IP (fail2ban le fait automatiquement) et, à terme, désactiver l'authentification par mot de passe au profit des clés."
+      en: "248 failures from a single address in a short time: unambiguously a brute-force attack. The immediate response: ban that IP (fail2ban does it automatically) and, in time, disable password authentication in favour of keys."
+
+  - title:
+      fr: "Configurer fail2ban pour bannir les attaquants"
+      en: "Configuring fail2ban to ban attackers"
+    file: jail.local
+    lang: ini
+    kind: secure
+    code: |
+      # File: /etc/fail2ban/jail.local
+      # Watch the SSH log and ban an IP after too many failed logins.
+      [sshd]
+      enabled  = true
+      port     = ssh
+      maxretry = 5          # ban after 5 failed attempts
+      findtime = 10m        # ... within a 10-minute window
+      bantime  = 1h         # ... for one hour
+    output: |
+      # After: sudo systemctl restart fail2ban
+      #   sudo fail2ban-client status sshd
+      Status for the jail: sshd
+      |- Currently failed: 2
+      |- Total banned:     14
+      `- Banned IP list:   203.0.113.42 198.51.100.7
+    note:
+      fr: "fail2ban lit `auth.log` et ajoute automatiquement une règle de pare-feu bloquant toute adresse ayant échoué 5 fois en 10 minutes. C'est une défense simple et efficace contre les robots de force brute, en complément des clés SSH."
+      en: "fail2ban reads `auth.log` and automatically adds a firewall rule blocking any address that failed 5 times in 10 minutes. It is a simple, effective defence against brute-force bots, on top of SSH keys."
+
+  - title:
+      fr: "Détecter un balayage de ports dans une capture"
+      en: "Detecting a port scan in a capture"
+    file: detect-scan.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # On YOUR OWN lab: a port scan shows as many SYN packets to many ports
+      # from the same source in a very short time. Capture and count them.
+      sudo tcpdump -i eth0 -n "tcp[tcpflags] & tcp-syn != 0" \
+        | grep -oE "> 192.0.2.10.[0-9]+" | sort -u | head
+    output: |
+      > 192.0.2.10.22
+      > 192.0.2.10.23
+      > 192.0.2.10.80
+      > 192.0.2.10.139
+      > 192.0.2.10.443
+      > 192.0.2.10.445
+      > 192.0.2.10.3306
+      > 192.0.2.10.3389
+    note:
+      fr: "Une même source qui touche en rafale des dizaines de ports différents est la signature d'un balayage. La parade n'est pas d'empêcher le scan (impossible sur un service public) mais de **fermer** les ports inutiles : moins il y a de ports ouverts, moins le scan rapporte."
+      en: "A single source hitting dozens of different ports in a burst is the signature of a scan. The counter is not to prevent the scan (impossible on a public service) but to **close** useless ports: the fewer open ports, the less the scan yields."
+
+mistake:
+  fr: |
+    **Croire qu'une seule défense suffit, ou compter sur le secret de sa configuration.**
+
+    Beaucoup pensent « j'ai un pare-feu, je suis protégé » ou « mon serveur est sur un port inhabituel, personne
+    ne le trouvera ». C'est faux. Un pare-feu ne protège pas d'un mot de passe faible ; un port exotique est
+    trouvé en quelques secondes par un scan automatisé. Compter sur le secret d'une configuration — la *sécurité
+    par l'obscurité* — n'est jamais une vraie défense. La bonne approche est la **défense en profondeur** :
+    plusieurs couches indépendantes (pare-feu **et** clés SSH **et** chiffrement **et** mises à jour **et**
+    surveillance). Si l'une cède, les autres tiennent. Aucune couche n'est négligeable, et aucune n'est suffisante
+    seule.
+  en: |
+    **Believing one defence is enough, or relying on the secrecy of your configuration.**
+
+    Many think "I have a firewall, I'm protected" or "my server is on an unusual port, no one will find it".
+    This is false. A firewall does not protect against a weak password; an exotic port is found in seconds by an
+    automated scan. Relying on a configuration's secrecy — *security through obscurity* — is never a real
+    defence. The right approach is **defence in depth**: several independent layers (firewall **and** SSH keys
+    **and** encryption **and** updates **and** monitoring). If one gives way, the others hold. No layer is
+    negligible, and none is sufficient on its own.
+
+bestPractice:
+  fr: |
+    - **Défense en profondeur** : empilez pare-feu, chiffrement, authentification forte, journaux et mises à jour.
+    - **Clés plutôt que mots de passe** contre la force brute : il n'y a plus rien à deviner.
+    - **fail2ban** : bannit automatiquement les adresses qui multiplient les échecs de connexion.
+    - **Chiffrez tout** (HTTPS/TLS) : une interception sur un échange chiffré ne rapporte rien à l'attaquant.
+    - **Surveillez les journaux** : une rafale de `Failed password` ou un balayage sont des signaux à ne pas ignorer.
+    - **Jamais de sécurité par l'obscurité** : un port caché ou une config secrète ne remplace pas une vraie défense.
+  en: |
+    - **Defence in depth**: stack firewall, encryption, strong authentication, logs and updates.
+    - **Keys over passwords** against brute force: there is nothing left to guess.
+    - **fail2ban**: automatically bans addresses that pile up failed logins.
+    - **Encrypt everything** (HTTPS/TLS): an interception on an encrypted exchange yields nothing to the attacker.
+    - **Watch the logs**: a burst of `Failed password` or a scan are signals not to ignore.
+    - **Never security through obscurity**: a hidden port or a secret config does not replace a real defence.
+
+exercise:
+  statement:
+    fr: |
+      À partir d'un extrait de journal et de vos connaissances, raisonnez comme un défenseur :
+
+      1. Dans un journal SSH, comptez les connexions échouées et identifiez l'adresse la plus agressive.
+      2. Pour chacune de ces attaques, nommez la défense principale : balayage de ports, force brute, man-in-the-middle, DDoS.
+      3. Écrivez une configuration `fail2ban` minimale qui bannit une IP après 4 échecs en 5 minutes, pour 30 minutes.
+      4. Expliquez en une phrase ce qu'est la défense en profondeur.
+
+      Notez vos réponses dans votre dépôt de suivi.
+    en: |
+      From a log excerpt and your knowledge, reason like a defender:
+
+      1. In an SSH log, count the failed logins and identify the most aggressive address.
+      2. For each of these attacks, name the main defence: port scanning, brute force, man-in-the-middle, DDoS.
+      3. Write a minimal `fail2ban` configuration that bans an IP after 4 failures in 5 minutes, for 30 minutes.
+      4. Explain in one sentence what defence in depth is.
+
+      Record your answers in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Count failures and find the most aggressive source
+      grep "Failed password" /var/log/auth.log \
+        | grep -oE "from [0-9.]+" | awk '{print $2}' \
+        | sort | uniq -c | sort -nr | head -n 1
+
+      # 2. Main defences:
+      #    - port scanning      -> firewall + close useless ports
+      #    - brute force        -> SSH keys + fail2ban
+      #    - man-in-the-middle  -> encryption (HTTPS/TLS)
+      #    - DDoS               -> rate limiting + anti-DDoS services
+
+      # 3. Minimal fail2ban jail (file /etc/fail2ban/jail.local):
+      #    [sshd]
+      #    enabled  = true
+      #    maxretry = 4
+      #    findtime = 5m
+      #    bantime  = 30m
+
+      # 4. Defence in depth = stacking several independent security layers so
+      #    that if one fails, the others still protect the system.
+    note:
+      fr: "Chaque attaque a sa parade, mais aucune parade ne suffit seule : clés SSH et fail2ban contre la force brute, chiffrement contre l'interception, pare-feu contre le balayage. Empilées, ces couches forment la défense en profondeur."
+      en: "Each attack has its counter, but no single counter is enough: SSH keys and fail2ban against brute force, encryption against interception, firewall against scanning. Stacked, these layers form defence in depth."
+
+quiz:
+  - q:
+      fr: "Quel est le but d'une attaque par force brute ?"
+      en: "What is the goal of a brute-force attack?"
+    options:
+      fr:
+        - "Deviner un mot de passe par essais répétés"
+        - "Rendre un service indisponible"
+        - "Intercepter une conversation chiffrée"
+        - "Supprimer les journaux"
+      en:
+        - "Guess a password through repeated tries"
+        - "Make a service unavailable"
+        - "Intercept an encrypted conversation"
+        - "Delete the logs"
+    answer: 0
+    why:
+      fr: "La force brute essaie des milliers de mots de passe jusqu'à trouver le bon ; les clés SSH et fail2ban sont les défenses principales."
+      en: "Brute force tries thousands of passwords until it finds the right one; SSH keys and fail2ban are the main defences."
+  - q:
+      fr: "Quelle est la défense principale contre une attaque de l'homme du milieu (MITM) ?"
+      en: "What is the main defence against a man-in-the-middle (MITM) attack?"
+    options:
+      fr:
+        - "Changer de port réseau"
+        - "Le chiffrement de bout en bout (HTTPS/TLS)"
+        - "Supprimer les utilisateurs inactifs"
+        - "Augmenter la mémoire du serveur"
+      en:
+        - "Change the network port"
+        - "End-to-end encryption (HTTPS/TLS)"
+        - "Delete inactive users"
+        - "Increase the server's memory"
+    answer: 1
+    why:
+      fr: "Un échange chiffré reste illisible même s'il est intercepté, et toute modification est détectée : c'est exactement ce que TLS apporte."
+      en: "An encrypted exchange stays unreadable even if intercepted, and any change is detected: that is exactly what TLS provides."
+  - q:
+      fr: "Que fait fail2ban ?"
+      en: "What does fail2ban do?"
+    options:
+      fr:
+        - "Il chiffre les mots de passe"
+        - "Il scanne les ports du serveur"
+        - "Il lit les journaux et bannit automatiquement une IP après trop d'échecs"
+        - "Il sauvegarde les fichiers"
+      en:
+        - "It encrypts passwords"
+        - "It scans the server's ports"
+        - "It reads the logs and automatically bans an IP after too many failures"
+        - "It backs up files"
+    answer: 2
+    why:
+      fr: "fail2ban surveille des journaux comme `auth.log` et ajoute une règle de pare-feu bloquant les adresses qui échouent trop souvent : une parade efficace contre la force brute."
+      en: "fail2ban watches logs like `auth.log` and adds a firewall rule blocking addresses that fail too often: an effective counter to brute force."
+  - q:
+      fr: "Qu'est-ce que la « sécurité par l'obscurité » et pourquoi est-elle insuffisante ?"
+      en: "What is \"security through obscurity\" and why is it insufficient?"
+    options:
+      fr:
+        - "Chiffrer toutes les données ; c'est en fait très efficace"
+        - "Compter sur le secret d'une config (port caché…) ; un scan la découvre vite"
+        - "Utiliser plusieurs couches de défense ; c'est la meilleure méthode"
+        - "Fermer tous les ports ; cela rend le serveur inutilisable"
+      en:
+        - "Encrypting all data; it is actually very effective"
+        - "Relying on a config's secrecy (hidden port…); a scan finds it quickly"
+        - "Using several layers of defence; it is the best method"
+        - "Closing all ports; it makes the server unusable"
+    answer: 1
+    why:
+      fr: "Cacher un service (port exotique, config secrète) ne protège pas : un balayage automatisé le trouve en secondes. Seules de vraies défenses empilées protègent durablement."
+      en: "Hiding a service (exotic port, secret config) does not protect: an automated scan finds it in seconds. Only real, stacked defences protect durably."
+  - q:
+      fr: "Que décrit le principe de « défense en profondeur » ?"
+      en: "What does the \"defence in depth\" principle describe?"
+    options:
+      fr:
+        - "Une seule muraille très épaisse"
+        - "Cacher le serveur pour que personne ne le trouve"
+        - "Désactiver toute sécurité pour aller plus vite"
+        - "Empiler plusieurs couches indépendantes, pour que les autres tiennent si l'une cède"
+      en:
+        - "A single very thick wall"
+        - "Hiding the server so no one finds it"
+        - "Disabling all security to go faster"
+        - "Stacking several independent layers, so the others hold if one gives way"
+    answer: 3
+    why:
+      fr: "La défense en profondeur combine pare-feu, chiffrement, authentification forte, journaux et mises à jour : si une couche échoue, les autres continuent de protéger."
+      en: "Defence in depth combines firewall, encryption, strong authentication, logs and updates: if one layer fails, the others keep protecting."

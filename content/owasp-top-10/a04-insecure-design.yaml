@@ -1,0 +1,401 @@
+description:
+  fr: "A04 Insecure Design : des failles présentes dès la conception, avant le code, et comment les éviter par la modélisation des menaces."
+  en: "A04 Insecure Design: flaws present from the design stage, before any code, and how to avoid them with threat modelling."
+duration: 25
+
+intro:
+  fr: |
+    **A04 - Insecure Design** (conception non sécurisée) est une catégorie **nouvelle en 2021**. Elle désigne
+    les failles qui ne viennent pas d'un bug de programmation, mais d'un **défaut de conception** : on a oublié
+    de prévoir un contrôle de sécurité dès le départ. Un code parfaitement écrit peut implémenter un design
+    dangereux.
+
+    Imaginez une maison dont les plans ne prévoient **aucune** serrure sur la porte d'entrée. Les maçons
+    peuvent construire des murs irréprochables : la maison reste ouverte à tous, parce que le problème est dans
+    le **plan**, pas dans l'exécution. Corriger après coup coûte cher et laisse souvent des traces. La sécurité
+    doit être pensée **avant** de poser la première pierre.
+
+    Dans cette leçon, vous verrez des exemples typiques - réinitialisation de mot de passe sans limite, logique
+    métier abusable, absence de verrouillage de compte - et surtout la méthode pour les éviter : **modélisation
+    des menaces**, cas d'abus et exigences de sécurité dès la conception.
+  en: |
+    **A04 - Insecure Design** is a **new category in 2021**. It covers flaws that do not come from a
+    programming bug but from a **design defect**: a security control was never planned from the start. Perfectly
+    written code can implement a dangerous design.
+
+    Picture a house whose blueprints include **no** lock on the front door. The builders can raise flawless
+    walls: the house stays open to everyone, because the problem is in the **plan**, not the execution. Fixing
+    it afterwards is costly and often leaves scars. Security must be considered **before** laying the first
+    brick.
+
+    In this lesson you will see typical examples - password reset without a limit, abusable business logic,
+    no account lockout - and above all the method to avoid them: **threat modelling**, abuse cases and
+    security requirements from the design stage.
+
+sections:
+  - heading:
+      fr: "Bug d'implémentation contre défaut de conception"
+      en: "Implementation bug versus design flaw"
+    body:
+      fr: |
+        | Aspect | Bug d'implémentation | Défaut de conception (A04) |
+        |---|---|---|
+        | Où ? | Dans une ligne de code | Dans l'architecture, le flux, les règles |
+        | Exemple | Oubli d'un `?` dans une requête | Aucun mécanisme anti-abus prévu |
+        | Détecté par | SAST, revue de code | Modélisation des menaces, cas d'abus |
+        | Correction | Changer quelques lignes | Repenser une partie du système |
+
+        Quelques défauts de conception classiques :
+
+        - une **réinitialisation de mot de passe** par question secrète devinable (« nom de votre animal ») ;
+        - un **tunnel d'achat** où le prix est envoyé par le client et accepté tel quel ;
+        - une **absence de limite** sur les tentatives, les crédits, les transferts ;
+        - un **workflow** où une étape de validation peut être sautée en appelant directement l'étape suivante.
+
+        Aucun de ces problèmes n'est un bug : le code fait exactement ce qu'on lui a demandé. C'est la
+        **spécification** qui est dangereuse.
+      en: |
+        | Aspect | Implementation bug | Design flaw (A04) |
+        |---|---|---|
+        | Where? | In a line of code | In the architecture, the flow, the rules |
+        | Example | A missing `?` in a query | No anti-abuse mechanism planned |
+        | Detected by | SAST, code review | Threat modelling, abuse cases |
+        | Fix | Change a few lines | Rethink part of the system |
+
+        Some classic design flaws:
+
+        - a **password reset** via a guessable secret question ("your pet's name");
+        - a **checkout flow** where the price is sent by the client and accepted as is;
+        - a **lack of limits** on attempts, credits, transfers;
+        - a **workflow** where a validation step can be skipped by calling the next step directly.
+
+        None of these is a bug: the code does exactly what it was asked to. It is the **specification** that is
+        dangerous.
+  - heading:
+      fr: "Concevoir sûr : modélisation des menaces"
+      en: "Designing securely: threat modelling"
+    body:
+      fr: |
+        La **modélisation des menaces** (*threat modelling*) se fait tôt, sur un schéma, en se posant quatre
+        questions (cadre de Shostack) :
+
+        1. **Que construit-on ?** (le diagramme de flux de données)
+        2. **Qu'est-ce qui peut mal tourner ?** (menaces, via STRIDE : Spoofing, Tampering, Repudiation,
+           Information disclosure, Denial of service, Elevation of privilege)
+        3. **Que fait-on à ce sujet ?** (les contre-mesures)
+        4. **A-t-on bien fait le travail ?** (vérification)
+
+        On écrit des **cas d'abus** (« et si un attaquant réinitialisait le mot de passe de quelqu'un
+        d'autre ? ») à côté des cas d'usage, et on en tire des **exigences de sécurité** : limite de débit,
+        verrouillage après N échecs, validation du prix côté serveur, étapes de workflow non contournables.
+
+        Côté pipeline DevSecOps, A04 ne se détecte pas par un seul scanner : la défense principale est
+        **humaine** (revue d'architecture, threat modelling en continu). Mais certains symptômes se repèrent :
+        le **DAST** montre une absence de limite de débit, les **tests d'abus** automatisés rejouent un
+        contournement de workflow, et des bibliothèques (rate limiter, machine à états) imposent le bon design.
+      en: |
+        **Threat modelling** is done early, on a diagram, asking four questions (Shostack's framework):
+
+        1. **What are we building?** (the data-flow diagram)
+        2. **What can go wrong?** (threats, via STRIDE: Spoofing, Tampering, Repudiation, Information
+           disclosure, Denial of service, Elevation of privilege)
+        3. **What are we going to do about it?** (countermeasures)
+        4. **Did we do a good job?** (verification)
+
+        You write **abuse cases** ("what if an attacker reset someone else's password?") alongside the use
+        cases, and derive **security requirements**: rate limits, lockout after N failures, server-side price
+        validation, non-skippable workflow steps.
+
+        On the DevSecOps side, A04 is not caught by a single scanner: the primary defense is **human**
+        (architecture review, continuous threat modelling). But some symptoms show up: **DAST** reveals a
+        missing rate limit, automated **abuse tests** replay a workflow bypass, and libraries (rate limiter,
+        state machine) enforce the right design.
+
+examples:
+  - title:
+      fr: "Réinitialisation de mot de passe : conception vulnérable vs sûre"
+      en: "Password reset: vulnerable vs secure design"
+    file: reset_design.py
+    lang: python
+    kind: secure
+    code: |
+      import secrets
+      import time
+
+      # ---------- VULNERABLE DESIGN ----------
+      # Reset relies on a guessable "secret question" and has no rate limit.
+      def reset_vulnerable(user, answer):
+          if answer == user["pet_name"]:        # often public on social media
+              return "password reset allowed"
+          return "wrong answer"
+
+      # ---------- SECURE DESIGN ----------
+      # Reset uses an unguessable, single-use, short-lived token sent out of band
+      # (email), plus a rate limit. This is a DESIGN decision, not a code tweak.
+      TOKENS = {}
+
+      def request_reset(user_email):
+          token = secrets.token_urlsafe(32)     # unguessable
+          TOKENS[token] = (user_email, time.time() + 900)  # expires in 15 minutes
+          # send `token` by email; never reveal whether the account exists
+          return "if the account exists, an email was sent"
+
+      def confirm_reset(token):
+          entry = TOKENS.pop(token, None)        # single use: removed on consumption
+          if entry is None or entry[1] < time.time():
+              return "invalid or expired token"
+          return "password reset allowed"
+
+      print(request_reset("alice@example.com"))
+      t = next(iter(TOKENS))
+      print(confirm_reset(t))
+      print(confirm_reset(t))   # reused token no longer works
+    output: |
+      if the account exists, an email was sent
+      password reset allowed
+      invalid or expired token
+    note:
+      fr: "La faille n'est pas dans le code mais dans le choix de la « question secrète ». Le bon design repose sur un jeton imprévisible, à usage unique, expirant, envoyé hors bande."
+      en: "The flaw is not in the code but in the choice of a \"secret question\". The sound design relies on an unguessable, single-use, expiring token sent out of band."
+
+  - title:
+      fr: "Logique métier : prix envoyé par le client vs recalculé"
+      en: "Business logic: client-sent price vs recomputed"
+    file: checkout.py
+    lang: python
+    kind: secure
+    code: |
+      PRICES = {"book": 20.0, "pen": 2.0}   # the source of truth, server-side
+
+      # ---------- VULNERABLE DESIGN ----------
+      def total_vulnerable(cart):
+          # Trusts a "price" field the client sends -> buyer can send price: 0.01
+          return sum(item["price"] * item["qty"] for item in cart)
+
+      # ---------- SECURE DESIGN ----------
+      def total(cart):
+          # The server looks up the price itself; the client only sends sku + qty
+          total = 0.0
+          for item in cart:
+              price = PRICES.get(item["sku"])
+              if price is None or item["qty"] < 1:
+                  raise ValueError("invalid cart item")
+              total += price * item["qty"]
+          return total
+
+      tampered = [{"sku": "book", "price": 0.01, "qty": 1}]
+      print("vulnerable total:", total_vulnerable(tampered))   # trusts 0.01
+      print("secure total    :", total([{"sku": "book", "qty": 1}]))
+    output: |
+      vulnerable total: 0.01
+      secure total    : 20.0
+    note:
+      fr: "Accepter le prix du client est un défaut de conception : le serveur doit être la source de vérité. Le client n'envoie que la référence et la quantité."
+      en: "Accepting the client's price is a design flaw: the server must be the source of truth. The client sends only the reference and the quantity."
+
+  - title:
+      fr: "Limite de débit : conception sans garde-fou vs avec compteur"
+      en: "Rate limiting: design with no guard vs with a counter"
+    file: rate_limit.py
+    lang: python
+    kind: secure
+    code: |
+      import time
+
+      # ---------- SECURE DESIGN ----------
+      # A sliding-window limiter is a design-level control against brute force,
+      # credential stuffing and resource abuse. Decide it BEFORE coding the feature.
+      class RateLimiter:
+          def __init__(self, max_calls, per_seconds):
+              self.max_calls = max_calls
+              self.per = per_seconds
+              self.calls: dict = {}
+
+          def allow(self, key: str) -> bool:
+              now = time.time()
+              window = [t for t in self.calls.get(key, []) if t > now - self.per]
+              if len(window) >= self.max_calls:
+                  return False                   # deny: too many attempts
+              window.append(now)
+              self.calls[key] = window
+              return True
+
+      limiter = RateLimiter(max_calls=3, per_seconds=60)
+      for i in range(1, 6):
+          print(f"attempt {i}: {'ALLOW' if limiter.allow('alice') else 'DENY'}")
+    output: |
+      attempt 1: ALLOW
+      attempt 2: ALLOW
+      attempt 3: ALLOW
+      attempt 4: DENY
+      attempt 5: DENY
+    note:
+      fr: "Cliquez sur Run. Sans limite prévue au design, un attaquant teste des millions de mots de passe. Le compteur par fenêtre bloque après 3 tentatives : c'est une exigence de conception."
+      en: "Press Run. Without a limit planned at design time, an attacker tries millions of passwords. The window counter blocks after 3 attempts: it is a design requirement."
+
+mistake:
+  fr: |
+    **Vouloir « sécuriser plus tard », après avoir livré les fonctionnalités.**
+
+    Ajouter la sécurité en fin de projet revient à poser des serrures sur une maison déjà construite sans
+    prévoir d'emplacement : c'est cher, incomplet et source de régressions. Un défaut de conception ne se
+    corrige pas avec un patch d'une ligne ; il faut souvent revoir un flux entier. La modélisation des menaces
+    coûte quelques heures au début et évite des semaines de reprise. La sécurité est une **exigence**, pas une
+    option qu'on branche à la fin.
+  en: |
+    **Wanting to "secure it later", after shipping the features.**
+
+    Adding security at the end of a project is like fitting locks onto an already-built house with no place
+    for them: it is costly, incomplete and a source of regressions. A design flaw is not fixed with a one-line
+    patch; it often requires reworking a whole flow. Threat modelling costs a few hours up front and saves
+    weeks of rework. Security is a **requirement**, not an option you plug in at the end.
+
+bestPractice:
+  fr: |
+    - **Modélisez les menaces dès la conception** (STRIDE, diagramme de flux) sur chaque fonctionnalité sensible.
+    - **Écrivez des cas d'abus** à côté des cas d'usage, et traduisez-les en exigences de sécurité.
+    - **Server-side source of truth** : prix, droits, états ne viennent jamais du client.
+    - **Limites par défaut** : débit, tentatives, quotas, plafonds de transaction.
+    - **Workflows non contournables** : chaque étape vérifie que la précédente a bien eu lieu.
+    - **Patrons sûrs réutilisables** (rate limiter, machine à états) plutôt que de réinventer à chaque fois.
+  en: |
+    - **Threat-model from the design stage** (STRIDE, data-flow diagram) on every sensitive feature.
+    - **Write abuse cases** alongside use cases, and turn them into security requirements.
+    - **Server-side source of truth**: prices, rights, states never come from the client.
+    - **Limits by default**: rate, attempts, quotas, transaction caps.
+    - **Non-skippable workflows**: each step checks that the previous one actually happened.
+    - **Reusable secure patterns** (rate limiter, state machine) rather than reinventing each time.
+
+exercise:
+  statement:
+    fr: |
+      Une start-up conçoit un système de parrainage : chaque code de parrainage donne 10 € de crédit au
+      parrain quand un filleul s'inscrit. Le design proposé :
+
+      - le filleul saisit un code de parrainage à l'inscription ;
+      - le crédit est ajouté immédiatement, sans autre vérification ;
+      - aucun plafond, aucune limite sur le nombre de filleuls par jour.
+
+      1. Décrivez deux abus possibles (pensez « cas d'abus »).
+      2. Proposez trois exigences de sécurité à intégrer **au design** pour les empêcher.
+    en: |
+      A start-up is designing a referral system: each referral code gives 10 EUR credit to the referrer when a
+      referee signs up. The proposed design:
+
+      - the referee enters a referral code at signup;
+      - the credit is added immediately, with no further check;
+      - no cap, no limit on the number of referees per day.
+
+      1. Describe two possible abuses (think "abuse cases").
+      2. Propose three security requirements to add **at the design level** to prevent them.
+  solution:
+    file: solution.md
+    lang: markdown
+    code: |
+      ## Abuse cases
+      1. Self-referral farming: one person creates many fake accounts, each entering
+         their own code, generating unlimited credit.
+      2. Code guessing / sharing: predictable codes are brute-forced, or a leaked code
+         is reused by many unrelated signups.
+
+      ## Design-level security requirements
+      - Credit only after a *qualifying event* (verified email + first real purchase),
+        not immediately at signup.
+      - Per-referrer daily cap and a global lifetime cap on referral credit.
+      - Unpredictable, single-use referral codes, plus rate limiting and duplicate
+        device/payment detection to block mass fake accounts.
+    note:
+      fr: "Aucune de ces corrections n'est un patch de code : ce sont des décisions de conception (événement qualifiant, plafonds, codes à usage unique) issues des cas d'abus."
+      en: "None of these fixes is a code patch: they are design decisions (qualifying event, caps, single-use codes) derived from the abuse cases."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'un défaut de conception (A04) ?"
+      en: "What is a design flaw (A04)?"
+    options:
+      fr:
+        - "Un bug dans une ligne de code"
+        - "Un contrôle de sécurité qui n'a jamais été prévu dans le design"
+        - "Un certificat TLS mal configuré"
+        - "Une dépendance obsolète"
+      en:
+        - "A bug in a line of code"
+        - "A security control that was never planned in the design"
+        - "A misconfigured TLS certificate"
+        - "An outdated dependency"
+    answer: 1
+    why:
+      fr: "A04 concerne l'architecture et les règles : le code fait ce qu'on lui a demandé, mais la spécification a oublié un contrôle."
+      en: "A04 is about architecture and rules: the code does what it was asked, but the specification forgot a control."
+  - q:
+      fr: "Quelle méthode permet de trouver les défauts de conception tôt ?"
+      en: "Which method helps find design flaws early?"
+    options:
+      fr:
+        - "La modélisation des menaces (threat modelling)"
+        - "Le scan de dépendances"
+        - "Le renouvellement des certificats"
+        - "La minification du code"
+      en:
+        - "Threat modelling"
+        - "Dependency scanning"
+        - "Certificate renewal"
+        - "Code minification"
+    answer: 0
+    why:
+      fr: "La modélisation des menaces analyse le design avant le code (STRIDE, cas d'abus) pour en déduire des exigences de sécurité."
+      en: "Threat modelling analyses the design before the code (STRIDE, abuse cases) to derive security requirements."
+  - q:
+      fr: "Pourquoi accepter le prix envoyé par le client est-il un défaut de conception ?"
+      en: "Why is accepting the client-sent price a design flaw?"
+    options:
+      fr:
+        - "Parce que le JSON est trop volumineux"
+        - "Parce que cela ralentit le serveur"
+        - "Parce que le client peut modifier le prix ; le serveur doit être la source de vérité"
+        - "Parce que le prix doit être chiffré"
+      en:
+        - "Because the JSON is too large"
+        - "Because it slows the server down"
+        - "Because the client can change the price; the server must be the source of truth"
+        - "Because the price must be encrypted"
+    answer: 2
+    why:
+      fr: "Tout ce qui vient du client est modifiable ; le serveur doit recalculer le prix à partir de la référence produit."
+      en: "Anything from the client is forgeable; the server must recompute the price from the product reference."
+  - q:
+      fr: "Que désigne l'acronyme STRIDE ?"
+      en: "What does the acronym STRIDE stand for?"
+    options:
+      fr:
+        - "Un algorithme de chiffrement"
+        - "Six catégories de menaces pour la modélisation"
+        - "Un type de pare-feu"
+        - "Un format de journal"
+      en:
+        - "An encryption algorithm"
+        - "Six threat categories for modelling"
+        - "A type of firewall"
+        - "A log format"
+    answer: 1
+    why:
+      fr: "STRIDE liste six familles de menaces (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege)."
+      en: "STRIDE lists six threat families (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege)."
+  - q:
+      fr: "Pourquoi « sécuriser plus tard » est-il une mauvaise approche ?"
+      en: "Why is \"secure it later\" a poor approach?"
+    options:
+      fr:
+        - "Parce que la sécurité est interdite en production"
+        - "Parce qu'un défaut de conception exige souvent de revoir un flux entier, coûteux après coup"
+        - "Parce que les scanners ne fonctionnent qu'en préproduction"
+        - "Parce que le code devient plus rapide"
+      en:
+        - "Because security is forbidden in production"
+        - "Because a design flaw often requires reworking a whole flow, costly after the fact"
+        - "Because scanners only work in staging"
+        - "Because the code becomes faster"
+    answer: 1
+    why:
+      fr: "Corriger un design dangereux après livraison coûte cher et provoque des régressions ; la modélisation des menaces en amont l'évite."
+      en: "Fixing a dangerous design after shipping is costly and causes regressions; upfront threat modelling avoids it."

@@ -1,0 +1,389 @@
+description:
+  fr: "A05 Security Misconfiguration : mode debug, erreurs bavardes, en-têtes manquants et stockage cloud public, détectés par IaC et DAST."
+  en: "A05 Security Misconfiguration: debug mode, chatty errors, missing headers and public cloud storage, caught by IaC and DAST."
+duration: 25
+
+intro:
+  fr: |
+    **A05 - Security Misconfiguration** (mauvaise configuration de sécurité) regroupe tous les réglages
+    dangereux : mode débogage activé en production, comptes par défaut non changés, services inutiles ouverts,
+    messages d'erreur qui dévoilent l'intérieur du système, en-têtes de sécurité absents, permissions cloud
+    trop larges. En 2021, cette catégorie a absorbé l'ancienne faille *XML External Entities (XXE)*.
+
+    Pensez à un immeuble neuf livré avec le code d'accès « 0000 » encore actif, la porte de la salle serveurs
+    grande ouverte, et un plan détaillé du bâtiment affiché dans le hall. Rien n'est « cassé », mais tout est
+    mal réglé : un visiteur mal intentionné n'a aucun effort à fournir. La sécurité par configuration, c'est
+    fermer ces portes **avant** l'ouverture.
+
+    Dans cette leçon, vous verrez les erreurs les plus fréquentes - debug activé, erreur détaillée renvoyée au
+    client, en-têtes de sécurité manquants, bucket de stockage public - en version vulnérable puis corrigée, et
+    les outils qui les détectent : **IaC scanning** (Checkov, Trivy, tfsec) et **DAST**.
+  en: |
+    **A05 - Security Misconfiguration** covers every dangerous setting: debug mode enabled in production,
+    unchanged default accounts, useless services left open, error messages that reveal the system's internals,
+    missing security headers, overly broad cloud permissions. In 2021 this category absorbed the former *XML
+    External Entities (XXE)* flaw.
+
+    Think of a new building delivered with the access code still "0000", the server-room door wide open, and a
+    detailed floor plan posted in the lobby. Nothing is "broken", but everything is misconfigured: a
+    malicious visitor has no effort to make. Security by configuration means closing those doors **before**
+    opening day.
+
+    In this lesson you will see the most common mistakes - debug enabled, a detailed error returned to the
+    client, missing security headers, a public storage bucket - vulnerable then fixed, and the tools that
+    detect them: **IaC scanning** (Checkov, Trivy, tfsec) and **DAST**.
+
+sections:
+  - heading:
+      fr: "Les mauvaises configurations les plus fréquentes"
+      en: "The most common misconfigurations"
+    body:
+      fr: |
+        | Mauvaise configuration | Risque | Correction |
+        |---|---|---|
+        | Mode debug en production | Code source et secrets exposés dans les erreurs | `DEBUG=False`, erreurs génériques |
+        | Comptes / mots de passe par défaut | Accès trivial (`admin`/`admin`) | Changer / désactiver dès l'installation |
+        | Erreurs détaillées renvoyées | Chemins, versions, requêtes SQL divulgués | Message générique, détails dans les logs |
+        | En-têtes de sécurité manquants | XSS, clickjacking, downgrade | HSTS, CSP, `X-Content-Type-Options`... |
+        | Services / ports inutiles ouverts | Surface d'attaque élargie | Désactiver, fermer, segmenter |
+        | Stockage cloud public | Fuite de données massive | Bloquer l'accès public, chiffrer |
+
+        Le fil conducteur : **durcir par défaut** et n'ouvrir que le strict nécessaire. Un système « qui marche »
+        n'est pas un système « bien configuré » : les réglages par défaut privilégient la facilité de mise en
+        route, pas la sécurité. Chaque environnement (dev, test, prod) doit avoir une configuration explicite et
+        versionnée (*configuration as code*), reproductible et vérifiable.
+      en: |
+        | Misconfiguration | Risk | Fix |
+        |---|---|---|
+        | Debug mode in production | Source code and secrets exposed in errors | `DEBUG=False`, generic errors |
+        | Default accounts / passwords | Trivial access (`admin`/`admin`) | Change / disable at install time |
+        | Detailed errors returned | Paths, versions, SQL queries disclosed | Generic message, details in logs |
+        | Missing security headers | XSS, clickjacking, downgrade | HSTS, CSP, `X-Content-Type-Options`... |
+        | Useless services / ports open | Enlarged attack surface | Disable, close, segment |
+        | Public cloud storage | Massive data leak | Block public access, encrypt |
+
+        The common thread: **harden by default** and open only the strict minimum. A system that "works" is not
+        a "well-configured" system: default settings favour ease of setup, not security. Each environment (dev,
+        test, prod) must have an explicit, versioned configuration (*configuration as code*), reproducible and
+        verifiable.
+  - heading:
+      fr: "Détecter la mauvaise configuration"
+      en: "Detecting misconfiguration"
+    body:
+      fr: |
+        C'est l'une des catégories où l'automatisation est la plus efficace, surtout côté infrastructure :
+
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | IaC scanning | Checkov, Trivy config, tfsec | Un bucket public, un SG ouvert, un `DEBUG` à `true` dans l'IaC |
+        | DAST | OWASP ZAP, Nikto | En-têtes manquants, erreurs verbeuses, pages d'admin exposées |
+        | CSPM | Prowler, ScoutSuite | Les écarts cloud par rapport aux CIS Benchmarks |
+        | Scan d'image | Trivy, Grype | Images avec services ou paquets inutiles |
+
+        Le **scan d'Infrastructure as Code** (Checkov, Trivy, tfsec) est particulièrement précieux : il
+        détecte la mauvaise configuration **avant** le déploiement, directement dans le code Terraform ou le
+        Dockerfile, et fait échouer la pull request. C'est le *shift left* appliqué à la configuration : on
+        corrige le plan, pas le serveur en production.
+      en: |
+        This is one of the categories where automation is most effective, especially on the infrastructure
+        side:
+
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | IaC scanning | Checkov, Trivy config, tfsec | A public bucket, an open SG, a `DEBUG` set to `true` in IaC |
+        | DAST | OWASP ZAP, Nikto | Missing headers, verbose errors, exposed admin pages |
+        | CSPM | Prowler, ScoutSuite | Cloud drift from the CIS Benchmarks |
+        | Image scan | Trivy, Grype | Images with useless services or packages |
+
+        **Infrastructure-as-Code scanning** (Checkov, Trivy, tfsec) is especially valuable: it detects
+        misconfiguration **before** deployment, directly in the Terraform code or the Dockerfile, and fails the
+        pull request. It is *shift left* applied to configuration: you fix the blueprint, not the production
+        server.
+
+examples:
+  - title:
+      fr: "Flask : debug activé et erreur bavarde vs configuration durcie"
+      en: "Flask: debug on and chatty error vs hardened configuration"
+    file: app.py
+    lang: python
+    kind: secure
+    code: |
+      import os
+      from flask import Flask, jsonify
+
+      app = Flask(__name__)
+
+      # ---------- VULNERABLE ----------
+      # debug=True exposes the interactive debugger: an error page lets an attacker
+      # run Python on the server, and leaks source code, paths and environment.
+      #   app.run(debug=True)                     # NEVER in production
+
+      # ---------- FIXED ----------
+      # Debug is driven by config, defaults to off; errors are generic to the client.
+      app.config["DEBUG"] = os.environ.get("FLASK_DEBUG") == "1"  # off unless opted in
+
+      @app.errorhandler(500)
+      def internal_error(e):
+          # The detailed exception goes to the server logs, NOT to the user
+          app.logger.exception("internal error")
+          return jsonify(error="internal server error"), 500  # generic message
+
+      @app.get("/")
+      def index():
+          return jsonify(status="ok")
+
+      if __name__ == "__main__":
+          # Host/port from config; debug stays False in production
+          app.run(host="127.0.0.1", port=8000)
+    note:
+      fr: "`debug=True` transforme chaque erreur en console Python distante : fuite de code et exécution possible. En production, debug désactivé et message d'erreur générique, les détails restant dans les logs."
+      en: "`debug=True` turns every error into a remote Python console: code leak and possible execution. In production, debug is off and the error message is generic, with details kept in the logs."
+
+  - title:
+      fr: "En-têtes de sécurité HTTP : absents vs présents"
+      en: "HTTP security headers: missing vs present"
+    file: headers.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, Response
+
+      app = Flask(__name__)
+
+      # ---------- FIXED ----------
+      # Security headers are a cheap, high-value hardening step. Add them globally.
+      @app.after_request
+      def set_security_headers(resp: Response) -> Response:
+          # Force HTTPS for a year, including subdomains (prevents downgrade)
+          resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+          # Restrict what can load/execute -> strong anti-XSS defense in depth
+          resp.headers["Content-Security-Policy"] = "default-src 'self'"
+          # Stop MIME sniffing that could turn an upload into executable content
+          resp.headers["X-Content-Type-Options"] = "nosniff"
+          # Disallow being framed -> anti-clickjacking
+          resp.headers["X-Frame-Options"] = "DENY"
+          # Limit referrer leakage to other sites
+          resp.headers["Referrer-Policy"] = "no-referrer"
+          return resp
+
+      @app.get("/")
+      def index():
+          return "ok"
+
+      # A scanner like OWASP ZAP or securityheaders.io flags each missing header.
+    note:
+      fr: "Sans ces en-têtes, l'application reste exposée au downgrade HTTPS, au clickjacking et facilite le XSS. Les ajouter globalement via `after_request` est rapide et à fort impact. Un DAST signale ceux qui manquent."
+      en: "Without these headers, the app stays exposed to HTTPS downgrade, clickjacking and easier XSS. Adding them globally via `after_request` is quick and high-impact. A DAST flags the missing ones."
+
+  - title:
+      fr: "IaC : bucket S3 public (Terraform) vulnérable vs verrouillé"
+      en: "IaC: public S3 bucket (Terraform) vulnerable vs locked down"
+    file: main.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # ---------- VULNERABLE ----------
+      # A public-read ACL exposes every object to the whole Internet.
+      # resource "aws_s3_bucket" "data" {
+      #   bucket = "example-app-data"
+      #   acl    = "public-read"          # Checkov CKV_AWS_20 / tfsec flag this
+      # }
+
+      # ---------- FIXED ----------
+      resource "aws_s3_bucket" "data" {
+        bucket = "example-app-data"
+      }
+
+      # Block ALL forms of public access at the account/bucket level
+      resource "aws_s3_bucket_public_access_block" "data" {
+        bucket                  = aws_s3_bucket.data.id
+        block_public_acls       = true
+        block_public_policy     = true
+        ignore_public_acls      = true
+        restrict_public_buckets = true
+      }
+
+      # Encrypt objects at rest by default
+      resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
+        bucket = aws_s3_bucket.data.id
+        rule {
+          apply_server_side_encryption_by_default {
+            sse_algorithm = "aws:kms"
+          }
+        }
+      }
+    output: |
+      $ checkov -f main.tf
+      Passed checks: 4, Failed checks: 0, Skipped checks: 0
+      Check: CKV_AWS_20: "S3 Bucket does not allow public access"  PASSED
+    note:
+      fr: "Le scan IaC (Checkov, tfsec, Trivy config) détecte le bucket public **avant** le déploiement et bloque la PR. Le `public_access_block` et le chiffrement par défaut corrigent la configuration à la source."
+      en: "IaC scanning (Checkov, tfsec, Trivy config) catches the public bucket **before** deployment and blocks the PR. The `public_access_block` and default encryption fix the configuration at the source."
+
+mistake:
+  fr: |
+    **Prendre « ça marche » pour « c'est bien configuré ».**
+
+    Les réglages par défaut d'un framework, d'une base ou d'un cloud sont pensés pour une mise en route facile,
+    pas pour la production : debug activé, mot de passe par défaut, accès large, erreurs verbeuses. Un système
+    fonctionnel peut ainsi exposer son code source, ses secrets ou ses données sans qu'aucune ligne ne soit
+    « buggée ». Il faut une configuration **explicite, durcie et versionnée** par environnement, et la vérifier
+    automatiquement (IaC scanning, DAST) à chaque changement, car une configuration se dégrade avec le temps.
+  en: |
+    **Taking "it works" for "it is well configured".**
+
+    The default settings of a framework, database or cloud are designed for easy setup, not for production:
+    debug on, default password, broad access, verbose errors. A functional system can thus expose its source
+    code, secrets or data without a single "buggy" line. You need an **explicit, hardened, versioned**
+    configuration per environment, and you must verify it automatically (IaC scanning, DAST) on every change,
+    because a configuration drifts over time.
+
+bestPractice:
+  fr: |
+    - **Durcir par défaut** : debug désactivé, comptes par défaut supprimés, services inutiles coupés.
+    - **Erreurs génériques** côté client ; les détails restent dans les journaux côté serveur.
+    - **En-têtes de sécurité** systématiques : HSTS, CSP, `X-Content-Type-Options`, `X-Frame-Options`.
+    - **Configuration as Code** versionnée et identique entre les environnements, reproductible.
+    - **IaC scanning en CI** (Checkov, Trivy, tfsec) : un bucket public ou un SG ouvert fait échouer la PR.
+    - **DAST et CSPM** pour vérifier la configuration en fonctionnement et le cloud (CIS Benchmarks).
+  en: |
+    - **Harden by default**: debug off, default accounts removed, useless services disabled.
+    - **Generic errors** on the client side; details stay in the server logs.
+    - **Security headers** everywhere: HSTS, CSP, `X-Content-Type-Options`, `X-Frame-Options`.
+    - **Configuration as Code** versioned and identical across environments, reproducible.
+    - **IaC scanning in CI** (Checkov, Trivy, tfsec): a public bucket or open SG fails the PR.
+    - **DAST and CSPM** to verify the running configuration and the cloud (CIS Benchmarks).
+
+exercise:
+  statement:
+    fr: |
+      Un audit rapide d'une application en production relève :
+
+      1. Une page d'erreur affiche la trace Python complète avec les chemins du serveur.
+      2. La console d'administration de la base est accessible sur `/adminer` sans restriction.
+      3. Le bucket de sauvegardes a l'ACL `public-read`.
+
+      Pour chaque point : expliquez le risque, donnez la correction, et nommez l'outil du pipeline qui aurait
+      dû le détecter avant la mise en production.
+    en: |
+      A quick audit of a production application finds:
+
+      1. An error page shows the full Python stack trace with server paths.
+      2. The database admin console is reachable at `/adminer` with no restriction.
+      3. The backups bucket has the `public-read` ACL.
+
+      For each point: explain the risk, give the fix, and name the pipeline tool that should have caught it
+      before production.
+  solution:
+    file: solution.md
+    lang: markdown
+    code: |
+      1. Verbose error page
+         Risk: leaks source paths, versions and sometimes secrets, guiding an attacker.
+         Fix: DEBUG=False, a generic error to the client, full details only in logs.
+         Tool: DAST (OWASP ZAP/Nikto flags verbose errors); code/config review.
+
+      2. Exposed /adminer admin console
+         Risk: direct database access, default or weak credentials, full compromise.
+         Fix: remove it from production, or restrict by network/VPN + strong auth.
+         Tool: DAST (finds exposed admin paths); image/config review.
+
+      3. public-read backups bucket
+         Risk: massive data leak of every backup object to the whole Internet.
+         Fix: S3 public access block on, default KMS encryption, least-privilege policy.
+         Tool: IaC scanning (Checkov CKV_AWS_20, tfsec, Trivy config) + CSPM (Prowler).
+    note:
+      fr: "Les trois problèmes se détectent automatiquement : DAST pour les erreurs et l'admin exposée, IaC scanning et CSPM pour le bucket public. Tous auraient dû bloquer avant la production."
+      en: "All three are detectable automatically: DAST for the errors and exposed admin, IaC scanning and CSPM for the public bucket. All should have blocked before production."
+
+quiz:
+  - q:
+      fr: "Pourquoi laisser `debug=True` en production est-il dangereux ?"
+      en: "Why is leaving `debug=True` in production dangerous?"
+    options:
+      fr:
+        - "Cela ralentit seulement l'application"
+        - "Les pages d'erreur exposent le code, les chemins et parfois l'exécution de commandes"
+        - "Cela désactive HTTPS"
+        - "Cela supprime les journaux"
+      en:
+        - "It only slows the application down"
+        - "Error pages expose code, paths and sometimes command execution"
+        - "It disables HTTPS"
+        - "It deletes the logs"
+    answer: 1
+    why:
+      fr: "Le débogueur interactif dévoile le code source, les chemins et l'environnement, et peut permettre d'exécuter du code sur le serveur."
+      en: "The interactive debugger reveals source code, paths and environment, and can allow running code on the server."
+  - q:
+      fr: "Quelle faille a été fusionnée dans A05 en 2021 ?"
+      en: "Which flaw was merged into A05 in 2021?"
+    options:
+      fr:
+        - "L'injection SQL"
+        - "Le SSRF"
+        - "XML External Entities (XXE)"
+        - "Le CSRF"
+      en:
+        - "SQL injection"
+        - "SSRF"
+        - "XML External Entities (XXE)"
+        - "CSRF"
+    answer: 2
+    why:
+      fr: "L'ancienne catégorie XXE a été intégrée à Security Misconfiguration en 2021, car elle découle d'un parseur XML mal configuré."
+      en: "The former XXE category was folded into Security Misconfiguration in 2021, as it stems from a misconfigured XML parser."
+  - q:
+      fr: "Quel en-tête force le navigateur à n'utiliser que HTTPS ?"
+      en: "Which header forces the browser to use HTTPS only?"
+    options:
+      fr:
+        - "`Strict-Transport-Security` (HSTS)"
+        - "`X-Frame-Options`"
+        - "`Referrer-Policy`"
+        - "`Accept-Encoding`"
+      en:
+        - "`Strict-Transport-Security` (HSTS)"
+        - "`X-Frame-Options`"
+        - "`Referrer-Policy`"
+        - "`Accept-Encoding`"
+    answer: 0
+    why:
+      fr: "HSTS indique au navigateur de n'accéder au site qu'en HTTPS pendant une durée donnée, empêchant le downgrade."
+      en: "HSTS tells the browser to access the site only over HTTPS for a set duration, preventing downgrade."
+  - q:
+      fr: "Quel outil détecte un bucket S3 public directement dans le code Terraform, avant déploiement ?"
+      en: "Which tool detects a public S3 bucket directly in Terraform code, before deployment?"
+    options:
+      fr:
+        - "Un scanner DAST en boîte noire"
+        - "Un gestionnaire de mots de passe"
+        - "Un outil d'IaC scanning (Checkov, tfsec, Trivy config)"
+        - "Un linter JavaScript"
+      en:
+        - "A black-box DAST scanner"
+        - "A password manager"
+        - "An IaC scanning tool (Checkov, tfsec, Trivy config)"
+        - "A JavaScript linter"
+    answer: 2
+    why:
+      fr: "Le scan d'Infrastructure as Code analyse le Terraform/Dockerfile et bloque la PR avant tout déploiement (shift left)."
+      en: "Infrastructure-as-Code scanning analyses the Terraform/Dockerfile and blocks the PR before any deployment (shift left)."
+  - q:
+      fr: "Pourquoi une erreur détaillée ne doit-elle pas être renvoyée au client ?"
+      en: "Why should a detailed error not be returned to the client?"
+    options:
+      fr:
+        - "Parce qu'elle ralentit la réponse"
+        - "Parce qu'elle divulgue chemins, versions et parfois requêtes SQL à l'attaquant"
+        - "Parce qu'elle consomme trop de mémoire"
+        - "Parce qu'elle casse le cache HTTP"
+      en:
+        - "Because it slows the response"
+        - "Because it discloses paths, versions and sometimes SQL queries to the attacker"
+        - "Because it uses too much memory"
+        - "Because it breaks the HTTP cache"
+    answer: 1
+    why:
+      fr: "Les détails techniques guident l'attaquant ; ils doivent rester dans les journaux côté serveur, le client ne recevant qu'un message générique."
+      en: "Technical details guide the attacker; they must stay in the server logs, with the client receiving only a generic message."

@@ -1,0 +1,531 @@
+description:
+  fr: "Construire un script d'audit de sécurité Windows avec PowerShell 7 : administrateurs locaux, pare-feu, mises à jour, échecs de connexion (4625), SMBv1, BitLocker et Microsoft Defender."
+  en: "Build a Windows security audit script with PowerShell 7: local administrators, firewall, updates, failed logons (4625), SMBv1, BitLocker and Microsoft Defender."
+duration: 30
+
+intro:
+  fr: |
+    Vous maîtrisez le pipeline et les fonctions robustes : assemblons-les en un **script d'audit** qui
+    inspecte la posture de sécurité d'un poste ou d'un serveur Windows et rend un verdict clair, contrôle
+    par contrôle.
+
+    C'est le **contrôle technique** de la machine : une liste de points vérifiés, chacun marqué PASS ou
+    FAIL. Qui est administrateur local ? Le pare-feu est-il actif sur tous les profils ? Les mises à jour
+    sont-elles installées ? Combien d'échecs de connexion récents (l'événement 4625) ? Le protocole obsolète
+    et vulnérable SMBv1 est-il désactivé ? BitLocker chiffre-t-il le disque ? Microsoft Defender est-il
+    opérationnel et à jour ?
+
+    Chaque contrôle utilise de **vraies** cmdlets de PowerShell 7 : `Get-LocalGroupMember`,
+    `Get-NetFirewallProfile`, `Get-HotFix`, `Get-WinEvent`, `Get-BitLockerVolume`, `Get-MpComputerStatus`.
+    Le script est modulaire (une fonction par contrôle), tolère un contrôle en échec sans tout arrêter, et
+    sort avec un code non nul s'il reste des défauts — prêt pour une tâche planifiée. Lancez-le **en
+    administrateur**, uniquement sur des machines qui vous appartiennent.
+  en: |
+    You have mastered the pipeline and robust functions: let us assemble them into an **audit script** that
+    inspects the security posture of a Windows workstation or server and returns a clear verdict, check by
+    check.
+
+    It is the machine's **safety inspection**: a list of checked points, each marked PASS or FAIL. Who is a
+    local administrator? Is the firewall on for all profiles? Are updates installed? How many recent failed
+    logons (event 4625)? Is the obsolete, vulnerable SMBv1 protocol disabled? Does BitLocker encrypt the
+    disk? Is Microsoft Defender running and up to date?
+
+    Each check uses **real** PowerShell 7 cmdlets: `Get-LocalGroupMember`, `Get-NetFirewallProfile`,
+    `Get-HotFix`, `Get-WinEvent`, `Get-BitLockerVolume`, `Get-MpComputerStatus`. The script is modular (one
+    function per check), tolerates a failing check without stopping everything, and exits with a non-zero
+    code if any fault remains — ready for a scheduled task. Run it **as administrator**, only on machines
+    you own.
+
+sections:
+  - heading:
+      fr: "Comptes et pare-feu"
+      en: "Accounts and firewall"
+    body:
+      fr: |
+        Le premier angle d'audit, ce sont les **comptes à privilèges**. Le groupe `Administrators` local
+        doit rester minimal : chaque membre inattendu est un risque. On le liste avec :
+
+        ```powershell
+        Get-LocalGroupMember -Group 'Administrators'
+        ```
+
+        On compare la liste obtenue à une **liste blanche** de comptes légitimes ; tout le reste déclenche
+        une alerte.
+
+        Le deuxième angle est le **pare-feu Windows Defender**. Il expose trois **profils** — `Domain`,
+        `Private`, `Public` — qui doivent **tous** être actifs :
+
+        ```powershell
+        Get-NetFirewallProfile | Select-Object Name, Enabled
+        ```
+
+        Un profil désactivé, souvent le `Public`, ouvre la machine sur les réseaux non fiables. On vérifie
+        aussi la politique par défaut en entrée : elle devrait **bloquer** (`DefaultInboundAction = Block`).
+        Ces cmdlets `Get-Net*` proviennent du module `NetSecurity`, présent nativement sur Windows.
+      en: |
+        The first audit angle is **privileged accounts**. The local `Administrators` group must stay
+        minimal: every unexpected member is a risk. List it with:
+
+        ```powershell
+        Get-LocalGroupMember -Group 'Administrators'
+        ```
+
+        You compare the resulting list to an **allow-list** of legitimate accounts; anything else triggers
+        an alert.
+
+        The second angle is the **Windows Defender Firewall**. It exposes three **profiles** — `Domain`,
+        `Private`, `Public` — that must **all** be enabled:
+
+        ```powershell
+        Get-NetFirewallProfile | Select-Object Name, Enabled
+        ```
+
+        A disabled profile, often `Public`, opens the machine on untrusted networks. You also check the
+        default inbound policy: it should **block** (`DefaultInboundAction = Block`). These `Get-Net*`
+        cmdlets come from the `NetSecurity` module, native on Windows.
+  - heading:
+      fr: "Mises à jour et journaux de sécurité"
+      en: "Updates and security logs"
+    body:
+      fr: |
+        Un système **non à jour** accumule des vulnérabilités connues. `Get-HotFix` liste les correctifs
+        installés et leur date :
+
+        ```powershell
+        Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1
+        ```
+
+        Si le dernier correctif remonte à plusieurs semaines, c'est un signal d'alerte. (Sur les versions
+        récentes, on peut aussi interroger le module `PSWindowsUpdate` ou l'API Windows Update pour les
+        correctifs *en attente*.)
+
+        Côté **journaux**, l'événement de sécurité **4625** correspond à un **échec de connexion**. Une
+        rafale de 4625 trahit une attaque par force brute ou par pulvérisation de mots de passe. On les
+        compte avec `Get-WinEvent` et un filtre efficace :
+
+        ```powershell
+        $since = (Get-Date).AddHours(-24)
+        Get-WinEvent -FilterHashtable @{ LogName='Security'; Id=4625; StartTime=$since } -ErrorAction SilentlyContinue
+        ```
+
+        Le `-FilterHashtable` filtre **côté source** (bien plus rapide qu'un `Where-Object` après coup). On
+        compte ensuite les événements et, pour aller plus loin, on extrait le nom du compte ciblé via la
+        propriété `Properties` de chaque événement. Au-delà d'un seuil (par exemple 10 en 24 h), on signale
+        un défaut.
+      en: |
+        An **out-of-date** system accumulates known vulnerabilities. `Get-HotFix` lists installed updates
+        and their date:
+
+        ```powershell
+        Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1
+        ```
+
+        If the latest update is several weeks old, it is a warning sign. (On recent versions you can also
+        query the `PSWindowsUpdate` module or the Windows Update API for *pending* updates.)
+
+        On the **logs** side, security event **4625** corresponds to a **failed logon**. A burst of 4625
+        betrays a brute-force or password-spraying attack. You count them with `Get-WinEvent` and an
+        efficient filter:
+
+        ```powershell
+        $since = (Get-Date).AddHours(-24)
+        Get-WinEvent -FilterHashtable @{ LogName='Security'; Id=4625; StartTime=$since } -ErrorAction SilentlyContinue
+        ```
+
+        The `-FilterHashtable` filters **at the source** (far faster than a later `Where-Object`). You then
+        count the events and, to go further, extract the targeted account name via each event's `Properties`
+        property. Above a threshold (for example 10 in 24 h), you flag a fault.
+  - heading:
+      fr: "SMBv1, BitLocker et Defender"
+      en: "SMBv1, BitLocker and Defender"
+    body:
+      fr: |
+        Trois contrôles complètent la posture de base :
+
+        - **SMBv1** est un protocole de partage de fichiers **obsolète**, exploité par WannaCry et NotPetya.
+          Il doit être **désactivé** :
+          ```powershell
+          Get-SmbServerConfiguration | Select-Object EnableSMB1Protocol   # doit être False
+          ```
+        - **BitLocker** chiffre le disque : un portable volé non chiffré livre toutes ses données. On vérifie
+          l'état de protection du volume système :
+          ```powershell
+          Get-BitLockerVolume -MountPoint 'C:' | Select-Object ProtectionStatus
+          ```
+        - **Microsoft Defender** doit être actif, en protection temps réel, avec des signatures récentes :
+          ```powershell
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusSignatureAge
+          ```
+
+        | Contrôle | Cmdlet | Attendu |
+        |---|---|---|
+        | SMBv1 désactivé | `Get-SmbServerConfiguration` | `EnableSMB1Protocol = False` |
+        | Disque chiffré | `Get-BitLockerVolume` | `ProtectionStatus = On` |
+        | Antivirus actif | `Get-MpComputerStatus` | `RealTimeProtectionEnabled = True` |
+
+        Chacune de ces cmdlets renvoie un objet : on lit directement la propriété pertinente, sans analyser
+        de texte, et on la compare à la valeur attendue pour décider PASS ou FAIL.
+      en: |
+        Three checks complete the baseline posture:
+
+        - **SMBv1** is an **obsolete** file-sharing protocol, exploited by WannaCry and NotPetya. It must be
+          **disabled**:
+          ```powershell
+          Get-SmbServerConfiguration | Select-Object EnableSMB1Protocol   # must be False
+          ```
+        - **BitLocker** encrypts the disk: a stolen unencrypted laptop hands over all its data. You check
+          the system volume's protection status:
+          ```powershell
+          Get-BitLockerVolume -MountPoint 'C:' | Select-Object ProtectionStatus
+          ```
+        - **Microsoft Defender** must be active, with real-time protection and recent signatures:
+          ```powershell
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusSignatureAge
+          ```
+
+        | Check | Cmdlet | Expected |
+        |---|---|---|
+        | SMBv1 disabled | `Get-SmbServerConfiguration` | `EnableSMB1Protocol = False` |
+        | Disk encrypted | `Get-BitLockerVolume` | `ProtectionStatus = On` |
+        | Antivirus active | `Get-MpComputerStatus` | `RealTimeProtectionEnabled = True` |
+
+        Each of these cmdlets returns an object: you read the relevant property directly, without parsing
+        text, and compare it to the expected value to decide PASS or FAIL.
+
+examples:
+  - title:
+      fr: "Administrateurs locaux contre liste blanche"
+      en: "Local administrators against an allow-list"
+    file: check_admins.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # Expected, legitimate members of the local Administrators group.
+      $allowed = @('BUILTIN\Administrator', "$env:COMPUTERNAME\itadmin")
+
+      $members = Get-LocalGroupMember -Group 'Administrators' |
+          Select-Object -ExpandProperty Name
+
+      # Anyone NOT on the allow-list is an unexpected privileged account.
+      $unexpected = $members | Where-Object { $_ -notin $allowed }
+
+      if ($unexpected) {
+          Write-Output "[FAIL] Unexpected local admins: $($unexpected -join ', ')"
+      } else {
+          Write-Output '[PASS] Local Administrators group matches the allow-list'
+      }
+    output: |
+      [FAIL] Unexpected local admins: WEB01\contractor
+    note:
+      fr: "On compare les membres réels à une **liste blanche** (`-notin`). Tout compte en trop, comme un `contractor` oublié, ressort immédiatement. `Select-Object -ExpandProperty Name` extrait la chaîne du nom, et `-join ', '` rend le message lisible dans le rapport."
+      en: "We compare the real members to an **allow-list** (`-notin`). Any extra account, like a forgotten `contractor`, surfaces at once. `Select-Object -ExpandProperty Name` extracts the name string, and `-join ', '` makes the report message readable."
+
+  - title:
+      fr: "Échecs de connexion : compter les 4625"
+      en: "Failed logons: counting 4625 events"
+    file: check_failed_logons.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      $since = (Get-Date).AddHours(-24)
+      $threshold = 10
+
+      # FilterHashtable filters at the source: fast even on large Security logs.
+      $events = Get-WinEvent -FilterHashtable @{
+          LogName   = 'Security'
+          Id        = 4625
+          StartTime = $since
+      } -ErrorAction SilentlyContinue
+
+      $count = ($events | Measure-Object).Count
+
+      if ($count -gt $threshold) {
+          # Property index 5 of a 4625 event is the targeted account name.
+          $topTargets = $events |
+              Group-Object { $_.Properties[5].Value } |
+              Sort-Object Count -Descending |
+              Select-Object -First 3 Name, Count
+          Write-Output "[FAIL] $count failed logons in 24h (threshold $threshold)"
+          $topTargets | Format-Table -AutoSize
+      } else {
+          Write-Output "[PASS] $count failed logons in 24h (<= $threshold)"
+      }
+    output: |
+      [FAIL] 42 failed logons in 24h (threshold 10)
+
+      Name          Count
+      ----          -----
+      Administrator    31
+      sqlsvc            7
+      guest             4
+    note:
+      fr: "`-FilterHashtable` est la méthode performante pour interroger `Get-WinEvent` : le filtrage se fait côté journal. On compte les 4625, et au-delà du seuil on regroupe par compte ciblé (`Properties[5]`) pour révéler qui subit la force brute — ici le compte `Administrator`."
+      en: "`-FilterHashtable` is the performant way to query `Get-WinEvent`: filtering happens at the log level. We count the 4625s, and above the threshold group by targeted account (`Properties[5]`) to reveal who is being brute-forced — here the `Administrator` account."
+
+  - title:
+      fr: "Pare-feu, SMBv1, BitLocker, Defender"
+      en: "Firewall, SMBv1, BitLocker, Defender"
+    file: check_posture.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # Firewall: all three profiles must be enabled.
+      $fwOff = Get-NetFirewallProfile |
+          Where-Object { -not $_.Enabled } |
+          Select-Object -ExpandProperty Name
+      if ($fwOff) { "[FAIL] Firewall disabled on: $($fwOff -join ', ')" }
+      else        { '[PASS] Firewall enabled on all profiles' }
+
+      # SMBv1 must be disabled (WannaCry / NotPetya vector).
+      if ((Get-SmbServerConfiguration).EnableSMB1Protocol) { '[FAIL] SMBv1 is ENABLED' }
+      else                                                 { '[PASS] SMBv1 is disabled' }
+
+      # BitLocker must protect the system volume.
+      $bl = (Get-BitLockerVolume -MountPoint 'C:').ProtectionStatus
+      if ($bl -eq 'On') { '[PASS] BitLocker protects C:' } else { "[FAIL] BitLocker C: is $bl" }
+
+      # Defender real-time protection must be on, signatures recent.
+      $mp = Get-MpComputerStatus
+      if ($mp.RealTimeProtectionEnabled -and $mp.AntivirusSignatureAge -le 3) {
+          '[PASS] Defender active, signatures recent'
+      } else {
+          "[FAIL] Defender RTP=$($mp.RealTimeProtectionEnabled) sigAge=$($mp.AntivirusSignatureAge)d"
+      }
+    output: |
+      [PASS] Firewall enabled on all profiles
+      [PASS] SMBv1 is disabled
+      [FAIL] BitLocker C: is Off
+      [PASS] Defender active, signatures recent
+    note:
+      fr: "Chaque contrôle lit **une propriété d'objet** et la compare à la valeur attendue : `Enabled`, `EnableSMB1Protocol`, `ProtectionStatus`, `RealTimeProtectionEnabled`. Pas d'analyse de texte. Ici, le disque C: n'est pas chiffré : un défaut concret à corriger."
+      en: "Each check reads **one object property** and compares it to the expected value: `Enabled`, `EnableSMB1Protocol`, `ProtectionStatus`, `RealTimeProtectionEnabled`. No text parsing. Here, drive C: is not encrypted: a concrete fault to fix."
+
+  - title:
+      fr: "Le script complet avec verdict"
+      en: "The complete script with a verdict"
+    file: Invoke-WindowsAudit.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      #Requires -RunAsAdministrator
+      $ErrorActionPreference = 'Stop'
+
+      $script:Failures = 0
+      function Pass($m) { Write-Output "[PASS] $m" }
+      function Fail($m) { Write-Output "[FAIL] $m"; $script:Failures++ }
+
+      function Test-FirewallOn {
+          $off = Get-NetFirewallProfile | Where-Object { -not $_.Enabled }
+          if ($off) { Fail "Firewall off: $(($off.Name) -join ', ')" } else { Pass 'Firewall on all profiles' }
+      }
+      function Test-Smb1Disabled {
+          if ((Get-SmbServerConfiguration).EnableSMB1Protocol) { Fail 'SMBv1 enabled' } else { Pass 'SMBv1 disabled' }
+      }
+      function Test-Defender {
+          $mp = Get-MpComputerStatus
+          if ($mp.RealTimeProtectionEnabled) { Pass 'Defender real-time protection on' }
+          else { Fail 'Defender real-time protection OFF' }
+      }
+
+      function Invoke-WindowsAudit {
+          Write-Output "=== Windows audit on $env:COMPUTERNAME ($(Get-Date -Format yyyy-MM-dd)) ==="
+          Test-FirewallOn
+          Test-Smb1Disabled
+          Test-Defender
+          Write-Output '-----------------------------------'
+          if ($script:Failures -eq 0) { Write-Output 'RESULT: PASS'; exit 0 }
+          Write-Output "RESULT: FAIL ($script:Failures fault(s))"
+          exit 1   # non-zero so Task Scheduler / CI reacts
+      }
+
+      Invoke-WindowsAudit
+    output: |
+      === Windows audit on WEB01 (2026-11-27) ===
+      [PASS] Firewall on all profiles
+      [FAIL] SMBv1 enabled
+      [PASS] Defender real-time protection on
+      -----------------------------------
+      RESULT: FAIL (1 fault(s))
+    note:
+      fr: "`#Requires -RunAsAdministrator` impose l'exécution privilégiée. Le motif `Pass`/`Fail` + compteur `$script:Failures` et une fonction par contrôle rend le script extensible : ajouter un contrôle = ajouter une fonction et un appel. Le code de sortie non nul le rend exploitable en automatisation."
+      en: "`#Requires -RunAsAdministrator` enforces privileged execution. The `Pass`/`Fail` + `$script:Failures` counter pattern and one function per check make the script extensible: adding a check = adding a function and a call. The non-zero exit code makes it usable in automation."
+
+mistake:
+  fr: |
+    **Filtrer les journaux avec `Get-WinEvent | Where-Object` au lieu de `-FilterHashtable`.**
+
+    Le journal de sécurité d'un serveur contient des millions d'entrées. `Get-WinEvent | Where-Object { $_.Id
+    -eq 4625 }` récupère **tout** le journal en mémoire puis filtre : c'est extrêmement lent, parfois
+    plusieurs minutes, et peut saturer le poste. Le bon réflexe est `-FilterHashtable @{ LogName='Security';
+    Id=4625; StartTime=$since }`, qui filtre **côté source**. Autre erreur fréquente : exécuter l'audit sans
+    les droits administrateur — de nombreuses cmdlets (`Get-BitLockerVolume`, lecture du journal Security)
+    renvoient alors des résultats vides ou une erreur, et on croit à tort la machine conforme. Un statut
+    `[SKIP]` explicite vaut mieux qu'un faux `[PASS]`.
+  en: |
+    **Filtering logs with `Get-WinEvent | Where-Object` instead of `-FilterHashtable`.**
+
+    A server's security log holds millions of entries. `Get-WinEvent | Where-Object { $_.Id -eq 4625 }`
+    pulls the **whole** log into memory then filters: extremely slow, sometimes several minutes, and can
+    choke the machine. The right reflex is `-FilterHashtable @{ LogName='Security'; Id=4625; StartTime=$since
+    }`, which filters **at the source**. Another frequent mistake: running the audit without administrator
+    rights — many cmdlets (`Get-BitLockerVolume`, reading the Security log) then return empty results or an
+    error, and you wrongly believe the machine is compliant. An explicit `[SKIP]` status beats a false
+    `[PASS]`.
+
+bestPractice:
+  fr: |
+    - **Une fonction par contrôle** et un compteur de défauts ; sortez avec un code non nul s'il n'est pas
+      nul.
+    - **Filtrez les journaux avec `-FilterHashtable`**, jamais par `Where-Object` après coup.
+    - **Exécutez en administrateur** (`#Requires -RunAsAdministrator`) et distinguez `[PASS]`, `[FAIL]`,
+      `[SKIP]`.
+    - **Comparez à des listes blanches** (administrateurs locaux, ports attendus) plutôt que de tout
+      signaler.
+    - **Lisez les propriétés d'objet** (`ProtectionStatus`, `EnableSMB1Protocol`) au lieu d'analyser du
+      texte.
+    - **Restez en lecture seule** : un audit observe, il ne corrige pas ; la remédiation est une étape
+      distincte.
+    - **Archivez le rapport daté** et expédiez-le vers un SIEM pour suivre l'évolution.
+  en: |
+    - **One function per check** and a fault counter; exit with a non-zero code if it is not zero.
+    - **Filter logs with `-FilterHashtable`**, never with a later `Where-Object`.
+    - **Run as administrator** (`#Requires -RunAsAdministrator`) and distinguish `[PASS]`, `[FAIL]`,
+      `[SKIP]`.
+    - **Compare to allow-lists** (local admins, expected ports) rather than flagging everything.
+    - **Read object properties** (`ProtectionStatus`, `EnableSMB1Protocol`) instead of parsing text.
+    - **Stay read-only**: an audit observes, it does not fix; remediation is a separate step.
+    - **Archive the dated report** and ship it to a SIEM to track evolution.
+
+exercise:
+  statement:
+    fr: |
+      Ajoutez au script d'audit une fonction de contrôle `Test-BitLocker` qui :
+
+      1. lit l'état de protection BitLocker du volume système `C:` avec `Get-BitLockerVolume` ;
+      2. appelle `Pass` si `ProtectionStatus` vaut `On`, sinon `Fail` avec l'état réel dans le message ;
+      3. gère proprement le cas où la cmdlet échoue (droits insuffisants, BitLocker absent) en renvoyant un
+         statut `[SKIP]` plutôt qu'un faux `[PASS]` ;
+      4. s'intègre dans le compteur `$script:Failures` existant.
+    en: |
+      Add a check function `Test-BitLocker` to the audit script that:
+
+      1. reads the BitLocker protection status of the system volume `C:` with `Get-BitLockerVolume`;
+      2. calls `Pass` if `ProtectionStatus` is `On`, otherwise `Fail` with the real status in the message;
+      3. cleanly handles the case where the cmdlet fails (insufficient rights, BitLocker absent) by
+         returning a `[SKIP]` status rather than a false `[PASS]`;
+      4. integrates with the existing `$script:Failures` counter.
+  solution:
+    file: Test-BitLocker.ps1
+    lang: powershell
+    code: |
+      $script:Failures = 0
+      function Pass($m) { Write-Output "[PASS] $m" }
+      function Fail($m) { Write-Output "[FAIL] $m"; $script:Failures++ }
+      function Skip($m) { Write-Output "[SKIP] $m" }
+
+      function Test-BitLocker {
+          try {
+              # Stop makes a missing cmdlet / access error catchable.
+              $status = (Get-BitLockerVolume -MountPoint 'C:' -ErrorAction Stop).ProtectionStatus
+          }
+          catch {
+              # Not a pass: we simply could not verify it.
+              Skip "BitLocker not verifiable: $($_.Exception.Message)"
+              return
+          }
+          if ($status -eq 'On') {
+              Pass 'BitLocker protects C:'
+          } else {
+              Fail "BitLocker on C: is $status"
+          }
+      }
+
+      Test-BitLocker
+      Write-Output "Failures so far: $script:Failures"
+    note:
+      fr: "Le `try/catch` avec `-ErrorAction Stop` distingue trois issues : chiffré (`Pass`), non chiffré (`Fail`, compté), ou non vérifiable (`Skip`, non compté). Ne jamais renvoyer `Pass` quand on n'a pas pu mesurer : un `[SKIP]` honnête évite un faux sentiment de conformité."
+      en: "The `try/catch` with `-ErrorAction Stop` distinguishes three outcomes: encrypted (`Pass`), not encrypted (`Fail`, counted), or not verifiable (`Skip`, not counted). Never return `Pass` when you could not measure: an honest `[SKIP]` avoids a false sense of compliance."
+
+quiz:
+  - q:
+      fr: "Quel identifiant d'événement Windows correspond à un échec de connexion ?"
+      en: "Which Windows event ID corresponds to a failed logon?"
+    options:
+      fr: ["4624", "4625", "4688", "1102"]
+      en: ["4624", "4625", "4688", "1102"]
+    answer: 1
+    why:
+      fr: "L'événement 4625 est une connexion échouée ; 4624 est une connexion réussie. Une rafale de 4625 signale une attaque par force brute."
+      en: "Event 4625 is a failed logon; 4624 is a successful one. A burst of 4625 signals a brute-force attack."
+  - q:
+      fr: "Pourquoi utiliser `-FilterHashtable` avec `Get-WinEvent` ?"
+      en: "Why use `-FilterHashtable` with `Get-WinEvent`?"
+    options:
+      fr:
+        - "Pour filtrer côté source, bien plus rapide que `Where-Object` après coup"
+        - "Pour chiffrer les journaux"
+        - "Pour supprimer les événements"
+        - "Parce que `Where-Object` n'existe pas"
+      en:
+        - "To filter at the source, far faster than a later `Where-Object`"
+        - "To encrypt the logs"
+        - "To delete the events"
+        - "Because `Where-Object` does not exist"
+    answer: 0
+    why:
+      fr: "`-FilterHashtable` applique le filtre directement sur le journal, sans tout charger en mémoire. Un `Where-Object` postérieur récupère des millions d'entrées avant de filtrer : très lent."
+      en: "`-FilterHashtable` applies the filter directly on the log, without loading everything into memory. A later `Where-Object` pulls millions of entries before filtering: very slow."
+  - q:
+      fr: "Quelle cmdlet vérifie si SMBv1 est activé sur le serveur ?"
+      en: "Which cmdlet checks whether SMBv1 is enabled on the server?"
+    options:
+      fr:
+        - "Get-NetFirewallProfile"
+        - "Get-MpComputerStatus"
+        - "Get-SmbServerConfiguration"
+        - "Get-HotFix"
+      en:
+        - "Get-NetFirewallProfile"
+        - "Get-MpComputerStatus"
+        - "Get-SmbServerConfiguration"
+        - "Get-HotFix"
+    answer: 2
+    why:
+      fr: "`Get-SmbServerConfiguration` expose la propriété `EnableSMB1Protocol`, qui doit valoir `False`. SMBv1 est le vecteur de WannaCry et doit rester désactivé."
+      en: "`Get-SmbServerConfiguration` exposes the `EnableSMB1Protocol` property, which must be `False`. SMBv1 is the WannaCry vector and must stay disabled."
+  - q:
+      fr: "Pourquoi exécuter le script d'audit en tant qu'administrateur ?"
+      en: "Why run the audit script as administrator?"
+    options:
+      fr:
+        - "Pour qu'il s'exécute plus vite"
+        - "Parce que de nombreuses cmdlets (journal Security, BitLocker) renvoient sinon des résultats vides ou une erreur"
+        - "Pour chiffrer le rapport"
+        - "Parce que PowerShell 7 l'exige toujours"
+      en:
+        - "So it runs faster"
+        - "Because many cmdlets (Security log, BitLocker) otherwise return empty results or an error"
+        - "To encrypt the report"
+        - "Because PowerShell 7 always requires it"
+    answer: 1
+    why:
+      fr: "Sans droits admin, lire le journal Security ou interroger BitLocker échoue ou renvoie du vide, ce qui pourrait faire croire à tort que la machine est conforme. D'où `#Requires -RunAsAdministrator`."
+      en: "Without admin rights, reading the Security log or querying BitLocker fails or returns empty, which could wrongly suggest the machine is compliant. Hence `#Requires -RunAsAdministrator`."
+  - q:
+      fr: "Comment repérer un administrateur local illégitime ?"
+      en: "How do you spot an illegitimate local administrator?"
+    options:
+      fr:
+        - "En supprimant le groupe Administrators"
+        - "En comparant les membres de Administrators à une liste blanche de comptes attendus"
+        - "En désactivant le pare-feu"
+        - "En lisant le journal 4624"
+      en:
+        - "By deleting the Administrators group"
+        - "By comparing the Administrators members to an allow-list of expected accounts"
+        - "By disabling the firewall"
+        - "By reading the 4624 log"
+    answer: 1
+    why:
+      fr: "On liste les membres avec `Get-LocalGroupMember -Group 'Administrators'` et on compare à une liste blanche : tout compte hors liste (`-notin`) est un administrateur inattendu à investiguer."
+      en: "You list members with `Get-LocalGroupMember -Group 'Administrators'` and compare to an allow-list: any account not on it (`-notin`) is an unexpected administrator to investigate."

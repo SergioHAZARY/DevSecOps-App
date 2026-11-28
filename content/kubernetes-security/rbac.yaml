@@ -1,0 +1,349 @@
+description:
+  fr: "Maîtriser le RBAC Kubernetes : Roles, ClusterRoles, Bindings, moindre privilège, verbes dangereux et vérification des droits avec kubectl auth can-i."
+  en: "Master Kubernetes RBAC: Roles, ClusterRoles, Bindings, least privilege, dangerous verbs and checking permissions with kubectl auth can-i."
+duration: 25
+
+intro:
+  fr: |
+    Dans un cluster Kubernetes, tout passe par l'**API Server** : créer un pod, lire un secret, supprimer un
+    déploiement. Le **RBAC** (*Role-Based Access Control*, contrôle d'accès basé sur les rôles) décide *qui* a le
+    droit de faire *quoi* sur *quelles* ressources. C'est la serrure principale du cluster.
+
+    L'analogie : le RBAC est le trousseau de clés d'un hôtel. La femme de chambre a la clé des chambres mais pas
+    du coffre ; le directeur a le passe général. Donner le passe général à tout le monde « pour simplifier » est
+    exactement ce que fait un `cluster-admin` distribué sans réflexion — et c'est la faille la plus exploitée des
+    clusters.
+
+    Dans cette leçon, vous allez comprendre les quatre objets du RBAC (**Role**, **ClusterRole**, **RoleBinding**,
+    **ClusterRoleBinding**), appliquer le **moindre privilège** à un compte de service applicatif, repérer les
+    **verbes dangereux** (`*`, `create pods`, `secrets`), et vérifier concrètement les droits avec `kubectl auth
+    can-i`.
+  en: |
+    In a Kubernetes cluster, everything goes through the **API Server**: creating a pod, reading a secret,
+    deleting a deployment. **RBAC** (*Role-Based Access Control*) decides *who* may do *what* on *which* resources.
+    It is the cluster's main lock.
+
+    The analogy: RBAC is a hotel's key ring. The housekeeper has the room keys but not the safe; the manager has
+    the master key. Handing the master key to everyone "to keep things simple" is exactly what a thoughtlessly
+    distributed `cluster-admin` does — and it is the most exploited weakness of clusters.
+
+    In this lesson you will understand the four RBAC objects (**Role**, **ClusterRole**, **RoleBinding**,
+    **ClusterRoleBinding**), apply **least privilege** to an application service account, spot the **dangerous
+    verbs** (`*`, `create pods`, `secrets`), and concretely check permissions with `kubectl auth can-i`.
+
+sections:
+  - heading:
+      fr: "Les quatre objets du RBAC"
+      en: "The four RBAC objects"
+    body:
+      fr: |
+        Le RBAC combine deux choses : un **rôle** (un ensemble de permissions) et une **liaison** (*binding*) qui
+        attribue ce rôle à un sujet (utilisateur, groupe ou **ServiceAccount**).
+
+        | Objet | Portée | Rôle |
+        |---|---|---|
+        | `Role` | Un namespace | Liste de permissions dans ce namespace |
+        | `ClusterRole` | Tout le cluster | Permissions cluster, ou réutilisable par namespace |
+        | `RoleBinding` | Un namespace | Lie un (Cluster)Role à un sujet dans ce namespace |
+        | `ClusterRoleBinding` | Tout le cluster | Lie un ClusterRole à un sujet sur **tout** le cluster |
+
+        Une permission se décrit par trois champs : `apiGroups` (le groupe d'API), `resources` (pods, secrets,
+        deployments…) et `verbs` (`get`, `list`, `watch`, `create`, `update`, `delete`). Le piège classique est
+        le **ClusterRoleBinding** vers `cluster-admin` : il donne tous les droits partout. On l'évite au profit de
+        `Role` + `RoleBinding` limités à un namespace.
+      en: |
+        RBAC combines two things: a **role** (a set of permissions) and a **binding** that assigns that role to a
+        subject (user, group or **ServiceAccount**).
+
+        | Object | Scope | Role |
+        |---|---|---|
+        | `Role` | One namespace | List of permissions in that namespace |
+        | `ClusterRole` | Whole cluster | Cluster permissions, or reusable per namespace |
+        | `RoleBinding` | One namespace | Binds a (Cluster)Role to a subject in that namespace |
+        | `ClusterRoleBinding` | Whole cluster | Binds a ClusterRole to a subject across **the whole** cluster |
+
+        A permission is described by three fields: `apiGroups` (the API group), `resources` (pods, secrets,
+        deployments…) and `verbs` (`get`, `list`, `watch`, `create`, `update`, `delete`). The classic trap is a
+        **ClusterRoleBinding** to `cluster-admin`: it grants all rights everywhere. Avoid it in favour of a `Role`
+        + `RoleBinding` scoped to a namespace.
+  - heading:
+      fr: "Verbes et ressources dangereux"
+      en: "Dangerous verbs and resources"
+    body:
+      fr: |
+        Certaines permissions, même sans être `cluster-admin`, permettent une **escalade de privilèges**. À
+        surveiller :
+
+        - **`*` (wildcard)** sur `verbs` ou `resources` : donne tout, impossible à auditer.
+        - **`create`/`update` sur `pods`** : on peut lancer un pod privilégié montant le système de l'hôte, donc
+          s'évader du cluster.
+        - **`get`/`list` sur `secrets`** : lire tous les secrets d'un namespace (mots de passe, tokens).
+        - **`create` sur `pods/exec`** : exécuter des commandes dans n'importe quel pod.
+        - **`escalate`/`bind` sur `roles`** : se donner soi-même plus de droits.
+        - **`impersonate`** : agir au nom d'un autre utilisateur, y compris un admin.
+
+        Un ServiceAccount applicatif n'a presque jamais besoin de ces verbes. On part de **zéro permission** et on
+        ajoute seulement ce que l'application utilise réellement. On retire aussi le **token monté
+        automatiquement** (`automountServiceAccountToken: false`) quand le pod ne parle pas à l'API.
+      en: |
+        Some permissions, even short of `cluster-admin`, enable **privilege escalation**. Watch for:
+
+        - **`*` (wildcard)** on `verbs` or `resources`: grants everything, impossible to audit.
+        - **`create`/`update` on `pods`**: you can launch a privileged pod mounting the host filesystem, hence
+          escape the cluster.
+        - **`get`/`list` on `secrets`**: read every secret in a namespace (passwords, tokens).
+        - **`create` on `pods/exec`**: run commands in any pod.
+        - **`escalate`/`bind` on `roles`**: grant yourself more rights.
+        - **`impersonate`**: act as another user, including an admin.
+
+        An application ServiceAccount almost never needs these verbs. You start from **zero permissions** and add
+        only what the app actually uses. You also remove the **automatically mounted token**
+        (`automountServiceAccountToken: false`) when the pod does not talk to the API.
+
+examples:
+  - title:
+      fr: "Dangereux : cluster-admin pour une application"
+      en: "Dangerous: cluster-admin for an application"
+    file: overprivileged-rbac.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - binds a built-in super-admin role to an app SA.
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: myapp
+        namespace: shop
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding        # cluster-wide, not namespaced!
+      metadata:
+        name: myapp-is-admin
+      subjects:
+        - kind: ServiceAccount
+          name: myapp
+          namespace: shop
+      roleRef:
+        kind: ClusterRole
+        name: cluster-admin           # every verb on every resource, anywhere
+        apiGroup: rbac.authorization.k8s.io
+    output: |
+      # If the myapp pod is compromised, the attacker can:
+      #   kubectl --token=$SA_TOKEN get secrets -A      # read ALL secrets
+      #   kubectl --token=$SA_TOKEN create -f evil-pod  # run privileged pods
+      #   kubectl --token=$SA_TOKEN delete ns kube-system  # destroy cluster
+    note:
+      fr: "Lier `cluster-admin` à un ServiceAccount applicatif est catastrophique : si le pod est compromis, son token donne un contrôle total du cluster — lecture de tous les secrets, création de pods privilégiés, destruction de namespaces."
+      en: "Binding `cluster-admin` to an application ServiceAccount is catastrophic: if the pod is compromised, its token grants full control of the cluster — reading all secrets, creating privileged pods, destroying namespaces."
+
+  - title:
+      fr: "Sécurisé : Role de moindre privilège"
+      en: "Secure: least-privilege Role"
+    file: least-privilege-rbac.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: myapp
+        namespace: shop
+      automountServiceAccountToken: false   # no token unless a pod opts in
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role                        # namespaced, not cluster-wide
+      metadata:
+        name: myapp-reader
+        namespace: shop
+      rules:
+        # The app only needs to READ its own ConfigMaps. Nothing else.
+        - apiGroups: [""]
+          resources: ["configmaps"]
+          verbs: ["get", "list", "watch"]   # read-only, no create/delete
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding                 # binds only inside namespace shop
+      metadata:
+        name: myapp-reader-binding
+        namespace: shop
+      subjects:
+        - kind: ServiceAccount
+          name: myapp
+          namespace: shop
+      roleRef:
+        kind: Role
+        name: myapp-reader
+        apiGroup: rbac.authorization.k8s.io
+    output: |
+      # The compromised pod can now do almost nothing:
+      #   kubectl get secrets        -> Forbidden
+      #   kubectl create pod ...     -> Forbidden
+      #   kubectl get configmaps     -> allowed (its only purpose)
+    note:
+      fr: "Un `Role` limité à la lecture des ConfigMaps, lié dans le seul namespace `shop` par un `RoleBinding`. Aucun accès aux secrets, pas de création de pods : un pod compromis n'a presque aucun levier. `automountServiceAccountToken: false` évite même de monter le token."
+      en: "A `Role` limited to reading ConfigMaps, bound only in the `shop` namespace by a `RoleBinding`. No secret access, no pod creation: a compromised pod has almost no leverage. `automountServiceAccountToken: false` even avoids mounting the token."
+
+  - title:
+      fr: "Auditer les droits avec kubectl auth can-i"
+      en: "Auditing permissions with kubectl auth can-i"
+    file: audit-rbac.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Verify what a ServiceAccount can REALLY do (authorised audit).
+
+      SA=system:serviceaccount:shop:myapp
+
+      # 1. Can it read secrets? (should be "no")
+      kubectl auth can-i get secrets --as="$SA" -n shop
+
+      # 2. Can it create pods? (privilege-escalation vector, should be "no")
+      kubectl auth can-i create pods --as="$SA" -n shop
+
+      # 3. Full list of everything this SA is allowed to do.
+      kubectl auth can-i --list --as="$SA" -n shop
+
+      # 4. Find every binding that grants cluster-admin (the big risk).
+      kubectl get clusterrolebindings -o json | jq -r '.items[]
+        | select(.roleRef.name=="cluster-admin")
+        | "\(.metadata.name) -> \(.subjects[]?.name)"'
+    output: |
+      no
+      no
+      Resources   Non-Resource URLs   Resource Names   Verbs
+      configmaps  []                  []               [get list watch]
+      myapp-is-admin -> myapp     <-- a dangerous binding to fix!
+    note:
+      fr: "`kubectl auth can-i` répond `yes`/`no` pour une action précise et `--list` montre tous les droits effectifs d'un sujet. C'est l'outil n°1 pour prouver qu'un compte respecte le moindre privilège et pour traquer les `cluster-admin` oubliés."
+      en: "`kubectl auth can-i` answers `yes`/`no` for a precise action and `--list` shows all effective rights of a subject. It is the number-one tool to prove an account follows least privilege and to hunt down forgotten `cluster-admin` bindings."
+
+mistake:
+  fr: |
+    **Distribuer `cluster-admin` « pour que ça marche ».** Face à une erreur `Forbidden`, la tentation est de
+    lier `cluster-admin` au compte pour débloquer la situation. C'est transformer un petit problème de permission
+    en faille critique : le token de ce compte devient une clé passe-partout du cluster. La bonne démarche est
+    inverse — partir de **zéro permission** et ajouter uniquement les verbes/ressources que `kubectl auth can-i`
+    confirme nécessaires. Autre erreur : utiliser le wildcard `*` sur `resources` ou `verbs`, qui rend le rôle
+    impossible à auditer et accorde souvent bien plus que prévu.
+  en: |
+    **Handing out `cluster-admin` "to make it work".** Faced with a `Forbidden` error, the temptation is to bind
+    `cluster-admin` to the account to unblock things. That turns a small permission problem into a critical flaw:
+    the account's token becomes a cluster master key. The right approach is the opposite — start from **zero
+    permissions** and add only the verbs/resources that `kubectl auth can-i` confirms are needed. Another mistake:
+    using the `*` wildcard on `resources` or `verbs`, which makes the role impossible to audit and often grants
+    far more than intended.
+
+bestPractice:
+  fr: |
+    - **Partez de zéro permission**, ajoutez seulement ce qui est réellement utilisé (moindre privilège).
+    - **Préférez `Role` + `RoleBinding`** (namespace) à `ClusterRole` + `ClusterRoleBinding` (tout le cluster).
+    - **Bannissez le wildcard `*`** sur `verbs`/`resources` : nommez explicitement les permissions.
+    - **Surveillez les verbes dangereux** : `create pods`, `get secrets`, `impersonate`, `escalate`, `bind`.
+    - **Vérifiez avec `kubectl auth can-i --list`** et désactivez le token automatique si le pod ne parle pas à l'API.
+  en: |
+    - **Start from zero permissions**, add only what is actually used (least privilege).
+    - **Prefer `Role` + `RoleBinding`** (namespace) over `ClusterRole` + `ClusterRoleBinding` (whole cluster).
+    - **Ban the `*` wildcard** on `verbs`/`resources`: name permissions explicitly.
+    - **Watch dangerous verbs**: `create pods`, `get secrets`, `impersonate`, `escalate`, `bind`.
+    - **Verify with `kubectl auth can-i --list`** and disable the automatic token if the pod does not talk to the API.
+
+exercise:
+  statement:
+    fr: |
+      Une application de supervision doit pouvoir **lister et observer les pods** (`get`, `list`, `watch`) dans
+      le namespace `monitoring`, et rien d'autre. Elle utilise le ServiceAccount `prom-sa`.
+
+      1. Écrivez le `Role` et le `RoleBinding` de moindre privilège correspondants.
+      2. Donnez la commande qui vérifie que ce compte **ne peut pas** lire les secrets.
+    en: |
+      A monitoring application must be able to **list and watch pods** (`get`, `list`, `watch`) in the
+      `monitoring` namespace, and nothing else. It uses the ServiceAccount `prom-sa`.
+
+      1. Write the matching least-privilege `Role` and `RoleBinding`.
+      2. Give the command that verifies this account **cannot** read secrets.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: pod-watcher
+        namespace: monitoring
+      rules:
+        - apiGroups: [""]
+          resources: ["pods"]
+          verbs: ["get", "list", "watch"]   # read-only on pods, nothing else
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: pod-watcher-binding
+        namespace: monitoring
+      subjects:
+        - kind: ServiceAccount
+          name: prom-sa
+          namespace: monitoring
+      roleRef:
+        kind: Role
+        name: pod-watcher
+        apiGroup: rbac.authorization.k8s.io
+      # Verify it cannot read secrets (expect: no):
+      #   kubectl auth can-i get secrets \
+      #     --as=system:serviceaccount:monitoring:prom-sa -n monitoring
+    note:
+      fr: "Le `Role` n'accorde que `get/list/watch` sur `pods`. La commande `kubectl auth can-i get secrets --as=...` doit répondre `no`, prouvant que le compte respecte le moindre privilège."
+      en: "The `Role` grants only `get/list/watch` on `pods`. The command `kubectl auth can-i get secrets --as=...` must answer `no`, proving the account follows least privilege."
+
+quiz:
+  - q:
+      fr: "Quelle est la portée d'un `Role` (par opposition à un `ClusterRole`) ?"
+      en: "What is the scope of a `Role` (as opposed to a `ClusterRole`)?"
+    options:
+      fr: ["Tout le cluster", "Un seul namespace", "Un seul pod", "Un seul nœud"]
+      en: ["The whole cluster", "A single namespace", "A single pod", "A single node"]
+    answer: 1
+    why:
+      fr: "Un `Role` ne s'applique qu'à l'intérieur d'un namespace, alors qu'un `ClusterRole` a une portée cluster. On privilégie `Role` pour limiter la portée."
+      en: "A `Role` applies only within a namespace, whereas a `ClusterRole` has cluster scope. You favour `Role` to limit scope."
+  - q:
+      fr: "Pourquoi lier `cluster-admin` à un ServiceAccount applicatif est-il dangereux ?"
+      en: "Why is binding `cluster-admin` to an application ServiceAccount dangerous?"
+    options:
+      fr: ["Le token compromis donne un contrôle total du cluster", "Cela ralentit l'API Server", "Cela chiffre les secrets", "Cela désactive le réseau"]
+      en: ["A compromised token grants full cluster control", "It slows the API Server", "It encrypts secrets", "It disables the network"]
+    answer: 0
+    why:
+      fr: "`cluster-admin` autorise tous les verbes sur toutes les ressources : si le pod est compromis, l'attaquant lit tous les secrets, crée des pods privilégiés et peut détruire le cluster."
+      en: "`cluster-admin` allows every verb on every resource: if the pod is compromised, the attacker reads all secrets, creates privileged pods and can destroy the cluster."
+  - q:
+      fr: "Quelle commande vérifie si un sujet peut effectuer une action donnée ?"
+      en: "Which command checks whether a subject can perform a given action?"
+    options:
+      fr: ["kubectl describe role", "kubectl get rbac", "kubectl auth can-i", "kubectl apply"]
+      en: ["kubectl describe role", "kubectl get rbac", "kubectl auth can-i", "kubectl apply"]
+    answer: 2
+    why:
+      fr: "`kubectl auth can-i <verbe> <ressource> --as=<sujet>` répond `yes`/`no`, et `--list` affiche tous les droits effectifs d'un sujet."
+      en: "`kubectl auth can-i <verb> <resource> --as=<subject>` answers `yes`/`no`, and `--list` shows all a subject's effective rights."
+  - q:
+      fr: "Lequel de ces verbes/ressources est un vecteur d'escalade à surveiller ?"
+      en: "Which of these verbs/resources is an escalation vector to watch?"
+    options:
+      fr: ["get sur configmaps", "list sur events", "watch sur services", "create sur pods"]
+      en: ["get on configmaps", "list on events", "watch on services", "create on pods"]
+    answer: 3
+    why:
+      fr: "Pouvoir créer des pods permet de lancer un pod privilégié montant le système de l'hôte et donc de s'évader du cluster ; c'est un vecteur d'escalade majeur."
+      en: "Being able to create pods lets you launch a privileged pod mounting the host filesystem and thus escape the cluster; it is a major escalation vector."
+  - q:
+      fr: "Quelle est la bonne réaction face à une erreur `Forbidden` d'un ServiceAccount ?"
+      en: "What is the right reaction to a ServiceAccount `Forbidden` error?"
+    options:
+      fr: ["Ajouter uniquement la permission précise manquante", "Lier cluster-admin", "Mettre un wildcard `*` partout", "Désactiver le RBAC"]
+      en: ["Add only the precise missing permission", "Bind cluster-admin", "Put a `*` wildcard everywhere", "Disable RBAC"]
+    answer: 0
+    why:
+      fr: "On ajoute seulement le verbe/ressource manquant confirmé par `kubectl auth can-i`, pour rester au plus près du moindre privilège, jamais `cluster-admin` ni un wildcard."
+      en: "You add only the missing verb/resource confirmed by `kubectl auth can-i`, staying as close to least privilege as possible, never `cluster-admin` or a wildcard."

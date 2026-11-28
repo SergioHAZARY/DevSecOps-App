@@ -1,0 +1,460 @@
+description:
+  fr: "Visualiser et alerter avec Grafana : provisionner sources de données et tableaux de bord en YAML, définir des alertes, et sécuriser l'accès (pas d'admin par défaut, SSO, pas d'anonyme)."
+  en: "Visualize and alert with Grafana: provision data sources and dashboards as YAML, define alerts, and secure access (no default admin, SSO, no anonymous)."
+duration: 35
+
+intro:
+  fr: |
+    Prometheus stocke des métriques, mais une colonne de chiffres ne parle à personne. **Grafana** est
+    l'outil qui transforme ces données en **tableaux de bord** : courbes, jauges, cartes de chaleur, le tout
+    en temps réel. C'est l'écran de contrôle d'une salle de supervision, où une anomalie saute aux yeux en
+    une fraction de seconde.
+
+    Mais Grafana n'est pas qu'un joli affichage. Il se connecte à de multiples **sources de données**
+    (Prometheus, Loki, Elasticsearch...), il déclenche des **alertes**, et surtout il donne accès à toute
+    votre observabilité — donc à des informations sensibles. Un Grafana mal sécurisé, avec son mot de passe
+    `admin/admin` par défaut et l'accès anonyme activé, est une porte grande ouverte.
+
+    Vous allez apprendre à **provisionner** Grafana en YAML (sources de données et tableaux de bord décrits
+    dans des fichiers versionnés, pas cliqués à la main), à créer des alertes, et à le **durcir** : changer
+    le mot de passe admin, activer le SSO, et couper l'accès anonyme.
+  en: |
+    Prometheus stores metrics, but a column of numbers speaks to nobody. **Grafana** is the tool that turns
+    that data into **dashboards**: curves, gauges, heatmaps, all in real time. It is the control screen of a
+    monitoring room, where an anomaly jumps out in a fraction of a second.
+
+    But Grafana is not just a pretty display. It connects to multiple **data sources** (Prometheus, Loki,
+    Elasticsearch...), it fires **alerts**, and above all it grants access to your entire observability —
+    hence to sensitive information. A poorly secured Grafana, with its default `admin/admin` password and
+    anonymous access enabled, is a wide-open door.
+
+    You will learn to **provision** Grafana as YAML (data sources and dashboards described in versioned
+    files, not clicked by hand), to create alerts, and to **harden** it: change the admin password, enable
+    SSO, and turn off anonymous access.
+
+sections:
+  - heading:
+      fr: "Provisionner plutôt que cliquer"
+      en: "Provision rather than click"
+    body:
+      fr: |
+        On peut tout configurer dans Grafana à la souris, mais c'est une mauvaise idée : rien n'est
+        versionné, rien n'est reproductible, et une réinstallation perd tout. La bonne pratique est le
+        **provisioning** : décrire les sources de données et les tableaux de bord dans des fichiers YAML/JSON
+        que Grafana charge au démarrage.
+
+        | Élément provisionné | Fichier | Contenu |
+        |---|---|---|
+        | Sources de données | `provisioning/datasources/*.yml` | URL de Prometheus/Loki, type |
+        | Tableaux de bord | `provisioning/dashboards/*.yml` | D'où charger les dashboards JSON |
+        | Alertes | `provisioning/alerting/*.yml` | Règles et points de contact |
+
+        Ainsi, l'ensemble de la configuration vit dans Git : on la revoit, on la restaure à l'identique, on
+        la déploie dans plusieurs environnements. C'est le même principe que l'infrastructure as code
+        appliqué à la supervision. Les dashboards eux-mêmes sont des fichiers JSON exportables et
+        versionnables.
+      en: |
+        You can configure everything in Grafana with the mouse, but it is a bad idea: nothing is versioned,
+        nothing is reproducible, and a reinstall loses everything. The best practice is **provisioning**:
+        describing data sources and dashboards in YAML/JSON files that Grafana loads at startup.
+
+        | Provisioned element | File | Contents |
+        |---|---|---|
+        | Data sources | `provisioning/datasources/*.yml` | Prometheus/Loki URL, type |
+        | Dashboards | `provisioning/dashboards/*.yml` | Where to load the JSON dashboards from |
+        | Alerts | `provisioning/alerting/*.yml` | Rules and contact points |
+
+        This way the whole configuration lives in Git: you review it, restore it identically, deploy it to
+        several environments. It is the same principle as infrastructure as code applied to monitoring. The
+        dashboards themselves are exportable, versionable JSON files.
+  - heading:
+      fr: "Sources de données et alertes"
+      en: "Data sources and alerts"
+    body:
+      fr: |
+        Une **source de données** (*data source*) connecte Grafana à un système de stockage : Prometheus
+        pour les métriques, Loki pour les logs, Elasticsearch pour les deux. On la provisionne avec son type
+        et son URL interne. Les tableaux de bord interrogent ensuite cette source avec son propre langage
+        (PromQL pour Prometheus, LogQL pour Loki).
+
+        Grafana sait aussi **alerter**. Depuis la version 9, l'alerting est unifié : une règle évalue une
+        requête à intervalle régulier et, quand la condition est remplie, notifie un **point de contact**
+        (*contact point* : Slack, e-mail, webhook). Cela recoupe Alertmanager, mais permet de gérer les
+        alertes directement depuis Grafana, tous backends confondus.
+
+        | Concept d'alerting Grafana | Rôle |
+        |---|---|
+        | Règle d'alerte | La requête + la condition + la durée |
+        | Point de contact | Où envoyer la notification |
+        | Politique de notification | Quel contact pour quelle alerte |
+
+        Pour les secrets (URL de webhook, clés), on utilise des **variables d'environnement** ou des
+        fichiers, jamais des valeurs en dur dans les fichiers de provisioning versionnés.
+      en: |
+        A **data source** connects Grafana to a storage system: Prometheus for metrics, Loki for logs,
+        Elasticsearch for both. You provision it with its type and internal URL. Dashboards then query that
+        source with its own language (PromQL for Prometheus, LogQL for Loki).
+
+        Grafana can also **alert**. Since version 9 the alerting is unified: a rule evaluates a query at
+        regular intervals and, when the condition holds, notifies a **contact point** (Slack, email,
+        webhook). This overlaps with Alertmanager, but lets you manage alerts directly from Grafana, across
+        all backends.
+
+        | Grafana alerting concept | Role |
+        |---|---|
+        | Alert rule | The query + the condition + the duration |
+        | Contact point | Where to send the notification |
+        | Notification policy | Which contact for which alert |
+
+        For secrets (webhook URLs, keys), use **environment variables** or files, never hard-coded values in
+        the versioned provisioning files.
+  - heading:
+      fr: "Durcir l'accès à Grafana"
+      en: "Hardening access to Grafana"
+    body:
+      fr: |
+        Grafana donne une vue d'ensemble de votre système : qui y accède voit tout. Trois réglages par
+        défaut sont dangereux et doivent être corrigés dès l'installation.
+
+        | Réglage par défaut | Danger | Correction |
+        |---|---|---|
+        | `admin` / `admin` | Compte administrateur trivial | Mot de passe fort via variable d'env |
+        | Accès anonyme possible | Lecture sans authentification | `auth.anonymous.enabled = false` |
+        | Inscription libre | N'importe qui crée un compte | `users.allow_sign_up = false` |
+
+        Au-delà, on branche l'authentification sur le **SSO** de l'entreprise (OAuth/OIDC, SAML) : les
+        utilisateurs se connectent avec leur compte central, on applique le MFA et on révoque un accès en un
+        point unique. On met Grafana derrière un **reverse proxy TLS** (jamais en HTTP clair) et on applique
+        le **moindre privilège** avec les rôles (Viewer, Editor, Admin).
+
+        Le premier réflexe à l'installation : définir `GF_SECURITY_ADMIN_PASSWORD` via une variable
+        d'environnement (idéalement un secret), couper l'anonyme et l'inscription. Ces trois lignes
+        éliminent les vulnérabilités les plus exploitées sur les Grafana exposés.
+      en: |
+        Grafana gives an overview of your system: whoever accesses it sees everything. Three default
+        settings are dangerous and must be fixed at install time.
+
+        | Default setting | Danger | Fix |
+        |---|---|---|
+        | `admin` / `admin` | Trivial administrator account | Strong password via env var |
+        | Anonymous access possible | Reading without authentication | `auth.anonymous.enabled = false` |
+        | Open sign-up | Anyone creates an account | `users.allow_sign_up = false` |
+
+        Beyond that, wire authentication to the company **SSO** (OAuth/OIDC, SAML): users log in with their
+        central account, you enforce MFA and revoke access from a single point. Put Grafana behind a **TLS
+        reverse proxy** (never plain HTTP) and apply **least privilege** with roles (Viewer, Editor, Admin).
+
+        The first reflex at install: set `GF_SECURITY_ADMIN_PASSWORD` via an environment variable (ideally a
+        secret), turn off anonymous access and sign-up. These three lines eliminate the most exploited
+        vulnerabilities on exposed Grafanas.
+
+examples:
+  - title:
+      fr: "VULNÉRABLE : Grafana avec les réglages par défaut"
+      en: "VULNERABLE: Grafana with the default settings"
+    file: compose-bad.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      services:
+        grafana:
+          image: grafana/grafana:11.4.0
+          ports:
+            # Problem 1: exposed on 0.0.0.0 in plain HTTP
+            - "3000:3000"
+          environment:
+            # Problem 2: anonymous access lets anyone read every dashboard
+            GF_AUTH_ANONYMOUS_ENABLED: "true"
+            GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+            # Problem 3: open sign-up lets anyone create an account
+            GF_USERS_ALLOW_SIGN_UP: "true"
+            # Problem 4: the admin password is left as the default "admin"
+    note:
+      fr: "Accès anonyme en Admin, inscription libre, mot de passe `admin` par défaut, HTTP clair : ce Grafana expose toute l'observabilité à n'importe qui. La version sécurisée corrige chacun de ces points."
+      en: "Anonymous Admin access, open sign-up, default `admin` password, plain HTTP: this Grafana exposes all observability to anyone. The secure version fixes each of these points."
+
+  - title:
+      fr: "SÉCURISÉ : Grafana durci"
+      en: "SECURE: hardened Grafana"
+    file: compose.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      name: monitoring
+
+      services:
+        grafana:
+          image: grafana/grafana:11.4.0
+          environment:
+            # Strong admin password from a secret file, not a hard-coded value
+            GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin
+            # No anonymous access: authentication is required
+            GF_AUTH_ANONYMOUS_ENABLED: "false"
+            # Nobody can self-register an account
+            GF_USERS_ALLOW_SIGN_UP: "false"
+            # Enforce secure cookies (served behind a TLS reverse proxy)
+            GF_SECURITY_COOKIE_SECURE: "true"
+          secrets:
+            - grafana_admin
+          volumes:
+            - ./provisioning:/etc/grafana/provisioning:ro
+          networks:
+            - monitoring
+          # No public port: a reverse proxy terminates TLS in front of Grafana
+
+      secrets:
+        grafana_admin:
+          file: ./secrets/grafana_admin.txt # in .gitignore
+
+      networks:
+        monitoring:
+    note:
+      fr: "Le mot de passe admin vient d'un secret-fichier, l'anonyme et l'inscription sont coupés, les cookies sont sécurisés. Grafana n'a pas de port public : un reverse proxy TLS se place devant."
+      en: "The admin password comes from a secret file, anonymous access and sign-up are off, cookies are secure. Grafana has no public port: a TLS reverse proxy sits in front."
+
+  - title:
+      fr: "Provisionner la source de données Prometheus"
+      en: "Provision the Prometheus data source"
+    file: provisioning/datasources/prometheus.yml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: 1
+
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          access: proxy           # Grafana queries Prometheus server-side
+          url: http://prometheus:9090
+          isDefault: true
+          jsonData:
+            timeInterval: "15s"   # matches Prometheus scrape_interval
+        - name: Loki
+          type: loki
+          access: proxy
+          url: http://loki:3100
+          jsonData:
+            maxLines: 1000
+    note:
+      fr: "Les sources de données sont décrites en YAML versionné, chargées au démarrage. `access: proxy` fait passer les requêtes par le serveur Grafana (pas le navigateur), ce qui évite d'exposer l'URL interne aux clients."
+      en: "The data sources are described in versioned YAML, loaded at startup. `access: proxy` routes queries through the Grafana server (not the browser), avoiding exposing the internal URL to clients."
+
+  - title:
+      fr: "Provisionner une alerte et son point de contact"
+      en: "Provision an alert and its contact point"
+    file: provisioning/alerting/rules.yml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: 1
+
+      # Contact point: where notifications go (secret read from env, not committed)
+      contactPoints:
+        - orgId: 1
+          name: team-slack
+          receivers:
+            - uid: slack1
+              type: slack
+              settings:
+                url: ${SLACK_WEBHOOK_URL}  # injected from the environment
+
+      groups:
+        - orgId: 1
+          name: security
+          folder: Security
+          interval: 1m
+          rules:
+            - uid: brute-force
+              title: HighAuthFailureRate
+              condition: A
+              data:
+                - refId: A
+                  datasourceUid: prometheus
+                  model:
+                    expr: rate(auth_failures_total[5m]) > 5
+              labels:
+                severity: critical
+              annotations:
+                summary: "Auth failure rate too high (possible brute force)"
+    note:
+      fr: "La règle d'alerte et son point de contact sont provisionnés en YAML. L'URL du webhook Slack vient d'une variable d'environnement (`${SLACK_WEBHOOK_URL}`), jamais écrite en clair dans le fichier versionné."
+      en: "The alert rule and its contact point are provisioned in YAML. The Slack webhook URL comes from an environment variable (`${SLACK_WEBHOOK_URL}`), never written in clear text in the versioned file."
+
+mistake:
+  fr: |
+    **Laisser Grafana avec `admin/admin`, l'accès anonyme activé, et tout configurer à la main.**
+
+    Deux problèmes se cumulent. Côté sécurité, un Grafana exposé avec son mot de passe par défaut et l'accès
+    anonyme est trivialement compromis : un attaquant voit toute votre observabilité (versions, trafic,
+    métriques métier) et peut même modifier les tableaux de bord et les alertes pour masquer son activité.
+    Côté exploitation, tout configurer à la souris signifie qu'aucune configuration n'est versionnée : une
+    panne du serveur, et des mois de travail disparaissent. Durcissez dès l'installation (mot de passe fort,
+    pas d'anonyme, pas d'inscription, SSO, TLS) et **provisionnez** sources de données, tableaux de bord et
+    alertes en YAML versionné.
+  en: |
+    **Leaving Grafana with `admin/admin`, anonymous access enabled, and configuring everything by hand.**
+
+    Two problems compound. On security, an exposed Grafana with its default password and anonymous access is
+    trivially compromised: an attacker sees all your observability (versions, traffic, business metrics) and
+    can even alter the dashboards and alerts to hide their activity. On operations, configuring everything
+    with the mouse means no configuration is versioned: one server failure, and months of work vanish.
+    Harden at install time (strong password, no anonymous, no sign-up, SSO, TLS) and **provision** data
+    sources, dashboards and alerts as versioned YAML.
+
+bestPractice:
+  fr: |
+    - **Provisionnez tout en YAML/JSON versionné** : sources de données, tableaux de bord, alertes.
+    - **Mot de passe admin fort** via variable d'environnement ou secret-fichier, jamais `admin/admin`.
+    - **Coupez l'accès anonyme** (`auth.anonymous.enabled = false`) et l'inscription libre.
+    - **SSO (OAuth/OIDC, SAML)** pour centraliser l'authentification et appliquer le MFA.
+    - **Grafana derrière un reverse proxy TLS**, cookies sécurisés, jamais en HTTP clair.
+    - **Moindre privilège** avec les rôles (Viewer/Editor/Admin) ; secrets des webhooks hors du YAML.
+  en: |
+    - **Provision everything as versioned YAML/JSON**: data sources, dashboards, alerts.
+    - **Strong admin password** via environment variable or secret file, never `admin/admin`.
+    - **Turn off anonymous access** (`auth.anonymous.enabled = false`) and open sign-up.
+    - **SSO (OAuth/OIDC, SAML)** to centralise authentication and enforce MFA.
+    - **Grafana behind a TLS reverse proxy**, secure cookies, never plain HTTP.
+    - **Least privilege** with roles (Viewer/Editor/Admin); webhook secrets kept out of the YAML.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue déploie Grafana avec ce bloc d'environnement :
+
+      ```yaml
+      environment:
+        GF_AUTH_ANONYMOUS_ENABLED: "true"
+        GF_USERS_ALLOW_SIGN_UP: "true"
+      ```
+
+      1. Citez les deux problèmes de sécurité de cette configuration.
+      2. Réécrivez le bloc `environment` de façon durcie : mot de passe admin fort depuis un secret-fichier,
+         pas d'accès anonyme, pas d'inscription, cookies sécurisés.
+      3. En une phrase, pourquoi provisionner les sources de données plutôt que les créer à la main ?
+    en: |
+      A colleague deploys Grafana with this environment block:
+
+      ```yaml
+      environment:
+        GF_AUTH_ANONYMOUS_ENABLED: "true"
+        GF_USERS_ALLOW_SIGN_UP: "true"
+      ```
+
+      1. Name the two security problems in this configuration.
+      2. Rewrite the `environment` block in a hardened way: strong admin password from a secret file, no
+         anonymous access, no sign-up, secure cookies.
+      3. In one sentence, why provision data sources rather than creating them by hand?
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # 1. Problems:
+      #    - Anonymous access lets anyone read every dashboard without logging in.
+      #    - Open sign-up lets anyone create an account on the instance.
+      #    (and the admin password is implicitly left as the default "admin")
+      #
+      # 2. Hardened environment block:
+      environment:
+        GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin
+        GF_AUTH_ANONYMOUS_ENABLED: "false"
+        GF_USERS_ALLOW_SIGN_UP: "false"
+        GF_SECURITY_COOKIE_SECURE: "true"
+      #
+      # 3. Provisioning keeps the config in Git: versioned, reviewable and
+      #    restorable identically across environments and after a reinstall.
+    note:
+      fr: "On coupe l'anonyme et l'inscription, et on charge le mot de passe admin depuis un secret. Le provisioning versionne la configuration : on la restaure à l'identique après une panne."
+      en: "Anonymous access and sign-up are off, and the admin password loads from a secret. Provisioning versions the configuration: you restore it identically after a failure."
+
+quiz:
+  - q:
+      fr: "Pourquoi provisionner Grafana en YAML plutôt que tout configurer à la souris ?"
+      en: "Why provision Grafana as YAML rather than configuring everything with the mouse?"
+    options:
+      fr:
+        - "Pour que la configuration soit versionnée, reproductible et restaurable"
+        - "Parce que la souris est désactivée"
+        - "Pour chiffrer les tableaux de bord"
+        - "Parce que c'est obligatoire pour démarrer Grafana"
+      en:
+        - "So the configuration is versioned, reproducible and restorable"
+        - "Because the mouse is disabled"
+        - "To encrypt the dashboards"
+        - "Because it is mandatory to start Grafana"
+    answer: 0
+    why:
+      fr: "Le provisioning place toute la configuration dans Git : on la revoit, on la déploie partout et on la restaure à l'identique, contrairement à une configuration cliquée perdue en cas de panne."
+      en: "Provisioning puts the whole configuration in Git: you review it, deploy it everywhere and restore it identically, unlike a clicked configuration lost on a failure."
+  - q:
+      fr: "Quel réglage par défaut de Grafana faut-il impérativement corriger ?"
+      en: "Which Grafana default setting must absolutely be fixed?"
+    options:
+      fr:
+        - "La couleur du thème"
+        - "Le mot de passe admin `admin/admin`"
+        - "Le fuseau horaire"
+        - "Le nombre de tableaux de bord"
+      en:
+        - "The theme colour"
+        - "The `admin/admin` admin password"
+        - "The timezone"
+        - "The number of dashboards"
+    answer: 1
+    why:
+      fr: "Le compte `admin/admin` par défaut est trivialement exploitable : on le remplace par un mot de passe fort dès l'installation, via une variable d'environnement ou un secret."
+      en: "The default `admin/admin` account is trivially exploitable: replace it with a strong password at install time, via an environment variable or a secret."
+  - q:
+      fr: "Pourquoi désactiver l'accès anonyme dans Grafana ?"
+      en: "Why disable anonymous access in Grafana?"
+    options:
+      fr:
+        - "Pour accélérer l'affichage"
+        - "Pour réduire la taille des tableaux de bord"
+        - "Pour empêcher n'importe qui de lire toute l'observabilité sans authentification"
+        - "Parce que l'anonyme empêche les alertes"
+      en:
+        - "To speed up rendering"
+        - "To reduce dashboard size"
+        - "To stop anyone from reading all observability without authentication"
+        - "Because anonymous blocks alerts"
+    answer: 2
+    why:
+      fr: "L'accès anonyme laisse tout visiteur consulter vos tableaux de bord (versions, trafic, métriques métier) sans se connecter : une fuite d'information majeure."
+      en: "Anonymous access lets any visitor view your dashboards (versions, traffic, business metrics) without logging in: a major information leak."
+  - q:
+      fr: "Comment gérer l'URL d'un webhook Slack dans un fichier de provisioning versionné ?"
+      en: "How should you handle a Slack webhook URL in a versioned provisioning file?"
+    options:
+      fr:
+        - "L'écrire en clair, c'est sans risque"
+        - "La référencer via une variable d'environnement, jamais en dur"
+        - "La coder en base64"
+        - "La mettre dans le nom du fichier"
+      en:
+        - "Write it in clear text, it is harmless"
+        - "Reference it via an environment variable, never hard-coded"
+        - "Encode it in base64"
+        - "Put it in the file name"
+    answer: 1
+    why:
+      fr: "L'URL d'un webhook est un secret : on l'injecte via une variable d'environnement (`${SLACK_WEBHOOK_URL}`) pour ne jamais la commiter dans le dépôt."
+      en: "A webhook URL is a secret: inject it via an environment variable (`${SLACK_WEBHOOK_URL}`) so it is never committed to the repository."
+  - q:
+      fr: "Quel mécanisme centralise l'authentification et permet d'appliquer le MFA à Grafana ?"
+      en: "Which mechanism centralises authentication and lets you enforce MFA on Grafana?"
+    options:
+      fr:
+        - "L'accès anonyme"
+        - "Le SSO (OAuth/OIDC, SAML)"
+        - "Le mode HTTP clair"
+        - "Le compte admin local"
+      en:
+        - "Anonymous access"
+        - "SSO (OAuth/OIDC, SAML)"
+        - "Plain HTTP mode"
+        - "The local admin account"
+    answer: 1
+    why:
+      fr: "Le SSO relie Grafana au fournisseur d'identité central : les utilisateurs se connectent avec leur compte d'entreprise, le MFA s'applique et un accès se révoque en un point unique."
+      en: "SSO ties Grafana to the central identity provider: users log in with their company account, MFA applies and access is revoked from a single point."

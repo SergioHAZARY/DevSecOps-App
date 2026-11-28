@@ -1,0 +1,424 @@
+description:
+  fr: "Comprendre à quoi sert un pare-feu, comment il filtre le trafic par règles, et configurer ufw en appliquant le refus par défaut."
+  en: "Understand what a firewall is for, how it filters traffic with rules, and configure ufw applying default-deny."
+duration: 24
+
+intro:
+  fr: |
+    Un serveur connecté à Internet reçoit en permanence des tentatives de connexion : certaines légitimes, et
+    beaucoup venant de robots qui cherchent une porte ouverte. Le **pare-feu** (*firewall*) est le videur à
+    l'entrée : il examine chaque paquet qui veut entrer ou sortir, et décide de le **laisser passer** ou de le
+    **bloquer**, selon des règles que vous définissez.
+
+    Imaginez l'entrée d'un immeuble sécurisé avec une liste. Le gardien ne laisse entrer que les personnes
+    prévues ; tous les autres sont refoulés, sans explication. C'est exactement l'esprit d'un bon pare-feu :
+    **tout est interdit par défaut**, et on n'ouvre que le strict nécessaire. Cette approche s'appelle le
+    **refus par défaut** (*default deny*), et c'est l'une des idées les plus importantes de toute la sécurité.
+
+    Dans cette leçon, vous allez comprendre comment un pare-feu filtre le trafic, découvrir les grandes familles
+    d'outils (ufw, iptables, nftables), et configurer un pare-feu simple avec `ufw` en n'ouvrant que les ports
+    dont vous avez vraiment besoin.
+  en: |
+    A server connected to the Internet constantly receives connection attempts: some legitimate, and many from
+    bots looking for an open door. The **firewall** is the bouncer at the entrance: it examines every packet
+    trying to come in or go out, and decides to **let it through** or **block it**, according to rules you
+    define.
+
+    Picture the entrance of a secure building with a guest list. The guard only lets in expected people;
+    everyone else is turned away, with no explanation. That is exactly the spirit of a good firewall:
+    **everything is forbidden by default**, and you open only the strict minimum. This approach is called
+    **default deny**, and it is one of the most important ideas in all of security.
+
+    In this lesson you will understand how a firewall filters traffic, discover the main tool families (ufw,
+    iptables, nftables), and configure a simple firewall with `ufw`, opening only the ports you truly need.
+
+sections:
+  - heading:
+      fr: "Comment un pare-feu filtre le trafic"
+      en: "How a firewall filters traffic"
+    body:
+      fr: |
+        Un pare-feu applique une liste de **règles** à chaque paquet. Une règle regarde en général :
+
+        - la **direction** : entrant (*inbound*) ou sortant (*outbound*) ;
+        - le **protocole** : TCP ou UDP ;
+        - le **port** de destination (22 pour SSH, 443 pour HTTPS…) ;
+        - l'**adresse source** : d'où vient le paquet.
+
+        Et décide d'une **action** : autoriser (*allow*), rejeter (*reject*, avec un refus poli) ou ignorer
+        (*drop*, le paquet disparaît sans réponse). Les règles sont lues **dans l'ordre**, et la première qui
+        correspond s'applique.
+
+        | Direction | Protocole | Port | Source | Action |
+        |---|---|---|---|---|
+        | entrant | TCP | 22 (SSH) | 192.0.2.0/24 | autoriser |
+        | entrant | TCP | 443 (HTTPS) | partout | autoriser |
+        | entrant | tout | tout | partout | refuser (règle par défaut) |
+
+        La dernière ligne est le cœur de la sécurité : **par défaut, on refuse tout**. On n'ajoute ensuite que
+        les quelques règles « autoriser » strictement nécessaires. C'est l'inverse de « j'autorise tout et je
+        bloque ce qui est dangereux » — approche vouée à l'échec, car on oublie toujours une menace.
+      en: |
+        A firewall applies a list of **rules** to each packet. A rule usually looks at:
+
+        - the **direction**: inbound or outbound;
+        - the **protocol**: TCP or UDP;
+        - the destination **port** (22 for SSH, 443 for HTTPS…);
+        - the **source address**: where the packet comes from.
+
+        And decides on an **action**: allow, reject (a polite refusal) or drop (the packet vanishes with no
+        reply). Rules are read **in order**, and the first match wins.
+
+        | Direction | Protocol | Port | Source | Action |
+        |---|---|---|---|---|
+        | inbound | TCP | 22 (SSH) | 192.0.2.0/24 | allow |
+        | inbound | TCP | 443 (HTTPS) | anywhere | allow |
+        | inbound | any | any | anywhere | deny (default rule) |
+
+        The last line is the heart of security: **by default, deny everything**. You then add only the few
+        strictly necessary "allow" rules. This is the opposite of "allow everything and block what is dangerous"
+        — an approach doomed to fail, because you always forget one threat.
+  - heading:
+      fr: "Les outils : ufw, iptables, nftables"
+      en: "The tools: ufw, iptables, nftables"
+    body:
+      fr: |
+        Sous Linux, le filtrage se fait dans le noyau. Plusieurs couches d'outils permettent de le configurer,
+        de la plus simple à la plus technique :
+
+        | Outil | Niveau | Pour qui |
+        |---|---|---|
+        | **ufw** (*Uncomplicated Firewall*) | Simple | Débutants, serveurs courants |
+        | **firewalld** | Simple (RHEL/Fedora) | Familles Red Hat |
+        | **iptables** | Détaillé, historique | Encore très répandu |
+        | **nftables** | Détaillé, moderne | Successeur d'iptables |
+
+        `ufw` est une **surcouche** : il traduit vos commandes simples (`ufw allow 22`) en règles de bas niveau.
+        Pour débuter et pour la majorité des serveurs, `ufw` suffit largement et évite les erreurs. `iptables` et
+        `nftables` offrent un contrôle plus fin, utile pour des configurations avancées, mais leur syntaxe est
+        plus exigeante.
+
+        Le choix n'est pas « lequel est le meilleur » mais « lequel pour mon besoin » : on commence avec `ufw`,
+        et on descend vers `nftables` seulement quand une règle complexe le demande. Dans tous les cas, le
+        principe reste identique : refus par défaut, puis ouverture minimale.
+      en: |
+        On Linux, filtering happens in the kernel. Several layers of tools let you configure it, from the
+        simplest to the most technical:
+
+        | Tool | Level | For whom |
+        |---|---|---|
+        | **ufw** (*Uncomplicated Firewall*) | Simple | Beginners, everyday servers |
+        | **firewalld** | Simple (RHEL/Fedora) | Red Hat families |
+        | **iptables** | Detailed, historical | Still very common |
+        | **nftables** | Detailed, modern | iptables' successor |
+
+        `ufw` is a **front end**: it translates your simple commands (`ufw allow 22`) into low-level rules. To
+        start, and for most servers, `ufw` is more than enough and avoids mistakes. `iptables` and `nftables`
+        offer finer control, useful for advanced setups, but their syntax is more demanding.
+
+        The choice is not "which is best" but "which for my need": you start with `ufw`, and drop down to
+        `nftables` only when a complex rule requires it. In every case, the principle stays the same: default
+        deny, then minimal opening.
+  - heading:
+      fr: "Configurer ufw sans se verrouiller dehors"
+      en: "Configuring ufw without locking yourself out"
+    body:
+      fr: |
+        La mise en place d'un pare-feu suit toujours le même ordre, et il y a un piège mortel à éviter.
+
+        1. Définir la **politique par défaut** : refuser tout le trafic entrant, autoriser le sortant.
+        2. **Autoriser SSH en premier**, avant d'activer le pare-feu, sinon vous vous coupez l'accès.
+        3. Ajouter les autres règles nécessaires (HTTP, HTTPS…).
+        4. **Activer** le pare-feu, puis vérifier son état.
+
+        Le piège : si vous activez un pare-feu en refus par défaut **sans** avoir autorisé SSH, et que vous êtes
+        connecté à distance, votre session actuelle survit mais toute nouvelle connexion sera bloquée. Vous
+        perdez l'accès au serveur. **Autorisez toujours le port SSH (22) avant d'activer ufw.**
+
+        | Commande ufw | Rôle |
+        |---|---|
+        | `ufw default deny incoming` | Refuse tout le trafic entrant par défaut |
+        | `ufw default allow outgoing` | Autorise le trafic sortant |
+        | `ufw allow 22/tcp` | Ouvre SSH |
+        | `ufw allow from 192.0.2.0/24 to any port 22` | SSH seulement depuis un réseau précis |
+        | `ufw enable` | Active le pare-feu |
+        | `ufw status verbose` | Affiche les règles et l'état |
+
+        Encore mieux que `ufw allow 22` : restreindre SSH à votre réseau d'administration avec `ufw allow from`.
+        Le port n'est alors ouvert que pour les adresses de confiance, pas pour le monde entier.
+      en: |
+        Setting up a firewall always follows the same order, and there is a deadly trap to avoid.
+
+        1. Set the **default policy**: deny all inbound traffic, allow outbound.
+        2. **Allow SSH first**, before enabling the firewall, otherwise you cut your own access.
+        3. Add the other needed rules (HTTP, HTTPS…).
+        4. **Enable** the firewall, then check its status.
+
+        The trap: if you enable a default-deny firewall **without** having allowed SSH, and you are connected
+        remotely, your current session survives but any new connection will be blocked. You lose access to the
+        server. **Always allow the SSH port (22) before enabling ufw.**
+
+        | ufw command | Role |
+        |---|---|
+        | `ufw default deny incoming` | Deny all inbound traffic by default |
+        | `ufw default allow outgoing` | Allow outbound traffic |
+        | `ufw allow 22/tcp` | Open SSH |
+        | `ufw allow from 192.0.2.0/24 to any port 22` | SSH only from a specific network |
+        | `ufw enable` | Enable the firewall |
+        | `ufw status verbose` | Show the rules and state |
+
+        Better still than `ufw allow 22`: restrict SSH to your admin network with `ufw allow from`. The port is
+        then open only for trusted addresses, not for the whole world.
+
+examples:
+  - title:
+      fr: "Mettre en place un pare-feu en refus par défaut"
+      en: "Setting up a default-deny firewall"
+    file: setup-ufw.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. Default policy: deny everything inbound, allow outbound
+      sudo ufw default deny incoming
+      sudo ufw default allow outgoing
+
+      # 2. CRUCIAL: allow SSH BEFORE enabling, or you lock yourself out
+      sudo ufw allow 22/tcp
+
+      # 3. Open the web ports this server actually needs
+      sudo ufw allow 80/tcp     # HTTP
+      sudo ufw allow 443/tcp    # HTTPS
+
+      # 4. Enable the firewall and check the result
+      sudo ufw enable
+      sudo ufw status verbose
+    output: |
+      Rules updated
+      Firewall is active and enabled on system startup
+      Status: active
+
+      Default: deny (incoming), allow (outgoing)
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     ALLOW IN    Anywhere
+      80/tcp                     ALLOW IN    Anywhere
+      443/tcp                    ALLOW IN    Anywhere
+    note:
+      fr: "L'ordre est vital : on autorise SSH **avant** `ufw enable`. La politique `deny (incoming)` bloque tout le reste automatiquement. Seuls trois ports sont ouverts : c'est le moindre privilège appliqué au réseau."
+      en: "Order is vital: SSH is allowed **before** `ufw enable`. The `deny (incoming)` policy blocks everything else automatically. Only three ports are open: least privilege applied to the network."
+
+  - title:
+      fr: "Restreindre SSH à un réseau de confiance"
+      en: "Restricting SSH to a trusted network"
+    file: restrict-ssh.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Remove the open-to-everyone SSH rule
+      sudo ufw delete allow 22/tcp
+
+      # Allow SSH ONLY from the admin network (example range 192.0.2.0/24)
+      sudo ufw allow from 192.0.2.0/24 to any port 22 proto tcp
+
+      sudo ufw status numbered
+    output: |
+      Status: active
+
+           To                         Action      From
+           --                         ------      ----
+      [ 1] 22/tcp                     ALLOW IN    192.0.2.0/24
+      [ 2] 80/tcp                     ALLOW IN    Anywhere
+      [ 3] 443/tcp                    ALLOW IN    Anywhere
+    note:
+      fr: "SSH n'est désormais joignable que depuis `192.0.2.0/24` : les robots qui balaient Internet à la recherche du port 22 ne voient plus rien. Les ports web restent ouverts à tous, car un site public doit être joignable de partout."
+      en: "SSH is now reachable only from `192.0.2.0/24`: bots scanning the Internet for port 22 see nothing. The web ports stay open to everyone, because a public site must be reachable from anywhere."
+
+  - title:
+      fr: "Lire une règle iptables sous-jacente"
+      en: "Reading an underlying iptables rule"
+    file: iptables-view.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # ufw writes low-level rules; here is the same idea in raw iptables.
+      # -A INPUT: append to the inbound chain; -j: jump to an action.
+      sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT   # allow HTTPS in
+      sudo iptables -A INPUT -j DROP                          # drop the rest (last!)
+
+      # List the active rules with numbers and packet counts
+      sudo iptables -L INPUT -n --line-numbers
+    output: |
+      Chain INPUT (policy ACCEPT)
+      num  target  prot opt source     destination
+      1    ACCEPT  tcp  --  0.0.0.0/0  0.0.0.0/0   tcp dpt:443
+      2    DROP    all  --  0.0.0.0/0  0.0.0.0/0
+    note:
+      fr: "La règle `DROP` doit être **en dernier** : les règles sont lues dans l'ordre, et tout ce qui n'a pas été accepté avant tombe dessus. Comprendre iptables aide à savoir ce que `ufw` fabrique réellement sous le capot."
+      en: "The `DROP` rule must come **last**: rules are read in order, and anything not accepted before falls through to it. Understanding iptables helps you know what `ufw` actually builds under the hood."
+
+mistake:
+  fr: |
+    **Activer un pare-feu en refus par défaut sans avoir d'abord autorisé SSH, ou tout autoriser « pour tester ».**
+
+    L'erreur qui coûte le plus cher : vous êtes connecté à un serveur distant, vous lancez `ufw default deny
+    incoming` puis `ufw enable` sans avoir fait `ufw allow 22`. Votre session actuelle tient, mais à la prochaine
+    déconnexion, impossible de revenir : le serveur vous est fermé. Autorisez **toujours** SSH avant d'activer le
+    pare-feu, et gardez une session ouverte pour tester. L'erreur inverse est tout aussi grave : ouvrir large
+    (`ufw allow` sur plein de ports, ou désactiver le pare-feu « le temps de déboguer ») laisse des services
+    exposés que des robots trouveront en quelques minutes. Refus par défaut, ouverture minimale, toujours.
+  en: |
+    **Enabling a default-deny firewall without first allowing SSH, or allowing everything "to test".**
+
+    The costliest mistake: you are connected to a remote server, you run `ufw default deny incoming` then
+    `ufw enable` without having done `ufw allow 22`. Your current session holds, but on the next disconnect you
+    cannot come back: the server is closed to you. **Always** allow SSH before enabling the firewall, and keep a
+    session open to test. The opposite mistake is just as serious: opening wide (`ufw allow` on many ports, or
+    disabling the firewall "while debugging") leaves services exposed that bots will find in minutes. Default
+    deny, minimal opening, always.
+
+bestPractice:
+  fr: |
+    - **Refus par défaut** : `ufw default deny incoming`, puis n'ouvrez que les ports strictement nécessaires.
+    - **Autorisez SSH avant d'activer** : sinon vous vous verrouillez hors d'un serveur distant.
+    - **Restreignez par source quand c'est possible** : `ufw allow from <réseau> to any port 22` plutôt qu'ouvert à tous.
+    - **Gardez une session ouverte** pour tester toute nouvelle règle avant de fermer l'ancienne.
+    - **Vérifiez régulièrement** : `ufw status verbose` doit ne montrer que les règles attendues.
+    - **Moins de ports ouverts = moins de surface d'attaque** : fermez tout service que vous n'utilisez pas.
+  en: |
+    - **Default deny**: `ufw default deny incoming`, then open only the strictly necessary ports.
+    - **Allow SSH before enabling**: otherwise you lock yourself out of a remote server.
+    - **Restrict by source when possible**: `ufw allow from <network> to any port 22` rather than open to all.
+    - **Keep a session open** to test any new rule before closing the old one.
+    - **Check regularly**: `ufw status verbose` should show only the expected rules.
+    - **Fewer open ports = smaller attack surface**: close any service you do not use.
+
+exercise:
+  statement:
+    fr: |
+      Dans votre VM, configurez un pare-feu `ufw` pour un petit serveur web, en respectant le refus par défaut :
+
+      1. Définissez la politique par défaut : refuser l'entrant, autoriser le sortant.
+      2. Autorisez SSH, mais uniquement depuis le réseau privé `192.0.2.0/24`.
+      3. Autorisez HTTP (80) et HTTPS (443) depuis n'importe où.
+      4. Activez le pare-feu et affichez l'état détaillé.
+      5. Expliquez en une phrase pourquoi l'ordre des étapes 2 et 4 est important.
+
+      Notez vos commandes dans votre dépôt de suivi.
+    en: |
+      In your VM, configure a `ufw` firewall for a small web server, respecting default deny:
+
+      1. Set the default policy: deny inbound, allow outbound.
+      2. Allow SSH, but only from the private network `192.0.2.0/24`.
+      3. Allow HTTP (80) and HTTPS (443) from anywhere.
+      4. Enable the firewall and show the detailed status.
+      5. Explain in one sentence why the order of steps 2 and 4 matters.
+
+      Record your commands in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Default policy: deny inbound, allow outbound
+      sudo ufw default deny incoming
+      sudo ufw default allow outgoing
+
+      # 2. SSH allowed ONLY from the trusted admin network (before enabling!)
+      sudo ufw allow from 192.0.2.0/24 to any port 22 proto tcp
+
+      # 3. Web ports open to everyone (a public site must be reachable)
+      sudo ufw allow 80/tcp
+      sudo ufw allow 443/tcp
+
+      # 4. Enable and verify
+      sudo ufw enable
+      sudo ufw status verbose
+
+      # 5. SSH must be allowed BEFORE 'ufw enable', otherwise the default-deny
+      #    policy blocks new SSH connections and locks you out of the server.
+    note:
+      fr: "SSH est restreint au réseau d'administration : les robots d'Internet ne peuvent plus l'atteindre. L'ordre compte car `ufw enable` applique immédiatement le refus par défaut ; sans la règle SSH posée avant, on se coupe l'accès."
+      en: "SSH is restricted to the admin network: Internet bots can no longer reach it. Order matters because `ufw enable` applies default deny immediately; without the SSH rule set first, you cut your own access."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que le principe de « refus par défaut » (default deny) ?"
+      en: "What is the \"default deny\" principle?"
+    options:
+      fr:
+        - "On autorise tout, puis on bloque ce qui est dangereux"
+        - "On bloque tout par défaut, puis on autorise seulement le nécessaire"
+        - "On désactive le pare-feu pour aller plus vite"
+        - "On ouvre tous les ports au-dessus de 1024"
+      en:
+        - "Allow everything, then block what is dangerous"
+        - "Block everything by default, then allow only what is needed"
+        - "Disable the firewall to go faster"
+        - "Open all ports above 1024"
+    answer: 1
+    why:
+      fr: "Le refus par défaut interdit tout, puis n'ouvre que le strict nécessaire : on n'oublie ainsi aucune menace, contrairement à l'approche « tout autoriser puis bloquer »."
+      en: "Default deny forbids everything, then opens only the strict minimum: no threat is forgotten, unlike the \"allow all then block\" approach."
+  - q:
+      fr: "Pourquoi autoriser SSH avant d'activer ufw sur un serveur distant ?"
+      en: "Why allow SSH before enabling ufw on a remote server?"
+    options:
+      fr:
+        - "Pour que le pare-feu démarre plus vite"
+        - "Parce que ufw l'exige techniquement"
+        - "Pour ne pas se couper l'accès : sinon les nouvelles connexions SSH sont bloquées"
+        - "Pour chiffrer le trafic SSH"
+      en:
+        - "To make the firewall start faster"
+        - "Because ufw technically requires it"
+        - "To avoid cutting your access: otherwise new SSH connections are blocked"
+        - "To encrypt the SSH traffic"
+    answer: 2
+    why:
+      fr: "Avec le refus par défaut, toute connexion non autorisée est bloquée ; sans règle SSH posée avant `ufw enable`, on perd l'accès au serveur à la prochaine reconnexion."
+      en: "With default deny, any unauthorised connection is blocked; without an SSH rule set before `ufw enable`, you lose access to the server on the next reconnect."
+  - q:
+      fr: "Quel outil est une surcouche simple au-dessus du filtrage du noyau ?"
+      en: "Which tool is a simple front end over the kernel's filtering?"
+    options:
+      fr: ["ufw", "tcpdump", "openssl", "cron"]
+      en: ["ufw", "tcpdump", "openssl", "cron"]
+    answer: 0
+    why:
+      fr: "`ufw` (Uncomplicated Firewall) traduit des commandes simples en règles de bas niveau : idéal pour débuter et pour la plupart des serveurs."
+      en: "`ufw` (Uncomplicated Firewall) translates simple commands into low-level rules: ideal to start and for most servers."
+  - q:
+      fr: "Pourquoi la règle `DROP` doit-elle être la dernière dans une liste iptables ?"
+      en: "Why must the `DROP` rule come last in an iptables list?"
+    options:
+      fr:
+        - "Parce que DROP est plus lent"
+        - "Parce que les règles sont lues dans l'ordre et tout le non-autorisé doit y tomber à la fin"
+        - "Parce que iptables trie automatiquement"
+        - "Parce que DROP ne fonctionne qu'en dernier techniquement"
+      en:
+        - "Because DROP is slower"
+        - "Because rules are read in order and everything unauthorised must fall through to it at the end"
+        - "Because iptables sorts automatically"
+        - "Because DROP only works last technically"
+    answer: 1
+    why:
+      fr: "Les règles sont évaluées de haut en bas ; placer `DROP` en dernier permet d'abord d'accepter le trafic légitime, puis de rejeter tout le reste."
+      en: "Rules are evaluated top to bottom; placing `DROP` last first accepts legitimate traffic, then rejects everything else."
+  - q:
+      fr: "Quel est l'avantage de `ufw allow from 192.0.2.0/24 to any port 22` par rapport à `ufw allow 22` ?"
+      en: "What is the advantage of `ufw allow from 192.0.2.0/24 to any port 22` over `ufw allow 22`?"
+    options:
+      fr:
+        - "C'est plus rapide à taper"
+        - "Ça chiffre la connexion SSH"
+        - "Ça ouvre SSH à tout Internet"
+        - "Ça n'ouvre SSH que pour un réseau de confiance, pas pour le monde entier"
+      en:
+        - "It is faster to type"
+        - "It encrypts the SSH connection"
+        - "It opens SSH to the whole Internet"
+        - "It opens SSH only for a trusted network, not the whole world"
+    answer: 3
+    why:
+      fr: "Restreindre SSH à une source de confiance réduit la surface d'attaque : les robots qui balaient Internet à la recherche du port 22 ne voient plus rien."
+      en: "Restricting SSH to a trusted source shrinks the attack surface: bots scanning the Internet for port 22 see nothing."

@@ -1,0 +1,382 @@
+description:
+  fr: "Maîtriser les permissions Linux (lecture, écriture, exécution), chmod, chown, umask et le bit SUID, pour protéger fichiers et secrets."
+  en: "Master Linux permissions (read, write, execute), chmod, chown, umask and the SUID bit, to protect files and secrets."
+duration: 25
+
+intro:
+  fr: |
+    Sur un système partagé, tout le monde ne doit pas pouvoir lire ou modifier tous les fichiers. Les
+    **permissions** sont les règles qui décident *qui* a le droit de faire *quoi* sur chaque fichier. C'est le
+    cœur de la sécurité sous Linux : une clé privée lisible par tous, c'est une clé déjà compromise.
+
+    Pensez à un coffre-fort d'hôtel. Pour chaque coffre, on décide qui peut l'ouvrir : le client, le personnel
+    d'étage, ou tout le monde. Linux fait pareil, mais avec trois catégories de personnes et trois actions
+    possibles. Une fois que vous avez compris ces 3 × 3, vous lisez n'importe quelle ligne de permissions d'un
+    coup d'œil.
+
+    Dans cette leçon, vous allez apprendre à **lire** une ligne de permissions, à les **changer** avec `chmod`,
+    à changer le **propriétaire** avec `chown`, à comprendre le `umask` qui fixe les droits par défaut, et à
+    repérer le bit **SUID**, une puissance pratique mais dangereuse. Le calculateur de permissions, en bas de
+    page, vous aidera à vous entraîner.
+  en: |
+    On a shared system, not everyone should be able to read or change every file. **Permissions** are the rules
+    that decide *who* may do *what* to each file. This is the heart of Linux security: a private key readable by
+    everyone is a key already compromised.
+
+    Think of a hotel safe. For each safe, you decide who can open it: the guest, the floor staff, or everyone.
+    Linux does the same, but with three categories of people and three possible actions. Once you grasp this
+    3 × 3, you read any permission line at a glance.
+
+    In this lesson you will learn to **read** a permission line, to **change** it with `chmod`, to change the
+    **owner** with `chown`, to understand the `umask` that sets default rights, and to spot the **SUID** bit, a
+    handy but dangerous power. The permission calculator, at the bottom of the page, will help you practise.
+
+sections:
+  - heading:
+      fr: "Lire une ligne de permissions"
+      en: "Reading a permission line"
+    body:
+      fr: |
+        Chaque fichier a trois catégories de « qui » et trois « quoi ». Les catégories sont : le **propriétaire**
+        (*user*, `u`), le **groupe** (`g`) et **les autres** (*others*, `o`). Les actions sont : **lire** (`r`),
+        **écrire** (`w`) et **exécuter** (`x`).
+
+        Quand vous tapez `ls -l`, la première colonne ressemble à `-rwxr-x---`. On la lit ainsi :
+
+        | Position | `-rwxr-x---` | Signifie |
+        |---|---|---|
+        | 1 | `-` | Type : `-` fichier, `d` dossier, `l` lien |
+        | 2-4 | `rwx` | Propriétaire : lit, écrit, exécute |
+        | 5-7 | `r-x` | Groupe : lit, exécute, mais n'écrit pas |
+        | 8-10 | `---` | Les autres : aucun droit |
+
+        Chaque droit vaut un nombre : **lire = 4, écrire = 2, exécuter = 1**. On additionne par catégorie, ce qui
+        donne le fameux code à trois chiffres. Ici `rwx` = 4+2+1 = 7, `r-x` = 4+0+1 = 5, `---` = 0 : la
+        permission est donc **750**.
+      en: |
+        Each file has three categories of "who" and three "what". The categories are: the **owner** (*user*,
+        `u`), the **group** (`g`) and **others** (`o`). The actions are: **read** (`r`), **write** (`w`) and
+        **execute** (`x`).
+
+        When you type `ls -l`, the first column looks like `-rwxr-x---`. You read it this way:
+
+        | Position | `-rwxr-x---` | Means |
+        |---|---|---|
+        | 1 | `-` | Type: `-` file, `d` directory, `l` link |
+        | 2-4 | `rwx` | Owner: reads, writes, executes |
+        | 5-7 | `r-x` | Group: reads, executes, but does not write |
+        | 8-10 | `---` | Others: no rights |
+
+        Each right has a number: **read = 4, write = 2, execute = 1**. You add them up per category, giving the
+        famous three-digit code. Here `rwx` = 4+2+1 = 7, `r-x` = 4+0+1 = 5, `---` = 0: so the permission is
+        **750**.
+  - heading:
+      fr: "Changer les droits : chmod et chown"
+      en: "Changing rights: chmod and chown"
+    body:
+      fr: |
+        **`chmod`** (*change mode*) modifie les permissions. Deux écritures, le même résultat :
+
+        - **Numérique** : `chmod 640 secret.txt` → propriétaire lit+écrit (6), groupe lit (4), autres rien (0).
+        - **Symbolique** : `chmod u+x script.sh` (ajoute l'exécution au propriétaire), `chmod o-r fichier`
+          (retire la lecture aux autres), `chmod g+w fichier` (ajoute l'écriture au groupe).
+
+        **`chown`** (*change owner*) change le propriétaire et le groupe : `chown alice:devs fichier` donne le
+        fichier à `alice` et au groupe `devs`. Il faut en général `sudo` pour cela.
+
+        | Besoin | Commande | Permission |
+        |---|---|---|
+        | Un secret, lisible par son seul propriétaire | `chmod 600 .env` | `-rw-------` |
+        | Une clé privée SSH | `chmod 600 id_ed25519` | `-rw-------` |
+        | Un script exécutable par tous | `chmod 755 script.sh` | `-rwxr-xr-x` |
+        | Un dossier personnel privé | `chmod 700 ~/prive` | `drwx------` |
+
+        Règle d'or de sécurité : **un secret se met en 600** (ou 400 en lecture seule). Dès qu'un `4` apparaît
+        pour le groupe ou les autres sur un fichier sensible, n'importe qui peut le lire.
+      en: |
+        **`chmod`** (*change mode*) changes permissions. Two notations, same result:
+
+        - **Numeric**: `chmod 640 secret.txt` → owner reads+writes (6), group reads (4), others nothing (0).
+        - **Symbolic**: `chmod u+x script.sh` (add execute for the owner), `chmod o-r file` (remove read from
+          others), `chmod g+w file` (add write for the group).
+
+        **`chown`** (*change owner*) changes the owner and group: `chown alice:devs file` gives the file to
+        `alice` and group `devs`. You usually need `sudo` for this.
+
+        | Need | Command | Permission |
+        |---|---|---|
+        | A secret, readable only by its owner | `chmod 600 .env` | `-rw-------` |
+        | An SSH private key | `chmod 600 id_ed25519` | `-rw-------` |
+        | A script executable by everyone | `chmod 755 script.sh` | `-rwxr-xr-x` |
+        | A private home folder | `chmod 700 ~/private` | `drwx------` |
+
+        Golden security rule: **a secret goes to 600** (or 400 for read-only). As soon as a `4` appears for the
+        group or others on a sensitive file, anyone can read it.
+  - heading:
+      fr: "umask et le bit SUID"
+      en: "umask and the SUID bit"
+    body:
+      fr: |
+        Le **umask** fixe les permissions **par défaut** des nouveaux fichiers. C'est un *masque* : il
+        **retire** des droits. Avec le umask courant `022`, un nouveau fichier naît en `644` (`rw-r--r--`) et un
+        nouveau dossier en `755`. Un umask plus strict, `077`, crée des fichiers en `600` : personne d'autre que
+        le propriétaire n'y a accès. Sur une machine qui manipule des secrets, `umask 077` est un bon réflexe.
+
+        Le bit **SUID** (*Set User ID*) est spécial : un programme avec SUID s'exécute avec les droits de son
+        **propriétaire**, pas de celui qui le lance. Exemple légitime : `passwd` est SUID root, car changer son
+        mot de passe nécessite d'écrire dans un fichier réservé à root. Dans `ls -l`, le SUID apparaît comme un
+        `s` à la place du `x` du propriétaire : `-rwsr-xr-x`.
+
+        Le SUID est **pratique mais risqué** : un programme SUID root qui contient une faille donne les pleins
+        pouvoirs à un attaquant. En audit, on recherche les fichiers SUID avec `find / -perm -4000` pour vérifier
+        qu'aucun binaire inattendu n'a ce privilège.
+      en: |
+        The **umask** sets the **default** permissions of new files. It is a *mask*: it **removes** rights. With
+        the common umask `022`, a new file is born as `644` (`rw-r--r--`) and a new directory as `755`. A
+        stricter umask, `077`, creates files as `600`: no one but the owner has access. On a machine handling
+        secrets, `umask 077` is a good reflex.
+
+        The **SUID** bit (*Set User ID*) is special: a program with SUID runs with its **owner**'s rights, not
+        those of whoever launches it. A legitimate example: `passwd` is SUID root, because changing your password
+        requires writing to a root-only file. In `ls -l`, SUID shows as an `s` in place of the owner's `x`:
+        `-rwsr-xr-x`.
+
+        SUID is **handy but risky**: a SUID-root program with a flaw gives an attacker full power. In audits, you
+        search for SUID files with `find / -perm -4000` to check that no unexpected binary holds this privilege.
+
+examples:
+  - title:
+      fr: "Lire et comprendre les permissions existantes"
+      en: "Reading and understanding existing permissions"
+    file: read-perms.sh
+    lang: bash
+    kind: neutral
+    code: |
+      ls -l
+      # Breakdown of each line:
+      #   -rw-------  secret, owner read+write only (600)
+      #   -rwxr-xr-x  script, everyone can run it (755)
+      #   drwxr-x---  folder, owner full, group read+enter, others nothing (750)
+    output: |
+      -rw------- 1 alice alice   220 Jun  3 11:20 .env
+      -rwxr-xr-x 1 alice alice  1840 Jun  3 11:18 deploy.sh
+      drwxr-x--- 2 alice devs   4096 Jun  3 11:15 shared
+      -rw-r--r-- 1 alice alice    58 Jun  3 11:10 notes.txt
+    note:
+      fr: "Le `.env` est en `600` : parfait, lui seul contient des secrets. `notes.txt` est en `644`, lisible par tous : acceptable pour des notes, inacceptable pour un mot de passe. Savoir lire ces codes repère immédiatement un fichier trop ouvert."
+      en: "The `.env` is `600`: perfect, it alone holds secrets. `notes.txt` is `644`, readable by all: fine for notes, unacceptable for a password. Reading these codes instantly spots a file that is too open."
+
+  - title:
+      fr: "Protéger un secret et une clé SSH"
+      en: "Protecting a secret and an SSH key"
+    file: protect-secret.sh
+    lang: bash
+    kind: secure
+    code: |
+      # A fresh file is often world-readable (644): fix it for a secret
+      echo "DB_PASSWORD=changeme-in-vault" > .env
+      ls -l .env
+
+      # Lock it down: owner read+write only, nobody else (600)
+      chmod 600 .env
+      ls -l .env
+
+      # Same rule for an SSH private key; SSH even REFUSES a loose key
+      chmod 600 ~/.ssh/id_ed25519
+    output: |
+      -rw-r--r-- 1 alice alice 31 Jun  3 11:30 .env
+      -rw------- 1 alice alice 31 Jun  3 11:30 .env
+    note:
+      fr: "Avant `chmod`, le `.env` était lisible par tous (`644`) : fuite potentielle. Après `chmod 600`, lui seul y accède. SSH va plus loin : il **refuse** d'utiliser une clé privée trop permissive, par sécurité."
+      en: "Before `chmod`, the `.env` was world-readable (`644`): a potential leak. After `chmod 600`, only its owner can access it. SSH goes further: it **refuses** to use a private key that is too permissive, for safety."
+
+  - title:
+      fr: "Changer le propriétaire et auditer les fichiers SUID"
+      en: "Changing the owner and auditing SUID files"
+    file: owner-and-suid.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Give the shared folder to alice and the devs group (needs sudo)
+      sudo chown alice:devs shared
+      sudo chmod 750 shared          # owner full, group read+enter, others none
+      ls -ld shared
+
+      # Security audit: list programs that run with their owner's rights (SUID)
+      find /usr/bin -perm -4000 -type f 2>/dev/null
+    output: |
+      drwxr-x--- 2 alice devs 4096 Jun  3 11:15 shared
+      /usr/bin/passwd
+      /usr/bin/sudo
+      /usr/bin/su
+    note:
+      fr: "`passwd`, `sudo` et `su` sont légitimement SUID root : ils ont besoin de droits élevés pour une tâche précise. L'audit `find -perm -4000` sert à repérer un binaire SUID **inattendu**, souvent le signe d'une porte dérobée."
+      en: "`passwd`, `sudo` and `su` are legitimately SUID root: they need elevated rights for a specific task. The `find -perm -4000` audit is meant to spot an **unexpected** SUID binary, often the sign of a backdoor."
+
+mistake:
+  fr: |
+    **Mettre `chmod 777` sur un fichier ou un dossier « pour que ça marche ».**
+
+    Quand un programme n'a pas accès à un fichier, la tentation est de tout ouvrir avec `chmod 777`
+    (`rwxrwxrwx`) : tout le monde peut lire, écrire et exécuter. C'est une faille béante. N'importe quel compte,
+    y compris un service compromis, peut alors modifier ce fichier. La bonne démarche est l'inverse : donner le
+    **minimum** de droits, à la **bonne** personne ou au bon groupe, avec `chown` puis un `chmod` restreint
+    (640, 750…). Un secret ne descend jamais en dessous de 600 ; un `777` sur un fichier sensible est une alerte.
+  en: |
+    **Setting `chmod 777` on a file or folder "to make it work".**
+
+    When a program cannot access a file, the temptation is to open everything with `chmod 777` (`rwxrwxrwx`):
+    everyone can read, write and execute. That is a gaping hole. Any account, including a compromised service,
+    can then change this file. The right approach is the opposite: give the **minimum** rights, to the **right**
+    person or group, with `chown` then a restricted `chmod` (640, 750…). A secret never goes below 600; a `777`
+    on a sensitive file is a red flag.
+
+bestPractice:
+  fr: |
+    - **Moindre privilège sur les fichiers** : accordez le minimum de droits nécessaires, jamais `777`.
+    - **Les secrets en 600** (ou 400 en lecture seule) : clés privées, `.env`, certificats, mots de passe.
+    - **`umask 077`** sur les machines sensibles : les nouveaux fichiers naissent privés par défaut.
+    - **`chown` d'abord, `chmod` ensuite** : attribuez le fichier au bon utilisateur/groupe, puis réglez finement.
+    - **Auditez les SUID** : `find / -perm -4000` doit ne renvoyer que des binaires système connus.
+    - **Vérifiez après coup** : un `ls -l` confirme que la permission appliquée est bien celle attendue.
+  en: |
+    - **Least privilege on files**: grant the minimum rights needed, never `777`.
+    - **Secrets at 600** (or 400 read-only): private keys, `.env`, certificates, passwords.
+    - **`umask 077`** on sensitive machines: new files are born private by default.
+    - **`chown` first, `chmod` second**: assign the file to the right user/group, then tune finely.
+    - **Audit SUID**: `find / -perm -4000` should return only known system binaries.
+    - **Verify afterwards**: an `ls -l` confirms the applied permission is the one you intended.
+
+exercise:
+  statement:
+    fr: |
+      Entraînez-vous à protéger des fichiers selon leur sensibilité. Utilisez le calculateur en bas de page pour
+      vérifier vos codes.
+
+      1. Créez un fichier `secret.env` et un script `run.sh`.
+      2. Donnez à `secret.env` la permission pour que **seul** son propriétaire puisse le lire et l'écrire.
+      3. Donnez à `run.sh` la permission pour que le propriétaire puisse tout faire, et que le groupe et les autres puissent seulement le lire et l'exécuter.
+      4. Donnez les deux fichiers à l'utilisateur `deploy` et au groupe `web`.
+      5. Vérifiez le résultat avec `ls -l` et donnez le code numérique de chaque fichier.
+
+      Notez vos commandes dans votre dépôt de suivi.
+    en: |
+      Practise protecting files according to their sensitivity. Use the calculator at the bottom of the page to
+      check your codes.
+
+      1. Create a file `secret.env` and a script `run.sh`.
+      2. Give `secret.env` the permission so that **only** its owner can read and write it.
+      3. Give `run.sh` the permission so the owner can do everything, and the group and others can only read and execute it.
+      4. Give both files to user `deploy` and group `web`.
+      5. Check the result with `ls -l` and give each file's numeric code.
+
+      Record your commands in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Create the two files
+      touch secret.env run.sh
+
+      # 2. Secret: owner read+write only -> 600
+      chmod 600 secret.env
+
+      # 3. Script: owner all, group+others read+execute -> 755
+      chmod 755 run.sh
+
+      # 4. Assign both to user deploy and group web (needs sudo)
+      sudo chown deploy:web secret.env run.sh
+
+      # 5. Verify
+      ls -l secret.env run.sh
+      # secret.env -> -rw-------  = 600
+      # run.sh     -> -rwxr-xr-x  = 755
+    note:
+      fr: "`600` protège le secret (propriétaire seul : 6 = 4+2). `755` rend le script exécutable par tous sans les laisser le modifier (7 pour le propriétaire, 5 = 4+1 pour les autres). `chown deploy:web` fixe le bon propriétaire et le bon groupe."
+      en: "`600` protects the secret (owner only: 6 = 4+2). `755` makes the script runnable by all without letting them change it (7 for the owner, 5 = 4+1 for others). `chown deploy:web` sets the right owner and group."
+
+quiz:
+  - q:
+      fr: "Que vaut la permission `rwxr-x---` en notation numérique ?"
+      en: "What is the permission `rwxr-x---` in numeric notation?"
+    options:
+      fr: ["777", "755", "750", "640"]
+      en: ["777", "755", "750", "640"]
+    answer: 2
+    why:
+      fr: "`rwx` = 7 (4+2+1), `r-x` = 5 (4+0+1), `---` = 0 : la permission est donc 750."
+      en: "`rwx` = 7 (4+2+1), `r-x` = 5 (4+0+1), `---` = 0: so the permission is 750."
+  - q:
+      fr: "Quelle permission convient à une clé privée SSH ou à un fichier `.env` ?"
+      en: "Which permission suits an SSH private key or a `.env` file?"
+    options:
+      fr:
+        - "600 : lecture et écriture pour le seul propriétaire"
+        - "777 : tous les droits pour tout le monde"
+        - "755 : exécutable par tous"
+        - "644 : lisible par tous"
+      en:
+        - "600: read and write for the owner only"
+        - "777: all rights for everyone"
+        - "755: executable by all"
+        - "644: readable by all"
+    answer: 0
+    why:
+      fr: "Un secret ne doit être accessible qu'à son propriétaire : `600` (rw-------). SSH refuse même une clé privée trop permissive."
+      en: "A secret must be accessible only to its owner: `600` (rw-------). SSH even refuses a private key that is too permissive."
+  - q:
+      fr: "Pourquoi `chmod 777` sur un fichier sensible est-il dangereux ?"
+      en: "Why is `chmod 777` on a sensitive file dangerous?"
+    options:
+      fr:
+        - "Parce que ça supprime le fichier"
+        - "Parce que n'importe qui, y compris un service compromis, peut le lire et le modifier"
+        - "Parce que ça chiffre le fichier"
+        - "Parce que ça le rend invisible"
+      en:
+        - "Because it deletes the file"
+        - "Because anyone, including a compromised service, can read and change it"
+        - "Because it encrypts the file"
+        - "Because it makes it invisible"
+    answer: 1
+    why:
+      fr: "`777` donne lecture, écriture et exécution à tout le monde : c'est l'inverse du moindre privilège et une faille béante sur un fichier sensible."
+      en: "`777` grants read, write and execute to everyone: the opposite of least privilege and a gaping hole on a sensitive file."
+  - q:
+      fr: "À quoi sert le umask ?"
+      en: "What is the umask for?"
+    options:
+      fr:
+        - "À chiffrer les fichiers"
+        - "À changer le propriétaire d'un fichier"
+        - "À définir les permissions par défaut des nouveaux fichiers"
+        - "À lister les fichiers SUID"
+      en:
+        - "To encrypt files"
+        - "To change a file's owner"
+        - "To set the default permissions of new files"
+        - "To list SUID files"
+    answer: 2
+    why:
+      fr: "Le umask retire des droits par défaut : avec `077`, les nouveaux fichiers naissent en 600, donc privés."
+      en: "The umask removes rights by default: with `077`, new files are born as 600, hence private."
+  - q:
+      fr: "Que fait un programme avec le bit SUID, comme `passwd` ?"
+      en: "What does a program with the SUID bit, like `passwd`, do?"
+    options:
+      fr:
+        - "Il s'exécute avec les droits de son propriétaire, pas de celui qui le lance"
+        - "Il ne peut jamais être exécuté"
+        - "Il supprime l'utilisateur courant"
+        - "Il s'exécute toujours sans aucun droit"
+      en:
+        - "It runs with its owner's rights, not those of whoever launches it"
+        - "It can never be executed"
+        - "It deletes the current user"
+        - "It always runs with no rights at all"
+    answer: 0
+    why:
+      fr: "Un binaire SUID root s'exécute en root : légitime pour `passwd`, mais dangereux s'il est inattendu, d'où l'audit `find -perm -4000`."
+      en: "A SUID-root binary runs as root: legitimate for `passwd`, but dangerous if unexpected, hence the `find -perm -4000` audit."
+
+widgets: [permission-calculator]

@@ -1,0 +1,413 @@
+description:
+  fr: "Lire les journaux système pour repérer un incident et planifier des tâches automatiques avec cron et les timers systemd."
+  en: "Read system logs to spot an incident and schedule automatic tasks with cron and systemd timers."
+duration: 24
+
+intro:
+  fr: |
+    Un système Linux écrit en permanence ce qui lui arrive : chaque connexion, chaque erreur, chaque `sudo`.
+    Ces traces sont les **journaux** (*logs*). Savoir les lire, c'est pouvoir répondre à la question qui revient
+    après tout incident : *que s'est-il passé, quand, et qui l'a fait ?* En sécurité, les journaux sont souvent
+    la seule preuve d'une intrusion.
+
+    Imaginez les caméras de vidéosurveillance d'un magasin. On ne les regarde pas en continu, mais le jour où
+    quelque chose cloche, on remonte l'enregistrement pour comprendre. Les journaux sont ces caméras : discrets
+    au quotidien, précieux le jour d'un problème. Encore faut-il qu'ils tournent, et savoir les relire.
+
+    L'autre moitié de la leçon concerne l'**automatisation du temps** : faire exécuter une tâche toute seule, à
+    heure fixe, sans intervention humaine. Une sauvegarde chaque nuit, une mise à jour chaque semaine, un
+    nettoyage chaque heure. L'outil historique est **cron** ; sa version moderne intégrée à systemd est le
+    **timer**. Vous apprendrez les deux.
+  en: |
+    A Linux system constantly writes down what happens to it: every login, every error, every `sudo`. These
+    traces are the **logs**. Knowing how to read them means being able to answer the question that comes up
+    after any incident: *what happened, when, and who did it?* In security, logs are often the only proof of an
+    intrusion.
+
+    Picture a shop's CCTV cameras. You do not watch them constantly, but the day something goes wrong, you roll
+    back the footage to understand. Logs are those cameras: quiet day to day, precious on the day of a problem.
+    They still need to be running, and you need to know how to read them back.
+
+    The other half of the lesson is about **automating time**: having a task run on its own, at a fixed time,
+    with no human intervention. A backup every night, an update every week, a cleanup every hour. The historical
+    tool is **cron**; its modern version built into systemd is the **timer**. You will learn both.
+
+sections:
+  - heading:
+      fr: "Où sont les journaux et comment les lire"
+      en: "Where the logs are and how to read them"
+    body:
+      fr: |
+        Sous Linux, les journaux vivent surtout dans `/var/log/`. Les plus utiles à connaître :
+
+        | Fichier / source | Contient |
+        |---|---|
+        | `/var/log/auth.log` | Connexions, `sudo`, SSH (Debian/Ubuntu) |
+        | `/var/log/syslog` | Messages généraux du système |
+        | `journalctl` | Le journal centralisé de systemd (tous les services) |
+        | `dmesg` | Messages du noyau (matériel, pilotes) |
+
+        Pour les lire, on réutilise les outils de la leçon « fichiers et texte » : `tail -f` pour suivre en
+        direct, `grep` pour filtrer. Exemple central en sécurité : surveiller les connexions échouées.
+
+        En sécurité, le journal d'authentification est une mine. Des dizaines de lignes `Failed password`
+        provenant d'une même adresse signalent une **attaque par force brute**. Un `sudo` inattendu, une
+        connexion à une heure anormale : autant d'indices. Lire les journaux, c'est lire l'histoire récente de
+        la machine. Point important : un attaquant cherche souvent à **effacer** les journaux pour couvrir ses
+        traces, d'où l'intérêt de les **centraliser** ailleurs (sujet approfondi plus tard).
+      en: |
+        On Linux, logs mostly live in `/var/log/`. The most useful ones to know:
+
+        | File / source | Holds |
+        |---|---|
+        | `/var/log/auth.log` | Logins, `sudo`, SSH (Debian/Ubuntu) |
+        | `/var/log/syslog` | General system messages |
+        | `journalctl` | systemd's centralised journal (all services) |
+        | `dmesg` | Kernel messages (hardware, drivers) |
+
+        To read them, you reuse the tools from the "files and text" lesson: `tail -f` to follow live, `grep` to
+        filter. A central security example: watching failed logins.
+
+        In security, the authentication log is a goldmine. Dozens of `Failed password` lines from the same
+        address signal a **brute-force attack**. An unexpected `sudo`, a login at an abnormal hour: all are
+        clues. Reading logs is reading the machine's recent history. Important point: an attacker often tries to
+        **erase** the logs to cover their tracks, which is why **centralising** them elsewhere matters (a topic
+        covered in depth later).
+  - heading:
+      fr: "La rotation des journaux"
+      en: "Log rotation"
+    body:
+      fr: |
+        Un journal grossit sans fin : laissé tel quel, il finirait par remplir le disque. La **rotation des
+        journaux** (*log rotation*) résout cela. Le service `logrotate` tourne chaque jour et, pour chaque
+        journal :
+
+        1. **Archive** le fichier courant (`auth.log` devient `auth.log.1`).
+        2. **Compresse** les anciens (`auth.log.2.gz`, `auth.log.3.gz`…).
+        3. **Supprime** les plus vieux au-delà d'une durée définie (par exemple 4 semaines).
+
+        | Fichier | Âge |
+        |---|---|
+        | `auth.log` | Aujourd'hui (en cours d'écriture) |
+        | `auth.log.1` | Hier |
+        | `auth.log.2.gz` | Avant-hier, compressé |
+
+        Deux conséquences pratiques. D'abord, pour chercher dans l'historique, on utilise `zcat` ou `zgrep` qui
+        lisent directement les fichiers compressés `.gz`. Ensuite, un enjeu de sécurité : la durée de rétention.
+        Garder les journaux trop peu de temps, c'est risquer d'avoir déjà effacé la preuve d'une intrusion le
+        jour où on la découvre. On adapte la rétention à ses besoins et à ses obligations.
+      en: |
+        A log grows endlessly: left as is, it would eventually fill the disk. **Log rotation** solves this. The
+        `logrotate` service runs every day and, for each log:
+
+        1. **Archives** the current file (`auth.log` becomes `auth.log.1`).
+        2. **Compresses** the older ones (`auth.log.2.gz`, `auth.log.3.gz`…).
+        3. **Deletes** the oldest beyond a set duration (for example 4 weeks).
+
+        | File | Age |
+        |---|---|
+        | `auth.log` | Today (being written) |
+        | `auth.log.1` | Yesterday |
+        | `auth.log.2.gz` | The day before, compressed |
+
+        Two practical consequences. First, to search the history, you use `zcat` or `zgrep`, which read the
+        compressed `.gz` files directly. Second, a security concern: the retention period. Keeping logs too
+        short a time risks having already erased the proof of an intrusion the day you discover it. You tune
+        retention to your needs and obligations.
+  - heading:
+      fr: "Planifier des tâches : cron et timers"
+      en: "Scheduling tasks: cron and timers"
+    body:
+      fr: |
+        **cron** exécute des commandes à des moments précis. Chaque utilisateur a sa liste de tâches, la
+        *crontab*, éditée avec `crontab -e`. Chaque ligne suit cinq champs de temps, puis la commande :
+
+        ```
+        ┌───── minute (0-59)
+        │ ┌───── heure (0-23)
+        │ │ ┌───── jour du mois (1-31)
+        │ │ │ ┌───── mois (1-12)
+        │ │ │ │ ┌───── jour de la semaine (0-6, 0 = dimanche)
+        │ │ │ │ │
+        0 2 * * *  /opt/backup.sh      # tous les jours à 02h00
+        ```
+
+        | Expression | Signifie |
+        |---|---|
+        | `0 2 * * *` | Chaque jour à 02h00 |
+        | `*/15 * * * *` | Toutes les 15 minutes |
+        | `0 3 * * 0` | Chaque dimanche à 03h00 |
+
+        La version moderne, intégrée à systemd, est le **timer** : un fichier `.timer` déclenche un `.service`.
+        Avantages par rapport à cron : les journaux passent par `journalctl`, et une tâche manquée (machine
+        éteinte) peut être **rattrapée** au démarrage grâce à l'option `Persistent=true`. Pour une sauvegarde
+        quotidienne qui ne doit jamais sauter, le timer est préférable. Côté sécurité, on fait tourner ces
+        tâches sous un compte dédié peu privilégié, jamais root sans raison, et on vérifie régulièrement dans les
+        journaux qu'elles réussissent.
+      en: |
+        **cron** runs commands at precise times. Each user has their own task list, the *crontab*, edited with
+        `crontab -e`. Each line follows five time fields, then the command:
+
+        ```
+        ┌───── minute (0-59)
+        │ ┌───── hour (0-23)
+        │ │ ┌───── day of month (1-31)
+        │ │ │ ┌───── month (1-12)
+        │ │ │ │ ┌───── day of week (0-6, 0 = Sunday)
+        │ │ │ │ │
+        0 2 * * *  /opt/backup.sh      # every day at 02:00
+        ```
+
+        | Expression | Means |
+        |---|---|
+        | `0 2 * * *` | Every day at 02:00 |
+        | `*/15 * * * *` | Every 15 minutes |
+        | `0 3 * * 0` | Every Sunday at 03:00 |
+
+        The modern version, built into systemd, is the **timer**: a `.timer` file triggers a `.service`.
+        Advantages over cron: logs go through `journalctl`, and a missed task (machine off) can be **caught up**
+        at boot with the `Persistent=true` option. For a daily backup that must never skip, the timer is
+        preferable. On the security side, run these tasks under a dedicated low-privilege account, never root
+        without reason, and regularly check in the logs that they succeed.
+
+examples:
+  - title:
+      fr: "Repérer une attaque par force brute dans les journaux"
+      en: "Spotting a brute-force attack in the logs"
+    file: inspect-auth.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Count failed SSH logins
+      grep -c "Failed password" /var/log/auth.log
+
+      # Which IPs are responsible, most aggressive first
+      grep "Failed password" /var/log/auth.log \
+        | grep -oE "from [0-9.]+" | awk '{print $2}' \
+        | sort | uniq -c | sort -nr | head -n 3
+
+      # Search the compressed, rotated history too (yesterday and before)
+      zgrep -c "Failed password" /var/log/auth.log.*.gz
+    output: |
+      37
+           31 203.0.113.42
+            4 198.51.100.7
+            2 192.0.2.55
+    note:
+      fr: "31 échecs depuis `203.0.113.42` en un seul fichier : c'est une attaque par force brute caractérisée. `zgrep` fouille aussi les journaux déjà compressés par la rotation, pour voir si l'attaque a commencé avant aujourd'hui."
+      en: "31 failures from `203.0.113.42` in a single file: a textbook brute-force attack. `zgrep` also digs through the logs already compressed by rotation, to see whether the attack started before today."
+
+  - title:
+      fr: "Planifier une sauvegarde quotidienne avec cron"
+      en: "Scheduling a daily backup with cron"
+    file: backup-cron.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Edit the current user's crontab (opens an editor)
+      crontab -e
+
+      # Add this line: run the backup every day at 02:30, logging output
+      #   30 2 * * *  /opt/scripts/backup.sh >> /var/log/backup.log 2>&1
+
+      # List the scheduled tasks to confirm
+      crontab -l
+    output: |
+      30 2 * * *  /opt/scripts/backup.sh >> /var/log/backup.log 2>&1
+    note:
+      fr: "`30 2 * * *` signifie « à 02h30 tous les jours ». Le `>> /var/log/backup.log 2>&1` redirige la sortie **et** les erreurs vers un journal : indispensable, car une tâche planifiée tourne sans personne pour voir ce qu'elle affiche."
+      en: "`30 2 * * *` means \"at 02:30 every day\". The `>> /var/log/backup.log 2>&1` redirects output **and** errors to a log: essential, because a scheduled task runs with no one around to see what it prints."
+
+  - title:
+      fr: "Une sauvegarde fiable avec un timer systemd"
+      en: "A reliable backup with a systemd timer"
+    file: backup.timer
+    lang: ini
+    kind: secure
+    code: |
+      # File: /etc/systemd/system/backup.timer
+      [Unit]
+      Description=Run the backup every day
+
+      [Timer]
+      OnCalendar=*-*-* 02:30:00
+      # If the machine was off at 02:30, run the job as soon as it boots
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    output: |
+      # Needs a matching backup.service (with User=backupuser). Then:
+      #   sudo systemctl daemon-reload
+      #   sudo systemctl enable --now backup.timer
+      #   systemctl list-timers backup.timer
+      NEXT                        LEFT     UNIT          ACTIVATES
+      Wed 2027-06-04 02:30:00 UTC 13h left backup.timer  backup.service
+    note:
+      fr: "`Persistent=true` est l'atout du timer sur cron : si la machine était éteinte à l'heure prévue, la tâche est **rattrapée** au démarrage. `list-timers` montre la prochaine exécution. Les journaux passent par `journalctl -u backup`."
+      en: "`Persistent=true` is the timer's edge over cron: if the machine was off at the planned time, the task is **caught up** at boot. `list-timers` shows the next run. Logs go through `journalctl -u backup`."
+
+mistake:
+  fr: |
+    **Planifier une tâche sans journaliser sa sortie, ou faire tourner cron en root sans raison.**
+
+    Une tâche cron s'exécute sans personne devant l'écran. Si vous ne redirigez pas sa sortie et ses erreurs
+    vers un fichier (`>> /var/log/matache.log 2>&1`), un échec passe totalement inaperçu : vous croyez vos
+    sauvegardes faites alors qu'elles plantent chaque nuit depuis un mois. Toujours journaliser, et vérifier
+    régulièrement le journal. Autre erreur : programmer toutes ses tâches dans la crontab de root. Une tâche qui
+    n'a pas besoin des droits d'administrateur doit tourner sous un compte dédié peu privilégié ; sinon, le
+    moindre script compromis s'exécute avec les pleins pouvoirs.
+  en: |
+    **Scheduling a task without logging its output, or running cron as root for no reason.**
+
+    A cron task runs with no one at the screen. If you do not redirect its output and errors to a file
+    (`>> /var/log/mytask.log 2>&1`), a failure goes completely unnoticed: you believe your backups are done
+    while they have been crashing every night for a month. Always log, and check the log regularly. Another
+    mistake: scheduling all your tasks in root's crontab. A task that does not need administrator rights should
+    run under a dedicated low-privilege account; otherwise, any compromised script runs with full power.
+
+bestPractice:
+  fr: |
+    - **Journalisez chaque tâche planifiée** : `>> /var/log/tache.log 2>&1` capture sortie et erreurs pour détecter un échec.
+    - **Vérifiez les journaux régulièrement** : `/var/log/auth.log` révèle les attaques par force brute (`grep Failed password`).
+    - **Fouillez l'historique compressé** avec `zgrep` / `zcat` pour remonter au-delà du journal du jour.
+    - **Compte dédié pour les tâches** : ne programmez pas tout en root ; appliquez le moindre privilège.
+    - **Timer plutôt que cron** pour une tâche critique : `Persistent=true` rattrape les exécutions manquées, journaux dans `journalctl`.
+    - **Conservez les journaux assez longtemps** : une rétention trop courte efface la preuve d'un incident avant qu'on le découvre.
+  en: |
+    - **Log every scheduled task**: `>> /var/log/task.log 2>&1` captures output and errors to catch a failure.
+    - **Check the logs regularly**: `/var/log/auth.log` reveals brute-force attacks (`grep Failed password`).
+    - **Dig the compressed history** with `zgrep` / `zcat` to go back beyond today's log.
+    - **Dedicated account for tasks**: do not schedule everything as root; apply least privilege.
+    - **Timer over cron** for a critical task: `Persistent=true` catches up missed runs, logs in `journalctl`.
+    - **Keep logs long enough**: too short a retention erases the proof of an incident before you discover it.
+
+exercise:
+  statement:
+    fr: |
+      Dans votre VM, entraînez-vous à lire les journaux et à planifier une tâche :
+
+      1. Affichez combien de connexions SSH ont échoué dans `/var/log/auth.log`.
+      2. Trouvez l'adresse IP qui a échoué le plus souvent.
+      3. Cherchez les connexions échouées aussi dans les journaux déjà compressés (`.gz`).
+      4. Programmez une tâche cron qui écrit la date dans un fichier `/tmp/heartbeat.log` toutes les 5 minutes, en journalisant correctement.
+      5. Affichez votre crontab pour vérifier.
+
+      Notez vos commandes dans votre dépôt de suivi.
+    en: |
+      In your VM, practise reading logs and scheduling a task:
+
+      1. Show how many SSH logins failed in `/var/log/auth.log`.
+      2. Find the IP address that failed most often.
+      3. Search failed logins in the already-compressed logs too (`.gz`).
+      4. Schedule a cron task that writes the date to a file `/tmp/heartbeat.log` every 5 minutes, logging properly.
+      5. Show your crontab to verify.
+
+      Record your commands in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Count failed SSH logins
+      grep -c "Failed password" /var/log/auth.log
+
+      # 2. The IP that failed most often
+      grep "Failed password" /var/log/auth.log \
+        | grep -oE "from [0-9.]+" | awk '{print $2}' \
+        | sort | uniq -c | sort -nr | head -n 1
+
+      # 3. Search the compressed, rotated history as well
+      zgrep "Failed password" /var/log/auth.log.*.gz | head -n 5
+
+      # 4. Schedule a heartbeat every 5 minutes (add with: crontab -e)
+      #    */5 * * * *  date >> /tmp/heartbeat.log 2>&1
+
+      # 5. Show the crontab to confirm
+      crontab -l
+    note:
+      fr: "`*/5 * * * *` déclenche la tâche toutes les 5 minutes. La redirection `>> ... 2>&1` garde une trace de chaque exécution. `zgrep` lit directement les `.gz` : on remonte ainsi l'attaque au-delà du journal courant."
+      en: "`*/5 * * * *` triggers the task every 5 minutes. The `>> ... 2>&1` redirection keeps a trace of each run. `zgrep` reads the `.gz` files directly: this traces the attack beyond the current log."
+
+quiz:
+  - q:
+      fr: "Quel journal contient les connexions et les utilisations de `sudo` sur Ubuntu ?"
+      en: "Which log holds logins and `sudo` uses on Ubuntu?"
+    options:
+      fr: ["/var/log/syslog", "/var/log/auth.log", "/var/log/dmesg", "/etc/passwd"]
+      en: ["/var/log/syslog", "/var/log/auth.log", "/var/log/dmesg", "/etc/passwd"]
+    answer: 1
+    why:
+      fr: "`/var/log/auth.log` enregistre l'authentification : connexions SSH, `sudo`, tentatives échouées. C'est le premier journal à consulter en cas d'incident de sécurité."
+      en: "`/var/log/auth.log` records authentication: SSH logins, `sudo`, failed attempts. It is the first log to check after a security incident."
+  - q:
+      fr: "Que signifie de nombreuses lignes `Failed password` depuis la même IP ?"
+      en: "What do many `Failed password` lines from the same IP mean?"
+    options:
+      fr:
+        - "Un problème de matériel"
+        - "Une mise à jour en cours"
+        - "Une probable attaque par force brute"
+        - "Un disque plein"
+      en:
+        - "A hardware problem"
+        - "An update in progress"
+        - "A likely brute-force attack"
+        - "A full disk"
+    answer: 2
+    why:
+      fr: "Des dizaines d'échecs d'authentification venant d'une même adresse trahissent une tentative de deviner le mot de passe en masse : une attaque par force brute."
+      en: "Dozens of authentication failures from the same address reveal a mass attempt to guess the password: a brute-force attack."
+  - q:
+      fr: "À quoi sert la rotation des journaux (logrotate) ?"
+      en: "What is log rotation (logrotate) for?"
+    options:
+      fr:
+        - "À archiver, compresser et supprimer les vieux journaux pour éviter de remplir le disque"
+        - "À chiffrer les journaux"
+        - "À envoyer les journaux par e-mail"
+        - "À accélérer le système"
+      en:
+        - "To archive, compress and delete old logs to avoid filling the disk"
+        - "To encrypt the logs"
+        - "To email the logs"
+        - "To speed up the system"
+    answer: 0
+    why:
+      fr: "Sans rotation, un journal grossirait sans fin. logrotate archive le fichier courant, compresse les anciens et supprime les plus vieux après une durée définie."
+      en: "Without rotation, a log would grow endlessly. logrotate archives the current file, compresses the old ones and deletes the oldest after a set duration."
+  - q:
+      fr: "Que signifie l'expression cron `0 2 * * *` ?"
+      en: "What does the cron expression `0 2 * * *` mean?"
+    options:
+      fr:
+        - "Toutes les 2 minutes"
+        - "Chaque jour à 02h00"
+        - "Le 2 de chaque mois"
+        - "Toutes les 2 heures"
+      en:
+        - "Every 2 minutes"
+        - "Every day at 02:00"
+        - "On the 2nd of each month"
+        - "Every 2 hours"
+    answer: 1
+    why:
+      fr: "Les champs sont minute, heure, jour du mois, mois, jour de la semaine : `0 2 * * *` = minute 0 de l'heure 2, tous les jours, soit 02h00."
+      en: "The fields are minute, hour, day of month, month, day of week: `0 2 * * *` = minute 0 of hour 2, every day, i.e. 02:00."
+  - q:
+      fr: "Quel avantage un timer systemd a-t-il sur cron pour une sauvegarde critique ?"
+      en: "What advantage does a systemd timer have over cron for a critical backup?"
+    options:
+      fr:
+        - "Il est plus rapide à écrire"
+        - "Il ne nécessite aucun fichier"
+        - "Avec `Persistent=true`, il rattrape une exécution manquée si la machine était éteinte"
+        - "Il n'a pas besoin de compte utilisateur"
+      en:
+        - "It is faster to write"
+        - "It needs no file"
+        - "With `Persistent=true`, it catches up a missed run if the machine was off"
+        - "It needs no user account"
+    answer: 2
+    why:
+      fr: "`Persistent=true` fait rattraper au démarrage une tâche manquée pendant l'arrêt de la machine ; de plus, les journaux du timer passent par `journalctl`."
+      en: "`Persistent=true` catches up at boot a task missed while the machine was off; also, the timer's logs go through `journalctl`."

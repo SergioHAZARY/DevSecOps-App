@@ -1,0 +1,340 @@
+description:
+  fr: "Comprendre le modèle de menace Kubernetes et le cadre des 4C (Cloud, Cluster, Conteneur, Code) pour savoir quoi protéger et dans quel ordre."
+  en: "Understand the Kubernetes threat model and the 4C framework (Cloud, Cluster, Container, Code) to know what to protect and in what order."
+duration: 20
+
+intro:
+  fr: |
+    **Kubernetes** (souvent abrégé **K8s**) est l'orchestrateur qui fait tourner des conteneurs sur un parc de
+    machines. Il est devenu le standard pour exécuter des applications à grande échelle — et donc une cible de
+    choix. Avant d'empiler des contrôles de sécurité, il faut une carte : *qu'est-ce qu'on protège, contre qui,
+    et où sont les points faibles ?* C'est le **modèle de menace**.
+
+    L'analogie : sécuriser un cluster, c'est comme sécuriser un immeuble de bureaux. Il y a le quartier (le cloud),
+    le bâtiment et ses accès (le cluster), chaque bureau loué (le conteneur) et ce que fait le locataire à
+    l'intérieur (le code). Négliger un seul niveau ouvre une porte aux autres.
+
+    Dans cette leçon, vous allez découvrir le cadre des **4C** qui structure toute la sécurité Kubernetes,
+    identifier les principales menaces (pod privilégié, API Server exposé, secrets en clair, déplacement latéral),
+    et comprendre pourquoi la sécurité se construit de l'extérieur vers l'intérieur.
+  en: |
+    **Kubernetes** (often shortened to **K8s**) is the orchestrator that runs containers across a fleet of
+    machines. It has become the standard for running applications at scale — and therefore a prime target. Before
+    stacking security controls, you need a map: *what are we protecting, from whom, and where are the weak points?*
+    That is the **threat model**.
+
+    The analogy: securing a cluster is like securing an office building. There is the neighbourhood (the cloud),
+    the building and its entrances (the cluster), each rented office (the container), and what the tenant does
+    inside (the code). Neglect a single level and you open a door to the others.
+
+    In this lesson you will discover the **4C** framework that structures all Kubernetes security, identify the
+    main threats (privileged pod, exposed API Server, clear-text secrets, lateral movement), and understand why
+    security is built from the outside in.
+
+sections:
+  - heading:
+      fr: "Les 4C de la sécurité cloud-native"
+      en: "The 4Cs of cloud-native security"
+    body:
+      fr: |
+        Le modèle des **4C** empile quatre couches concentriques. Chacune repose sur la précédente : un code
+        parfait dans un conteneur sur un cluster mal configuré reste vulnérable.
+
+        | Couche | Ce que c'est | Exemples de contrôles |
+        |---|---|---|
+        | **Cloud** | L'infrastructure sous le cluster | IAM, réseau VPC, chiffrement disques |
+        | **Cluster** | Kubernetes lui-même | RBAC, API Server, admission control, NetworkPolicy |
+        | **Container** | L'image et son exécution | Image scannée, non-root, capabilities réduites |
+        | **Code** | Votre application | Validation des entrées, dépendances à jour, pas de secrets en dur |
+
+        On sécurise **de l'extérieur vers l'intérieur** : si le cloud est compromis (une clé IAM qui fuit), toute
+        la sécurité des couches supérieures s'effondre. Chaque couche doit supposer que la précédente peut tomber.
+      en: |
+        The **4C** model stacks four concentric layers. Each rests on the previous one: perfect code in a
+        container on a misconfigured cluster is still vulnerable.
+
+        | Layer | What it is | Example controls |
+        |---|---|---|
+        | **Cloud** | The infrastructure under the cluster | IAM, VPC network, disk encryption |
+        | **Cluster** | Kubernetes itself | RBAC, API Server, admission control, NetworkPolicy |
+        | **Container** | The image and its runtime | Scanned image, non-root, reduced capabilities |
+        | **Code** | Your application | Input validation, up-to-date dependencies, no hard-coded secrets |
+
+        You secure **from the outside in**: if the cloud is compromised (a leaked IAM key), all the security of
+        the layers above collapses. Each layer must assume the previous one can fall.
+  - heading:
+      fr: "Les menaces principales d'un cluster"
+      en: "The main threats to a cluster"
+    body:
+      fr: |
+        Un attaquant qui vise Kubernetes cherche généralement à **s'échapper d'un conteneur** vers le nœud, puis
+        à **se déplacer latéralement** vers d'autres pods, et enfin à **atteindre l'API Server** pour prendre le
+        contrôle du cluster. Les failles classiques :
+
+        - **Pod privilégié** (`privileged: true`, `hostPID`, montage de `docker.sock`) : évasion vers l'hôte.
+        - **API Server exposé** sans authentification forte : contrôle total à distance.
+        - **RBAC trop permissif** : un compte de service avec `cluster-admin` compromis = tout le cluster.
+        - **Secrets en clair** : les Secrets K8s ne sont que du base64, lisibles par qui a accès à etcd.
+        - **Pas de NetworkPolicy** : par défaut, tout pod peut parler à tout autre (déplacement latéral libre).
+
+        Chacune de ces menaces correspond à une leçon de ce cours. Le modèle de menace sert de fil conducteur.
+      en: |
+        An attacker targeting Kubernetes typically tries to **escape a container** onto the node, then **move
+        laterally** to other pods, and finally **reach the API Server** to take over the cluster. The classic
+        flaws:
+
+        - **Privileged pod** (`privileged: true`, `hostPID`, mounting `docker.sock`): escape to the host.
+        - **Exposed API Server** without strong authentication: full remote control.
+        - **Over-permissive RBAC**: a compromised service account with `cluster-admin` = the whole cluster.
+        - **Clear-text secrets**: K8s Secrets are only base64, readable by anyone with etcd access.
+        - **No NetworkPolicy**: by default, any pod can talk to any other (free lateral movement).
+
+        Each of these threats maps to a lesson in this course. The threat model is the common thread.
+
+examples:
+  - title:
+      fr: "Dangereux : un pod qui ouvre la porte de l'hôte"
+      en: "Dangerous: a pod that opens the host's door"
+    file: privileged-pod.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - this pod can take over the whole node.
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: debug-tools
+      spec:
+        hostPID: true          # sees and signals all host processes
+        hostNetwork: true      # shares the node's network stack
+        containers:
+          - name: tools
+            image: ubuntu:24.04
+            command: ["sleep", "infinity"]
+            securityContext:
+              privileged: true # disables almost all isolation
+            volumeMounts:
+              - name: host-root
+                mountPath: /host
+        volumes:
+          - name: host-root
+            hostPath:
+              path: /          # mounts the ENTIRE host filesystem
+    output: |
+      # From inside this pod an attacker simply does:
+      #   chroot /host    ->  full root shell on the node
+      # They can then read every other pod's secrets and tokens.
+    note:
+      fr: "`privileged: true`, `hostPID` et le montage de `/` font sauter l'isolation : un attaquant dans ce pod obtient un accès root sur le nœud et peut compromettre tous les autres pods. C'est le cauchemar du modèle de menace."
+      en: "`privileged: true`, `hostPID` and mounting `/` remove isolation: an attacker in this pod gets root access on the node and can compromise every other pod. This is the threat model's nightmare."
+
+  - title:
+      fr: "Sécurisé : un pod aligné sur le modèle de menace"
+      en: "Secure: a pod aligned with the threat model"
+    file: hardened-pod.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # Same workload, but each 4C principle is applied.
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: app
+      spec:
+        securityContext:
+          runAsNonRoot: true       # Code/Container: never run as root
+          seccompProfile:
+            type: RuntimeDefault   # Container: restrict syscalls
+        containers:
+          - name: app
+            image: registry.example.com/app@sha256:abc123  # pinned digest
+            securityContext:
+              allowPrivilegeEscalation: false  # no sudo-like escalation
+              readOnlyRootFilesystem: true     # tamper-resistant
+              capabilities:
+                drop: ["ALL"]                  # Cluster/Container: no caps
+            ports:
+              - containerPort: 8080
+        # No hostPID, no hostNetwork, no hostPath, no privileged.
+        automountServiceAccountToken: false    # Cluster: no free API token
+    output: |
+      # If this container is breached, the blast radius is tiny:
+      #   - no root, no extra capabilities, read-only disk
+      #   - no host access, no API token to pivot with
+    note:
+      fr: "Chaque réglage ferme une voie d'attaque du modèle de menace : non-root et capabilities vides limitent l'évasion, `automountServiceAccountToken: false` empêche de rebondir vers l'API Server. Les leçons suivantes détaillent chacun."
+      en: "Each setting closes an attack path from the threat model: non-root and empty capabilities limit escape, `automountServiceAccountToken: false` prevents pivoting to the API Server. The next lessons detail each one."
+
+  - title:
+      fr: "Cartographier sa surface d'attaque"
+      en: "Mapping your attack surface"
+    file: audit-surface.sh
+    lang: bash
+    kind: neutral
+    code: |
+      #!/usr/bin/env bash
+      # Quick threat-model reconnaissance of your OWN cluster (authorised).
+
+      # 1. Any privileged or host-sharing pods? (container escape risk)
+      kubectl get pods -A -o json | jq -r '.items[]
+        | select(.spec.hostPID or .spec.hostNetwork
+          or (.spec.containers[].securityContext.privileged == true))
+        | "\(.metadata.namespace)/\(.metadata.name)"'
+
+      # 2. Who holds cluster-admin? (RBAC blast radius)
+      kubectl get clusterrolebindings -o json | jq -r '.items[]
+        | select(.roleRef.name=="cluster-admin")
+        | .metadata.name'
+
+      # 3. Is the API Server reachable? Which auth is configured?
+      kubectl cluster-info
+
+      # 4. Namespaces without any NetworkPolicy (free lateral movement)
+      for ns in $(kubectl get ns -o name | cut -d/ -f2); do
+        n=$(kubectl get netpol -n "$ns" --no-headers 2>/dev/null | wc -l)
+        [ "$n" -eq 0 ] && echo "No NetworkPolicy in namespace: $ns"
+      done
+    output: |
+      default/debug-tools
+      cluster-admin
+      Kubernetes control plane is running at https://10.0.0.1:6443
+      No NetworkPolicy in namespace: default
+    note:
+      fr: "Ce script d'audit révèle les quatre faiblesses majeures : pods privilégiés, détenteurs de `cluster-admin`, exposition de l'API et namespaces sans NetworkPolicy. C'est le point de départ concret d'un modèle de menace."
+      en: "This audit script reveals the four major weaknesses: privileged pods, `cluster-admin` holders, API exposure and namespaces without NetworkPolicy. It is the concrete starting point of a threat model."
+
+mistake:
+  fr: |
+    **Sécuriser le code en oubliant le cluster.** Beaucoup d'équipes scrupuleuses sur la qualité de leur code
+    déploient sur un cluster où n'importe quel pod peut parler à l'API Server, lire les secrets des autres
+    namespaces et tourner en root. Le modèle des 4C rappelle qu'une faille dans une couche *extérieure* (cloud,
+    cluster) annule tous les efforts des couches *intérieures*. On sécurise de l'extérieur vers l'intérieur, pas
+    l'inverse, et on suppose toujours que la couche en dessous peut être compromise.
+  en: |
+    **Securing the code while forgetting the cluster.** Many teams meticulous about code quality deploy onto a
+    cluster where any pod can talk to the API Server, read other namespaces' secrets and run as root. The 4C
+    model reminds us that a flaw in an *outer* layer (cloud, cluster) cancels all the effort of the *inner*
+    layers. You secure from the outside in, not the reverse, and you always assume the layer below can be
+    compromised.
+
+bestPractice:
+  fr: |
+    - **Pensez en 4C** : cloud, cluster, conteneur, code — sécurisez chaque couche, en commençant par l'extérieur.
+    - **Supposez la compromission** d'un conteneur : limitez son rayon d'impact (non-root, pas de token API, read-only).
+    - **Cartographiez votre surface** régulièrement : pods privilégiés, détenteurs de `cluster-admin`, namespaces sans NetworkPolicy.
+    - **Interdisez les pods privilégiés** par un contrôle d'admission, ne comptez pas sur la bonne volonté.
+    - **Chiffrez etcd** : les Secrets ne sont que du base64 tant qu'etcd n'est pas chiffré au repos.
+  en: |
+    - **Think in 4Cs**: cloud, cluster, container, code — secure each layer, starting from the outside.
+    - **Assume a container is compromised**: limit its blast radius (non-root, no API token, read-only).
+    - **Map your surface** regularly: privileged pods, `cluster-admin` holders, namespaces without NetworkPolicy.
+    - **Ban privileged pods** with an admission control, do not rely on goodwill.
+    - **Encrypt etcd**: Secrets are only base64 until etcd is encrypted at rest.
+
+exercise:
+  statement:
+    fr: |
+      On vous donne le manifeste d'un pod. Analysez-le selon le modèle de menace :
+
+      ```yaml
+      spec:
+        containers:
+          - name: api
+            image: myapi:latest
+            securityContext:
+              privileged: true
+      ```
+
+      1. Citez **deux** menaces concrètes que pose ce pod (couches du modèle 4C concernées).
+      2. Réécrivez le `securityContext` pour les neutraliser.
+    en: |
+      You are given a pod manifest. Analyse it against the threat model:
+
+      ```yaml
+      spec:
+        containers:
+          - name: api
+            image: myapi:latest
+            securityContext:
+              privileged: true
+      ```
+
+      1. Name **two** concrete threats this pod poses (which 4C layers are involved).
+      2. Rewrite the `securityContext` to neutralise them.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      # Threats:
+      #  - Container layer: `privileged: true` allows escape to the node.
+      #  - Container layer: `image: myapi:latest` is a mutable tag -> you
+      #    cannot know what actually runs (supply-chain / integrity risk).
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: api
+            image: myapi@sha256:1111111111111111111111111111111111111111111111111111111111111111
+            securityContext:
+              privileged: false               # no host escape
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+    note:
+      fr: "Menace 1 : évasion de conteneur via `privileged`. Menace 2 : image en tag mutable `latest` (intégrité). La correction passe en non-root, retire toutes les capabilities et épingle l'image par digest."
+      en: "Threat 1: container escape via `privileged`. Threat 2: mutable `latest` tag image (integrity). The fix runs non-root, drops all capabilities and pins the image by digest."
+
+quiz:
+  - q:
+      fr: "Que représentent les 4C de la sécurité cloud-native ?"
+      en: "What do the 4Cs of cloud-native security represent?"
+    options:
+      fr: ["Cloud, Cluster, Container, Code", "CPU, Cache, Cluster, Cloud", "Code, Commit, CI, CD", "Cloud, CDN, Cache, Cluster"]
+      en: ["Cloud, Cluster, Container, Code", "CPU, Cache, Cluster, Cloud", "Code, Commit, CI, CD", "Cloud, CDN, Cache, Cluster"]
+    answer: 0
+    why:
+      fr: "Les 4C sont quatre couches concentriques — Cloud, Cluster, Container, Code — chacune reposant sur la sécurité de celle qui l'entoure."
+      en: "The 4Cs are four concentric layers — Cloud, Cluster, Container, Code — each resting on the security of the one surrounding it."
+  - q:
+      fr: "Dans quel ordre sécurise-t-on les couches 4C ?"
+      en: "In what order do you secure the 4C layers?"
+    options:
+      fr: ["Du code vers le cloud", "De l'extérieur (cloud) vers l'intérieur (code)", "Uniquement le conteneur", "L'ordre n'a pas d'importance"]
+      en: ["From code outward to cloud", "From the outside (cloud) inward (code)", "Only the container", "Order does not matter"]
+    answer: 1
+    why:
+      fr: "Une faille dans une couche extérieure (cloud, cluster) annule la sécurité des couches intérieures ; on commence donc par l'extérieur."
+      en: "A flaw in an outer layer (cloud, cluster) cancels the security of inner layers, so you start from the outside."
+  - q:
+      fr: "Pourquoi un pod `privileged: true` est-il dangereux ?"
+      en: "Why is a `privileged: true` pod dangerous?"
+    options:
+      fr: ["Il consomme trop de CPU", "Il ralentit le réseau", "Il permet de s'échapper vers le nœud hôte", "Il désactive les logs"]
+      en: ["It uses too much CPU", "It slows the network", "It allows escaping to the host node", "It disables logs"]
+    answer: 2
+    why:
+      fr: "Le mode privilégié lève l'essentiel de l'isolation du conteneur, ce qui permet à un attaquant d'obtenir un accès root sur le nœud et de compromettre les autres pods."
+      en: "Privileged mode removes most of the container's isolation, letting an attacker gain root on the node and compromise other pods."
+  - q:
+      fr: "Pourquoi les Secrets Kubernetes ne sont-ils pas chiffrés par défaut ?"
+      en: "Why are Kubernetes Secrets not encrypted by default?"
+    options:
+      fr: ["Ils sont seulement encodés en base64, lisibles dans etcd", "Ils utilisent AES-256", "Ils sont stockés sur le cloud", "Ils sont signés mais pas chiffrés"]
+      en: ["They are only base64-encoded, readable in etcd", "They use AES-256", "They are stored in the cloud", "They are signed but not encrypted"]
+    answer: 0
+    why:
+      fr: "Un Secret K8s n'est que du base64 ; sans chiffrement d'etcd au repos (EncryptionConfiguration), quiconque accède à etcd lit les secrets en clair."
+      en: "A K8s Secret is only base64; without etcd encryption at rest (EncryptionConfiguration), anyone with etcd access reads the secrets in clear."
+  - q:
+      fr: "Quel est le risque d'un cluster sans aucune NetworkPolicy ?"
+      en: "What is the risk of a cluster with no NetworkPolicy?"
+    options:
+      fr: ["Les pods sont trop lents", "Les logs sont perdus", "Le TLS est désactivé", "Tout pod peut parler à tout autre : déplacement latéral libre"]
+      en: ["Pods are too slow", "Logs are lost", "TLS is disabled", "Any pod can talk to any other: free lateral movement"]
+    answer: 3
+    why:
+      fr: "Par défaut, Kubernetes autorise toute communication inter-pods ; sans NetworkPolicy, un pod compromis atteint librement les autres, ce qui facilite le déplacement latéral."
+      en: "By default, Kubernetes allows all inter-pod communication; without NetworkPolicy, a compromised pod freely reaches others, enabling lateral movement."

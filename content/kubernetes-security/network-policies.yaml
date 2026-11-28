@@ -1,0 +1,348 @@
+description:
+  fr: "Cloisonner le réseau d'un cluster Kubernetes avec les NetworkPolicy : refus par défaut, autorisation du DNS et flux applicatif vers la base de données."
+  en: "Segment a Kubernetes cluster's network with NetworkPolicy: default deny, allowing DNS and the app-to-database flow."
+duration: 22
+
+intro:
+  fr: |
+    Par défaut, dans un cluster Kubernetes, **tous les pods peuvent se parler** — frontend, backend, base de
+    données, tout est ouvert. C'est pratique pour démarrer, mais c'est un cauchemar de sécurité : un seul pod
+    compromis peut scanner et attaquer tous les autres. Ce mouvement s'appelle le **déplacement latéral**.
+
+    L'analogie : un cluster sans NetworkPolicy, c'est un open space sans cloisons où n'importe qui peut aller
+    fouiller sur le bureau du voisin. Une **NetworkPolicy** est une cloison : elle définit quels pods ont le droit
+    de parler à quels autres pods, et sur quels ports.
+
+    Le principe de sécurité est le même que pour un pare-feu : **refus par défaut** (*default deny*), puis on
+    autorise explicitement le strict nécessaire. Dans cette leçon, vous allez poser une politique de refus total,
+    puis rouvrir uniquement le DNS (indispensable) et le flux `app → base de données`. Point crucial : les
+    NetworkPolicy ne font **rien** sans un plugin réseau (**CNI**) qui les applique, comme Calico ou Cilium.
+  en: |
+    By default, in a Kubernetes cluster, **all pods can talk to each other** — frontend, backend, database,
+    everything is open. Convenient to start with, but a security nightmare: a single compromised pod can scan
+    and attack all the others. This movement is called **lateral movement**.
+
+    The analogy: a cluster without NetworkPolicy is an open-plan office with no partitions, where anyone can go
+    rummage on a neighbour's desk. A **NetworkPolicy** is a partition: it defines which pods may talk to which
+    other pods, and on which ports.
+
+    The security principle is the same as a firewall: **default deny**, then explicitly allow only the strict
+    minimum. In this lesson you will set a total-deny policy, then reopen only DNS (indispensable) and the
+    `app → database` flow. Crucial point: NetworkPolicies do **nothing** without a network plugin (**CNI**) that
+    enforces them, such as Calico or Cilium.
+
+sections:
+  - heading:
+      fr: "Default deny : le point de départ"
+      en: "Default deny: the starting point"
+    body:
+      fr: |
+        Une NetworkPolicy cible des pods via un `podSelector` et liste les flux autorisés en **entrée**
+        (`Ingress`) et/ou **sortie** (`Egress`). La règle fondatrice est une politique qui **sélectionne tous les
+        pods** d'un namespace et n'autorise **aucun** flux : c'est le refus par défaut.
+
+        | Élément | Rôle |
+        |---|---|
+        | `podSelector: {}` | Sélectionne **tous** les pods du namespace |
+        | `policyTypes: [Ingress, Egress]` | On contrôle l'entrée ET la sortie |
+        | aucune règle `ingress`/`egress` | Donc tout est refusé |
+
+        Attention à un piège majeur : couper **tout** l'Egress casse la **résolution DNS**. Chaque pod a besoin
+        de joindre CoreDNS (port 53, UDP et TCP) pour résoudre les noms de service. On ajoute donc toujours une
+        politique qui autorise le DNS **juste après** le default deny, sinon plus aucun pod ne peut résoudre
+        `ma-base.mon-namespace.svc`.
+      en: |
+        A NetworkPolicy targets pods via a `podSelector` and lists the allowed **inbound** (`Ingress`) and/or
+        **outbound** (`Egress`) flows. The foundational rule is a policy that **selects all pods** in a namespace
+        and allows **no** flow: this is default deny.
+
+        | Element | Role |
+        |---|---|
+        | `podSelector: {}` | Selects **all** pods in the namespace |
+        | `policyTypes: [Ingress, Egress]` | Control both inbound AND outbound |
+        | no `ingress`/`egress` rule | Therefore everything is denied |
+
+        Beware of a major trap: cutting **all** Egress breaks **DNS resolution**. Every pod needs to reach CoreDNS
+        (port 53, UDP and TCP) to resolve service names. So you always add a policy allowing DNS **right after**
+        the default deny, otherwise no pod can resolve `my-db.my-namespace.svc`.
+  - heading:
+      fr: "Autoriser un flux précis : app → base"
+      en: "Allowing a precise flow: app → database"
+    body:
+      fr: |
+        Une fois le refus par défaut en place, on rouvre **chemin par chemin**. Pour autoriser l'application à
+        joindre la base de données, on écrit une politique côté **base** (`Ingress`) qui accepte le trafic
+        provenant des pods portant le label de l'application, sur le port de la base.
+
+        Les sélecteurs de source peuvent combiner :
+
+        - **`podSelector`** : les pods portant certains labels (dans le même namespace).
+        - **`namespaceSelector`** : les pods d'autres namespaces portant certains labels.
+        - **`ipBlock`** : une plage d'adresses IP (ex. un service externe).
+
+        Un détail subtil : `namespaceSelector` et `podSelector` dans un **même** élément de liste se combinent par
+        un ET logique (pods *de ce namespace* **et** *portant ce label*), alors que deux éléments séparés sont un
+        OU. Cette distinction est une source fréquente d'erreurs ; on la vérifie toujours en testant un `kubectl
+        exec ... -- nc -zv`.
+      en: |
+        Once default deny is in place, you reopen **path by path**. To allow the application to reach the
+        database, you write a policy on the **database** side (`Ingress`) accepting traffic from pods bearing the
+        application's label, on the database port.
+
+        Source selectors can combine:
+
+        - **`podSelector`**: pods bearing certain labels (in the same namespace).
+        - **`namespaceSelector`**: pods from other namespaces bearing certain labels.
+        - **`ipBlock`**: an IP address range (e.g. an external service).
+
+        A subtle detail: `namespaceSelector` and `podSelector` in the **same** list item combine with a logical
+        AND (pods *from this namespace* **and** *bearing this label*), whereas two separate items are an OR. This
+        distinction is a frequent source of errors; always verify it by testing with `kubectl exec ... -- nc -zv`.
+
+examples:
+  - title:
+      fr: "Dangereux : aucun cloisonnement (tout ouvert)"
+      en: "Dangerous: no segmentation (everything open)"
+    file: no-policy.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - there is simply NO NetworkPolicy.
+      # This manifest only deploys a database with no network restriction.
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: db
+        namespace: shop
+      spec:
+        selector:
+          matchLabels: { app: db }
+        template:
+          metadata:
+            labels: { app: db }
+          spec:
+            containers:
+              - name: postgres
+                image: postgres:16
+                env:
+                  - { name: POSTGRES_PASSWORD, value: changeme-in-vault }
+                ports:
+                  - containerPort: 5432
+      # With no policy, ANY pod in the cluster can reach port 5432:
+      # a compromised frontend pod connects straight to the database.
+    output: |
+      # From an unrelated, compromised pod anywhere in the cluster:
+      #   $ nc -zv db.shop.svc 5432
+      #   db.shop.svc (10.96.0.42:5432) open   <-- reachable by everyone
+    note:
+      fr: "Sans NetworkPolicy, la base est joignable par **n'importe quel** pod du cluster. Un attaquant qui compromet un pod sans rapport peut se connecter directement à PostgreSQL : c'est le déplacement latéral facilité."
+      en: "Without a NetworkPolicy, the database is reachable by **any** pod in the cluster. An attacker who compromises an unrelated pod can connect straight to PostgreSQL: lateral movement made easy."
+
+  - title:
+      fr: "Sécurisé : refus par défaut + DNS autorisé"
+      en: "Secure: default deny + DNS allowed"
+    file: default-deny.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # 1. Deny ALL ingress and egress for every pod in the namespace.
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-all
+        namespace: shop
+      spec:
+        podSelector: {}               # selects every pod
+        policyTypes: [Ingress, Egress]
+        # No ingress/egress rules below -> everything is refused.
+      ---
+      # 2. Allow DNS egress to CoreDNS, or name resolution breaks cluster-wide.
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-dns
+        namespace: shop
+      spec:
+        podSelector: {}
+        policyTypes: [Egress]
+        egress:
+          - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+            ports:
+              - { protocol: UDP, port: 53 }
+              - { protocol: TCP, port: 53 }
+    output: |
+      # After applying both policies:
+      #   nc -zv db.shop.svc 5432   ->  times out (ingress denied)
+      #   nslookup db.shop.svc      ->  still works (DNS egress allowed)
+    note:
+      fr: "`podSelector: {}` sans règle = refus total. La seconde politique rouvre uniquement le DNS (port 53 vers kube-system), sans quoi aucun pod ne pourrait résoudre les noms de service. C'est l'étape qu'on oublie le plus souvent."
+      en: "`podSelector: {}` with no rule = total deny. The second policy reopens only DNS (port 53 to kube-system), without which no pod could resolve service names. This is the step people most often forget."
+
+  - title:
+      fr: "Sécurisé : autoriser uniquement app → base"
+      en: "Secure: allow only app → database"
+    file: allow-app-to-db.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # On the DATABASE: accept ingress ONLY from pods labelled app=api.
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: db-allow-from-api
+        namespace: shop
+      spec:
+        podSelector:
+          matchLabels: { app: db }     # this policy protects the db pods
+        policyTypes: [Ingress]
+        ingress:
+          - from:
+              - podSelector:
+                  matchLabels: { app: api }   # source: the API pods only
+            ports:
+              - { protocol: TCP, port: 5432 }
+      ---
+      # On the API: allow egress to the db on 5432 (default-deny blocks it otherwise).
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: api-allow-to-db
+        namespace: shop
+      spec:
+        podSelector:
+          matchLabels: { app: api }
+        policyTypes: [Egress]
+        egress:
+          - to:
+              - podSelector:
+                  matchLabels: { app: db }
+            ports:
+              - { protocol: TCP, port: 5432 }
+    output: |
+      # From an `api` pod:    nc -zv db.shop.svc 5432  ->  open
+      # From a `web` pod:     nc -zv db.shop.svc 5432  ->  timeout (denied)
+    note:
+      fr: "Il faut les deux sens : l'Ingress côté base **et** l'Egress côté app, car le default deny bloque aussi la sortie. Seuls les pods `app=api` joignent la base ; un pod `web` compromis reste coincé."
+      en: "You need both directions: Ingress on the database side **and** Egress on the app side, because default deny also blocks egress. Only `app=api` pods reach the database; a compromised `web` pod stays stuck."
+
+mistake:
+  fr: |
+    **Couper tout l'Egress et casser le DNS.** C'est l'erreur la plus fréquente : on applique un default deny
+    strict (Ingress + Egress), et soudain **plus aucun pod ne résout les noms de service** — les applications
+    échouent avec des erreurs DNS cryptiques. Il faut toujours ajouter la politique qui autorise le port 53 vers
+    CoreDNS (`kube-system`). Deuxième piège : écrire des NetworkPolicy sur un cluster dont le **CNI ne les
+    applique pas**. Le CNI par défaut de certaines distributions ignore les NetworkPolicy ; il faut Calico,
+    Cilium ou équivalent, sinon vos politiques sont de la décoration sans effet.
+  en: |
+    **Cutting all egress and breaking DNS.** This is the most common mistake: you apply a strict default deny
+    (Ingress + Egress), and suddenly **no pod resolves service names** — applications fail with cryptic DNS
+    errors. You must always add the policy allowing port 53 to CoreDNS (`kube-system`). Second trap: writing
+    NetworkPolicies on a cluster whose **CNI does not enforce them**. Some distributions' default CNI ignores
+    NetworkPolicies; you need Calico, Cilium or equivalent, otherwise your policies are decoration with no effect.
+
+bestPractice:
+  fr: |
+    - **Commencez par un default deny** (Ingress + Egress) par namespace, puis rouvrez chemin par chemin.
+    - **Autorisez le DNS immédiatement** (port 53 vers kube-system), sinon tout casse.
+    - **Autorisez les deux sens** d'un flux : Egress côté source ET Ingress côté destination.
+    - **Vérifiez que votre CNI applique les NetworkPolicy** (Calico, Cilium) : sinon elles sont ignorées.
+    - **Testez vos politiques** avec `kubectl exec ... -- nc -zv` depuis un pod autorisé et un pod interdit.
+  en: |
+    - **Start with a default deny** (Ingress + Egress) per namespace, then reopen path by path.
+    - **Allow DNS immediately** (port 53 to kube-system), otherwise everything breaks.
+    - **Allow both directions** of a flow: Egress on the source AND Ingress on the destination.
+    - **Check that your CNI enforces NetworkPolicies** (Calico, Cilium): otherwise they are ignored.
+    - **Test your policies** with `kubectl exec ... -- nc -zv` from an allowed pod and a forbidden pod.
+
+exercise:
+  statement:
+    fr: |
+      Dans le namespace `shop`, un pod `cache` (label `app=cache`) expose Redis sur le port **6379**. Seuls les
+      pods de l'API (label `app=api`) doivent pouvoir le joindre.
+
+      Écrivez la NetworkPolicy côté `cache` qui n'autorise l'Ingress que depuis les pods `app=api`, sur le port
+      6379. (On suppose qu'un default deny et une politique DNS sont déjà en place.)
+    en: |
+      In the `shop` namespace, a `cache` pod (label `app=cache`) exposes Redis on port **6379**. Only the API
+      pods (label `app=api`) should be able to reach it.
+
+      Write the NetworkPolicy on the `cache` side that allows Ingress only from `app=api` pods, on port 6379.
+      (Assume a default deny and a DNS policy are already in place.)
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: cache-allow-from-api
+        namespace: shop
+      spec:
+        podSelector:
+          matchLabels: { app: cache }    # protects the Redis/cache pods
+        policyTypes: [Ingress]
+        ingress:
+          - from:
+              - podSelector:
+                  matchLabels: { app: api }   # only API pods allowed
+            ports:
+              - protocol: TCP
+                port: 6379
+    note:
+      fr: "Le `podSelector` cible les pods `app=cache` ; la règle `ingress` n'accepte que les sources `app=api` sur 6379. Tout autre pod est bloqué par le default deny en vigueur."
+      en: "The `podSelector` targets `app=cache` pods; the `ingress` rule only accepts `app=api` sources on 6379. Any other pod is blocked by the default deny in force."
+
+quiz:
+  - q:
+      fr: "Par défaut, quels pods peuvent communiquer entre eux dans un cluster ?"
+      en: "By default, which pods can communicate with each other in a cluster?"
+    options:
+      fr: ["Aucun", "Tous les pods peuvent parler à tous les autres", "Seulement ceux du même namespace", "Seulement ceux du même nœud"]
+      en: ["None", "All pods can talk to all others", "Only those in the same namespace", "Only those on the same node"]
+    answer: 1
+    why:
+      fr: "Sans NetworkPolicy, Kubernetes autorise toute communication inter-pods, ce qui permet le déplacement latéral en cas de compromission."
+      en: "Without a NetworkPolicy, Kubernetes allows all inter-pod communication, enabling lateral movement if a pod is compromised."
+  - q:
+      fr: "Que définit `podSelector: {}` sans règle dans une NetworkPolicy ?"
+      en: "What does `podSelector: {}` with no rule define in a NetworkPolicy?"
+    options:
+      fr: ["Un refus par défaut pour tous les pods sélectionnés", "Une autorisation totale", "Rien du tout", "Un chiffrement du trafic"]
+      en: ["A default deny for all selected pods", "A total allow", "Nothing at all", "Traffic encryption"]
+    answer: 0
+    why:
+      fr: "Un `podSelector` vide sélectionne tous les pods du namespace ; sans règle ingress/egress, tout le trafic correspondant est refusé."
+      en: "An empty `podSelector` selects every pod in the namespace; with no ingress/egress rule, all matching traffic is denied."
+  - q:
+      fr: "Quel flux faut-il absolument réautoriser après un default deny en Egress ?"
+      en: "Which flow must you absolutely reallow after a default deny on Egress?"
+    options:
+      fr: ["HTTP vers Internet", "SSH", "Le DNS (port 53 vers CoreDNS)", "ICMP"]
+      en: ["HTTP to the Internet", "SSH", "DNS (port 53 to CoreDNS)", "ICMP"]
+    answer: 2
+    why:
+      fr: "Sans accès au DNS (port 53 vers kube-system), les pods ne peuvent plus résoudre les noms de service et toutes les connexions par nom échouent."
+      en: "Without DNS access (port 53 to kube-system), pods can no longer resolve service names and all name-based connections fail."
+  - q:
+      fr: "Pour autoriser `api → db`, que faut-il écrire ?"
+      en: "To allow `api → db`, what must you write?"
+    options:
+      fr: ["Seulement l'Ingress côté db", "Seulement l'Egress côté api", "Ni l'un ni l'autre", "L'Ingress côté db ET l'Egress côté api"]
+      en: ["Only Ingress on the db side", "Only Egress on the api side", "Neither", "Ingress on the db side AND Egress on the api side"]
+    answer: 3
+    why:
+      fr: "Avec un default deny en Ingress et Egress, il faut autoriser la sortie côté api et l'entrée côté db ; sinon le flux reste bloqué dans un sens."
+      en: "With a default deny on both Ingress and Egress, you must allow egress on the api side and ingress on the db side; otherwise the flow stays blocked in one direction."
+  - q:
+      fr: "Pourquoi une NetworkPolicy peut-elle n'avoir aucun effet ?"
+      en: "Why might a NetworkPolicy have no effect at all?"
+    options:
+      fr: ["Le CNI du cluster n'applique pas les NetworkPolicy", "Le pod est trop gros", "Le namespace est chiffré", "Il manque un ServiceAccount"]
+      en: ["The cluster's CNI does not enforce NetworkPolicies", "The pod is too large", "The namespace is encrypted", "A ServiceAccount is missing"]
+    answer: 0
+    why:
+      fr: "Les NetworkPolicy sont inertes sans un plugin réseau qui les applique (Calico, Cilium) ; certains CNI par défaut les ignorent purement et simplement."
+      en: "NetworkPolicies are inert without a network plugin that enforces them (Calico, Cilium); some default CNIs simply ignore them."

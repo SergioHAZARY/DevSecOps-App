@@ -1,0 +1,371 @@
+description:
+  fr: "Appliquer les Pod Security Standards avec le Pod Security Admission et durcir un pod via un securityContext complet : non-root, read-only, capabilities et seccomp."
+  en: "Apply the Pod Security Standards with Pod Security Admission and harden a pod through a complete securityContext: non-root, read-only, capabilities and seccomp."
+duration: 25
+
+intro:
+  fr: |
+    Un conteneur Kubernetes qui tourne en **root**, avec un système de fichiers modifiable et toutes les
+    *capabilities* Linux, est une bombe à retardement : la moindre faille applicative donne à l'attaquant les
+    pleins pouvoirs dans le conteneur, premier pas vers l'évasion. La parade tient en un objet : le
+    **`securityContext`**, qui décrit comment un pod ou un conteneur doit s'exécuter.
+
+    L'analogie : par défaut, un conteneur est un locataire à qui on donne le passe-partout de l'immeuble. Le
+    `securityContext` lui retire ce passe et ne lui laisse que la clé de son appartement — et encore, en lecture
+    seule. Pour **imposer** ces règles à tout un namespace, Kubernetes fournit les **Pod Security Standards** (PSS,
+    trois niveaux : *privileged*, *baseline*, *restricted*) appliqués par le **Pod Security Admission** (PSA) via
+    de simples labels de namespace.
+
+    Dans cette leçon, vous allez durcir un pod avec un `securityContext` complet, puis verrouiller un namespace
+    entier avec le profil `restricted`.
+  en: |
+    A Kubernetes container running as **root**, with a writable filesystem and all Linux *capabilities*, is a
+    time bomb: the slightest application flaw gives the attacker full power inside the container, the first step
+    toward escape. The defense is one object: the **`securityContext`**, which describes how a pod or container
+    must run.
+
+    The analogy: by default, a container is a tenant handed the building's master key. The `securityContext`
+    takes that key away and leaves only the key to their own flat — and that, read-only. To **enforce** these
+    rules across a whole namespace, Kubernetes provides the **Pod Security Standards** (PSS, three levels:
+    *privileged*, *baseline*, *restricted*) applied by the **Pod Security Admission** (PSA) through simple
+    namespace labels.
+
+    In this lesson you will harden a pod with a complete `securityContext`, then lock down an entire namespace
+    with the `restricted` profile.
+
+sections:
+  - heading:
+      fr: "Les trois Pod Security Standards"
+      en: "The three Pod Security Standards"
+    body:
+      fr: |
+        Les **Pod Security Standards** définissent trois niveaux cumulatifs :
+
+        | Niveau | Ce qu'il autorise | Usage |
+        |---|---|---|
+        | `privileged` | Tout, sans restriction | Charges système de confiance uniquement |
+        | `baseline` | Interdit les options les plus dangereuses (privileged, hostNetwork…) | Minimum raisonnable |
+        | `restricted` | Durcissement fort : non-root, capabilities vidées, seccomp obligatoire | **Applications métier** |
+
+        Le **Pod Security Admission** applique ces standards à l'échelle d'un namespace via trois modes de label :
+
+        - `enforce` : **rejette** les pods non conformes (le vrai verrou).
+        - `audit` : les laisse passer mais les **journalise**.
+        - `warn` : affiche un **avertissement** à l'utilisateur.
+
+        On combine souvent `enforce=baseline` et `audit=restricted` le temps de migrer, puis on passe à
+        `enforce=restricted`. Tout tient dans des labels, sans installer d'outil tiers.
+      en: |
+        The **Pod Security Standards** define three cumulative levels:
+
+        | Level | What it allows | Use |
+        |---|---|---|
+        | `privileged` | Everything, no restriction | Trusted system workloads only |
+        | `baseline` | Forbids the most dangerous options (privileged, hostNetwork…) | Reasonable minimum |
+        | `restricted` | Strong hardening: non-root, dropped capabilities, mandatory seccomp | **Business applications** |
+
+        The **Pod Security Admission** applies these standards at namespace scope through three label modes:
+
+        - `enforce`: **rejects** non-compliant pods (the real lock).
+        - `audit`: lets them through but **logs** them.
+        - `warn`: shows a **warning** to the user.
+
+        You often combine `enforce=baseline` and `audit=restricted` while migrating, then move to
+        `enforce=restricted`. Everything is done through labels, with no third-party tool to install.
+  - heading:
+      fr: "Anatomie d'un securityContext durci"
+      en: "Anatomy of a hardened securityContext"
+    body:
+      fr: |
+        Le profil `restricted` se traduit par un `securityContext` précis. Les réglages indispensables :
+
+        - **`runAsNonRoot: true`** : refuse de démarrer si l'image tourne en root.
+        - **`allowPrivilegeEscalation: false`** : empêche un processus d'obtenir plus de droits (setuid).
+        - **`readOnlyRootFilesystem: true`** : système de fichiers en lecture seule ; on monte un `emptyDir`
+          pour les répertoires réellement inscriptibles (`/tmp`).
+        - **`capabilities.drop: ["ALL"]`** : retire toutes les capabilities Linux ; on n'en rajoute que si une est
+          strictement nécessaire (ex. `NET_BIND_SERVICE` pour écouter sous le port 1024).
+        - **`seccompProfile.type: RuntimeDefault`** : limite les appels système autorisés au profil par défaut du
+          runtime, réduisant drastiquement la surface du noyau exposée.
+
+        Ces réglages peuvent se placer au niveau du pod (`spec.securityContext`) ou du conteneur
+        (`spec.containers[].securityContext`), ce dernier ayant priorité.
+      en: |
+        The `restricted` profile translates into a precise `securityContext`. The essential settings:
+
+        - **`runAsNonRoot: true`**: refuses to start if the image runs as root.
+        - **`allowPrivilegeEscalation: false`**: prevents a process from gaining more rights (setuid).
+        - **`readOnlyRootFilesystem: true`**: read-only filesystem; you mount an `emptyDir` for directories that
+          genuinely need to be writable (`/tmp`).
+        - **`capabilities.drop: ["ALL"]`**: removes all Linux capabilities; you add one back only if strictly
+          needed (e.g. `NET_BIND_SERVICE` to listen below port 1024).
+        - **`seccompProfile.type: RuntimeDefault`**: limits allowed system calls to the runtime's default profile,
+          drastically reducing the exposed kernel surface.
+
+        These settings can live at the pod level (`spec.securityContext`) or the container level
+        (`spec.containers[].securityContext`), the latter taking priority.
+
+examples:
+  - title:
+      fr: "Dangereux : pod root, tout ouvert"
+      en: "Dangerous: root pod, everything open"
+    file: insecure-deploy.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - no securityContext at all.
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: { app: web }
+        template:
+          metadata:
+            labels: { app: web }
+          spec:
+            containers:
+              - name: web
+                image: nginx:1.27
+                # Defaults: runs as root (UID 0), writable filesystem,
+                # full Linux capabilities, no seccomp profile.
+                # A single RCE in the app = near-total control of the
+                # container and a launch pad to escape to the node.
+                ports:
+                  - containerPort: 80
+    output: |
+      # kubectl exec into the pod:
+      #   $ id
+      #   uid=0(root) gid=0(root) groups=0(root)   <-- running as root
+      #   $ cat /proc/1/status | grep CapEff
+      #   CapEff: 00000000a80425fb                 <-- many capabilities
+    note:
+      fr: "Aucun `securityContext` : le conteneur tourne en root avec toutes les capabilities et un disque inscriptible. C'est le réglage par défaut, et c'est précisément ce que le profil `restricted` interdit."
+      en: "No `securityContext`: the container runs as root with all capabilities and a writable disk. This is the default, and it is precisely what the `restricted` profile forbids."
+
+  - title:
+      fr: "Sécurisé : securityContext complet (restricted)"
+      en: "Secure: complete securityContext (restricted)"
+    file: secure-deploy.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: { app: web }
+        template:
+          metadata:
+            labels: { app: web }
+          spec:
+            securityContext:
+              runAsNonRoot: true          # refuse to run as root
+              runAsUser: 10001            # explicit non-zero UID
+              fsGroup: 10001
+              seccompProfile:
+                type: RuntimeDefault      # restrict syscalls
+            containers:
+              - name: web
+                image: nginxinc/nginx-unprivileged:1.27  # listens on 8080
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]         # no Linux capabilities
+                ports:
+                  - containerPort: 8080
+                volumeMounts:
+                  # Read-only root needs writable scratch dirs mounted in.
+                  - { name: tmp, mountPath: /tmp }
+                  - { name: cache, mountPath: /var/cache/nginx }
+            volumes:
+              - name: tmp
+                emptyDir: {}
+              - name: cache
+                emptyDir: {}
+    output: |
+      # kubectl exec into the pod now shows:
+      #   $ id
+      #   uid=10001 gid=10001                 <-- non-root
+      #   $ touch /etc/test
+      #   touch: /etc/test: Read-only file system   <-- tamper-resistant
+    note:
+      fr: "Image non-root (`nginx-unprivileged`), UID explicite, capabilities vidées, disque en lecture seule avec `emptyDir` pour `/tmp`. Même une RCE dans Nginx ne donne presque aucun levier à l'attaquant."
+      en: "Non-root image (`nginx-unprivileged`), explicit UID, dropped capabilities, read-only disk with `emptyDir` for `/tmp`. Even an RCE in Nginx gives the attacker almost no leverage."
+
+  - title:
+      fr: "Imposer restricted à tout un namespace (PSA)"
+      en: "Enforcing restricted on a whole namespace (PSA)"
+    file: namespace-psa.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # Pod Security Admission is built in: just label the namespace.
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: production
+        labels:
+          # Hard enforcement: non-compliant pods are REJECTED at creation.
+          pod-security.kubernetes.io/enforce: restricted
+          pod-security.kubernetes.io/enforce-version: latest
+          # Also audit + warn, useful while onboarding new workloads.
+          pod-security.kubernetes.io/audit: restricted
+          pod-security.kubernetes.io/warn: restricted
+    output: |
+      # Trying to create the insecure (root) deployment in this namespace:
+      # Error from server (Forbidden): pods "web" is forbidden:
+      #   violates PodSecurity "restricted:latest":
+      #   allowPrivilegeEscalation != false,
+      #   unrestricted capabilities (container must drop ALL),
+      #   runAsNonRoot != true, seccompProfile unset
+    note:
+      fr: "Trois labels suffisent : `enforce: restricted` rejette tout pod non conforme à la création, sans aucun outil tiers. Le message d'erreur liste précisément les réglages manquants, ce qui guide la correction."
+      en: "Three labels are enough: `enforce: restricted` rejects any non-compliant pod at creation, with no third-party tool. The error message lists exactly the missing settings, which guides the fix."
+
+mistake:
+  fr: |
+    **Mettre `readOnlyRootFilesystem: true` sans prévoir les répertoires inscriptibles.** Beaucoup d'applications
+    écrivent dans `/tmp`, `/var/run` ou un cache ; avec un disque en lecture seule et sans `emptyDir` monté, elles
+    plantent au démarrage. La solution n'est pas de retirer le réglage, mais de **monter un volume `emptyDir`**
+    sur chaque chemin réellement inscriptible. Autre piège : croire qu'un `securityContext` sur un pod suffit —
+    sans **Pod Security Admission** au niveau du namespace, rien n'empêche le prochain déploiement de revenir en
+    root.
+  en: |
+    **Setting `readOnlyRootFilesystem: true` without planning writable directories.** Many applications write to
+    `/tmp`, `/var/run` or a cache; with a read-only disk and no mounted `emptyDir`, they crash on startup. The
+    fix is not to drop the setting but to **mount an `emptyDir` volume** on each genuinely writable path. Another
+    trap: thinking a `securityContext` on one pod is enough — without **Pod Security Admission** at the namespace
+    level, nothing stops the next deployment from going back to root.
+
+bestPractice:
+  fr: |
+    - **Visez le profil `restricted`** pour toute application métier ; `baseline` est le strict minimum.
+    - **Imposez-le par namespace** avec les labels `pod-security.kubernetes.io/enforce` du PSA.
+    - **Un securityContext complet** : `runAsNonRoot`, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem`, `drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+    - **Utilisez des images non-root** (`-unprivileged`, distroless `nonroot`) pour satisfaire `runAsNonRoot`.
+    - **Migrez en douceur** : `warn`/`audit` d'abord, corrigez, puis `enforce`.
+  en: |
+    - **Aim for the `restricted` profile** for every business application; `baseline` is the bare minimum.
+    - **Enforce it per namespace** with the PSA `pod-security.kubernetes.io/enforce` labels.
+    - **A complete securityContext**: `runAsNonRoot`, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem`, `drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+    - **Use non-root images** (`-unprivileged`, distroless `nonroot`) to satisfy `runAsNonRoot`.
+    - **Migrate gently**: `warn`/`audit` first, fix, then `enforce`.
+
+exercise:
+  statement:
+    fr: |
+      On vous donne un conteneur sans aucun durcissement :
+
+      ```yaml
+      containers:
+        - name: api
+          image: myorg/api:1.4.0
+          ports:
+            - containerPort: 8080
+      ```
+
+      Ajoutez un `securityContext` conforme au profil **restricted** : non-root (UID 10001), pas d'escalade de
+      privilèges, système de fichiers en lecture seule, toutes les capabilities retirées et seccomp par défaut.
+      Prévoyez un volume inscriptible pour `/tmp`.
+    en: |
+      You are given a container with no hardening:
+
+      ```yaml
+      containers:
+        - name: api
+          image: myorg/api:1.4.0
+          ports:
+            - containerPort: 8080
+      ```
+
+      Add a `securityContext` compliant with the **restricted** profile: non-root (UID 10001), no privilege
+      escalation, read-only filesystem, all capabilities dropped and default seccomp. Provide a writable volume
+      for `/tmp`.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          seccompProfile:
+            type: RuntimeDefault        # restrict syscalls to the default set
+        containers:
+          - name: api
+            image: myorg/api:1.4.0
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]           # remove every Linux capability
+            ports:
+              - containerPort: 8080
+            volumeMounts:
+              - name: tmp
+                mountPath: /tmp         # writable scratch on a read-only root
+        volumes:
+          - name: tmp
+            emptyDir: {}
+    note:
+      fr: "Tous les réglages `restricted` sont présents. L'`emptyDir` monté sur `/tmp` permet à l'application d'écrire ses fichiers temporaires malgré le disque en lecture seule."
+      en: "All `restricted` settings are present. The `emptyDir` mounted on `/tmp` lets the app write temporary files despite the read-only disk."
+
+quiz:
+  - q:
+      fr: "Combien de niveaux les Pod Security Standards définissent-ils ?"
+      en: "How many levels do the Pod Security Standards define?"
+    options:
+      fr: ["Deux", "Trois : privileged, baseline, restricted", "Cinq", "Un seul"]
+      en: ["Two", "Three: privileged, baseline, restricted", "Five", "Only one"]
+    answer: 1
+    why:
+      fr: "Les PSS définissent trois niveaux cumulatifs : `privileged` (tout permis), `baseline` (garde-fous) et `restricted` (durcissement fort)."
+      en: "The PSS define three cumulative levels: `privileged` (anything), `baseline` (guardrails) and `restricted` (strong hardening)."
+  - q:
+      fr: "Quel mode du Pod Security Admission rejette réellement les pods non conformes ?"
+      en: "Which Pod Security Admission mode actually rejects non-compliant pods?"
+    options:
+      fr: ["audit", "warn", "enforce", "log"]
+      en: ["audit", "warn", "enforce", "log"]
+    answer: 2
+    why:
+      fr: "`enforce` bloque la création des pods non conformes ; `audit` les journalise et `warn` affiche seulement un avertissement."
+      en: "`enforce` blocks the creation of non-compliant pods; `audit` logs them and `warn` only shows a warning."
+  - q:
+      fr: "Que fait `capabilities.drop: [\"ALL\"]` ?"
+      en: "What does `capabilities.drop: [\"ALL\"]` do?"
+    options:
+      fr: ["Retire toutes les capabilities Linux du conteneur", "Supprime le conteneur", "Chiffre le disque", "Ajoute toutes les capabilities"]
+      en: ["Removes all Linux capabilities from the container", "Deletes the container", "Encrypts the disk", "Adds all capabilities"]
+    answer: 0
+    why:
+      fr: "Retirer toutes les capabilities réduit fortement ce qu'un processus compromis peut faire ; on en rajoute une seulement si elle est strictement nécessaire."
+      en: "Dropping all capabilities sharply reduces what a compromised process can do; you add one back only if strictly necessary."
+  - q:
+      fr: "Pourquoi `readOnlyRootFilesystem: true` peut-il faire planter une application ?"
+      en: "Why can `readOnlyRootFilesystem: true` crash an application?"
+    options:
+      fr: ["Parce qu'il désactive le réseau", "Parce qu'il chiffre le disque", "Parce qu'il supprime les logs", "Parce que l'app ne peut plus écrire dans /tmp sans volume monté"]
+      en: ["Because it disables the network", "Because it encrypts the disk", "Because it deletes logs", "Because the app can no longer write to /tmp without a mounted volume"]
+    answer: 3
+    why:
+      fr: "Avec un disque en lecture seule, il faut monter un `emptyDir` sur les chemins inscriptibles (/tmp, cache), sinon l'application échoue à écrire ses fichiers temporaires."
+      en: "With a read-only disk, you must mount an `emptyDir` on writable paths (/tmp, cache), otherwise the app fails to write its temporary files."
+  - q:
+      fr: "Comment imposer le profil restricted à tout un namespace ?"
+      en: "How do you enforce the restricted profile on a whole namespace?"
+    options:
+      fr: ["Avec un label pod-security.kubernetes.io/enforce: restricted", "En installant Falco", "En redémarrant le cluster", "En supprimant le namespace"]
+      en: ["With a pod-security.kubernetes.io/enforce: restricted label", "By installing Falco", "By restarting the cluster", "By deleting the namespace"]
+    answer: 0
+    why:
+      fr: "Le Pod Security Admission est intégré : un simple label `enforce: restricted` sur le namespace rejette les pods non conformes, sans outil tiers."
+      en: "Pod Security Admission is built in: a simple `enforce: restricted` label on the namespace rejects non-compliant pods, with no third-party tool."

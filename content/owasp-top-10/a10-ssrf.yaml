@@ -1,0 +1,429 @@
+description:
+  fr: "A10:2021 SSRF : forcer le serveur à requêter l'intérieur du réseau, défense par liste d'autorisation et validation d'IP, vulnérable vs corrigé."
+  en: "A10:2021 SSRF: forcing the server to request the internal network, defence with an allow-list and IP validation, vulnerable vs fixed."
+duration: 25
+
+intro:
+  fr: |
+    **A10 - Server-Side Request Forgery (SSRF)** (falsification de requête côté serveur) est la **dixième**
+    catégorie de l'OWASP Top 10 2021, entrée directement grâce au sondage de la communauté. Elle consiste à
+    faire émettre au **serveur** une requête vers une adresse choisie par l'attaquant : l'application devient
+    un **relais** vers le réseau interne, qu'elle seule peut atteindre.
+
+    Imaginez un majordome à qui vous donnez une adresse à visiter. Vous attendez qu'il aille à la poste ;
+    rien ne l'empêche d'aller ouvrir le coffre-fort de la maison (`127.0.0.1`) ou le tableau électrique de
+    l'immeuble (`169.254.169.254`, les métadonnées cloud) et de vous rapporter ce qu'il y trouve — avec
+    toutes ses clés.
+
+    Dès qu'une application accepte une **URL fournie par l'utilisateur** (webhook, aperçu de lien, import,
+    proxy), le risque existe. Dans cette leçon, vous verrez la bonne défense — **résoudre le nom, valider
+    l'IP, interdire les plages internes** — en Python et Node.js, avec code **vulnérable** puis **corrigé**,
+    contre un labo local.
+  en: |
+    **A10 - Server-Side Request Forgery (SSRF)** is the **tenth** category of the OWASP Top 10 2021, entering
+    directly thanks to the community survey. It tricks the **server** into sending a request to an address
+    chosen by the attacker: the application becomes a **relay** into the internal network, which only it can
+    reach.
+
+    Picture a butler you give an address to visit. You expect them to go to the post office; nothing stops
+    them from opening the house safe (`127.0.0.1`) or the building's fuse box (`169.254.169.254`, the cloud
+    metadata) and bringing back what they find — with all their keys.
+
+    As soon as an application accepts a **user-supplied URL** (webhook, link preview, import, proxy), the
+    risk exists. In this lesson you will see the right defence — **resolve the name, validate the IP, forbid
+    internal ranges** — in Python and Node.js, with **vulnerable** then **fixed** code, against a local lab.
+
+sections:
+  - heading:
+      fr: "Cibles internes et pourquoi la liste d'interdiction échoue"
+      en: "Internal targets and why the deny-list fails"
+    body:
+      fr: |
+        Quand le serveur suit une URL non vérifiée, l'attaquant la pointe vers l'intérieur :
+
+        | Cible | URL | Gain pour l'attaquant |
+        |---|---|---|
+        | Bouclage | `http://127.0.0.1:8080/admin` | Interface d'admin non exposée |
+        | Métadonnées cloud | `http://169.254.169.254/latest/meta-data/` | Identifiants IAM temporaires |
+        | Réseau privé | `http://10.0.0.0/8` | Bases et services internes |
+        | Autres schémas | `file:///etc/passwd`, `gopher://` | Lecture de fichiers, services TCP |
+
+        La défense **n'est pas** une liste d'interdiction de chaînes. `127.0.0.1` s'écrit aussi `2130706433`,
+        `0177.0.0.1`, `127.1`, `[::1]`, ou via un nom DNS public qui **résout** vers une adresse interne. Un
+        filtre textuel est toujours contournable.
+
+        La méthode fiable :
+
+        1. **Analyser l'URL** : n'accepter que `http`/`https`, rejeter `file`, `gopher`, `dict`.
+        2. **Résoudre le nom** en IP.
+        3. **Classer l'IP** : rejeter privée, bouclage, **lien-local** (`169.254.0.0/16`, dont les
+           métadonnées), réservée.
+        4. **Se connecter à l'IP validée** et **interdire les redirections** — sinon un `302` interne ou le
+           **DNS rebinding** (une seconde résolution qui renvoie `127.0.0.1`) contourne le contrôle.
+
+        En défense d'exécution, on **bloque `169.254.169.254`** au pare-feu hôte et on exige **IMDSv2** sur AWS.
+      en: |
+        When the server follows an unverified URL, the attacker points it inward:
+
+        | Target | URL | Attacker's gain |
+        |---|---|---|
+        | Loopback | `http://127.0.0.1:8080/admin` | Admin interface not exposed |
+        | Cloud metadata | `http://169.254.169.254/latest/meta-data/` | Temporary IAM credentials |
+        | Private network | `http://10.0.0.0/8` | Internal databases and services |
+        | Other schemes | `file:///etc/passwd`, `gopher://` | File reads, TCP services |
+
+        The defence is **not** a string deny-list. `127.0.0.1` also writes as `2130706433`, `0177.0.0.1`,
+        `127.1`, `[::1]`, or via a public DNS name that **resolves** to an internal address. A text filter is
+        always bypassable.
+
+        The reliable method:
+
+        1. **Parse the URL**: accept only `http`/`https`, reject `file`, `gopher`, `dict`.
+        2. **Resolve the name** to an IP.
+        3. **Classify the IP**: reject private, loopback, **link-local** (`169.254.0.0/16`, including
+           metadata), reserved.
+        4. **Connect to the validated IP** and **forbid redirects** — otherwise an internal `302` or **DNS
+           rebinding** (a second resolution returning `127.0.0.1`) bypasses the check.
+
+        As runtime defence, **block `169.254.169.254`** at the host firewall and require **IMDSv2** on AWS.
+  - heading:
+      fr: "Détection dans le pipeline DevSecOps"
+      en: "Detection in the DevSecOps pipeline"
+    body:
+      fr: |
+        Le SSRF se trouve dans le code et dans la configuration réseau :
+
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST | CodeQL (`py/ssrf`, `js/request-forgery`), Semgrep | Entrée utilisateur atteignant un appel réseau |
+        | DAST | OWASP ZAP (règle SSRF), Burp Collaborator | Le serveur émet une requête vers une cible choisie (hors-bande) |
+        | IaC | Trivy config, Checkov | Groupe de sécurité trop ouvert, IMDSv1 autorisé |
+        | Exécution | Pare-feu de sortie, blocage des métadonnées | Limite les cibles même si une SSRF passe |
+
+        Le **SAST** suit la donnée de l'entrée jusqu'au *sink* réseau (*taint analysis*). Un **collaborator
+        hors-bande** confirme que le serveur contacte bien une cible externe que vous contrôlez (à n'utiliser
+        que sur votre propre application). Enfin, l'**IaC** vérifie que les métadonnées ne sont pas
+        atteignables et qu'IMDSv2 est imposé.
+      en: |
+        SSRF lives in the code and in the network configuration:
+
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | SAST | CodeQL (`py/ssrf`, `js/request-forgery`), Semgrep | User input reaching a network call |
+        | DAST | OWASP ZAP (SSRF rule), Burp Collaborator | The server sends a request to a chosen target (out-of-band) |
+        | IaC | Trivy config, Checkov | Over-open security group, IMDSv1 allowed |
+        | Runtime | Egress firewall, metadata blocking | Limits targets even if an SSRF gets through |
+
+        **SAST** follows the data from the input to the network sink (taint analysis). An **out-of-band
+        collaborator** confirms the server really contacts an external target you control (to be used only on
+        your own application). Finally, **IaC** checks that metadata is unreachable and that IMDSv2 is enforced.
+
+examples:
+  - title:
+      fr: "Python : SSRF vulnérable puis validée (requests + ipaddress)"
+      en: "Python: vulnerable then validated SSRF (requests + ipaddress)"
+    file: fetch.py
+    lang: python
+    kind: secure
+    code: |
+      import ipaddress
+      import socket
+      from urllib.parse import urlparse
+      import requests
+
+      # ---------- VULNERABLE ----------
+      def fetch_vulnerable(url: str) -> str:
+          # http://169.254.169.254/... reaches the cloud metadata service
+          return requests.get(url, timeout=3).text
+
+      # ---------- FIXED ----------
+      def _is_public(host: str) -> bool:
+          # Classify the RESOLVED ip, not the string (defeats 2130706433, 127.1, DNS tricks)
+          for *_, sockaddr in socket.getaddrinfo(host, None):
+              ip = ipaddress.ip_address(sockaddr[0])
+              if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                  return False
+          return True
+
+      def fetch(url: str) -> str:
+          parsed = urlparse(url)
+          if parsed.scheme not in {"http", "https"}:
+              raise ValueError("only http/https allowed")       # blocks file://, gopher://
+          if not _is_public(parsed.hostname or ""):
+              raise ValueError("target resolves to a non-public address")
+          # No redirects: a 302 to 127.0.0.1 would otherwise bypass the check
+          return requests.get(url, timeout=3, allow_redirects=False).text
+
+
+      for u in ["http://169.254.169.254/latest/meta-data/", "http://127.0.0.1:8080/admin"]:
+          try:
+              fetch(u)
+          except ValueError as e:
+              print(f"BLOCKED {u} -> {e}")
+    output: |
+      BLOCKED http://169.254.169.254/latest/meta-data/ -> target resolves to a non-public address
+      BLOCKED http://127.0.0.1:8080/admin -> target resolves to a non-public address
+    note:
+      fr: "Le module `ipaddress` classe l'IP résolue : le lien-local `169.254.169.254` (métadonnées) et le bouclage sont rejetés avant toute requête. `allow_redirects=False` ferme la voie des redirections internes. CodeQL repère le flux (`py/ssrf`)."
+      en: "The `ipaddress` module classifies the resolved IP: the link-local `169.254.169.254` (metadata) and loopback are rejected before any request. `allow_redirects=False` closes the internal-redirect path. CodeQL spots the flow (`py/ssrf`)."
+
+  - title:
+      fr: "Node.js : SSRF vulnérable puis validée (fetch + dns + net)"
+      en: "Node.js: vulnerable then validated SSRF (fetch + dns + net)"
+    file: fetchUrl.js
+    lang: javascript
+    kind: secure
+    code: |
+      const dns = require("node:dns/promises");
+      const net = require("node:net");
+
+      // ---------- VULNERABLE ----------
+      async function fetchVulnerable(url) {
+        return (await fetch(url)).text(); // url is attacker-controlled -> internal access
+      }
+
+      // ---------- FIXED ----------
+      function isPrivate(ip) {
+        if (net.isIPv4(ip)) {
+          const [a, b] = ip.split(".").map(Number);
+          return a === 127 || a === 10 || a === 0 ||
+            (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) ||
+            (a === 169 && b === 254); // 169.254.169.254 metadata is link-local
+        }
+        return ip === "::1" || ip.startsWith("fe80") || ip.startsWith("fc") || ip.startsWith("fd");
+      }
+
+      async function safeFetch(url) {
+        const u = new URL(url);
+        if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("scheme");
+        // Resolve ONCE, then connect to that IP to defeat DNS rebinding
+        const { address } = await dns.lookup(u.hostname);
+        if (isPrivate(address)) throw new Error("target resolves to a private address");
+        const host = u.host;
+        u.hostname = address;
+        return (await fetch(u, { redirect: "manual", headers: { host } })).text();
+      }
+
+      safeFetch("http://169.254.169.254/latest/meta-data/")
+        .catch((e) => console.log("BLOCKED ->", e.message));
+    output: |
+      BLOCKED -> target resolves to a private address
+    note:
+      fr: "`dns.lookup` résout une seule fois ; on se connecte à l'IP validée (`u.hostname = address`) pour que le DNS rebinding ne puisse pas glisser une adresse interne entre la validation et la requête. `redirect: \"manual\"` bloque les redirections."
+      en: "`dns.lookup` resolves once; the connection goes to the validated IP (`u.hostname = address`) so DNS rebinding cannot slip an internal address between validation and the request. `redirect: \"manual\"` blocks redirects."
+
+  - title:
+      fr: "Défense réseau : bloquer les métadonnées et exiger IMDSv2 (Terraform)"
+      en: "Network defence: block metadata and require IMDSv2 (Terraform)"
+    file: metadata.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Runtime defence in depth: even if an SSRF reaches the server, make the
+      # cloud metadata service harder to abuse. Checkov/Trivy verify these settings.
+
+      resource "aws_instance" "app" {
+        ami           = "ami-0abcd1234example"
+        instance_type = "t3.micro"
+
+        metadata_options {
+          # Require IMDSv2 (session token): a simple SSRF GET cannot read credentials
+          http_tokens = "required"
+          # Minimise the hop limit so containers cannot easily reach metadata
+          http_put_response_hop_limit = 1
+          http_endpoint = "enabled"
+        }
+      }
+
+      # An egress security group should also deny traffic to 169.254.169.254 from
+      # application workloads that never legitimately need the metadata service.
+    note:
+      fr: "La défense en profondeur ne remplace pas la validation d'URL, mais la complète : **IMDSv2** (`http_tokens = \"required\"`) empêche une simple requête SSRF de lire des identifiants. Checkov et Trivy config vérifient ce réglage dans l'IaC."
+      en: "Defence in depth does not replace URL validation but complements it: **IMDSv2** (`http_tokens = \"required\"`) prevents a plain SSRF request from reading credentials. Checkov and Trivy config verify this setting in the IaC."
+
+mistake:
+  fr: |
+    **Filtrer la chaîne de l'URL au lieu de valider l'adresse IP résolue.**
+
+    Bloquer le texte `127.0.0.1` ou `169.254.169.254` ne protège de rien : l'attaquant écrit `2130706433`,
+    `0177.0.0.1`, `[::1]`, ou pointe un domaine public qui résout vers une adresse interne. La seule défense
+    fiable est de **résoudre le nom puis classer l'IP** (privée, bouclage, lien-local) avec une bibliothèque
+    dédiée. Autre faute : valider une fois puis laisser la bibliothèque HTTP re-résoudre et suivre les
+    redirections — un `302` interne ou le DNS rebinding passe alors à travers. Il faut se connecter à l'**IP
+    déjà validée** et **désactiver les redirections**.
+  en: |
+    **Filtering the URL string instead of validating the resolved IP address.**
+
+    Blocking the text `127.0.0.1` or `169.254.169.254` protects nothing: the attacker writes `2130706433`,
+    `0177.0.0.1`, `[::1]`, or points a public domain that resolves to an internal address. The only reliable
+    defence is to **resolve the name then classify the IP** (private, loopback, link-local) with a dedicated
+    library. Another fault: validate once then let the HTTP library re-resolve and follow redirects — an
+    internal `302` or DNS rebinding then slips through. You must connect to the **already-validated IP** and
+    **disable redirects**.
+
+bestPractice:
+  fr: |
+    - **Liste d'autorisation** de domaines/IP plutôt qu'une liste d'interdiction contournable.
+    - **Résoudre puis valider l'IP** (`ipaddress`, `net`) : rejeter privée, bouclage, lien-local, réservée.
+    - **Se connecter à l'IP validée** et **interdire les redirections** pour contrer le DNS rebinding.
+    - **Restreindre les schémas** à `http`/`https` ; bannir `file://`, `gopher://`, `dict://`.
+    - **Défense réseau** : pare-feu de sortie, blocage de `169.254.169.254`, **IMDSv2** imposé (vérifié en IaC).
+    - **SAST (CodeQL, Semgrep) + DAST (ZAP)** en CI sur les flux entrée utilisateur -> appel réseau.
+  en: |
+    - **Allow-list** of domains/IPs rather than a bypassable deny-list.
+    - **Resolve then validate the IP** (`ipaddress`, `net`): reject private, loopback, link-local, reserved.
+    - **Connect to the validated IP** and **forbid redirects** to counter DNS rebinding.
+    - **Restrict schemes** to `http`/`https`; ban `file://`, `gopher://`, `dict://`.
+    - **Network defence**: egress firewall, blocking of `169.254.169.254`, enforced **IMDSv2** (checked in IaC).
+    - **SAST (CodeQL, Semgrep) + DAST (ZAP)** in CI on user-input -> network-call flows.
+
+exercise:
+  statement:
+    fr: |
+      Un service de webhook laisse l'utilisateur enregistrer une URL que le serveur appellera :
+
+      ```python
+      import requests
+
+      def call_webhook(url, payload):
+          return requests.post(url, json=payload, timeout=3)
+      ```
+
+      1. Montrez comment un attaquant abuse de ce webhook pour lire les métadonnées cloud en labo local.
+      2. Réécrivez `call_webhook` : n'accepter que `http`/`https`, résoudre le nom, refuser toute IP interne
+         et ne pas suivre les redirections.
+    en: |
+      A webhook service lets the user register a URL that the server will call:
+
+      ```python
+      import requests
+
+      def call_webhook(url, payload):
+          return requests.post(url, json=payload, timeout=3)
+      ```
+
+      1. Show how an attacker abuses this webhook to read cloud metadata on a local lab.
+      2. Rewrite `call_webhook`: accept only `http`/`https`, resolve the name, refuse any internal IP and do
+         not follow redirects.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import ipaddress
+      import socket
+      from urllib.parse import urlparse
+      import requests
+
+
+      def _is_public(host: str) -> bool:
+          for *_, sockaddr in socket.getaddrinfo(host, None):
+              ip = ipaddress.ip_address(sockaddr[0])
+              # 169.254.169.254 is link-local: this check blocks the metadata endpoint
+              if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                  return False
+          return True
+
+
+      def call_webhook(url: str, payload: dict):
+          parsed = urlparse(url)
+          if parsed.scheme not in {"http", "https"}:
+              raise ValueError("only http/https allowed")
+          if not _is_public(parsed.hostname or ""):
+              raise ValueError("target resolves to a non-public address")
+          # Redirects disabled: a 302 to the metadata service must not be followed
+          return requests.post(url, json=payload, timeout=3, allow_redirects=False)
+    note:
+      fr: "L'attaquant enregistre `http://169.254.169.254/latest/meta-data/iam/...` : le serveur récupère des identifiants et les renvoie. La correction résout le nom, refuse le lien-local et désactive les redirections."
+      en: "The attacker registers `http://169.254.169.254/latest/meta-data/iam/...`: the server fetches credentials and returns them. The fix resolves the name, refuses link-local and disables redirects."
+
+quiz:
+  - q:
+      fr: "Quelle cible rend le SSRF particulièrement grave dans le cloud ?"
+      en: "Which target makes SSRF particularly severe in the cloud?"
+    options:
+      fr:
+        - "Le cache du navigateur"
+        - "Le service de métadonnées (`169.254.169.254`), qui distribue des identifiants"
+        - "Le serveur DNS public"
+        - "Le CDN"
+      en:
+        - "The browser cache"
+        - "The metadata service (`169.254.169.254`), which hands out credentials"
+        - "The public DNS server"
+        - "The CDN"
+    answer: 1
+    why:
+      fr: "Les métadonnées cloud renvoient des identifiants IAM temporaires ; une SSRF qui les atteint peut voler ces clés."
+      en: "Cloud metadata returns temporary IAM credentials; an SSRF reaching it can steal those keys."
+  - q:
+      fr: "Pourquoi filtrer la chaîne de l'URL ne suffit-il pas ?"
+      en: "Why is filtering the URL string not enough?"
+    options:
+      fr:
+        - "Parce que les URL sont chiffrées"
+        - "Parce qu'une même adresse a de nombreuses écritures et qu'un domaine public peut résoudre en interne"
+        - "Parce que le filtrage est trop lent"
+        - "Parce que les navigateurs le bloquent"
+      en:
+        - "Because URLs are encrypted"
+        - "Because one address has many spellings and a public domain can resolve internally"
+        - "Because filtering is too slow"
+        - "Because browsers block it"
+    answer: 1
+    why:
+      fr: "`2130706433`, `127.1` ou un domaine pointant vers `127.0.0.1` passent un filtre textuel ; seule la validation de l'IP résolue est fiable."
+      en: "`2130706433`, `127.1` or a domain pointing to `127.0.0.1` slip past a text filter; only validating the resolved IP is reliable."
+  - q:
+      fr: "Que contre le fait de se connecter à l'IP déjà validée plutôt qu'au nom ?"
+      en: "What does connecting to the already-validated IP rather than the name defeat?"
+    options:
+      fr:
+        - "L'attaque par DNS rebinding"
+        - "L'injection SQL"
+        - "Le XSS"
+        - "Le clickjacking"
+      en:
+        - "A DNS rebinding attack"
+        - "SQL injection"
+        - "XSS"
+        - "Clickjacking"
+    answer: 0
+    why:
+      fr: "Le DNS rebinding renvoie une IP publique à la validation puis une IP interne à la connexion ; épingler l'IP validée empêche ce changement."
+      en: "DNS rebinding returns a public IP at validation then an internal IP at connection; pinning the validated IP prevents that switch."
+  - q:
+      fr: "Quelle protection d'exécution limite une SSRF vers les métadonnées AWS ?"
+      en: "Which runtime protection limits SSRF to the AWS metadata service?"
+    options:
+      fr:
+        - "Augmenter la mémoire"
+        - "Activer un cookie SameSite"
+        - "Bloquer `169.254.169.254` au pare-feu et exiger IMDSv2"
+        - "Compresser les réponses"
+      en:
+        - "Increasing memory"
+        - "Enabling a SameSite cookie"
+        - "Blocking `169.254.169.254` at the firewall and requiring IMDSv2"
+        - "Compressing responses"
+    answer: 2
+    why:
+      fr: "Filtrer l'accès aux métadonnées et imposer IMDSv2 (jeton) empêche de lire des identifiants même si une SSRF atteint le serveur."
+      en: "Filtering metadata access and enforcing IMDSv2 (token) prevents credential reads even if an SSRF reaches the server."
+  - q:
+      fr: "Quel type d'outil suit la donnée de l'entrée utilisateur jusqu'à l'appel réseau sans lancer l'application ?"
+      en: "Which kind of tool follows data from user input to the network call without running the application?"
+    options:
+      fr:
+        - "Un outil SAST comme CodeQL ou Semgrep"
+        - "Un linter YAML"
+        - "Un générateur de SBOM"
+        - "Un scanner d'images"
+      en:
+        - "A SAST tool such as CodeQL or Semgrep"
+        - "A YAML linter"
+        - "An SBOM generator"
+        - "An image scanner"
+    answer: 0
+    why:
+      fr: "Le SAST fait de l'analyse de teinte : il relie la source (entrée) au *sink* réseau sans exécuter le code ; le DAST, lui, teste l'application en marche."
+      en: "SAST performs taint analysis: it links the source (input) to the network sink without running the code; DAST instead tests the running application."

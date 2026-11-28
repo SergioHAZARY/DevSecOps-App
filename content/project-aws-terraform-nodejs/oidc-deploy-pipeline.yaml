@@ -1,0 +1,475 @@
+description:
+  fr: "Déployer sans clé statique : provider OIDC GitHub dans AWS, rôle IAM à confiance restreinte au dépôt et à la branche, puis pipeline GitHub Actions fmt/validate/plan, scan IaC, build/scan/push et apply."
+  en: "Deploy without static keys: GitHub OIDC provider in AWS, an IAM role with trust restricted to the repo and branch, then a GitHub Actions pipeline doing fmt/validate/plan, IaC scan, build/scan/push and apply."
+duration: 35
+
+intro:
+  fr: |
+    Comment GitHub Actions peut-il déployer sur AWS **sans stocker de clé d'accès** ? C'est tout l'enjeu
+    de cette leçon, et la raison d'être du projet. Stocker une clé AWS (`AKIA...`) dans les secrets GitHub
+    fonctionne, mais c'est un risque permanent : une clé qui fuite donne un accès durable à votre compte.
+
+    La solution moderne est **OIDC** (*OpenID Connect*). GitHub émet, pour chaque exécution de workflow,
+    un **jeton de courte durée** signé. AWS fait confiance à ce jeton et accorde un accès **temporaire**
+    (quelques minutes) à un rôle précis. **Aucune clé** n'est stockée nulle part.
+
+    Analogie : au lieu de donner un double permanent des clés de la maison au livreur (la clé statique),
+    on lui remet un badge d'accès à usage unique qui expire après la livraison (le jeton OIDC). Dans cette
+    leçon, on configure cette confiance puis on écrit le pipeline de déploiement.
+  en: |
+    How can GitHub Actions deploy to AWS **without storing an access key**? That is the whole point of
+    this lesson, and the reason the project exists. Storing an AWS key (`AKIA...`) in GitHub secrets
+    works, but it is a permanent risk: a leaked key gives lasting access to your account.
+
+    The modern solution is **OIDC** (*OpenID Connect*). For each workflow run, GitHub issues a signed,
+    **short-lived token**. AWS trusts that token and grants **temporary** access (a few minutes) to a
+    specific role. **No key** is stored anywhere.
+
+    Analogy: instead of giving the delivery person a permanent copy of the house keys (the static key),
+    you hand them a single-use access badge that expires after the delivery (the OIDC token). In this
+    lesson we configure that trust, then write the deployment pipeline.
+
+sections:
+  - heading:
+      fr: "Le provider OIDC et le rôle à confiance restreinte"
+      en: "The OIDC provider and the trust-restricted role"
+    body:
+      fr: |
+        Deux ressources Terraform, ajoutées à `iam.tf`, établissent la confiance :
+
+        1. **`aws_iam_openid_connect_provider`** : déclare GitHub (`token.actions.githubusercontent.com`)
+           comme émetteur de confiance dans votre compte AWS. On ne le crée **qu'une fois**.
+        2. **`aws_iam_role`** avec une *trust policy* qui n'accepte le jeton que si deux conditions sont
+           réunies :
+           - l'audience (`aud`) vaut `sts.amazonaws.com` ;
+           - le sujet (`sub`) correspond **exactement** à `repo:OWNER/node-aws-ecs:ref:refs/heads/main`.
+
+        Cette seconde condition est cruciale : seul **votre** dépôt, et seulement depuis la branche
+        **`main`**, peut assumer le rôle. Un autre dépôt, une branche de test ou une pull request forkée
+        n'y ont pas accès. Restreindre le `sub` est la sécurité qui rend OIDC sûr.
+      en: |
+        Two Terraform resources, added to `iam.tf`, establish the trust:
+
+        1. **`aws_iam_openid_connect_provider`**: declares GitHub
+           (`token.actions.githubusercontent.com`) as a trusted issuer in your AWS account. It is created
+           **only once**.
+        2. **`aws_iam_role`** with a *trust policy* that accepts the token only if two conditions hold:
+           - the audience (`aud`) is `sts.amazonaws.com`;
+           - the subject (`sub`) matches **exactly** `repo:OWNER/node-aws-ecs:ref:refs/heads/main`.
+
+        This second condition is crucial: only **your** repository, and only from the **`main`** branch,
+        can assume the role. Another repository, a test branch or a forked pull request cannot. Restricting
+        the `sub` is the safeguard that makes OIDC safe.
+  - heading:
+      fr: "Les droits du rôle de déploiement, au plus juste"
+      en: "The deploy role's rights, as tight as possible"
+    body:
+      fr: |
+        Le rôle de déploiement ne reçoit **que** les droits nécessaires au pipeline :
+
+        - pousser une image dans **ECR** ;
+        - mettre à jour le **service ECS** et enregistrer une nouvelle *task definition* ;
+        - `iam:PassRole` **limité** aux deux rôles ECS (execution et task), pas à tous les rôles.
+
+        On évite soigneusement `AdministratorAccess` ou un `"*"` sur toutes les actions : si le jeton
+        était détourné, les dégâts resteraient limités au périmètre du déploiement. C'est le **moindre
+        privilège** appliqué à l'automatisation elle-même.
+      en: |
+        The deploy role receives **only** the rights the pipeline needs:
+
+        - push an image to **ECR**;
+        - update the **ECS service** and register a new *task definition*;
+        - `iam:PassRole` **restricted** to the two ECS roles (execution and task), not to every role.
+
+        We carefully avoid `AdministratorAccess` or a `"*"` on all actions: if the token were hijacked,
+        the damage would stay limited to the deployment scope. This is **least privilege** applied to the
+        automation itself.
+  - heading:
+      fr: "Le pipeline : valider sur PR, déployer sur main"
+      en: "The pipeline: validate on PR, deploy on main"
+    body:
+      fr: |
+        Le workflow `deploy.yml` a deux comportements :
+
+        - **sur une pull request** : il **valide** sans rien déployer — `terraform fmt -check`,
+          `validate`, puis scan de l'IaC avec **Checkov** et **Trivy config** (détection de mauvaises
+          configurations). Aucune ressource n'est créée.
+        - **sur push vers `main`** : après validation, il obtient un jeton OIDC, construit l'image, la
+          **scanne** (Trivy), la **pousse** sur ECR, puis exécute `terraform apply` avec le nouveau tag
+          d'image. Ce job s'exécute dans un **environnement protégé** (`environment: production`), qui peut
+          exiger une approbation manuelle.
+
+        La permission `id-token: write` est **indispensable** pour qu'OIDC fonctionne ; elle n'est
+        accordée qu'au job de déploiement.
+      en: |
+        The `deploy.yml` workflow has two behaviours:
+
+        - **on a pull request**: it **validates** without deploying anything — `terraform fmt -check`,
+          `validate`, then an IaC scan with **Checkov** and **Trivy config** (misconfiguration
+          detection). No resource is created.
+        - **on push to `main`**: after validation, it obtains an OIDC token, builds the image, **scans**
+          it (Trivy), **pushes** it to ECR, then runs `terraform apply` with the new image tag. This job
+          runs in a **protected environment** (`environment: production`), which can require manual
+          approval.
+
+        The `id-token: write` permission is **essential** for OIDC to work; it is granted only to the
+        deploy job.
+
+examples:
+  - title:
+      fr: "iam.tf : provider OIDC + rôle restreint au dépôt et à la branche"
+      en: "iam.tf: OIDC provider + role restricted to the repo and branch"
+    file: iam.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Append to iam.tf. Declares GitHub as a trusted OIDC issuer (once).
+      resource "aws_iam_openid_connect_provider" "github" {
+        url             = "https://token.actions.githubusercontent.com"
+        client_id_list  = ["sts.amazonaws.com"]
+        # GitHub's OIDC CA thumbprint (AWS validates the cert chain anyway).
+        thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+      }
+
+      data "aws_iam_policy_document" "github_trust" {
+        statement {
+          actions = ["sts:AssumeRoleWithWebIdentity"]
+          principals {
+            type        = "Federated"
+            identifiers = [aws_iam_openid_connect_provider.github.arn]
+          }
+          condition {
+            test     = "StringEquals"
+            variable = "token.actions.githubusercontent.com:aud"
+            values   = ["sts.amazonaws.com"]
+          }
+          # CRUCIAL: only THIS repo, and only the main branch, may assume the role.
+          condition {
+            test     = "StringLike"
+            variable = "token.actions.githubusercontent.com:sub"
+            values   = ["repo:${var.github_repo}:ref:refs/heads/main"]
+          }
+        }
+      }
+
+      resource "aws_iam_role" "github_deploy" {
+        name               = "${var.project}-github-deploy"
+        assume_role_policy = data.aws_iam_policy_document.github_trust.json
+      }
+    note:
+      fr: "La condition sur `sub` restreint la confiance à votre dépôt et à la branche `main`. Sans elle, n'importe quel dépôt GitHub pourrait tenter d'assumer le rôle : c'est le point de sécurité central d'OIDC."
+      en: "The `sub` condition restricts trust to your repository and the `main` branch. Without it, any GitHub repo could try to assume the role: this is OIDC's central security point."
+
+  - title:
+      fr: "iam.tf : les droits minimaux du rôle de déploiement"
+      en: "iam.tf: the deploy role's minimal rights"
+    file: iam.tf
+    lang: hcl
+    kind: secure
+    code: |
+      # Append to iam.tf. Only the rights the deploy pipeline actually needs.
+      data "aws_iam_policy_document" "github_deploy" {
+        statement {
+          sid       = "EcrAuth"
+          actions   = ["ecr:GetAuthorizationToken"]
+          resources = ["*"] # this specific action cannot be resource-scoped
+        }
+        statement {
+          sid = "EcrPushPull"
+          actions = [
+            "ecr:BatchCheckLayerAvailability",
+            "ecr:InitiateLayerUpload",
+            "ecr:UploadLayerPart",
+            "ecr:CompleteLayerUpload",
+            "ecr:PutImage",
+            "ecr:BatchGetImage",
+          ]
+          resources = [aws_ecr_repository.app.arn]
+        }
+        statement {
+          sid = "EcsDeploy"
+          actions = [
+            "ecs:UpdateService",
+            "ecs:DescribeServices",
+            "ecs:RegisterTaskDefinition",
+            "ecs:DescribeTaskDefinition",
+          ]
+          resources = ["*"]
+        }
+        statement {
+          sid       = "PassOnlyEcsRoles"
+          actions   = ["iam:PassRole"]
+          resources = [aws_iam_role.ecs_execution.arn, aws_iam_role.ecs_task.arn]
+        }
+      }
+
+      resource "aws_iam_role_policy" "github_deploy" {
+        name   = "${var.project}-github-deploy"
+        role   = aws_iam_role.github_deploy.id
+        policy = data.aws_iam_policy_document.github_deploy.json
+      }
+    note:
+      fr: "Aucun `AdministratorAccess` : le rôle ne peut que pousser l'image et mettre à jour le service. `iam:PassRole` est limité aux deux rôles ECS, jamais `\"*\"`."
+      en: "No `AdministratorAccess`: the role can only push the image and update the service. `iam:PassRole` is limited to the two ECS roles, never `\"*\"`."
+
+  - title:
+      fr: "deploy.yml : validation sur PR, déploiement OIDC sur main"
+      en: "deploy.yml: validation on PR, OIDC deployment on main"
+    file: .github/workflows/deploy.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: deploy
+
+      on:
+        push:
+          branches: [main]
+        pull_request:
+
+      permissions:
+        contents: read  # least privilege by default
+
+      jobs:
+        validate:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: hashicorp/setup-terraform@v3
+            - name: Format, init and validate (no backend needed to validate)
+              run: |
+                terraform -chdir=terraform fmt -check
+                terraform -chdir=terraform init -backend=false
+                terraform -chdir=terraform validate
+            - name: Checkov IaC scan
+              uses: bridgecrewio/checkov-action@v12
+              with:
+                directory: terraform
+            - name: Trivy IaC misconfiguration scan
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: config
+                scan-ref: terraform
+                severity: HIGH,CRITICAL
+                exit-code: "1"
+
+        deploy:
+          if: github.ref == 'refs/heads/main'
+          runs-on: ubuntu-latest
+          needs: [validate]
+          environment: production   # protected: can require manual approval
+          permissions:
+            contents: read
+            id-token: write         # REQUIRED for OIDC
+          steps:
+            - uses: actions/checkout@v4
+            - name: Get short-lived AWS credentials via OIDC (no static keys)
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                role-to-assume: arn:aws:iam::123456789012:role/node-aws-github-deploy
+                aws-region: us-east-1
+            - name: Log in to ECR
+              id: ecr
+              uses: aws-actions/amazon-ecr-login@v2
+            - name: Build the image
+              env:
+                REGISTRY: ${{ steps.ecr.outputs.registry }}
+              run: |
+                IMAGE="$REGISTRY/node-aws-app:${{ github.sha }}"
+                docker build -t "$IMAGE" ./app
+                echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+            - name: Scan the image with Trivy (fail on fixable HIGH/CRITICAL)
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                image-ref: ${{ env.IMAGE }}
+                severity: HIGH,CRITICAL
+                ignore-unfixed: true
+                exit-code: "1"
+            - name: Push the image to ECR
+              run: docker push "$IMAGE"
+            - uses: hashicorp/setup-terraform@v3
+            - name: Apply Terraform with the new image tag
+              run: |
+                terraform -chdir=terraform init
+                terraform -chdir=terraform apply -auto-approve -var="image_tag=${{ github.sha }}"
+    note:
+      fr: "`id-token: write` autorise OIDC ; `configure-aws-credentials` échange le jeton contre des identifiants temporaires. L'image est scannée **avant** d'être poussée, et `apply` déploie le tag = SHA du commit."
+      en: "`id-token: write` enables OIDC; `configure-aws-credentials` swaps the token for temporary credentials. The image is scanned **before** being pushed, and `apply` deploys the tag = commit SHA."
+
+  - title:
+      fr: "Vérifier l'authentification OIDC (identité temporaire)"
+      en: "Checking the OIDC authentication (temporary identity)"
+    file: whoami.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Add this step after configure-aws-credentials to confirm OIDC works.
+      # It prints the TEMPORARY assumed-role identity, not a static user.
+      aws sts get-caller-identity
+    output: |
+      {
+        "UserId": "AROAEXAMPLEID:GitHubActions",
+        "Account": "123456789012",
+        "Arn": "arn:aws:sts::123456789012:assumed-role/node-aws-github-deploy/GitHubActions"
+      }
+    note:
+      fr: "L'ARN est un `assumed-role` temporaire, pas un utilisateur IAM avec clé. Les identifiants expirent à la fin du job : rien à révoquer, rien qui puisse fuiter durablement."
+      en: "The ARN is a temporary `assumed-role`, not an IAM user with a key. Credentials expire at the end of the job: nothing to revoke, nothing that can leak durably."
+
+mistake:
+  fr: |
+    **Oublier la condition sur `sub`, ou stocker une clé AWS statique dans les secrets GitHub.**
+
+    Une *trust policy* qui vérifie seulement l'audience (`aud`) mais pas le sujet (`sub`) laisse **tout**
+    dépôt GitHub assumer votre rôle : c'est une faille grave. Toujours restreindre à
+    `repo:OWNER/REPO:ref:refs/heads/main`. Et n'ajoutez jamais de `AWS_ACCESS_KEY_ID` dans les secrets du
+    dépôt : une clé statique qui fuite donne un accès durable, OIDC existe précisément pour l'éviter.
+  en: |
+    **Forgetting the `sub` condition, or storing a static AWS key in GitHub secrets.**
+
+    A trust policy that checks only the audience (`aud`) but not the subject (`sub`) lets **any** GitHub
+    repository assume your role: a serious flaw. Always restrict to `repo:OWNER/REPO:ref:refs/heads/main`.
+    And never add an `AWS_ACCESS_KEY_ID` to the repository secrets: a leaked static key grants lasting
+    access, and OIDC exists precisely to avoid that.
+
+bestPractice:
+  fr: |
+    - **OIDC, pas de clé statique** : jetons de courte durée, rien à stocker.
+    - **Restreindre le `sub`** au dépôt **et** à la branche (`refs/heads/main`).
+    - **Rôle de déploiement au moindre privilège** : ni `AdministratorAccess`, ni `PassRole` sur `"*"`.
+    - **`id-token: write` uniquement sur le job de déploiement**.
+    - **Valider et scanner (Checkov, Trivy config) sur les PR**, déployer seulement sur `main`.
+    - **Environnement protégé** (`environment: production`) pour une approbation éventuelle.
+  en: |
+    - **OIDC, no static key**: short-lived tokens, nothing to store.
+    - **Restrict the `sub`** to the repository **and** the branch (`refs/heads/main`).
+    - **Least-privilege deploy role**: no `AdministratorAccess`, no `PassRole` on `"*"`.
+    - **`id-token: write` only on the deploy job**.
+    - **Validate and scan (Checkov, Trivy config) on PRs**, deploy only on `main`.
+    - **Protected environment** (`environment: production`) for optional approval.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe veut aussi autoriser les déploiements depuis la branche `release`, en plus de `main`.
+
+      1. Modifiez la condition `sub` de la *trust policy* pour accepter **les deux** branches.
+      2. Expliquez en une phrase pourquoi il ne faut **pas** utiliser `repo:OWNER/node-aws-ecs:*` à la
+         place (qui accepterait n'importe quelle branche ou pull request).
+    en: |
+      Your team also wants to allow deployments from the `release` branch, in addition to `main`.
+
+      1. Modify the `sub` condition of the trust policy to accept **both** branches.
+      2. Explain in one sentence why you should **not** use `repo:OWNER/node-aws-ecs:*` instead (which
+         would accept any branch or pull request).
+  solution:
+    file: trust-two-branches.tf
+    lang: hcl
+    code: |
+      condition {
+        test     = "StringLike"
+        variable = "token.actions.githubusercontent.com:sub"
+        # List the exact branches allowed; still NOT a wildcard on everything.
+        values = [
+          "repo:${var.github_repo}:ref:refs/heads/main",
+          "repo:${var.github_repo}:ref:refs/heads/release",
+        ]
+      }
+      # Why not "repo:OWNER/node-aws-ecs:*" ?
+      # That wildcard would also match pull_request contexts and every branch,
+      # letting an attacker's PR branch assume the deploy role. Always list
+      # the specific refs you trust.
+    note:
+      fr: "On liste explicitement les deux refs de confiance. Un joker `:*` accepterait aussi les contextes de pull request et toute branche, ce qui ouvrirait le rôle à une PR malveillante."
+      en: "We explicitly list the two trusted refs. A `:*` wildcard would also accept pull_request contexts and any branch, opening the role to a malicious PR."
+
+quiz:
+  - q:
+      fr: "Quel est l'avantage principal d'OIDC par rapport à une clé AWS statique dans les secrets GitHub ?"
+      en: "What is OIDC's main advantage over a static AWS key in GitHub secrets?"
+    options:
+      fr:
+        - "Il est plus rapide à configurer"
+        - "Il n'y a aucune clé à stocker : les jetons sont de courte durée et expirent"
+        - "Il permet d'utiliser plusieurs régions"
+        - "Il réduit la facture AWS"
+      en:
+        - "It is faster to configure"
+        - "There is no key to store: tokens are short-lived and expire"
+        - "It allows using several regions"
+        - "It reduces the AWS bill"
+    answer: 1
+    why:
+      fr: "OIDC remplace la clé permanente par un jeton temporaire : rien à stocker, rien qui puisse fuiter durablement."
+      en: "OIDC replaces the permanent key with a temporary token: nothing to store, nothing that can leak durably."
+  - q:
+      fr: "Pourquoi la condition sur `sub` dans la trust policy est-elle essentielle ?"
+      en: "Why is the `sub` condition in the trust policy essential?"
+    options:
+      fr:
+        - "Elle chiffre le jeton"
+        - "Elle accélère l'authentification"
+        - "Elle restreint l'assume du rôle à votre dépôt et votre branche uniquement"
+        - "Elle active le scan d'image"
+      en:
+        - "It encrypts the token"
+        - "It speeds up authentication"
+        - "It restricts assuming the role to your repository and branch only"
+        - "It enables image scanning"
+    answer: 2
+    why:
+      fr: "Sans la condition `sub`, n'importe quel dépôt GitHub pourrait assumer le rôle. On la limite à `repo:OWNER/REPO:ref:refs/heads/main`."
+      en: "Without the `sub` condition, any GitHub repo could assume the role. We limit it to `repo:OWNER/REPO:ref:refs/heads/main`."
+  - q:
+      fr: "Quelle permission de workflow est indispensable pour qu'OIDC fonctionne ?"
+      en: "Which workflow permission is indispensable for OIDC to work?"
+    options:
+      fr:
+        - "`id-token: write`"
+        - "`packages: write`"
+        - "`contents: write`"
+        - "`actions: write`"
+      en:
+        - "`id-token: write`"
+        - "`packages: write`"
+        - "`contents: write`"
+        - "`actions: write`"
+    answer: 0
+    why:
+      fr: "`id-token: write` autorise le job à demander le jeton OIDC que GitHub signe pour AWS."
+      en: "`id-token: write` lets the job request the OIDC token that GitHub signs for AWS."
+  - q:
+      fr: "Que fait le job `validate` sur une pull request ?"
+      en: "What does the `validate` job do on a pull request?"
+    options:
+      fr:
+        - "Il déploie l'infrastructure en production"
+        - "Il supprime les ressources AWS"
+        - "Il pousse l'image sur ECR"
+        - "Il formate, valide et scanne l'IaC (Checkov, Trivy) sans rien déployer"
+      en:
+        - "It deploys the infrastructure to production"
+        - "It deletes the AWS resources"
+        - "It pushes the image to ECR"
+        - "It formats, validates and scans the IaC (Checkov, Trivy) without deploying anything"
+    answer: 3
+    why:
+      fr: "Sur une PR, on vérifie et on scanne l'infrastructure (fmt, validate, Checkov, Trivy config) ; le déploiement n'a lieu que sur `main`."
+      en: "On a PR, the infrastructure is checked and scanned (fmt, validate, Checkov, Trivy config); deployment happens only on `main`."
+  - q:
+      fr: "Pourquoi le rôle de déploiement ne reçoit-il pas `AdministratorAccess` ?"
+      en: "Why does the deploy role not receive `AdministratorAccess`?"
+    options:
+      fr:
+        - "Pour limiter les dégâts si le jeton était détourné (moindre privilège)"
+        - "Parce qu'AWS l'interdit pour OIDC"
+        - "Pour accélérer le déploiement"
+        - "Parce que Terraform ne le supporte pas"
+      en:
+        - "To limit the damage if the token were hijacked (least privilege)"
+        - "Because AWS forbids it for OIDC"
+        - "To speed up deployment"
+        - "Because Terraform does not support it"
+    answer: 0
+    why:
+      fr: "Le rôle n'a que les droits ECR/ECS nécessaires. En cas de compromission, l'attaquant ne peut pas tout faire sur le compte."
+      en: "The role has only the necessary ECR/ECS rights. If compromised, the attacker cannot do everything on the account."

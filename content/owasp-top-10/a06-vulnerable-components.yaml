@@ -1,0 +1,384 @@
+description:
+  fr: "A06 Composants vulnérables et obsolètes : gérer les dépendances, lire une CVE, scanner avec SCA et produire un SBOM."
+  en: "A06 Vulnerable and Outdated Components: managing dependencies, reading a CVE, scanning with SCA and producing an SBOM."
+duration: 25
+
+intro:
+  fr: |
+    **A06 - Vulnerable and Outdated Components** (composants vulnérables et obsolètes) concerne le code que
+    vous n'avez **pas** écrit : les bibliothèques, frameworks et images de base dont dépend votre application.
+    Une application moderne est composée à **80-90 %** de dépendances tierces. Si l'une d'elles contient une
+    faille connue, votre application en hérite, même si votre propre code est irréprochable.
+
+    Imaginez une voiture dont vous avez assemblé la carrosserie à la perfection, mais dont les freins viennent
+    d'un lot rappelé par le fabricant. Le défaut n'est pas « chez vous », mais c'est vous qui roulez avec. En
+    sécurité logicielle, les failles les plus exploitées en masse (Log4Shell, Struts, OpenSSL) sont justement
+    des composants populaires et vulnérables.
+
+    Dans cette leçon, vous apprendrez à lire une **CVE**, à comparer des versions, à scanner vos dépendances
+    avec un outil **SCA** (*Software Composition Analysis*) comme Trivy, Snyk ou `pip-audit`, et à produire un
+    **SBOM** (*Software Bill of Materials*), l'inventaire de tous vos composants.
+  en: |
+    **A06 - Vulnerable and Outdated Components** is about the code you did **not** write: the libraries,
+    frameworks and base images your application depends on. A modern application is **80-90%** third-party
+    dependencies. If one of them contains a known flaw, your application inherits it, even if your own code is
+    flawless.
+
+    Picture a car whose body you assembled perfectly, but whose brakes come from a batch recalled by the
+    manufacturer. The defect is not "yours", but you are the one driving with it. In software security, the
+    most mass-exploited flaws (Log4Shell, Struts, OpenSSL) are precisely popular, vulnerable components.
+
+    In this lesson you will learn to read a **CVE**, compare versions, scan your dependencies with an **SCA**
+    tool (*Software Composition Analysis*) such as Trivy, Snyk or `pip-audit`, and produce an **SBOM**
+    (*Software Bill of Materials*), the inventory of all your components.
+
+sections:
+  - heading:
+      fr: "CVE, CVSS et le vocabulaire des dépendances"
+      en: "CVE, CVSS and the dependency vocabulary"
+    body:
+      fr: |
+        | Terme | Signification |
+        |---|---|
+        | **CVE** | *Common Vulnerabilities and Exposures* : un identifiant unique de faille (ex. CVE-2021-44228) |
+        | **CVSS** | Score de gravité de 0 à 10 (Low, Medium, High, Critical) |
+        | **SCA** | Analyse de composition logicielle : scanne les dépendances |
+        | **SBOM** | Inventaire complet des composants et de leurs versions |
+        | **Transitive** | Une dépendance de vos dépendances (vous ne l'avez pas choisie directement) |
+
+        La difficulté vient surtout des **dépendances transitives** : votre `package.json` liste 20
+        bibliothèques, mais l'arbre complet en contient des centaines. La faille Log4Shell (CVE-2021-44228,
+        CVSS 10.0) touchait `log4j`, souvent présent **indirectement**, via d'autres bibliothèques. On ne peut
+        pas corriger ce qu'on ne sait pas qu'on utilise : d'où l'importance de l'inventaire (SBOM) et du scan
+        automatique.
+
+        Épingler les versions (*pinning*, lockfiles) rend les builds reproductibles, mais ne suffit pas : une
+        version épinglée peut devenir vulnérable demain. Il faut **scanner en continu** et **mettre à jour**.
+      en: |
+        | Term | Meaning |
+        |---|---|
+        | **CVE** | *Common Vulnerabilities and Exposures*: a unique flaw identifier (e.g. CVE-2021-44228) |
+        | **CVSS** | Severity score from 0 to 10 (Low, Medium, High, Critical) |
+        | **SCA** | Software Composition Analysis: scans dependencies |
+        | **SBOM** | Full inventory of components and their versions |
+        | **Transitive** | A dependency of your dependencies (you did not pick it directly) |
+
+        The difficulty comes mainly from **transitive dependencies**: your `package.json` lists 20 libraries,
+        but the full tree holds hundreds. Log4Shell (CVE-2021-44228, CVSS 10.0) affected `log4j`, often present
+        **indirectly**, through other libraries. You cannot fix what you do not know you use: hence the
+        importance of the inventory (SBOM) and automatic scanning.
+
+        Pinning versions (lockfiles) makes builds reproducible, but is not enough: a pinned version can become
+        vulnerable tomorrow. You must **scan continuously** and **update**.
+  - heading:
+      fr: "SCA et SBOM dans le pipeline"
+      en: "SCA and SBOM in the pipeline"
+    body:
+      fr: |
+        A06 est la catégorie reine du **SCA** (*Software Composition Analysis*) :
+
+        | Outil | Écosystème | Rôle |
+        |---|---|---|
+        | `pip-audit` | Python | Scanne `requirements.txt` / l'environnement |
+        | `npm audit` | Node.js | Scanne `package-lock.json` |
+        | Trivy | Multi (images, fichiers, dépôts) | Scanne dépendances, images, IaC |
+        | Snyk | Multi | Scan + conseils de remédiation |
+        | Dependabot / Renovate | Multi | Ouvre automatiquement des PR de mise à jour |
+
+        Le **SBOM** (format **CycloneDX** ou **SPDX**, généré par Syft ou Trivy) est la liste de tous les
+        composants. Il permet de répondre en minutes à la question « sommes-nous touchés par cette nouvelle
+        CVE ? » sans fouiller le code. De plus en plus exigé contractuellement, il devient un livrable standard.
+
+        Un bon pipeline **fait échouer la build** sur une vulnérabilité **critique** ou **haute** connue, et
+        **Dependabot/Renovate** maintiennent les dépendances à jour en ouvrant des pull requests automatiques.
+      en: |
+        A06 is the flagship category for **SCA** (*Software Composition Analysis*):
+
+        | Tool | Ecosystem | Role |
+        |---|---|---|
+        | `pip-audit` | Python | Scans `requirements.txt` / the environment |
+        | `npm audit` | Node.js | Scans `package-lock.json` |
+        | Trivy | Multi (images, files, repos) | Scans dependencies, images, IaC |
+        | Snyk | Multi | Scan + remediation advice |
+        | Dependabot / Renovate | Multi | Automatically opens update PRs |
+
+        The **SBOM** (format **CycloneDX** or **SPDX**, generated by Syft or Trivy) is the list of all
+        components. It lets you answer in minutes the question "are we affected by this new CVE?" without
+        digging through the code. Increasingly required contractually, it is becoming a standard deliverable.
+
+        A good pipeline **fails the build** on a known **critical** or **high** vulnerability, and
+        **Dependabot/Renovate** keep dependencies up to date by opening automatic pull requests.
+
+examples:
+  - title:
+      fr: "requirements.txt : versions vulnérables vs corrigées"
+      en: "requirements.txt: vulnerable vs fixed versions"
+    file: requirements.txt
+    lang: text
+    kind: secure
+    code: |
+      # ---------- VULNERABLE (for illustration) ----------
+      # requests==2.19.1     # affected by CVE-2018-18074 (credentials leak on redirect)
+      # PyYAML==5.1          # affected by CVE-2020-1747 (arbitrary code via full_load)
+      # Flask==0.12.2        # multiple fixed CVEs in later releases
+
+      # ---------- FIXED ----------
+      # Pin to patched versions; a lockfile keeps the whole tree reproducible.
+      requests==2.32.3
+      PyYAML==6.0.2
+      Flask==3.0.3
+
+      # pip-audit reads this file and reports any dependency with a known CVE:
+      #   pip-audit -r requirements.txt
+    output: |
+      $ pip-audit -r requirements.txt
+      No known vulnerabilities found
+    note:
+      fr: "Les versions commentées portent des CVE connues. `pip-audit` (ou Trivy, Snyk) lit le fichier et signale chaque dépendance vulnérable ; ici, les versions corrigées passent sans alerte."
+      en: "The commented versions carry known CVEs. `pip-audit` (or Trivy, Snyk) reads the file and flags each vulnerable dependency; here, the fixed versions pass with no alert."
+
+  - title:
+      fr: "Comparer des versions pour savoir si l'on est touché (exécutable)"
+      en: "Comparing versions to know if you are affected (runnable)"
+    file: version_check.py
+    lang: python
+    kind: secure
+    code: |
+      # Parse "major.minor.patch" and compare, the way an SCA tool decides if a
+      # version falls in a vulnerable range (here: fixed in 2.31.0).
+      def parse(v: str) -> tuple:
+          return tuple(int(x) for x in v.split("."))
+
+      FIXED_IN = parse("2.31.0")   # the version that patches the CVE
+
+      def is_vulnerable(installed: str) -> bool:
+          # Vulnerable if the installed version is strictly below the fixed one
+          return parse(installed) < FIXED_IN
+
+      for version in ["2.19.1", "2.30.0", "2.31.0", "2.32.3"]:
+          status = "VULNERABLE" if is_vulnerable(version) else "safe"
+          print(f"requests {version:8} -> {status}")
+    output: |
+      requests 2.19.1   -> VULNERABLE
+      requests 2.30.0   -> VULNERABLE
+      requests 2.31.0   -> safe
+      requests 2.32.3   -> safe
+    note:
+      fr: "Cliquez sur Run. Un outil SCA fait exactement ce raisonnement, mais à grande échelle, en consultant une base de CVE : il compare chaque version installée à la plage vulnérable connue."
+      en: "Press Run. An SCA tool does exactly this reasoning, but at scale, against a CVE database: it compares each installed version to the known vulnerable range."
+
+  - title:
+      fr: "SCA et SBOM en CI avec Trivy"
+      en: "SCA and SBOM in CI with Trivy"
+    file: .github/workflows/sca.yml
+    lang: yaml
+    kind: secure
+    code: |
+      name: sca
+
+      on: [push, pull_request]
+
+      permissions:
+        contents: read
+
+      jobs:
+        dependencies:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+
+            # Fail the build on known HIGH/CRITICAL vulnerabilities in dependencies
+            - name: Scan dependencies with Trivy
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: fs
+                scanners: vuln
+                severity: HIGH,CRITICAL
+                exit-code: "1"      # non-zero -> the pull request is blocked
+
+            # Produce a CycloneDX SBOM as a build artifact (inventory of components)
+            - name: Generate SBOM
+              uses: aquasecurity/trivy-action@0.28.0
+              with:
+                scan-type: fs
+                format: cyclonedx
+                output: sbom.cdx.json
+
+            - uses: actions/upload-artifact@v4
+              with:
+                name: sbom
+                path: sbom.cdx.json
+    note:
+      fr: "Ce workflow échoue sur toute dépendance HIGH/CRITICAL connue et publie un SBOM CycloneDX. Dependabot ou Renovate compléteraient en ouvrant automatiquement les PR de mise à jour."
+      en: "This workflow fails on any known HIGH/CRITICAL dependency and publishes a CycloneDX SBOM. Dependabot or Renovate would complement it by opening update PRs automatically."
+
+mistake:
+  fr: |
+    **Installer une dépendance et ne jamais y revenir.**
+
+    Une bibliothèque sûre aujourd'hui peut devenir vulnérable demain, quand une nouvelle CVE est publiée. Le
+    code ne change pas, mais le risque, lui, apparaît. Beaucoup d'équipes épinglent une version « qui marche »
+    et l'oublient pendant des années ; le jour où une faille critique sort (Log4Shell), elles ne savent même
+    pas si elles utilisent le composant, souvent présent de façon **transitive**. Sans inventaire (SBOM) ni
+    scan continu (SCA), on ne peut ni savoir qu'on est touché, ni corriger à temps. La gestion des dépendances
+    est un travail **continu**, pas un choix unique à l'installation.
+  en: |
+    **Installing a dependency and never revisiting it.**
+
+    A library safe today can become vulnerable tomorrow, when a new CVE is published. The code does not change,
+    but the risk appears. Many teams pin a version that "works" and forget it for years; the day a critical
+    flaw drops (Log4Shell), they do not even know whether they use the component, often present **transitively**.
+    Without an inventory (SBOM) or continuous scanning (SCA), you can neither know you are affected nor fix in
+    time. Dependency management is **continuous** work, not a one-time choice at install.
+
+bestPractice:
+  fr: |
+    - **Scannez en continu** avec un outil SCA (`pip-audit`, `npm audit`, Trivy, Snyk) dès chaque commit.
+    - **Faites échouer la build** sur les vulnérabilités critiques et hautes connues.
+    - **Automatisez les mises à jour** avec Dependabot ou Renovate (PR automatiques).
+    - **Produisez un SBOM** (CycloneDX/SPDX) pour répondre vite à « sommes-nous touchés ? ».
+    - **Épinglez les versions** (lockfiles) pour des builds reproductibles, puis mettez à jour régulièrement.
+    - **Réduisez la surface** : moins de dépendances, images de base minimales (distroless), suppression des paquets inutiles.
+  en: |
+    - **Scan continuously** with an SCA tool (`pip-audit`, `npm audit`, Trivy, Snyk) on every commit.
+    - **Fail the build** on known critical and high vulnerabilities.
+    - **Automate updates** with Dependabot or Renovate (automatic PRs).
+    - **Produce an SBOM** (CycloneDX/SPDX) to answer "are we affected?" quickly.
+    - **Pin versions** (lockfiles) for reproducible builds, then update regularly.
+    - **Reduce the surface**: fewer dependencies, minimal base images (distroless), remove useless packages.
+
+exercise:
+  statement:
+    fr: |
+      Votre pipeline Node.js affiche ce résultat de `npm audit` :
+
+      ```text
+      lodash  <4.17.21  Severity: high  (Prototype Pollution, CVE-2020-8203)
+      Fix available via `npm audit fix`
+      ```
+
+      1. Expliquez ce que signifient « high », la CVE et le fait que `lodash` soit peut-être une dépendance
+         transitive.
+      2. Décrivez les étapes pour corriger, et comment éviter que cela se reproduise (automatisation + SBOM).
+    en: |
+      Your Node.js pipeline shows this `npm audit` result:
+
+      ```text
+      lodash  <4.17.21  Severity: high  (Prototype Pollution, CVE-2020-8203)
+      Fix available via `npm audit fix`
+      ```
+
+      1. Explain what "high", the CVE and the fact that `lodash` may be a transitive dependency mean.
+      2. Describe the steps to fix it, and how to prevent recurrence (automation + SBOM).
+  solution:
+    file: solution.md
+    lang: markdown
+    code: |
+      ## Reading the finding
+      - "high" is the CVSS severity band (below critical, above medium).
+      - CVE-2020-8203 is the unique id of this lodash prototype-pollution flaw.
+      - lodash may be transitive: another package you installed depends on it, so it
+        appears in package-lock.json even if you never added it directly.
+
+      ## Fixing and preventing recurrence
+      1. Update to a patched version: `npm audit fix` (or bump the parent dependency
+         that pulls in the old lodash), then re-run `npm audit` to confirm 0 high/critical.
+      2. Add `npm audit --audit-level=high` (or Trivy/Snyk) as a CI gate that fails the PR.
+      3. Enable Dependabot/Renovate to open update PRs automatically.
+      4. Generate an SBOM (CycloneDX via Syft/Trivy) so the next CVE can be matched in
+         minutes against the component inventory.
+    note:
+      fr: "On corrige la version, on ajoute une porte SCA bloquante en CI, on automatise les mises à jour et on produit un SBOM pour les prochaines CVE. La correction ponctuelle ne suffit pas sans l'automatisation."
+      en: "You fix the version, add a blocking SCA gate in CI, automate updates and produce an SBOM for future CVEs. A one-off fix is not enough without the automation."
+
+quiz:
+  - q:
+      fr: "Que désigne une CVE ?"
+      en: "What does a CVE denote?"
+    options:
+      fr:
+        - "Un identifiant unique d'une vulnérabilité connue"
+        - "Un type de pare-feu"
+        - "Un score de performance"
+        - "Un format d'image de conteneur"
+      en:
+        - "A unique identifier of a known vulnerability"
+        - "A type of firewall"
+        - "A performance score"
+        - "A container image format"
+    answer: 0
+    why:
+      fr: "CVE (Common Vulnerabilities and Exposures) attribue un identifiant unique à chaque faille connue, comme CVE-2021-44228 (Log4Shell)."
+      en: "CVE (Common Vulnerabilities and Exposures) assigns a unique id to each known flaw, such as CVE-2021-44228 (Log4Shell)."
+  - q:
+      fr: "Qu'est-ce qu'une dépendance transitive ?"
+      en: "What is a transitive dependency?"
+    options:
+      fr:
+        - "Une dépendance que vous avez installée directement"
+        - "Une dépendance de vos dépendances, non choisie directement"
+        - "Une dépendance chiffrée"
+        - "Une dépendance de développement uniquement"
+      en:
+        - "A dependency you installed directly"
+        - "A dependency of your dependencies, not chosen directly"
+        - "An encrypted dependency"
+        - "A development-only dependency"
+    answer: 1
+    why:
+      fr: "Les dépendances transitives sont tirées par vos dépendances directes ; elles forment la majeure partie de l'arbre et sont faciles à oublier."
+      en: "Transitive dependencies are pulled in by your direct ones; they make up most of the tree and are easy to overlook."
+  - q:
+      fr: "Quel type d'outil scanne les dépendances à la recherche de CVE connues ?"
+      en: "Which kind of tool scans dependencies for known CVEs?"
+    options:
+      fr:
+        - "Un outil SAST"
+        - "Un outil DAST"
+        - "Un outil SCA (pip-audit, npm audit, Trivy, Snyk)"
+        - "Un linter de style"
+      en:
+        - "A SAST tool"
+        - "A DAST tool"
+        - "An SCA tool (pip-audit, npm audit, Trivy, Snyk)"
+        - "A style linter"
+    answer: 2
+    why:
+      fr: "Le SCA (Software Composition Analysis) compare les versions installées à une base de CVE ; SAST et DAST analysent votre propre code."
+      en: "SCA (Software Composition Analysis) compares installed versions to a CVE database; SAST and DAST analyse your own code."
+  - q:
+      fr: "À quoi sert un SBOM ?"
+      en: "What is an SBOM for?"
+    options:
+      fr:
+        - "À chiffrer les dépendances"
+        - "À remplacer les tests unitaires"
+        - "À accélérer la compilation"
+        - "À inventorier tous les composants pour savoir vite si une CVE vous touche"
+      en:
+        - "To encrypt dependencies"
+        - "To replace unit tests"
+        - "To speed up compilation"
+        - "To inventory all components so you can quickly tell if a CVE affects you"
+    answer: 3
+    why:
+      fr: "Le SBOM (CycloneDX/SPDX) liste tous les composants et versions, permettant de répondre en minutes à « sommes-nous touchés ? »."
+      en: "The SBOM (CycloneDX/SPDX) lists every component and version, letting you answer \"are we affected?\" in minutes."
+  - q:
+      fr: "Pourquoi épingler une version ne suffit-il pas à rester sûr ?"
+      en: "Why is pinning a version not enough to stay safe?"
+    options:
+      fr:
+        - "Parce qu'une version épinglée peut devenir vulnérable quand une nouvelle CVE paraît"
+        - "Parce que l'épinglage casse la build"
+        - "Parce que les versions épinglées sont plus lentes"
+        - "Parce que l'épinglage supprime le lockfile"
+      en:
+        - "Because a pinned version can become vulnerable when a new CVE is published"
+        - "Because pinning breaks the build"
+        - "Because pinned versions are slower"
+        - "Because pinning removes the lockfile"
+    answer: 0
+    why:
+      fr: "Le risque évolue même si le code ne change pas : il faut scanner en continu et mettre à jour, pas seulement épingler une fois."
+      en: "Risk evolves even if the code does not change: you must scan continuously and update, not just pin once."

@@ -1,0 +1,481 @@
+description:
+  fr: "Centraliser et analyser les logs avec la stack ELK sécurisée : Elasticsearch, Filebeat, Logstash et Kibana, avec grok pour les logs d'auth, KQL et gestion du cycle de vie (ILM)."
+  en: "Centralize and analyze logs with a secured ELK stack: Elasticsearch, Filebeat, Logstash and Kibana, with grok for auth logs, KQL and index lifecycle management (ILM)."
+duration: 45
+
+intro:
+  fr: |
+    Quand vous avez dix serveurs, lire les logs à la main sur chacun est impossible. Il faut les
+    **centraliser** en un seul endroit où l'on cherche, filtre et corrèle. La **stack ELK** est la solution
+    historique pour cela : un ensemble d'outils qui collectent, transforment, stockent et affichent les logs
+    de toute une infrastructure.
+
+    ELK est l'acronyme de ses trois composants d'origine : **E**lasticsearch (le moteur de recherche qui
+    stocke), **L**ogstash (le transformateur), **K**ibana (l'interface). On y ajoute **Beats** (dont
+    Filebeat) pour la collecte légère. C'est la tour de contrôle qui rassemble toutes les communications
+    radio des avions en un seul écran.
+
+    Vous allez monter une stack ELK **avec la sécurité activée** (ce n'était pas le cas par défaut avant),
+    configurer Filebeat pour expédier des logs, écrire un filtre **grok** dans Logstash pour structurer des
+    logs d'authentification, chercher les connexions échouées en **KQL** dans Kibana, et mettre en place
+    l'**ILM** pour que les index ne remplissent pas le disque.
+  en: |
+    When you have ten servers, reading logs by hand on each is impossible. You must **centralise** them in
+    one place where you search, filter and correlate. The **ELK stack** is the historical solution for this:
+    a set of tools that collect, transform, store and display the logs of a whole infrastructure.
+
+    ELK stands for its three original components: **E**lasticsearch (the search engine that stores),
+    **L**ogstash (the transformer), **K**ibana (the interface). You add **Beats** (including Filebeat) for
+    lightweight collection. It is the control tower that gathers all the aircraft radio chatter onto a single
+    screen.
+
+    You will build an ELK stack **with security enabled** (it was not the default before), configure
+    Filebeat to ship logs, write a **grok** filter in Logstash to structure authentication logs, search for
+    failed logins in **KQL** in Kibana, and set up **ILM** so indices do not fill the disk.
+
+sections:
+  - heading:
+      fr: "Les composants et le flux"
+      en: "The components and the flow"
+    body:
+      fr: |
+        Un log traverse la stack dans un ordre précis :
+
+        | Composant | Rôle | Étape |
+        |---|---|---|
+        | **Filebeat** | Lit les fichiers de logs et les expédie | Collecte |
+        | **Logstash** | Analyse, structure et enrichit les logs | Transformation |
+        | **Elasticsearch** | Indexe et stocke, permet la recherche | Stockage |
+        | **Kibana** | Affiche, filtre, crée des tableaux de bord | Visualisation |
+
+        Le flux typique : **Filebeat → Logstash → Elasticsearch → Kibana**. Filebeat est léger et tourne sur
+        chaque serveur ; Logstash, plus lourd, est centralisé et fait le gros du travail de transformation.
+        Pour des cas simples, Filebeat peut même envoyer directement à Elasticsearch, sans Logstash.
+
+        Elasticsearch stocke les logs dans des **index**, découpés par jour (`logs-2026.01.15`). Chaque log
+        devient un **document** JSON avec des champs. Kibana interroge ensuite Elasticsearch pour afficher et
+        chercher. C'est cette structuration en champs qui rend possible une recherche du type « tous les
+        échecs d'authentification depuis cette IP ».
+      en: |
+        A log travels through the stack in a precise order:
+
+        | Component | Role | Stage |
+        |---|---|---|
+        | **Filebeat** | Reads log files and ships them | Collection |
+        | **Logstash** | Parses, structures and enriches logs | Transformation |
+        | **Elasticsearch** | Indexes and stores, enables search | Storage |
+        | **Kibana** | Displays, filters, builds dashboards | Visualisation |
+
+        The typical flow: **Filebeat → Logstash → Elasticsearch → Kibana**. Filebeat is lightweight and runs
+        on each server; Logstash, heavier, is centralised and does the bulk of the transformation work. For
+        simple cases Filebeat can even send directly to Elasticsearch, without Logstash.
+
+        Elasticsearch stores logs in **indices**, split by day (`logs-2026.01.15`). Each log becomes a JSON
+        **document** with fields. Kibana then queries Elasticsearch to display and search. It is this
+        structuring into fields that makes a search like "all authentication failures from this IP"
+        possible.
+  - heading:
+      fr: "Sécuriser la stack et expédier avec Filebeat"
+      en: "Securing the stack and shipping with Filebeat"
+    body:
+      fr: |
+        Pendant longtemps, Elasticsearch démarrait **sans aucune authentification** : n'importe qui sur le
+        réseau pouvait lire ou effacer tous les logs. De nombreuses fuites de données viennent d'un
+        Elasticsearch laissé ouvert sur Internet. Aujourd'hui la sécurité (X-Pack) est activée par défaut,
+        mais il faut la configurer correctement :
+
+        - **Authentification obligatoire** : chaque composant se connecte avec un compte et un mot de passe.
+        - **TLS partout** : le trafic entre Beats, Logstash, Elasticsearch et Kibana est chiffré.
+        - **Comptes à moindre privilège** : Filebeat n'a le droit que d'écrire ses index, pas de les
+          supprimer ni de lire ceux des autres.
+
+        **Filebeat** se configure dans `filebeat.yml` : on lui dit quels fichiers lire (`inputs`) et où
+        envoyer (`output`), avec les identifiants et le certificat TLS. Les mots de passe ne sont pas écrits
+        en clair : on utilise le **keystore** de Filebeat (`filebeat keystore add`) et on référence
+        `${VARIABLE}`.
+      en: |
+        For a long time, Elasticsearch started **with no authentication at all**: anyone on the network
+        could read or wipe all the logs. Many data breaches come from an Elasticsearch left open on the
+        Internet. Today security (X-Pack) is enabled by default, but you must configure it properly:
+
+        - **Mandatory authentication**: each component connects with an account and a password.
+        - **TLS everywhere**: traffic between Beats, Logstash, Elasticsearch and Kibana is encrypted.
+        - **Least-privilege accounts**: Filebeat may only write its indices, not delete them or read others'.
+
+        **Filebeat** is configured in `filebeat.yml`: you tell it which files to read (`inputs`) and where to
+        send (`output`), with the credentials and the TLS certificate. Passwords are not written in clear
+        text: you use Filebeat's **keystore** (`filebeat keystore add`) and reference `${VARIABLE}`.
+  - heading:
+      fr: "Grok, KQL et ILM"
+      en: "Grok, KQL and ILM"
+    body:
+      fr: |
+        Un log brut comme `Failed password for admin from 192.0.2.66 port 54122` n'est qu'une ligne de
+        texte. Le filtre **grok** de Logstash la découpe en champs nommés grâce à des motifs :
+        `%{IP:src_ip}` capture l'adresse IP dans un champ `src_ip`. Une fois structurés, les logs
+        deviennent interrogeables par champ.
+
+        Dans Kibana, on cherche avec **KQL** (*Kibana Query Language*), une syntaxe simple :
+
+        | Requête KQL | Résultat |
+        |---|---|
+        | `event.outcome: "failure"` | Tous les échecs |
+        | `event.outcome: "failure" and source.ip: "192.0.2.66"` | Échecs depuis une IP |
+        | `user.name: "admin" and event.action: "login"` | Connexions de l'admin |
+
+        Enfin, les logs s'accumulent vite et peuvent saturer le disque. L'**ILM** (*Index Lifecycle
+        Management*) automatise leur cycle de vie : on garde les index récents « chauds » (rapides),
+        on les bascule « froids » après quelques jours, et on les **supprime** après la durée de rétention
+        (par ex. 90 jours). Sans ILM, un cluster finit par tomber, disque plein. L'ILM est à la fois une
+        bonne pratique d'exploitation et de conformité (durée de conservation des logs).
+      en: |
+        A raw log like `Failed password for admin from 192.0.2.66 port 54122` is just a line of text.
+        Logstash's **grok** filter splits it into named fields using patterns: `%{IP:src_ip}` captures the IP
+        address into a `src_ip` field. Once structured, logs become queryable by field.
+
+        In Kibana you search with **KQL** (*Kibana Query Language*), a simple syntax:
+
+        | KQL query | Result |
+        |---|---|
+        | `event.outcome: "failure"` | All failures |
+        | `event.outcome: "failure" and source.ip: "192.0.2.66"` | Failures from one IP |
+        | `user.name: "admin" and event.action: "login"` | The admin's logins |
+
+        Finally, logs pile up fast and can saturate the disk. **ILM** (*Index Lifecycle Management*)
+        automates their lifecycle: keep recent indices "hot" (fast), move them "cold" after a few days, and
+        **delete** them after the retention period (e.g. 90 days). Without ILM, a cluster eventually falls
+        over, disk full. ILM is both an operational and a compliance best practice (log retention period).
+
+examples:
+  - title:
+      fr: "SÉCURISÉ : Elasticsearch et Kibana avec sécurité activée"
+      en: "SECURE: Elasticsearch and Kibana with security enabled"
+    file: compose.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      name: elk
+
+      services:
+        elasticsearch:
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+          environment:
+            - discovery.type=single-node
+            - xpack.security.enabled=true          # authentication + TLS, NOT off
+            - xpack.security.http.ssl.enabled=true
+            # Bootstrap password from a secret file, never hard-coded
+            - ELASTIC_PASSWORD_FILE=/run/secrets/es_password
+          secrets:
+            - es_password
+          ulimits:
+            memlock: { soft: -1, hard: -1 }
+          networks:
+            - elk
+          # No public port: only Kibana and Logstash reach it internally
+
+        kibana:
+          image: docker.elastic.co/kibana/kibana:8.17.0
+          environment:
+            - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+            - ELASTICSEARCH_USERNAME=kibana_system
+            - ELASTICSEARCH_PASSWORD_FILE=/run/secrets/kibana_password
+          secrets:
+            - kibana_password
+          networks:
+            - elk
+          ports:
+            - "127.0.0.1:5601:5601" # loopback only, behind a TLS proxy in prod
+
+      secrets:
+        es_password:
+          file: ./secrets/es_password.txt
+        kibana_password:
+          file: ./secrets/kibana_password.txt
+
+      networks:
+        elk:
+    note:
+      fr: "`xpack.security.enabled=true` est le point crucial : un Elasticsearch sans authentification est la cause de nombreuses fuites massives. Les mots de passe viennent de secrets-fichiers, et rien n'est exposé publiquement."
+      en: "`xpack.security.enabled=true` is the crucial point: an Elasticsearch without authentication is the cause of many massive breaches. Passwords come from secret files, and nothing is exposed publicly."
+
+  - title:
+      fr: "filebeat.yml : expédier des logs avec TLS"
+      en: "filebeat.yml: shipping logs with TLS"
+    file: filebeat.yml
+    lang: yaml
+    kind: secure
+    code: |
+      filebeat.inputs:
+        - type: filestream
+          id: auth-logs
+          enabled: true
+          paths:
+            - /var/log/auth.log        # the SSH / sudo authentication log
+
+      # Send to Logstash for grok parsing, over TLS
+      output.logstash:
+        hosts: ["logstash:5044"]
+        ssl.enabled: true
+        ssl.certificate_authorities: ["/etc/filebeat/certs/ca.crt"]
+
+      # Secrets come from the Filebeat keystore, referenced as ${VAR}, not in clear:
+      #   filebeat keystore create
+      #   filebeat keystore add LOGSTASH_USER
+      #   filebeat keystore add LOGSTASH_PASS
+    output: |
+      # Verify the configuration before running:
+      #   filebeat test config
+      #   filebeat test output
+      Config OK
+      logstash: logstash:5044... connection to backoff(async(tcp://logstash:5044)) established
+    note:
+      fr: "Filebeat lit `/var/log/auth.log` et l'expédie à Logstash en TLS. Les identifiants ne sont pas en clair : ils vivent dans le keystore de Filebeat, référencés par `${VAR}`."
+      en: "Filebeat reads `/var/log/auth.log` and ships it to Logstash over TLS. Credentials are not in clear text: they live in Filebeat's keystore, referenced as `${VAR}`."
+
+  - title:
+      fr: "Logstash : un filtre grok pour les logs d'auth"
+      en: "Logstash: a grok filter for auth logs"
+    file: logstash.conf
+    lang: ruby
+    kind: secure
+    code: |
+      input {
+        beats { port => 5044 }
+      }
+
+      filter {
+        # Structure a failed SSH login line into named fields
+        # Raw: "Failed password for admin from 192.0.2.66 port 54122 ssh2"
+        grok {
+          match => {
+            "message" => "Failed password for %{USERNAME:user_name} from %{IP:src_ip} port %{NUMBER:src_port}"
+          }
+          # Tag the event so we can search it easily later
+          add_field => { "[event][outcome]" => "failure" }
+        }
+        # Normalise the timestamp and geolocate the source IP
+        geoip { source => "src_ip" target => "geo" }
+      }
+
+      output {
+        elasticsearch {
+          hosts => ["https://elasticsearch:9200"]
+          user => "${ES_USER}"            # from the Logstash keystore
+          password => "${ES_PASS}"
+          ssl_enabled => true
+          index => "auth-%{+YYYY.MM.dd}"  # one daily index, managed by ILM
+        }
+      }
+    note:
+      fr: "Le filtre `grok` transforme une ligne de texte en champs (`user_name`, `src_ip`). On en profite pour marquer l'échec (`event.outcome: failure`) et géolocaliser l'IP : les logs deviennent interrogeables et corrélables."
+      en: "The `grok` filter turns a line of text into fields (`user_name`, `src_ip`). You also tag the failure (`event.outcome: failure`) and geolocate the IP: the logs become queryable and correlatable."
+
+  - title:
+      fr: "KQL dans Kibana et politique ILM"
+      en: "KQL in Kibana and the ILM policy"
+    file: search-and-ilm.txt
+    lang: text
+    kind: neutral
+    code: |
+      # --- KQL searches in Kibana's Discover view ---
+      # All failed logins:
+      event.outcome: "failure"
+
+      # Failed logins for admin from a specific IP (likely brute force):
+      event.outcome: "failure" and user_name: "admin" and src_ip: "192.0.2.66"
+
+      # More than one country for the same user in a short window (impossible travel):
+      user_name: "admin" and geo.country_name: *
+
+      # --- ILM policy: hot 7 days, then delete after 90 days ---
+      PUT _ilm/policy/auth-logs-policy
+      {
+        "policy": {
+          "phases": {
+            "hot":    { "actions": { "rollover": { "max_age": "7d" } } },
+            "delete": { "min_age": "90d", "actions": { "delete": {} } }
+          }
+        }
+      }
+    note:
+      fr: "KQL permet des recherches de sécurité directes (échecs par IP, voyage impossible). La politique ILM supprime automatiquement les index après 90 jours : le disque ne se remplit pas et la rétention est maîtrisée."
+      en: "KQL enables direct security searches (failures per IP, impossible travel). The ILM policy auto-deletes indices after 90 days: the disk does not fill and retention is controlled."
+
+mistake:
+  fr: |
+    **Démarrer Elasticsearch sans authentification « juste pour tester », et oublier l'ILM.**
+
+    Un Elasticsearch ouvert sans authentification est l'une des causes les plus fréquentes de fuites de
+    données massives : il suffit qu'il soit joignable depuis Internet pour que n'importe qui lise — ou
+    efface — l'intégralité des logs, lesquels contiennent souvent des informations sensibles. Activez
+    toujours `xpack.security.enabled`, le TLS et des comptes à moindre privilège, dès le premier démarrage.
+    Second oubli classique : ne pas configurer l'ILM. Les logs s'accumulent, l'index grossit sans fin, et un
+    matin le disque est plein et le cluster tombe. Une politique ILM (rotation + suppression après la durée
+    de rétention) est obligatoire en production.
+  en: |
+    **Starting Elasticsearch without authentication "just to test", and forgetting ILM.**
+
+    An Elasticsearch open without authentication is one of the most frequent causes of massive data
+    breaches: it only needs to be reachable from the Internet for anyone to read — or wipe — all the logs,
+    which often contain sensitive information. Always enable `xpack.security.enabled`, TLS and
+    least-privilege accounts, from the very first start. A second classic oversight: not configuring ILM.
+    Logs pile up, the index grows endlessly, and one morning the disk is full and the cluster falls over. An
+    ILM policy (rollover + deletion after the retention period) is mandatory in production.
+
+bestPractice:
+  fr: |
+    - **`xpack.security.enabled=true` + TLS** dès le départ ; jamais d'Elasticsearch ouvert sans auth.
+    - **Comptes à moindre privilège** : Filebeat écrit ses index, il ne lit ni n'efface ceux des autres.
+    - **Secrets dans le keystore** (Filebeat/Logstash), jamais de mot de passe en clair dans les configs.
+    - **grok pour structurer** les logs en champs (`src_ip`, `user_name`) : la base de toute détection.
+    - **KQL** pour chercher les événements de sécurité (échecs par IP, voyage impossible).
+    - **ILM obligatoire** : rotation puis suppression après la rétention, pour ne pas saturer le disque.
+    - **Kibana derrière un reverse proxy TLS**, jamais exposé directement.
+  en: |
+    - **`xpack.security.enabled=true` + TLS** from the start; never an Elasticsearch open without auth.
+    - **Least-privilege accounts**: Filebeat writes its indices, it neither reads nor wipes others'.
+    - **Secrets in the keystore** (Filebeat/Logstash), never a clear-text password in the configs.
+    - **grok to structure** logs into fields (`src_ip`, `user_name`): the basis of all detection.
+    - **KQL** to search security events (failures per IP, impossible travel).
+    - **Mandatory ILM**: rollover then deletion after retention, to avoid saturating the disk.
+    - **Kibana behind a TLS reverse proxy**, never exposed directly.
+
+exercise:
+  statement:
+    fr: |
+      Vous recevez dans vos logs SSH la ligne brute suivante :
+
+      ```
+      Failed password for invalid user root from 198.51.100.23 port 60122 ssh2
+      ```
+
+      1. Écrivez un motif grok qui capture le nom d'utilisateur dans `user_name` et l'IP source dans
+         `src_ip`.
+      2. Écrivez la requête KQL qui, dans Kibana, affiche tous les échecs de connexion provenant de l'IP
+         `198.51.100.23`.
+      3. En une phrase, pourquoi faut-il une politique ILM sur cet index ?
+    en: |
+      Your SSH logs contain the following raw line:
+
+      ```
+      Failed password for invalid user root from 198.51.100.23 port 60122 ssh2
+      ```
+
+      1. Write a grok pattern capturing the username into `user_name` and the source IP into `src_ip`.
+      2. Write the KQL query that, in Kibana, shows all login failures from the IP `198.51.100.23`.
+      3. In one sentence, why do you need an ILM policy on this index?
+  solution:
+    file: solution.conf
+    lang: ruby
+    code: |
+      # 1. Grok pattern (the "invalid user " prefix is matched literally):
+      filter {
+        grok {
+          match => {
+            "message" => "Failed password for invalid user %{USERNAME:user_name} from %{IP:src_ip} port %{NUMBER:src_port}"
+          }
+          add_field => { "[event][outcome]" => "failure" }
+        }
+      }
+
+      # 2. KQL query in Kibana's Discover:
+      #      event.outcome: "failure" and src_ip: "198.51.100.23"
+      #
+      # 3. ILM automatically deletes old indices after the retention period,
+      #    so these auth logs do not grow forever and fill the disk (and it keeps
+      #    retention compliant with policy).
+    note:
+      fr: "`%{USERNAME:user_name}` et `%{IP:src_ip}` capturent les champs ; le préfixe `invalid user ` est littéral. La requête KQL combine l'échec et l'IP. L'ILM évite que l'index grossisse sans fin."
+      en: "`%{USERNAME:user_name}` and `%{IP:src_ip}` capture the fields; the `invalid user ` prefix is literal. The KQL query combines the failure and the IP. ILM prevents the index from growing forever."
+
+quiz:
+  - q:
+      fr: "Que signifient les lettres ELK ?"
+      en: "What do the letters ELK stand for?"
+    options:
+      fr:
+        - "Elasticsearch, Logstash, Kibana"
+        - "Encrypt, Log, Keep"
+        - "Elastic, Linux, Kernel"
+        - "Event, Logger, Kafka"
+      en:
+        - "Elasticsearch, Logstash, Kibana"
+        - "Encrypt, Log, Keep"
+        - "Elastic, Linux, Kernel"
+        - "Event, Logger, Kafka"
+    answer: 0
+    why:
+      fr: "ELK = Elasticsearch (stockage/recherche), Logstash (transformation), Kibana (visualisation) ; on y ajoute souvent Filebeat pour la collecte."
+      en: "ELK = Elasticsearch (storage/search), Logstash (transformation), Kibana (visualisation); Filebeat is often added for collection."
+  - q:
+      fr: "Quel rôle joue Filebeat dans la stack ?"
+      en: "What role does Filebeat play in the stack?"
+    options:
+      fr:
+        - "Il affiche les tableaux de bord"
+        - "Il lit les fichiers de logs sur chaque serveur et les expédie"
+        - "Il stocke et indexe les logs"
+        - "Il remplace Elasticsearch"
+      en:
+        - "It displays the dashboards"
+        - "It reads log files on each server and ships them"
+        - "It stores and indexes the logs"
+        - "It replaces Elasticsearch"
+    answer: 1
+    why:
+      fr: "Filebeat est un collecteur léger qui tourne sur chaque serveur, lit les fichiers de logs et les envoie vers Logstash ou Elasticsearch."
+      en: "Filebeat is a lightweight collector that runs on each server, reads log files and sends them to Logstash or Elasticsearch."
+  - q:
+      fr: "À quoi sert un filtre grok dans Logstash ?"
+      en: "What is a grok filter in Logstash for?"
+    options:
+      fr:
+        - "À chiffrer les logs"
+        - "À compresser les index"
+        - "À découper une ligne de texte brute en champs nommés"
+        - "À supprimer les vieux logs"
+      en:
+        - "To encrypt the logs"
+        - "To compress the indices"
+        - "To split a raw text line into named fields"
+        - "To delete old logs"
+    answer: 2
+    why:
+      fr: "grok applique des motifs (`%{IP:src_ip}`) pour transformer du texte libre en champs structurés, condition d'une recherche et d'une corrélation efficaces."
+      en: "grok applies patterns (`%{IP:src_ip}`) to turn free text into structured fields, the prerequisite for effective search and correlation."
+  - q:
+      fr: "Pourquoi une politique ILM est-elle indispensable en production ?"
+      en: "Why is an ILM policy indispensable in production?"
+    options:
+      fr:
+        - "Pour chiffrer les index"
+        - "Pour accélérer grok"
+        - "Pour authentifier Kibana"
+        - "Pour faire tourner et supprimer les index afin de ne pas saturer le disque"
+      en:
+        - "To encrypt the indices"
+        - "To speed up grok"
+        - "To authenticate Kibana"
+        - "To roll over and delete indices so the disk is not saturated"
+    answer: 3
+    why:
+      fr: "Sans ILM, les logs s'accumulent sans fin et remplissent le disque ; la politique gère rotation et suppression après la durée de rétention."
+      en: "Without ILM, logs pile up endlessly and fill the disk; the policy handles rollover and deletion after the retention period."
+  - q:
+      fr: "Quelle erreur de configuration a causé de nombreuses fuites de logs via Elasticsearch ?"
+      en: "Which configuration mistake has caused many log breaches via Elasticsearch?"
+    options:
+      fr:
+        - "Le démarrer sans authentification et exposé sur le réseau"
+        - "Utiliser trop d'index"
+        - "Activer le TLS"
+        - "Mettre Kibana derrière un proxy"
+      en:
+        - "Starting it without authentication and exposed on the network"
+        - "Using too many indices"
+        - "Enabling TLS"
+        - "Putting Kibana behind a proxy"
+    answer: 0
+    why:
+      fr: "Un Elasticsearch ouvert sans authentification laisse quiconque lire ou effacer tous les logs : activez `xpack.security.enabled` et le TLS dès le départ."
+      en: "An Elasticsearch open without authentication lets anyone read or wipe all logs: enable `xpack.security.enabled` and TLS from the start."

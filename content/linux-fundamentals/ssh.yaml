@@ -1,0 +1,397 @@
+description:
+  fr: "Se connecter à distance en sécurité avec SSH, générer et utiliser une paire de clés, et comprendre pourquoi les clés valent mieux que les mots de passe."
+  en: "Connect remotely in a secure way with SSH, generate and use a key pair, and understand why keys beat passwords."
+duration: 25
+
+intro:
+  fr: |
+    Les serveurs ne sont presque jamais devant vous : ils sont dans un centre de données, à l'autre bout du
+    monde. Pour les administrer, on s'y connecte à distance. L'outil universel pour cela est **SSH** (*Secure
+    SHell*) : un tunnel **chiffré** entre votre machine et le serveur, dans lequel personne ne peut lire ce qui
+    circule.
+
+    Pensez à un courrier. Telnet, l'ancêtre de SSH, envoyait tout en clair : une carte postale que n'importe
+    quel facteur curieux pouvait lire, mot de passe compris. SSH, c'est une **enveloppe scellée** et
+    infalsifiable. Aujourd'hui, se connecter à un serveur autrement qu'en SSH est impensable.
+
+    Dans cette leçon, vous allez vous connecter à une machine en SSH, puis apprendre la méthode des
+    professionnels : l'**authentification par clés**. Au lieu d'un mot de passe que l'on peut deviner, on
+    utilise une paire de clés cryptographiques, bien plus sûre. Vous générerez votre propre paire et
+    l'installerez sur un serveur.
+  en: |
+    Servers are almost never in front of you: they sit in a data centre, on the other side of the world. To
+    administer them, you connect remotely. The universal tool for this is **SSH** (*Secure SHell*): an
+    **encrypted** tunnel between your machine and the server, in which no one can read what travels.
+
+    Think of mail. Telnet, SSH's ancestor, sent everything in clear text: a postcard any curious postman could
+    read, password included. SSH is a **sealed, tamper-proof envelope**. Today, connecting to a server by
+    anything other than SSH is unthinkable.
+
+    In this lesson you will connect to a machine over SSH, then learn the professionals' method: **key-based
+    authentication**. Instead of a password that can be guessed, you use a cryptographic key pair, far safer.
+    You will generate your own pair and install it on a server.
+
+sections:
+  - heading:
+      fr: "Se connecter avec SSH"
+      en: "Connecting with SSH"
+    body:
+      fr: |
+        La commande de base est simple : `ssh utilisateur@adresse`. Elle ouvre une session de terminal sur la
+        machine distante, exactement comme si vous étiez devant elle.
+
+        | Commande | Rôle |
+        |---|---|
+        | `ssh alice@192.0.2.10` | Se connecter en tant que `alice` sur cette IP |
+        | `ssh -p 2222 alice@serveur` | Se connecter sur un port SSH différent (ici 2222) |
+        | `scp fichier alice@serveur:/tmp/` | Copier un fichier **vers** le serveur |
+        | `scp alice@serveur:/tmp/log .` | Copier un fichier **depuis** le serveur |
+        | `rsync -avz dossier/ alice@serveur:/sauvegarde/` | Synchroniser un dossier (copie les différences) |
+
+        SSH utilise par défaut le port **22** en TCP. À la **toute première** connexion, SSH affiche
+        l'empreinte (*fingerprint*) du serveur et demande de la confirmer : c'est normal, il mémorise ainsi
+        l'identité du serveur pour détecter une éventuelle usurpation lors des connexions suivantes. Si un jour
+        SSH vous avertit que l'empreinte a changé, prenez l'alerte au sérieux : cela peut signaler une attaque.
+      en: |
+        The basic command is simple: `ssh user@address`. It opens a terminal session on the remote machine,
+        exactly as if you were sitting in front of it.
+
+        | Command | Role |
+        |---|---|
+        | `ssh alice@192.0.2.10` | Connect as `alice` to that IP |
+        | `ssh -p 2222 alice@server` | Connect on a different SSH port (here 2222) |
+        | `scp file alice@server:/tmp/` | Copy a file **to** the server |
+        | `scp alice@server:/tmp/log .` | Copy a file **from** the server |
+        | `rsync -avz folder/ alice@server:/backup/` | Sync a folder (copies the differences) |
+
+        SSH uses port **22** over TCP by default. On the **very first** connection, SSH shows the server's
+        fingerprint and asks you to confirm it: this is normal, it memorises the server's identity to detect
+        possible impersonation on later connections. If SSH one day warns you that the fingerprint has changed,
+        take the alert seriously: it can signal an attack.
+  - heading:
+      fr: "Clés plutôt que mots de passe"
+      en: "Keys over passwords"
+    body:
+      fr: |
+        Un mot de passe peut être deviné, volé, ou cassé par force brute. L'**authentification par clés** est
+        bien plus sûre. Elle repose sur une **paire** :
+
+        - La **clé privée** (`id_ed25519`) reste **chez vous**, secrète, protégée en permission `600`. On ne la
+          partage **jamais**, on ne la copie sur aucun serveur.
+        - La **clé publique** (`id_ed25519.pub`) se dépose **sur les serveurs**. Elle peut être vue de tous
+          sans danger.
+
+        Le principe : le serveur chiffre un défi avec votre clé publique ; seule votre clé privée peut le
+        résoudre. Vous prouvez ainsi votre identité **sans jamais transmettre de secret** sur le réseau.
+
+        | | Mot de passe | Clés SSH |
+        |---|---|---|
+        | Peut être deviné / cassé | Oui | Pratiquement impossible |
+        | Transmis sur le réseau | Oui (même chiffré) | Non, jamais |
+        | Réutilisé sur plusieurs sites | Souvent (danger) | Non |
+        | Confort | Taper à chaque fois | Connexion sans mot de passe |
+
+        On génère sa paire avec `ssh-keygen -t ed25519` (ed25519 est l'algorithme moderne recommandé). On
+        protège en plus la clé privée par une **phrase de passe** (*passphrase*) : même volée, elle reste
+        inutilisable sans cette phrase.
+      en: |
+        A password can be guessed, stolen, or cracked by brute force. **Key-based authentication** is far safer.
+        It relies on a **pair**:
+
+        - The **private key** (`id_ed25519`) stays **with you**, secret, protected at permission `600`. You
+          **never** share it, you copy it onto no server.
+        - The **public key** (`id_ed25519.pub`) is placed **on the servers**. It can be seen by anyone without
+          danger.
+
+        The principle: the server encrypts a challenge with your public key; only your private key can solve it.
+        You thus prove your identity **without ever sending a secret** over the network.
+
+        | | Password | SSH keys |
+        |---|---|---|
+        | Can be guessed / cracked | Yes | Practically impossible |
+        | Sent over the network | Yes (even if encrypted) | No, never |
+        | Reused across sites | Often (dangerous) | No |
+        | Convenience | Type it every time | Password-less login |
+
+        You generate your pair with `ssh-keygen -t ed25519` (ed25519 is the recommended modern algorithm). You
+        also protect the private key with a **passphrase**: even if stolen, it stays useless without that phrase.
+  - heading:
+      fr: "Durcir l'accès SSH, avec mesure"
+      en: "Hardening SSH access, sensibly"
+    body:
+      fr: |
+        Une fois les clés en place, on peut renforcer la configuration du serveur, dans
+        `/etc/ssh/sshd_config`. Les réglages fondamentaux, par ordre d'importance :
+
+        - **Désactiver la connexion par mot de passe** (`PasswordAuthentication no`) une fois que votre clé
+          fonctionne : plus aucune attaque par force brute de mot de passe n'est possible.
+        - **Interdire la connexion directe en root** (`PermitRootLogin no`) : on se connecte avec un compte
+          normal, puis on utilise `sudo`. Un attaquant ne peut plus viser directement le compte tout-puissant.
+        - **Vérifier les logs** : chaque connexion, réussie ou non, est écrite dans `/var/log/auth.log`.
+
+        La règle de sécurité à ne jamais oublier : **avant** de modifier la configuration SSH d'un serveur
+        distant, gardez une **seconde session SSH ouverte** et testez la nouvelle configuration dans une
+        troisième. Si vous vous trompez et que SSH vous rejette, la session déjà ouverte vous permet de corriger.
+        Sans cela, une faute de frappe peut vous couper définitivement l'accès au serveur. Le durcissement
+        avancé (port, fail2ban, restrictions par IP) sera approfondi plus loin dans le parcours.
+      en: |
+        Once keys are in place, you can harden the server's configuration, in `/etc/ssh/sshd_config`. The
+        fundamental settings, in order of importance:
+
+        - **Disable password login** (`PasswordAuthentication no`) once your key works: no password brute-force
+          attack is possible any more.
+        - **Forbid direct root login** (`PermitRootLogin no`): you connect with a normal account, then use
+          `sudo`. An attacker can no longer aim directly at the all-powerful account.
+        - **Check the logs**: every connection, successful or not, is written to `/var/log/auth.log`.
+
+        The security rule never to forget: **before** changing a remote server's SSH configuration, keep a
+        **second SSH session open** and test the new configuration in a third. If you make a mistake and SSH
+        rejects you, the already-open session lets you fix it. Without that, one typo can cut your access to the
+        server for good. Advanced hardening (port, fail2ban, per-IP restrictions) is covered later in the path.
+
+examples:
+  - title:
+      fr: "Générer une paire de clés moderne"
+      en: "Generating a modern key pair"
+    file: keygen.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Generate an ed25519 key pair; -C adds a comment to identify it.
+      # When asked, set a passphrase: it protects the key even if stolen.
+      ssh-keygen -t ed25519 -C "alice@laptop"
+
+      # Two files are created in ~/.ssh:
+      ls -l ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
+    output: |
+      Generating public/private ed25519 key pair.
+      Enter file in which to save the key (/home/alice/.ssh/id_ed25519):
+      Enter passphrase (empty for no passphrase):
+      Your identification has been saved in /home/alice/.ssh/id_ed25519
+      Your public key has been saved in /home/alice/.ssh/id_ed25519.pub
+      -rw------- 1 alice alice 411 Jun  3 12:00 /home/alice/.ssh/id_ed25519
+      -rw-r--r-- 1 alice alice 101 Jun  3 12:00 /home/alice/.ssh/id_ed25519.pub
+    note:
+      fr: "Remarquez les permissions : la clé **privée** est en `600` (propriétaire seul), la clé **publique** en `644` (lisible par tous, sans danger). La phrase de passe ajoute une seconde protection : une clé volée reste inutilisable sans elle."
+      en: "Note the permissions: the **private** key is `600` (owner only), the **public** key `644` (readable by all, harmless). The passphrase adds a second layer: a stolen key stays useless without it."
+
+  - title:
+      fr: "Installer sa clé et se connecter sans mot de passe"
+      en: "Installing your key and logging in without a password"
+    file: copy-id.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Copy your PUBLIC key to the server (asks for your password ONE last time)
+      ssh-copy-id alice@192.0.2.10
+
+      # Now connect: no password needed, the key proves who you are
+      ssh alice@192.0.2.10
+
+      # On the server, the public key sits in authorized_keys (never the private one!)
+      cat ~/.ssh/authorized_keys
+    output: |
+      Number of key(s) added: 1
+      Now try logging into the machine, with:   "ssh 'alice@192.0.2.10'"
+
+      alice@server:~$ cat ~/.ssh/authorized_keys
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOxamplePublicKeyData alice@laptop
+    note:
+      fr: "`ssh-copy-id` dépose votre clé **publique** dans `~/.ssh/authorized_keys` du serveur. Seule la publique y figure ; la privée ne quitte jamais votre machine. Dès lors, la connexion se fait sans mot de passe, de façon bien plus sûre."
+      en: "`ssh-copy-id` places your **public** key into the server's `~/.ssh/authorized_keys`. Only the public one goes there; the private one never leaves your machine. From then on, login needs no password and is far safer."
+
+  - title:
+      fr: "Durcir sshd en gardant un filet de sécurité"
+      en: "Hardening sshd while keeping a safety net"
+    file: harden-ssh.sh
+    lang: bash
+    kind: secure
+    code: |
+      # SAFETY FIRST: keep this current SSH session open in another terminal!
+      # Edit the server's SSH config
+      sudo nano /etc/ssh/sshd_config
+      #   PermitRootLogin no            # no direct root login
+      #   PasswordAuthentication no     # keys only, no password brute force
+
+      # Test the configuration file BEFORE applying it
+      sudo sshd -t && echo "config OK"
+
+      # Reload SSH, then test a NEW connection in a SEPARATE terminal
+      sudo systemctl reload ssh
+    output: |
+      config OK
+    note:
+      fr: "`sshd -t` valide la configuration **avant** de la recharger : si une erreur est signalée, on corrige sans avoir coupé le service. On garde toujours une session ouverte et on teste la nouvelle connexion dans une autre : c'est le filet qui évite de se verrouiller dehors."
+      en: "`sshd -t` validates the config **before** reloading: if an error is reported, you fix it without having cut the service. Always keep a session open and test the new connection in another one: that is the net that avoids locking yourself out."
+
+mistake:
+  fr: |
+    **Partager ou copier sa clé privée, et modifier sshd sans filet de sécurité.**
+
+    La clé **privée** (`id_ed25519`, sans `.pub`) est l'équivalent de la clé de votre maison : elle ne doit
+    jamais quitter votre machine, ni être envoyée par e-mail, ni être collée dans un dépôt Git. Seule la clé
+    **publique** (`.pub`) se dépose sur les serveurs. Confondre les deux, ou committer sa clé privée, revient à
+    donner l'accès à tout le monde. Autre erreur fréquente : changer la configuration SSH d'un serveur distant
+    sans garder une seconde session ouverte. Une faute de frappe dans `sshd_config` et vous êtes définitivement
+    enfermé dehors. Testez toujours avec `sshd -t`, puis dans une nouvelle session, avant de fermer l'ancienne.
+  en: |
+    **Sharing or copying your private key, and editing sshd with no safety net.**
+
+    The **private** key (`id_ed25519`, without `.pub`) is the equivalent of your house key: it must never leave
+    your machine, be emailed, or be pasted into a Git repository. Only the **public** key (`.pub`) is placed on
+    servers. Confusing the two, or committing your private key, is handing access to everyone. Another common
+    error: changing a remote server's SSH config without keeping a second session open. One typo in
+    `sshd_config` and you are locked out for good. Always test with `sshd -t`, then in a new session, before
+    closing the old one.
+
+bestPractice:
+  fr: |
+    - **Des clés, pas des mots de passe** : générez une paire ed25519 et désactivez l'authentification par mot de passe une fois qu'elle marche.
+    - **La clé privée reste chez vous** : permission `600`, jamais partagée, jamais dans Git.
+    - **Protégez la clé privée par une phrase de passe** : une clé volée devient inutilisable.
+    - **Interdisez la connexion root directe** : compte normal + `sudo`, c'est tracé et moins exposé.
+    - **Filet de sécurité obligatoire** : seconde session ouverte + `sshd -t` avant de recharger la configuration.
+    - **Surveillez `/var/log/auth.log`** : il révèle les tentatives de connexion échouées, signe d'une attaque.
+  en: |
+    - **Keys, not passwords**: generate an ed25519 pair and disable password authentication once it works.
+    - **The private key stays with you**: permission `600`, never shared, never in Git.
+    - **Protect the private key with a passphrase**: a stolen key becomes useless.
+    - **Forbid direct root login**: normal account + `sudo`, which is logged and less exposed.
+    - **Safety net required**: a second session open + `sshd -t` before reloading the config.
+    - **Watch `/var/log/auth.log`**: it reveals failed login attempts, a sign of an attack.
+
+exercise:
+  statement:
+    fr: |
+      Dans votre VM (ou entre deux VM), mettez en place une connexion SSH par clés :
+
+      1. Générez une paire de clés ed25519 avec un commentaire qui vous identifie.
+      2. Vérifiez les permissions des deux fichiers et expliquez pourquoi elles diffèrent.
+      3. Installez votre clé **publique** sur le compte cible (par `ssh-copy-id` ou en copiant dans `authorized_keys`).
+      4. Connectez-vous pour confirmer que le mot de passe n'est plus demandé.
+      5. Vérifiez la configuration SSH du serveur avec `sshd -t` avant tout rechargement.
+
+      Notez vos commandes dans votre dépôt de suivi.
+    en: |
+      In your VM (or between two VMs), set up a key-based SSH connection:
+
+      1. Generate an ed25519 key pair with a comment that identifies you.
+      2. Check both files' permissions and explain why they differ.
+      3. Install your **public** key on the target account (via `ssh-copy-id` or by copying into `authorized_keys`).
+      4. Log in to confirm the password is no longer asked.
+      5. Validate the server's SSH config with `sshd -t` before any reload.
+
+      Record your commands in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Generate the key pair
+      ssh-keygen -t ed25519 -C "alice@laptop"
+
+      # 2. The private key is 600 (owner only), the public is 644 (shareable)
+      ls -l ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
+
+      # 3. Install the PUBLIC key on the target server
+      ssh-copy-id alice@192.0.2.10
+
+      # 4. Connect: no password should be asked now
+      ssh alice@192.0.2.10 "echo connected without a password"
+
+      # 5. On the server, validate the SSH config before reloading
+      sudo sshd -t && echo "config OK"
+    note:
+      fr: "La clé privée est en `600` car elle est secrète ; la publique en `644` car elle est faite pour être partagée. `ssh-copy-id` n'envoie que la publique. `sshd -t` vérifie la configuration sans risquer de couper le service."
+      en: "The private key is `600` because it is secret; the public one is `644` because it is meant to be shared. `ssh-copy-id` sends only the public key. `sshd -t` checks the config without risking a service cut."
+
+quiz:
+  - q:
+      fr: "Pourquoi SSH remplace-t-il Telnet ?"
+      en: "Why does SSH replace Telnet?"
+    options:
+      fr:
+        - "Parce qu'il chiffre la connexion, alors que Telnet envoie tout en clair"
+        - "Parce qu'il est plus rapide"
+        - "Parce qu'il ne nécessite pas de mot de passe"
+        - "Parce qu'il fonctionne sans réseau"
+      en:
+        - "Because it encrypts the connection, while Telnet sends everything in clear"
+        - "Because it is faster"
+        - "Because it needs no password"
+        - "Because it works without a network"
+    answer: 0
+    why:
+      fr: "Telnet transmet tout en clair (mot de passe compris) ; SSH chiffre le tunnel, personne ne peut lire ce qui circule."
+      en: "Telnet transmits everything in clear (password included); SSH encrypts the tunnel, so no one can read what travels."
+  - q:
+      fr: "Quelle clé dépose-t-on sur le serveur ?"
+      en: "Which key do you place on the server?"
+    options:
+      fr:
+        - "La clé privée"
+        - "La clé publique"
+        - "Les deux clés"
+        - "Aucune, on utilise le mot de passe"
+      en:
+        - "The private key"
+        - "The public key"
+        - "Both keys"
+        - "Neither, you use the password"
+    answer: 1
+    why:
+      fr: "Seule la clé publique va sur le serveur (dans `authorized_keys`). La clé privée reste secrète sur votre machine et ne la quitte jamais."
+      en: "Only the public key goes on the server (in `authorized_keys`). The private key stays secret on your machine and never leaves it."
+  - q:
+      fr: "Pourquoi l'authentification par clés est-elle plus sûre qu'un mot de passe ?"
+      en: "Why is key authentication safer than a password?"
+    options:
+      fr:
+        - "Parce que la clé est plus courte"
+        - "Parce qu'aucun secret ne transite sur le réseau et qu'une clé est quasi impossible à deviner"
+        - "Parce qu'elle ne nécessite aucun logiciel"
+        - "Parce qu'elle change toute seule chaque jour"
+      en:
+        - "Because the key is shorter"
+        - "Because no secret travels over the network and a key is nearly impossible to guess"
+        - "Because it needs no software"
+        - "Because it changes by itself every day"
+    answer: 1
+    why:
+      fr: "La clé privée prouve l'identité sans jamais être transmise, et sa taille cryptographique la rend pratiquement impossible à casser par force brute."
+      en: "The private key proves identity without ever being transmitted, and its cryptographic size makes it practically impossible to brute-force."
+  - q:
+      fr: "Quelle précaution prendre avant de modifier `sshd_config` sur un serveur distant ?"
+      en: "What precaution should you take before editing `sshd_config` on a remote server?"
+    options:
+      fr:
+        - "Redémarrer le serveur d'abord"
+        - "Supprimer le fichier de configuration"
+        - "Garder une seconde session ouverte et valider avec `sshd -t`"
+        - "Désactiver le réseau"
+      en:
+        - "Reboot the server first"
+        - "Delete the config file"
+        - "Keep a second session open and validate with `sshd -t`"
+        - "Disable the network"
+    answer: 2
+    why:
+      fr: "Une faute dans `sshd_config` peut vous verrouiller dehors : une session déjà ouverte et `sshd -t` permettent de corriger sans perdre l'accès."
+      en: "A mistake in `sshd_config` can lock you out: an already-open session and `sshd -t` let you fix it without losing access."
+  - q:
+      fr: "Quelle permission doit avoir une clé privée SSH ?"
+      en: "What permission must an SSH private key have?"
+    options:
+      fr:
+        - "777, pour que tout le monde l'utilise"
+        - "644, lisible par tous"
+        - "755, exécutable"
+        - "600, lecture et écriture pour le seul propriétaire"
+      en:
+        - "777, so everyone can use it"
+        - "644, readable by all"
+        - "755, executable"
+        - "600, read and write for the owner only"
+    answer: 3
+    why:
+      fr: "Une clé privée doit rester secrète : `600`. SSH refuse d'ailleurs d'utiliser une clé privée accessible à d'autres utilisateurs."
+      en: "A private key must stay secret: `600`. SSH even refuses to use a private key accessible to other users."

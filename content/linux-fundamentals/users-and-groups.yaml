@@ -1,0 +1,373 @@
+description:
+  fr: "Comprendre les utilisateurs, les groupes et sudo sous Linux, et appliquer le moindre privilège pour qu'un compte ne puisse faire que le nécessaire."
+  en: "Understand users, groups and sudo on Linux, and apply least privilege so an account can do only what it needs."
+duration: 22
+
+intro:
+  fr: |
+    Un serveur Linux est rarement utilisé par une seule personne. Des humains s'y connectent, mais aussi des
+    programmes (le serveur web, la base de données…). Chacun a son **compte utilisateur**, avec un nom, un
+    numéro et des droits précis. Bien gérer ces comptes, c'est la première ligne de défense d'un système.
+
+    Pensez à un immeuble de bureaux avec des badges. Chaque employé a un badge qui ouvre certaines portes, pas
+    toutes. Le directeur peut tout ouvrir, mais il n'utilise son passe-partout qu'en cas de besoin. Donner à
+    chacun le badge le plus restreint possible, c'est le principe du **moindre privilège** : un compte ne doit
+    pouvoir faire que ce dont il a besoin, rien de plus.
+
+    Dans cette leçon, vous allez découvrir votre propre identité sur le système, créer un utilisateur, le
+    ranger dans des groupes, et comprendre **sudo**, la commande qui permet d'exécuter une action
+    d'administrateur de façon contrôlée et tracée.
+  en: |
+    A Linux server is rarely used by a single person. Humans connect to it, but so do programs (the web server,
+    the database…). Each has its **user account**, with a name, a number and precise rights. Managing these
+    accounts well is a system's first line of defence.
+
+    Think of an office building with badges. Each employee has a badge that opens certain doors, not all. The
+    director can open everything, but only uses the master key when needed. Giving everyone the most restricted
+    badge possible is the principle of **least privilege**: an account should be able to do only what it needs,
+    nothing more.
+
+    In this lesson you will discover your own identity on the system, create a user, file it into groups, and
+    understand **sudo**, the command that runs an administrator action in a controlled and logged way.
+
+sections:
+  - heading:
+      fr: "Utilisateurs, root et identité"
+      en: "Users, root and identity"
+    body:
+      fr: |
+        Chaque compte a un **nom** (ex. `alice`) et un numéro unique, l'**UID** (*User ID*). Le compte le plus
+        puissant est **root** (UID 0) : c'est l'administrateur qui peut tout faire, y compris casser le système.
+        On ne travaille **jamais** en root au quotidien ; c'est trop dangereux.
+
+        | Terme | Signification |
+        |---|---|
+        | `root` | Le super-administrateur (UID 0), tout-puissant |
+        | UID | Le numéro unique d'un utilisateur |
+        | GID | Le numéro unique d'un groupe |
+        | Utilisateur système | Compte non humain pour un service (ex. `www-data` pour le serveur web) |
+
+        La commande `whoami` dit qui vous êtes, et `id` donne votre UID, votre groupe principal et tous vos
+        groupes. Les comptes « système » comme `www-data` existent pour faire tourner des services : si le
+        serveur web est piraté, l'attaquant n'obtient que les faibles droits de `www-data`, pas ceux de root.
+        C'est le moindre privilège appliqué aux programmes.
+      en: |
+        Each account has a **name** (e.g. `alice`) and a unique number, the **UID** (*User ID*). The most
+        powerful account is **root** (UID 0): the administrator who can do anything, including breaking the
+        system. You **never** work as root day to day; it is too dangerous.
+
+        | Term | Meaning |
+        |---|---|
+        | `root` | The super-administrator (UID 0), all-powerful |
+        | UID | A user's unique number |
+        | GID | A group's unique number |
+        | System user | Non-human account for a service (e.g. `www-data` for the web server) |
+
+        The `whoami` command tells you who you are, and `id` gives your UID, your main group and all your groups.
+        "System" accounts like `www-data` exist to run services: if the web server is hacked, the attacker only
+        gets `www-data`'s weak rights, not root's. That is least privilege applied to programs.
+  - heading:
+      fr: "Groupes et partage des droits"
+      en: "Groups and sharing rights"
+    body:
+      fr: |
+        Un **groupe** rassemble plusieurs utilisateurs pour leur donner des droits communs. Plutôt que de
+        répéter les mêmes permissions pour chaque personne, on les accorde une fois au groupe, et on y ajoute
+        les membres. C'est comme donner accès à une salle de réunion à l'équipe « marketing » : on gère le
+        groupe, pas chaque badge un par un.
+
+        Quelques commandes clés (elles nécessitent les droits d'administrateur) :
+
+        | Commande | Rôle |
+        |---|---|
+        | `adduser bob` | Crée l'utilisateur `bob` (Debian/Ubuntu) |
+        | `passwd bob` | Change le mot de passe de `bob` |
+        | `groupadd devs` | Crée le groupe `devs` |
+        | `usermod -aG devs bob` | Ajoute `bob` au groupe `devs` |
+        | `deluser bob devs` | Retire `bob` du groupe `devs` |
+        | `groups bob` | Liste les groupes de `bob` |
+
+        Attention au `-aG` de `usermod` : le `-a` signifie *append* (ajouter). **Sans** le `-a`, vous
+        **remplacez** tous les groupes de l'utilisateur par celui indiqué, ce qui peut lui retirer l'accès à
+        `sudo` par accident. Toujours `usermod -aG`, jamais `usermod -G` seul.
+      en: |
+        A **group** gathers several users to grant them common rights. Rather than repeating the same
+        permissions for each person, you grant them once to the group and add members. It is like giving the
+        "marketing" team access to a meeting room: you manage the group, not each badge one by one.
+
+        A few key commands (they require administrator rights):
+
+        | Command | Role |
+        |---|---|
+        | `adduser bob` | Create user `bob` (Debian/Ubuntu) |
+        | `passwd bob` | Change `bob`'s password |
+        | `groupadd devs` | Create the group `devs` |
+        | `usermod -aG devs bob` | Add `bob` to the `devs` group |
+        | `deluser bob devs` | Remove `bob` from the `devs` group |
+        | `groups bob` | List `bob`'s groups |
+
+        Beware `usermod`'s `-aG`: the `-a` means *append* (add). **Without** the `-a`, you **replace** all of the
+        user's groups with the one given, which can accidentally remove their `sudo` access. Always
+        `usermod -aG`, never `usermod -G` alone.
+  - heading:
+      fr: "sudo : le passe-partout contrôlé"
+      en: "sudo: the controlled master key"
+    body:
+      fr: |
+        **sudo** (*superuser do*) permet d'exécuter **une seule** commande avec les droits de root, après avoir
+        tapé son propre mot de passe. C'est bien plus sûr que de se connecter en root :
+
+        - L'action est **tracée** : chaque `sudo` est écrit dans le journal `/var/log/auth.log`, avec qui, quand
+          et quelle commande.
+        - L'action est **ponctuelle** : on reprend ensuite ses droits normaux, on ne reste pas administrateur.
+        - L'accès est **encadré** : seuls les membres du groupe `sudo` (ou `wheel` sur RHEL) peuvent l'utiliser.
+
+        La bonne pratique universelle : un compte personnel normal, membre du groupe `sudo`, et l'on préfixe par
+        `sudo` les rares commandes qui le nécessitent. On n'active pas le compte root pour une connexion
+        directe, et surtout on ne travaille jamais en root « pour aller plus vite ». La traçabilité de sudo est
+        précieuse le jour où l'on doit comprendre qui a fait quoi.
+      en: |
+        **sudo** (*superuser do*) runs **a single** command with root's rights, after typing your own password.
+        It is far safer than logging in as root:
+
+        - The action is **logged**: every `sudo` is written to `/var/log/auth.log`, with who, when and which
+          command.
+        - The action is **one-off**: you return to your normal rights afterwards, you do not stay administrator.
+        - Access is **controlled**: only members of the `sudo` group (or `wheel` on RHEL) can use it.
+
+        The universal good practice: a normal personal account, member of the `sudo` group, and you prefix the
+        rare commands that need it with `sudo`. You do not enable the root account for direct login, and above
+        all you never work as root "to go faster". sudo's traceability is precious the day you need to
+        understand who did what.
+
+examples:
+  - title:
+      fr: "Qui suis-je ? Découvrir son identité"
+      en: "Who am I? Discovering your identity"
+    file: whoami.sh
+    lang: bash
+    kind: neutral
+    code: |
+      whoami         # my user name
+      id             # my UID, main group (GID) and all my groups
+      groups         # just the list of my groups
+      id www-data    # inspect the web server's system account
+    output: |
+      alice
+      uid=1000(alice) gid=1000(alice) groups=1000(alice),27(sudo),1001(devs)
+      alice sudo devs
+      uid=33(www-data) gid=33(www-data) groups=33(www-data)
+    note:
+      fr: "`alice` (UID 1000) est membre du groupe `sudo` : elle peut donc administrer. Le compte `www-data` (UID 33) n'a aucun groupe puissant : même piraté, le serveur web reste très limité. C'est le moindre privilège en action."
+      en: "`alice` (UID 1000) is a member of the `sudo` group: she can administer. The `www-data` account (UID 33) has no powerful group: even if hacked, the web server stays very limited. That is least privilege in action."
+
+  - title:
+      fr: "Créer un utilisateur et le mettre dans un groupe"
+      en: "Creating a user and adding them to a group"
+    file: create-user.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Create a new user 'bob' (Debian/Ubuntu); it prompts for a password
+      sudo adduser bob
+
+      # Create a project group and add bob to it (note the -aG: append!)
+      sudo groupadd devs
+      sudo usermod -aG devs bob
+
+      # Verify bob's groups
+      groups bob
+    output: |
+      Adding user `bob' ...
+      Adding new group `bob' (1002) ...
+      Adding new user `bob' (1002) with group `bob' ...
+      Creating home directory `/home/bob' ...
+      bob : bob devs
+    note:
+      fr: "`adduser` crée le compte, son dossier personnel et son groupe principal. `usermod -aG devs bob` **ajoute** `bob` au groupe `devs` sans toucher à ses autres groupes, grâce au `-a` : oublier ce `-a` est une erreur classique et dangereuse."
+      en: "`adduser` creates the account, its home folder and its main group. `usermod -aG devs bob` **adds** `bob` to the `devs` group without touching his others, thanks to `-a`: forgetting that `-a` is a classic and dangerous mistake."
+
+  - title:
+      fr: "sudo : exécuter une action d'admin et la retrouver dans le journal"
+      en: "sudo: running an admin action and finding it in the log"
+    file: use-sudo.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Try to read a protected file as a normal user: denied
+      cat /etc/shadow
+
+      # Do it properly with sudo (it asks for YOUR password, then logs the action)
+      sudo head -n 1 /etc/shadow
+
+      # Every sudo use is recorded: find your own entries in the auth log
+      sudo grep "sudo:" /var/log/auth.log | tail -n 1
+    output: |
+      cat: /etc/shadow: Permission denied
+      root:$6$xUa9...truncated...:19876:0:99999:7:::
+      Jun  3 11:05:12 server sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/head -n 1 /etc/shadow
+    note:
+      fr: "Sans `sudo`, l'accès au fichier des mots de passe est refusé : c'est voulu. Avec `sudo`, l'action réussit **et** laisse une trace nominative dans le journal. Cette traçabilité est la grande force de sudo face à une connexion root directe."
+      en: "Without `sudo`, access to the password file is denied: that is intended. With `sudo`, the action succeeds **and** leaves a named trace in the log. This traceability is sudo's great strength over a direct root login."
+
+mistake:
+  fr: |
+    **Travailler en root au quotidien, ou oublier le `-a` de `usermod -aG`.**
+
+    Se connecter en root « pour ne pas avoir à taper sudo » est l'une des pires habitudes : la moindre faute de
+    frappe peut détruire le système, et aucune trace nominative n'indique qui a agi. De même, `usermod -G devs
+    bob` (sans `-a`) ne *remplace* pas une ligne : il efface tous les autres groupes de `bob`, qui peut ainsi
+    perdre son accès `sudo`. Gardez deux réflexes : un compte normal + `sudo` pour l'administration, et toujours
+    `usermod -aG` pour ajouter à un groupe sans rien effacer.
+  en: |
+    **Working as root day to day, or forgetting the `-a` in `usermod -aG`.**
+
+    Logging in as root "to avoid typing sudo" is one of the worst habits: the slightest typo can destroy the
+    system, and no named trace shows who acted. Likewise, `usermod -G devs bob` (without `-a`) does not *add* a
+    line: it wipes all of `bob`'s other groups, so he may lose his `sudo` access. Keep two reflexes: a normal
+    account + `sudo` for administration, and always `usermod -aG` to add to a group without erasing anything.
+
+bestPractice:
+  fr: |
+    - **Moindre privilège** : chaque compte n'a que les droits dont il a besoin, rien de plus.
+    - **Jamais root au quotidien** : utilisez un compte personnel et préfixez par `sudo` les actions d'admin.
+    - **Toujours `usermod -aG`** : le `-a` ajoute à un groupe sans effacer les autres.
+    - **Des comptes de service dédiés** : un service compromis ne doit exposer que ses faibles droits (ex. `www-data`).
+    - **Surveillez `/var/log/auth.log`** : il trace chaque `sudo` et chaque connexion, utile en cas d'incident.
+    - **Désactivez ou verrouillez les comptes inutilisés** : un compte oublié est une porte d'entrée pour un attaquant.
+  en: |
+    - **Least privilege**: each account has only the rights it needs, nothing more.
+    - **Never root day to day**: use a personal account and prefix admin actions with `sudo`.
+    - **Always `usermod -aG`**: the `-a` adds to a group without erasing the others.
+    - **Dedicated service accounts**: a compromised service should expose only its weak rights (e.g. `www-data`).
+    - **Watch `/var/log/auth.log`**: it logs every `sudo` and every login, useful after an incident.
+    - **Disable or lock unused accounts**: a forgotten account is a way in for an attacker.
+
+exercise:
+  statement:
+    fr: |
+      Dans votre VM, mettez en place un petit scénario d'équipe en respectant le moindre privilège :
+
+      1. Affichez votre propre identité (nom, UID, groupes).
+      2. Créez un utilisateur `deploy` destiné aux déploiements.
+      3. Créez un groupe `web` et ajoutez-y `deploy` **sans** toucher à ses autres groupes.
+      4. Vérifiez que `deploy` fait bien partie du groupe `web`.
+      5. En tant que votre utilisateur, lisez la dernière ligne `sudo` du journal d'authentification.
+
+      Notez vos commandes dans votre dépôt de suivi.
+    en: |
+      In your VM, set up a small team scenario while respecting least privilege:
+
+      1. Show your own identity (name, UID, groups).
+      2. Create a user `deploy` intended for deployments.
+      3. Create a group `web` and add `deploy` to it **without** touching his other groups.
+      4. Verify that `deploy` is indeed part of the `web` group.
+      5. As your user, read the last `sudo` line of the authentication log.
+
+      Record your commands in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. My own identity
+      id
+
+      # 2. Create the deployment user (prompts for a password)
+      sudo adduser deploy
+
+      # 3. Create the 'web' group and ADD deploy to it (append with -aG)
+      sudo groupadd web
+      sudo usermod -aG web deploy
+
+      # 4. Check deploy's groups
+      groups deploy
+
+      # 5. Read the most recent sudo entry in the auth log
+      sudo grep "sudo:" /var/log/auth.log | tail -n 1
+    note:
+      fr: "Le `-aG` garantit que `deploy` garde son groupe principal tout en rejoignant `web`. La dernière ligne du journal montre que vos propres `sudo` sont tracés : c'est ce qui permet l'audit a posteriori."
+      en: "The `-aG` guarantees `deploy` keeps his main group while joining `web`. The log's last line shows that your own `sudo` calls are traced: this is what enables after-the-fact auditing."
+
+quiz:
+  - q:
+      fr: "Qui est l'utilisateur `root` sous Linux ?"
+      en: "Who is the `root` user on Linux?"
+    options:
+      fr:
+        - "Un utilisateur sans aucun droit"
+        - "Le super-administrateur (UID 0) qui peut tout faire"
+        - "Le compte du serveur web"
+        - "Un groupe d'utilisateurs"
+      en:
+        - "A user with no rights at all"
+        - "The super-administrator (UID 0) who can do anything"
+        - "The web server's account"
+        - "A group of users"
+    answer: 1
+    why:
+      fr: "`root` est le compte tout-puissant (UID 0) ; on évite de travailler directement avec lui car une erreur peut détruire le système."
+      en: "`root` is the all-powerful account (UID 0); you avoid working directly as it because one mistake can destroy the system."
+  - q:
+      fr: "Pourquoi préférer `sudo` à une connexion directe en root ?"
+      en: "Why prefer `sudo` over logging in directly as root?"
+    options:
+      fr:
+        - "Parce que sudo est plus rapide"
+        - "Parce que root n'existe pas sous Ubuntu"
+        - "Parce que sudo trace chaque action et n'accorde les droits que ponctuellement"
+        - "Parce que sudo chiffre les fichiers"
+      en:
+        - "Because sudo is faster"
+        - "Because root does not exist on Ubuntu"
+        - "Because sudo logs every action and grants rights only momentarily"
+        - "Because sudo encrypts files"
+    answer: 2
+    why:
+      fr: "sudo exécute une seule commande en root, la journalise dans `/var/log/auth.log`, puis rend les droits normaux : contrôle et traçabilité."
+      en: "sudo runs a single command as root, logs it to `/var/log/auth.log`, then returns normal rights: control and traceability."
+  - q:
+      fr: "Pourquoi toujours écrire `usermod -aG` et jamais `usermod -G` seul ?"
+      en: "Why always write `usermod -aG` and never `usermod -G` alone?"
+    options:
+      fr:
+        - "Parce que `-a` ajoute au groupe sans effacer les groupes existants"
+        - "Parce que `-G` n'existe pas"
+        - "Parce que `-a` crée automatiquement le groupe"
+        - "Parce que `-a` chiffre le compte"
+      en:
+        - "Because `-a` adds to the group without erasing existing groups"
+        - "Because `-G` does not exist"
+        - "Because `-a` creates the group automatically"
+        - "Because `-a` encrypts the account"
+    answer: 0
+    why:
+      fr: "Sans `-a`, `usermod -G` remplace tous les groupes de l'utilisateur, ce qui peut lui retirer son accès `sudo` par accident."
+      en: "Without `-a`, `usermod -G` replaces all of the user's groups, which can accidentally remove their `sudo` access."
+  - q:
+      fr: "Pourquoi un service comme le serveur web tourne-t-il sous un compte comme `www-data` ?"
+      en: "Why does a service like the web server run under an account like `www-data`?"
+    options:
+      fr:
+        - "Pour qu'il aille plus vite"
+        - "Pour qu'en cas de piratage, l'attaquant n'obtienne que de faibles droits"
+        - "Parce que root est interdit"
+        - "Pour chiffrer les pages web"
+      en:
+        - "To make it faster"
+        - "So that if hacked, the attacker only gets weak rights"
+        - "Because root is forbidden"
+        - "To encrypt the web pages"
+    answer: 1
+    why:
+      fr: "Faire tourner un service sous un compte peu privilégié limite les dégâts : un serveur web compromis n'ouvre pas tout le système."
+      en: "Running a service under a low-privilege account limits the damage: a compromised web server does not open the whole system."
+  - q:
+      fr: "Quelle commande affiche votre UID et la liste de vos groupes ?"
+      en: "Which command shows your UID and the list of your groups?"
+    options:
+      fr: ["passwd", "adduser", "sudo", "id"]
+      en: ["passwd", "adduser", "sudo", "id"]
+    answer: 3
+    why:
+      fr: "`id` affiche l'UID, le groupe principal (GID) et tous les groupes de l'utilisateur courant."
+      en: "`id` shows the current user's UID, main group (GID) and all their groups."

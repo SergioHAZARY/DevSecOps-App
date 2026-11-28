@@ -1,0 +1,378 @@
+description:
+  fr: "A03 Injection : SQL, commandes OS et XSS regroupés, pourquoi les données deviennent du code et comment l'empêcher, avec correctifs."
+  en: "A03 Injection: SQL, OS commands and XSS grouped together, why data becomes code and how to prevent it, with fixes."
+duration: 25
+
+intro:
+  fr: |
+    **A03 - Injection** regroupe toutes les failles où des **données** fournies par l'utilisateur sont
+    interprétées comme du **code** par un sous-système : la base de données (injection SQL), le système
+    d'exploitation (injection de commandes), ou le navigateur de la victime (**XSS**, intégré à cette catégorie
+    depuis 2021).
+
+    Imaginez une secrétaire qui lit à voix haute tout ce que vous écrivez sur un formulaire, et exécute chaque
+    phrase comme un ordre. Si vous écrivez « Nom : Bob », elle note « Bob ». Si vous écrivez « Nom : Bob, puis
+    efface tous les dossiers », elle efface tout. L'injection, c'est exactement cela : un système qui ne sépare
+    pas ce que le développeur a prévu de ce que l'utilisateur a tapé.
+
+    La correction tient en un principe : **séparer le code des données**. Requêtes paramétrées pour le SQL,
+    exécution sans shell pour les commandes, échappement contextuel pour le HTML. Dans cette leçon, vous verrez
+    les trois formes, en version vulnérable puis corrigée, et l'outil (SAST) qui les détecte.
+  en: |
+    **A03 - Injection** groups every flaw where user-supplied **data** is interpreted as **code** by a
+    subsystem: the database (SQL injection), the operating system (command injection), or the victim's browser
+    (**XSS**, folded into this category since 2021).
+
+    Picture a secretary who reads aloud everything you write on a form and carries out each sentence as an
+    order. If you write "Name: Bob", she notes "Bob". If you write "Name: Bob, then delete all files", she
+    deletes everything. Injection is exactly that: a system that does not separate what the developer intended
+    from what the user typed.
+
+    The fix comes down to one principle: **separate code from data**. Parameterized queries for SQL, shell-free
+    execution for commands, contextual escaping for HTML. In this lesson you will see the three forms,
+    vulnerable then fixed, and the tool (SAST) that detects them.
+
+sections:
+  - heading:
+      fr: "Les trois grandes familles d'injection"
+      en: "The three main injection families"
+    body:
+      fr: |
+        | Famille | Sous-système visé | Charge utile (labo local) | Correction |
+        |---|---|---|---|
+        | Injection SQL (CWE-89) | Base de données | `' OR '1'='1` | Requête paramétrée |
+        | Injection de commandes (CWE-78) | Système d'exploitation | `; cat /etc/passwd` | Exécution sans shell, liste d'arguments |
+        | XSS (CWE-79) | Navigateur de la victime | `<script>...</script>` | Échappement contextuel, CSP |
+
+        Toutes partagent la même racine : du texte externe **concaténé** dans une instruction qu'un interpréteur
+        va exécuter. Et toutes ont la même parade : ne jamais mélanger le code et les données.
+
+        - **SQL** : marqueurs `?` / `$1` / `:name`, la valeur voyage séparément de la requête.
+        - **Commandes** : liste d'arguments passée au processus sans shell (`subprocess.run([...])`).
+        - **XSS** : laisser le moteur de template échapper la sortie (`{{ }}` auto-échappé), ne jamais injecter
+          de HTML brut, et ajouter une **Content Security Policy**.
+
+        Les charges utiles ne se testent que sur **votre** environnement (base locale, conteneur, application
+        volontairement vulnérable).
+      en: |
+        | Family | Target subsystem | Payload (local lab) | Fix |
+        |---|---|---|---|
+        | SQL injection (CWE-89) | Database | `' OR '1'='1` | Parameterized query |
+        | Command injection (CWE-78) | Operating system | `; cat /etc/passwd` | Shell-free execution, argument list |
+        | XSS (CWE-79) | Victim's browser | `<script>...</script>` | Contextual escaping, CSP |
+
+        All share the same root: external text **concatenated** into a statement an interpreter will execute.
+        And all share the same defense: never mix code and data.
+
+        - **SQL**: `?` / `$1` / `:name` placeholders, the value travels separately from the query.
+        - **Commands**: an argument list passed to the process without a shell (`subprocess.run([...])`).
+        - **XSS**: let the template engine escape output (`{{ }}` auto-escaped), never inject raw HTML, and add
+          a **Content Security Policy**.
+
+        Payloads are only ever tested against **your own** environment (local database, container, deliberately
+        vulnerable application).
+  - heading:
+      fr: "Détection dans le pipeline DevSecOps"
+      en: "Detection in the DevSecOps pipeline"
+    body:
+      fr: |
+        L'injection est l'une des catégories les mieux couvertes par l'automatisation :
+
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST | Bandit (`B608`, `B602`), Semgrep (`p/owasp-top-ten`), CodeQL | Une entrée utilisateur qui atteint une requête ou une commande concaténée |
+        | DAST | OWASP ZAP (scan actif), sqlmap | L'application en marche qui réagit aux charges utiles |
+        | Revue | Recherche de f-strings SQL, `shell=True`, `innerHTML`, `dangerouslySetInnerHTML` | Les motifs à risque |
+        | Exécution | Compte SQL à privilèges minimaux, WAF, CSP | Limite les dégâts si une injection passe |
+
+        Le **SAST** suit le flot de données (*taint analysis*) depuis la source (l'entrée HTTP) jusqu'au *sink*
+        (la requête, la commande, le rendu HTML) : s'il n'y a pas de barrière de nettoyage entre les deux, il
+        lève une alerte. Un bon pipeline **fait échouer la pull request** sur ces constats.
+      en: |
+        Injection is one of the categories best covered by automation:
+
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | SAST | Bandit (`B608`, `B602`), Semgrep (`p/owasp-top-ten`), CodeQL | User input reaching a concatenated query or command |
+        | DAST | OWASP ZAP (active scan), sqlmap | The running app reacting to payloads |
+        | Review | Searching for SQL f-strings, `shell=True`, `innerHTML`, `dangerouslySetInnerHTML` | Risky patterns |
+        | Runtime | Least-privilege SQL account, WAF, CSP | Limits damage if an injection gets through |
+
+        **SAST** follows the data flow (*taint analysis*) from the source (the HTTP input) to the *sink* (the
+        query, the command, the HTML render): if there is no sanitising barrier between them, it raises an
+        alert. A good pipeline **fails the pull request** on these findings.
+
+examples:
+  - title:
+      fr: "Injection SQL : concaténation vulnérable vs marqueur corrigé"
+      en: "SQL injection: vulnerable concatenation vs fixed placeholder"
+    file: sqli.py
+    lang: python
+    kind: secure
+    code: |
+      import sqlite3
+
+      db = sqlite3.connect(":memory:")
+      db.executescript("""
+          CREATE TABLE users (email TEXT, role TEXT);
+          INSERT INTO users VALUES ('alice@example.com','admin'),('bob@example.com','user');
+      """)
+
+      # ---------- VULNERABLE ----------
+      def find_vulnerable(email):
+          # The input is glued into the SQL text: "' OR '1'='1" returns every row
+          return db.execute(f"SELECT role FROM users WHERE email = '{email}'").fetchall()
+
+      # ---------- FIXED ----------
+      def find(email):
+          # The ? placeholder keeps the value separate from the query structure
+          return db.execute("SELECT role FROM users WHERE email = ?", (email,)).fetchall()
+
+      attack = "x' OR '1'='1"
+      print("vulnerable:", find_vulnerable(attack))   # leaks all roles
+      print("fixed     :", find(attack))               # finds no such literal email
+    output: |
+      vulnerable: [('admin',), ('user',)]
+      fixed     : []
+    note:
+      fr: "Cliquez sur Run. La version vulnérable renvoie tous les rôles ; la version paramétrée cherche un e-mail littéralement nommé `x' OR '1'='1` et ne trouve rien. Bandit signale la première (B608)."
+      en: "Press Run. The vulnerable version returns all roles; the parameterized version looks for an email literally named `x' OR '1'='1` and finds nothing. Bandit flags the first (B608)."
+
+  - title:
+      fr: "Injection de commandes : shell vulnérable vs liste d'arguments"
+      en: "Command injection: vulnerable shell vs argument list"
+    file: cmd.py
+    lang: python
+    kind: secure
+    code: |
+      import subprocess
+
+      # ---------- VULNERABLE ----------
+      def ping_vulnerable(host):
+          # shell=True + concatenation: "8.8.8.8; rm -rf /tmp/x" runs TWO commands
+          return subprocess.run("ping -c 1 " + host, shell=True, capture_output=True)
+
+      # ---------- FIXED ----------
+      def ping(host):
+          # Argument list with shell=False (default): host is one literal argument,
+          # never parsed by a shell, so ; | && $( ) have no special meaning.
+          return subprocess.run(["ping", "-c", "1", host], shell=False,
+                                capture_output=True, timeout=5)
+
+      # Demonstration without actually running ping:
+      attack = "8.8.8.8; echo PWNED"
+      print("vulnerable builds shell line:", "ping -c 1 " + attack)
+      print("fixed passes one argument   :", ["ping", "-c", "1", attack])
+    output: |
+      vulnerable builds shell line: ping -c 1 8.8.8.8; echo PWNED
+      fixed passes one argument   : ['ping', '-c', '1', '8.8.8.8; echo PWNED']
+    note:
+      fr: "Sans shell, `8.8.8.8; echo PWNED` est un seul nom d'hôte (invalide), pas deux commandes. Bandit signale `shell=True` (B602) ; CodeQL remonte `py/command-line-injection`."
+      en: "Without a shell, `8.8.8.8; echo PWNED` is one (invalid) hostname, not two commands. Bandit flags `shell=True` (B602); CodeQL reports `py/command-line-injection`."
+
+  - title:
+      fr: "XSS : rendu brut vulnérable vs échappement corrigé"
+      en: "XSS: vulnerable raw render vs fixed escaping"
+    file: xss.py
+    lang: python
+    kind: secure
+    code: |
+      import html
+
+      # ---------- VULNERABLE ----------
+      def render_vulnerable(name):
+          # User text is placed into HTML as-is: <script>...</script> executes
+          return f"<p>Hello {name}</p>"
+
+      # ---------- FIXED ----------
+      def render(name):
+          # Escape the value for the HTML context: < > & " become entities
+          return f"<p>Hello {html.escape(name)}</p>"
+
+      payload = "<script>alert(document.cookie)</script>"
+      print("vulnerable:", render_vulnerable(payload))
+      print("fixed     :", render(payload))
+    output: |
+      vulnerable: <p>Hello <script>alert(document.cookie)</script></p>
+      fixed     : <p>Hello &lt;script&gt;alert(document.cookie)&lt;/script&gt;</p>
+    note:
+      fr: "Cliquez sur Run. Échappé, le script devient du texte inoffensif (`&lt;script&gt;`). En vrai, on laisse le moteur de template auto-échapper et on ajoute une Content Security Policy."
+      en: "Press Run. Escaped, the script becomes harmless text (`&lt;script&gt;`). In practice you let the template engine auto-escape and add a Content Security Policy."
+
+mistake:
+  fr: |
+    **Croire qu'un ORM ou un filtre rend le code « immunisé », et concaténer juste cette fois.**
+
+    Les injections qui atteignent la production ne sont presque jamais dans le code relu dix fois. Elles sont
+    dans un `ORDER BY` dynamique, un export, une requête de reporting en SQL brut, un `innerHTML` « pratique »,
+    ou un `os.system` d'un petit script interne. Supprimer quelques caractères (`'`, `;`, `<`) ne suffit pas :
+    il existe toujours un encodage ou un contexte qui passe. La seule règle fiable est **zéro concaténation de
+    donnée externe dans du code** : requête paramétrée, exécution sans shell, échappement contextuel.
+  en: |
+    **Believing an ORM or a filter makes the code "immune", and concatenating just this once.**
+
+    Injections that reach production are almost never in the code reviewed ten times. They are in a dynamic
+    `ORDER BY`, an export, a raw-SQL reporting query, a "handy" `innerHTML`, or an `os.system` in a small
+    internal script. Stripping a few characters (`'`, `;`, `<`) is not enough: there is always an encoding or
+    a context that slips through. The only reliable rule is **zero concatenation of external data into code**:
+    parameterized query, shell-free execution, contextual escaping.
+
+bestPractice:
+  fr: |
+    - **SQL** : requêtes paramétrées partout, liste d'autorisation pour les identifiants (colonnes de tri).
+    - **Commandes** : exécution sans shell (`subprocess.run([...])`, `execFile`), ou pas de commande du tout.
+    - **XSS** : auto-échappement du moteur de template, jamais de HTML brut, Content Security Policy.
+    - **Moindre privilège** : compte SQL sans `DROP`, utilisateur non-root pour les commandes.
+    - **SAST bloquant en CI** (Bandit, Semgrep, CodeQL) : une concaténation dangereuse fait échouer la PR.
+    - **DAST** (ZAP, sqlmap) sur l'environnement de test pour confirmer ce que l'analyse statique n'a pas vu.
+  en: |
+    - **SQL**: parameterized queries everywhere, allow-list for identifiers (sort columns).
+    - **Commands**: shell-free execution (`subprocess.run([...])`, `execFile`), or no command at all.
+    - **XSS**: template engine auto-escaping, never raw HTML, a Content Security Policy.
+    - **Least privilege**: SQL account without `DROP`, non-root user for commands.
+    - **Blocking SAST in CI** (Bandit, Semgrep, CodeQL): a dangerous concatenation fails the PR.
+    - **DAST** (ZAP, sqlmap) on the test environment to confirm what static analysis missed.
+
+exercise:
+  statement:
+    fr: |
+      Classez chaque extrait dans sa famille d'injection et donnez la correction :
+
+      ```python
+      # (a)
+      db.execute("SELECT * FROM logs WHERE user = '" + user + "'")
+      # (b)
+      os.system("gzip " + filename)
+      # (c)
+      return "<div>" + comment + "</div>"
+      ```
+
+      1. Indiquez pour (a), (b), (c) la famille (SQL, commande, XSS) et le sous-système interprète.
+      2. Réécrivez les trois lignes de façon sûre.
+    en: |
+      Classify each snippet into its injection family and give the fix:
+
+      ```python
+      # (a)
+      db.execute("SELECT * FROM logs WHERE user = '" + user + "'")
+      # (b)
+      os.system("gzip " + filename)
+      # (c)
+      return "<div>" + comment + "</div>"
+      ```
+
+      1. For (a), (b), (c), state the family (SQL, command, XSS) and the interpreting subsystem.
+      2. Rewrite the three lines safely.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import html
+      import subprocess
+
+      # (a) SQL injection (database) -> parameterized query
+      def find_logs(db, user):
+          return db.execute("SELECT * FROM logs WHERE user = ?", (user,)).fetchall()
+
+      # (b) Command injection (operating system) -> argument list, no shell
+      def gzip_file(filename):
+          return subprocess.run(["gzip", filename], shell=False, check=True)
+
+      # (c) XSS (victim's browser) -> contextual HTML escaping
+      def render_comment(comment):
+          return "<div>" + html.escape(comment) + "</div>"
+    note:
+      fr: "Même principe partout : séparer le code des données. Marqueur `?` pour le SQL, liste d'arguments pour la commande, `html.escape` pour le HTML."
+      en: "Same principle everywhere: separate code from data. `?` placeholder for SQL, argument list for the command, `html.escape` for HTML."
+
+quiz:
+  - q:
+      fr: "Quelle est la racine commune à toutes les injections ?"
+      en: "What is the common root of all injections?"
+    options:
+      fr:
+        - "Un mot de passe trop court"
+        - "Des données externes interprétées comme du code par un sous-système"
+        - "Un certificat TLS expiré"
+        - "Un pare-feu mal configuré"
+      en:
+        - "A password that is too short"
+        - "External data interpreted as code by a subsystem"
+        - "An expired TLS certificate"
+        - "A misconfigured firewall"
+    answer: 1
+    why:
+      fr: "SQL, commandes et XSS partagent la même cause : du texte utilisateur concaténé dans une instruction qu'un interpréteur exécute."
+      en: "SQL, commands and XSS share the same cause: user text concatenated into a statement an interpreter runs."
+  - q:
+      fr: "Quelle faille le XSS représente-t-il dans l'OWASP Top 10 2021 ?"
+      en: "Which category does XSS fall under in the OWASP Top 10 2021?"
+    options:
+      fr:
+        - "A03 Injection"
+        - "A01 Broken Access Control"
+        - "A07 Authentication Failures"
+        - "A09 Logging Failures"
+      en:
+        - "A03 Injection"
+        - "A01 Broken Access Control"
+        - "A07 Authentication Failures"
+        - "A09 Logging Failures"
+    answer: 0
+    why:
+      fr: "Depuis 2021, le XSS a été fusionné dans la catégorie Injection (A03), car c'est une injection dans le navigateur."
+      en: "Since 2021, XSS has been merged into the Injection category (A03), because it is an injection into the browser."
+  - q:
+      fr: "Comment neutraliser une injection SQL de façon fiable ?"
+      en: "How do you reliably neutralise a SQL injection?"
+    options:
+      fr:
+        - "En supprimant les apostrophes de la saisie"
+        - "En bloquant le mot `UNION`"
+        - "Avec une requête paramétrée (valeur séparée du code SQL)"
+        - "En chiffrant la base de données"
+      en:
+        - "By removing quotes from the input"
+        - "By blocking the word `UNION`"
+        - "With a parameterized query (value separate from the SQL code)"
+        - "By encrypting the database"
+    answer: 2
+    why:
+      fr: "Le marqueur transmet la valeur séparément : elle ne peut plus modifier la structure de la requête, quel que soit son contenu."
+      en: "The placeholder sends the value separately: it can no longer change the query's structure, whatever it contains."
+  - q:
+      fr: "Quel appel Python évite l'injection de commandes ?"
+      en: "Which Python call avoids command injection?"
+    options:
+      fr:
+        - "`os.system(\"gzip \" + name)`"
+        - "`subprocess.run(cmd, shell=True)`"
+        - "`subprocess.run([\"gzip\", name], shell=False)`"
+        - "`eval(\"gzip \" + name)`"
+      en:
+        - "`os.system(\"gzip \" + name)`"
+        - "`subprocess.run(cmd, shell=True)`"
+        - "`subprocess.run([\"gzip\", name], shell=False)`"
+        - "`eval(\"gzip \" + name)`"
+    answer: 2
+    why:
+      fr: "La liste d'arguments sans shell traite `name` comme un argument littéral : aucun métacaractère n'est interprété."
+      en: "The shell-free argument list treats `name` as a literal argument: no metacharacter is interpreted."
+  - q:
+      fr: "Quel type d'outil suit le flot de données de l'entrée jusqu'à la requête sans exécuter l'application ?"
+      en: "Which kind of tool follows data flow from input to query without running the app?"
+    options:
+      fr:
+        - "Un SAST avec analyse de teinte (taint analysis)"
+        - "Un scanner d'images de conteneurs"
+        - "Un outil DAST en boîte noire"
+        - "Un gestionnaire de secrets"
+      en:
+        - "A SAST tool with taint analysis"
+        - "A container image scanner"
+        - "A black-box DAST tool"
+        - "A secrets manager"
+    answer: 0
+    why:
+      fr: "Le SAST suit la teinte de la source (entrée HTTP) au sink (requête/commande/HTML) et alerte s'il n'y a pas de barrière de nettoyage."
+      en: "SAST follows taint from the source (HTTP input) to the sink (query/command/HTML) and alerts if there is no sanitising barrier."

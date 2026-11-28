@@ -1,0 +1,472 @@
+description:
+  fr: "Centraliser les logs à moindre coût avec Grafana Loki et Promtail (Alloy le remplace désormais), interroger en LogQL et détecter des événements de sécurité dans un lab Compose."
+  en: "Centralize logs cheaply with Grafana Loki and Promtail (now superseded by Alloy), query with LogQL and detect security events in a Compose lab."
+duration: 35
+
+intro:
+  fr: |
+    La stack ELK est puissante, mais lourde : Elasticsearch indexe le contenu complet de chaque log, ce qui
+    consomme beaucoup de mémoire et de disque. **Grafana Loki** propose une approche plus légère, pensée
+    comme « Prometheus, mais pour les logs » : il n'indexe que des **labels** (métadonnées), pas le contenu.
+    Résultat : beaucoup moins de ressources, et une intégration naturelle avec Grafana.
+
+    L'analogie : ELK range chaque document en recopiant tout son texte dans un immense sommaire ; Loki se
+    contente d'étiqueter les boîtes (`job=ssh`, `host=web1`) et de les ranger, puis cherche *dans* la boîte
+    seulement quand on le lui demande. Moins de travail à l'écriture, un peu plus à la lecture.
+
+    Vous allez monter Loki avec son agent de collecte **Promtail** (en notant qu'il est désormais remplacé
+    par **Grafana Alloy**), interroger les logs en **LogQL** (le cousin de PromQL), détecter des événements
+    de sécurité comme les connexions SSH échouées, le tout dans un lab Docker Compose branché sur Grafana.
+  en: |
+    The ELK stack is powerful, but heavy: Elasticsearch indexes the full content of every log, which eats a
+    lot of memory and disk. **Grafana Loki** offers a lighter approach, designed as "Prometheus, but for
+    logs": it indexes only **labels** (metadata), not the content. Result: far fewer resources, and a
+    natural integration with Grafana.
+
+    The analogy: ELK files each document by copying all its text into a huge index; Loki simply labels the
+    boxes (`job=ssh`, `host=web1`) and shelves them, then searches *inside* a box only when asked. Less work
+    on write, a bit more on read.
+
+    You will set up Loki with its collection agent **Promtail** (noting it is now superseded by **Grafana
+    Alloy**), query logs with **LogQL** (PromQL's cousin), detect security events such as failed SSH logins,
+    all in a Docker Compose lab wired to Grafana.
+
+sections:
+  - heading:
+      fr: "Loki : indexer les labels, pas le contenu"
+      en: "Loki: index the labels, not the content"
+    body:
+      fr: |
+        La différence fondamentale entre Loki et Elasticsearch tient en une phrase : Loki **n'indexe que les
+        labels**, Elasticsearch indexe **tout le contenu**.
+
+        | Aspect | Loki | Elasticsearch (ELK) |
+        |---|---|---|
+        | Index | Labels seulement | Contenu complet |
+        | Ressources | Légères | Lourdes (RAM, disque) |
+        | Recherche plein texte | Scan au moment de la requête | Instantanée (pré-indexée) |
+        | Intégration | Native avec Grafana | Via Kibana ou Grafana |
+
+        Un **flux de logs** (*log stream*) est identifié par un ensemble de labels, exactement comme une
+        série temporelle dans Prometheus : `{job="ssh", host="web1"}`. Loki stocke ces flux à bas coût.
+        Quand on cherche un texte précis, Loki filtre d'abord par labels (rapide), puis scanne le contenu des
+        flux retenus (plus lent, mais sur un petit sous-ensemble).
+
+        La conséquence pratique, essentielle : il faut choisir **peu de labels, à faible cardinalité**
+        (`job`, `host`, `env`). Mettre un identifiant unique (une IP, un user ID) en label ferait exploser le
+        nombre de flux et détruirait les performances. Les valeurs à forte variabilité restent *dans* le log,
+        pas dans un label.
+      en: |
+        The fundamental difference between Loki and Elasticsearch is one sentence: Loki **indexes only the
+        labels**, Elasticsearch indexes **all the content**.
+
+        | Aspect | Loki | Elasticsearch (ELK) |
+        |---|---|---|
+        | Index | Labels only | Full content |
+        | Resources | Light | Heavy (RAM, disk) |
+        | Full-text search | Scan at query time | Instant (pre-indexed) |
+        | Integration | Native with Grafana | Via Kibana or Grafana |
+
+        A **log stream** is identified by a set of labels, exactly like a time series in Prometheus:
+        `{job="ssh", host="web1"}`. Loki stores these streams cheaply. When you search for a precise text,
+        Loki first filters by labels (fast), then scans the content of the matching streams (slower, but on a
+        small subset).
+
+        The essential practical consequence: choose **few, low-cardinality labels** (`job`, `host`, `env`).
+        Putting a unique identifier (an IP, a user ID) in a label would explode the number of streams and
+        destroy performance. High-variability values stay *in* the log, not in a label.
+  - heading:
+      fr: "Promtail, et désormais Alloy"
+      en: "Promtail, and now Alloy"
+    body:
+      fr: |
+        Loki stocke, mais il faut lui apporter les logs. Historiquement, c'est le rôle de **Promtail**,
+        l'agent de collecte qui lit les fichiers (ou le journal systemd), attache des labels et expédie vers
+        Loki.
+
+        **Point important de 2026** : Promtail est **déprécié** et remplacé par **Grafana Alloy**, un
+        collecteur unifié (métriques, logs, traces) qui reprend ses fonctions et davantage. Promtail reste
+        utilisable et très répandu, mais les nouveaux déploiements devraient privilégier Alloy. Les concepts
+        sont identiques : des *cibles* à lire, des *labels* à attacher, une *sortie* vers Loki.
+
+        | Agent | Statut | Rôle |
+        |---|---|---|
+        | Promtail | Déprécié (toujours fonctionnel) | Collecte de logs vers Loki |
+        | Grafana Alloy | Recommandé | Collecteur unifié logs + métriques + traces |
+
+        Dans les deux cas, la configuration définit des `scrape_configs` (quels logs lire) avec des étapes de
+        *pipeline* qui peuvent extraire des champs et poser des labels. La bonne pratique de cardinalité
+        s'applique : on étiquette par `job` et `host`, jamais par valeur unique.
+      en: |
+        Loki stores, but you must bring it the logs. Historically that is the job of **Promtail**, the
+        collection agent that reads files (or the systemd journal), attaches labels and ships to Loki.
+
+        **Important 2026 note**: Promtail is **deprecated** and superseded by **Grafana Alloy**, a unified
+        collector (metrics, logs, traces) that takes over its functions and more. Promtail is still usable
+        and very widespread, but new deployments should prefer Alloy. The concepts are identical: *targets*
+        to read, *labels* to attach, an *output* to Loki.
+
+        | Agent | Status | Role |
+        |---|---|---|
+        | Promtail | Deprecated (still working) | Log collection to Loki |
+        | Grafana Alloy | Recommended | Unified logs + metrics + traces collector |
+
+        In both cases the configuration defines `scrape_configs` (which logs to read) with *pipeline* stages
+        that can extract fields and set labels. The cardinality best practice applies: label by `job` and
+        `host`, never by a unique value.
+  - heading:
+      fr: "LogQL : chercher et détecter"
+      en: "LogQL: search and detect"
+    body:
+      fr: |
+        **LogQL** est le langage de requête de Loki, volontairement proche de PromQL. Une requête commence
+        toujours par un **sélecteur de flux** entre accolades, puis applique des filtres :
+
+        | Requête LogQL | Résultat |
+        |---|---|
+        | `{job="ssh"}` | Tous les logs du flux `ssh` |
+        | `{job="ssh"} \|= "Failed password"` | Les lignes contenant « Failed password » |
+        | `{job="ssh"} \|= "Failed password" != "invalid user"` | Idem, en excluant un motif |
+        | `rate({job="ssh"} \|= "Failed password" [5m])` | Le débit d'échecs par seconde |
+
+        Les opérateurs de filtre de ligne sont `|=` (contient), `!=` (ne contient pas), `|~` (correspond à
+        une regex). On peut aussi extraire des champs à la volée (`| json`, `| logfmt`, `| pattern`) puis
+        filtrer dessus, ce qui rapproche Loki d'un vrai moteur d'analyse.
+
+        Pour la **détection de sécurité**, LogQL brille : `rate({job="ssh"} |= "Failed password" [1m]) > 5`
+        signale une attaque par force brute en cours. Et comme Loki est une source de données Grafana, on
+        crée directement une **alerte** sur cette requête — la supervision des logs devient de la détection.
+      en: |
+        **LogQL** is Loki's query language, deliberately close to PromQL. A query always starts with a
+        **stream selector** in braces, then applies filters:
+
+        | LogQL query | Result |
+        |---|---|
+        | `{job="ssh"}` | All logs of the `ssh` stream |
+        | `{job="ssh"} \|= "Failed password"` | Lines containing "Failed password" |
+        | `{job="ssh"} \|= "Failed password" != "invalid user"` | Same, excluding a pattern |
+        | `rate({job="ssh"} \|= "Failed password" [5m])` | The failure throughput per second |
+
+        The line filter operators are `|=` (contains), `!=` (does not contain), `|~` (matches a regex). You
+        can also extract fields on the fly (`| json`, `| logfmt`, `| pattern`) then filter on them, bringing
+        Loki close to a real analysis engine.
+
+        For **security detection**, LogQL shines: `rate({job="ssh"} |= "Failed password" [1m]) > 5` flags an
+        ongoing brute-force attack. And since Loki is a Grafana data source, you create an **alert** directly
+        on this query — log monitoring becomes detection.
+
+examples:
+  - title:
+      fr: "Le lab Compose : Loki, Promtail et Grafana"
+      en: "The Compose lab: Loki, Promtail and Grafana"
+    file: compose.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      name: loki-lab
+
+      services:
+        loki:
+          image: grafana/loki:3.3.0
+          command: -config.file=/etc/loki/config.yml
+          volumes:
+            - ./loki-config.yml:/etc/loki/config.yml:ro
+          networks:
+            - logging
+          # No public port: only Grafana and Promtail reach it internally
+
+        promtail:
+          # NOTE: Promtail is deprecated; Grafana Alloy is the recommended successor.
+          image: grafana/promtail:3.3.0
+          command: -config.file=/etc/promtail/config.yml
+          volumes:
+            - ./promtail-config.yml:/etc/promtail/config.yml:ro
+            - /var/log:/var/log:ro        # read-only access to host logs
+          networks:
+            - logging
+
+        grafana:
+          image: grafana/grafana:11.4.0
+          environment:
+            GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin
+            GF_AUTH_ANONYMOUS_ENABLED: "false"
+          secrets:
+            - grafana_admin
+          networks:
+            - logging
+          ports:
+            - "127.0.0.1:3000:3000" # loopback only, TLS proxy in front for prod
+
+      secrets:
+        grafana_admin:
+          file: ./secrets/grafana_admin.txt
+
+      networks:
+        logging:
+    note:
+      fr: "Loki n'a pas de port public ; Promtail lit `/var/log` en lecture seule. Grafana est durci (mot de passe par secret, pas d'anonyme) et n'écoute que sur `127.0.0.1`. Promtail est noté déprécié au profit d'Alloy."
+      en: "Loki has no public port; Promtail reads `/var/log` read-only. Grafana is hardened (password from a secret, no anonymous) and listens only on `127.0.0.1`. Promtail is noted as deprecated in favour of Alloy."
+
+  - title:
+      fr: "Promtail : collecter avec de bons labels"
+      en: "Promtail: collect with good labels"
+    file: promtail-config.yml
+    lang: yaml
+    kind: secure
+    code: |
+      server:
+        http_listen_port: 9080
+
+      clients:
+        - url: http://loki:3100/loki/api/v1/push
+
+      scrape_configs:
+        - job_name: system
+          static_configs:
+            - targets: ["localhost"]
+              labels:
+                # LOW-cardinality labels only: job and host, not IP or user id
+                job: ssh
+                host: web1
+                __path__: /var/log/auth.log
+          pipeline_stages:
+            # Keep the raw line; do NOT promote high-cardinality values to labels
+            - match:
+                selector: '{job="ssh"}'
+                stages:
+                  - regex:
+                      expression: "Failed password for (?P<user>\\S+) from (?P<ip>\\S+)"
+                  # These extracted fields stay in the log, not turned into labels
+    note:
+      fr: "On étiquette par `job` et `host` (faible cardinalité) uniquement. L'utilisateur et l'IP sont extraits mais **restent dans le log**, pas transformés en labels : sinon le nombre de flux exploserait et Loki ralentirait."
+      en: "Labels are `job` and `host` (low cardinality) only. The user and IP are extracted but **stay in the log**, not turned into labels: otherwise the number of streams would explode and Loki would slow down."
+
+  - title:
+      fr: "LogQL : détecter une force brute SSH"
+      en: "LogQL: detect an SSH brute force"
+    file: queries.logql
+    lang: text
+    kind: secure
+    code: |
+      # All SSH logs from web1
+      {job="ssh", host="web1"}
+
+      # Only failed password attempts (line filter |=)
+      {job="ssh"} |= "Failed password"
+
+      # Failed attempts, excluding the "invalid user" noise, as a per-second rate
+      rate({job="ssh"} |= "Failed password" != "invalid user" [5m])
+
+      # Count failures grouped by source IP extracted on the fly (detection)
+      sum by (ip) (
+        count_over_time(
+          {job="ssh"} |= "Failed password"
+            | regexp "from (?P<ip>\\S+)" [5m]
+        )
+      )
+
+      # Alert condition: more than 5 failures/sec over 1 minute = likely brute force
+      rate({job="ssh"} |= "Failed password" [1m]) > 5
+    note:
+      fr: "`|=` filtre les lignes, `regexp` extrait l'IP à la volée sans en faire un label, et `sum by (ip)` compte les échecs par source. La dernière ligne est une condition d'alerte de détection de force brute."
+      en: "`|=` filters lines, `regexp` extracts the IP on the fly without making it a label, and `sum by (ip)` counts failures per source. The last line is a brute-force detection alert condition."
+
+  - title:
+      fr: "VULNÉRABLE : un label à forte cardinalité tue Loki"
+      en: "VULNERABLE: a high-cardinality label kills Loki"
+    file: bad-labels.yml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      scrape_configs:
+        - job_name: system
+          static_configs:
+            - targets: ["localhost"]
+              labels:
+                job: ssh
+                __path__: /var/log/auth.log
+          pipeline_stages:
+            - regex:
+                expression: "from (?P<ip>\\S+)"
+            - labels:
+                # ANTI-PATTERN: the source IP as a label -> one stream per IP.
+                # A brute-force attack from thousands of IPs creates thousands of
+                # streams, explodes the index and brings Loki to its knees.
+                ip:
+    note:
+      fr: "Promouvoir l'IP en label crée un flux par IP distincte : une attaque depuis des milliers d'IP génère des milliers de flux et effondre Loki. L'IP doit rester *dans* le log et être extraite au moment de la requête."
+      en: "Promoting the IP to a label creates one stream per distinct IP: an attack from thousands of IPs generates thousands of streams and brings Loki down. The IP must stay *in* the log and be extracted at query time."
+
+mistake:
+  fr: |
+    **Mettre des valeurs à forte cardinalité (IP, user ID, trace ID) dans les labels Loki.**
+
+    C'est l'erreur n°1 avec Loki, et elle est contre-intuitive. Comme Loki n'indexe que les labels, on est
+    tenté d'y mettre tout ce sur quoi on veut chercher. Mais chaque combinaison de labels crée un **flux**
+    distinct : un label `ip` avec dix mille valeurs crée dix mille flux, l'index explose, la mémoire sature
+    et les requêtes s'effondrent. La règle est l'inverse d'ELK : gardez **peu de labels, à faible
+    cardinalité** (`job`, `host`, `env`), et laissez les valeurs variables *dans* le contenu du log, où
+    LogQL les extrait au moment de la requête (`| regexp`, `| json`). Et comme pour toute la stack de
+    supervision, n'exposez pas Loki ni Grafana publiquement.
+  en: |
+    **Putting high-cardinality values (IP, user ID, trace ID) in Loki labels.**
+
+    This is the number one Loki mistake, and it is counter-intuitive. Since Loki indexes only labels, you
+    are tempted to put everything you want to search on in them. But each label combination creates a
+    distinct **stream**: an `ip` label with ten thousand values creates ten thousand streams, the index
+    explodes, memory saturates and queries collapse. The rule is the opposite of ELK: keep **few,
+    low-cardinality labels** (`job`, `host`, `env`), and leave variable values *in* the log content, where
+    LogQL extracts them at query time (`| regexp`, `| json`). And as for the whole monitoring stack, do not
+    expose Loki or Grafana publicly.
+
+bestPractice:
+  fr: |
+    - **Peu de labels, à faible cardinalité** (`job`, `host`, `env`) ; jamais d'IP ni d'ID unique en label.
+    - **Les valeurs variables restent dans le log** ; LogQL les extrait à la requête (`| regexp`, `| json`).
+    - **LogQL pour la détection** : `rate({job="ssh"} |= "Failed password" [1m])` pour la force brute.
+    - **Alertes Grafana sur requêtes LogQL** : la centralisation des logs devient de la détection.
+    - **Nouveaux déploiements avec Grafana Alloy** plutôt que Promtail (déprécié).
+    - **N'exposez ni Loki ni Grafana publiquement** ; Grafana durci (pas d'anonyme, mot de passe fort).
+  en: |
+    - **Few, low-cardinality labels** (`job`, `host`, `env`); never an IP or unique ID as a label.
+    - **Variable values stay in the log**; LogQL extracts them at query time (`| regexp`, `| json`).
+    - **LogQL for detection**: `rate({job="ssh"} |= "Failed password" [1m])` for brute force.
+    - **Grafana alerts on LogQL queries**: log centralisation becomes detection.
+    - **New deployments with Grafana Alloy** rather than Promtail (deprecated).
+    - **Do not expose Loki or Grafana publicly**; hardened Grafana (no anonymous, strong password).
+
+exercise:
+  statement:
+    fr: |
+      1. Dans la configuration Promtail ci-dessous, repérez l'erreur et expliquez-la.
+
+      ```yaml
+      labels:
+        job: web
+        request_id: "{{ .request_id }}"
+      ```
+
+      2. Écrivez une requête LogQL qui donne le débit par seconde, sur 5 minutes, des lignes contenant
+         « Failed password » dans le flux `{job="ssh"}`.
+      3. En une phrase, quel agent est recommandé à la place de Promtail pour un nouveau déploiement ?
+    en: |
+      1. In the Promtail configuration below, spot the mistake and explain it.
+
+      ```yaml
+      labels:
+        job: web
+        request_id: "{{ .request_id }}"
+      ```
+
+      2. Write a LogQL query giving the per-second rate, over 5 minutes, of lines containing "Failed
+         password" in the `{job="ssh"}` stream.
+      3. In one sentence, which agent is recommended instead of Promtail for a new deployment?
+  solution:
+    file: solution.txt
+    lang: text
+    code: |
+      # 1. Mistake: "request_id" is a high-cardinality value (unique per request).
+      #    Using it as a label creates one Loki stream per request -> the index
+      #    explodes and performance collapses. Keep request_id INSIDE the log line
+      #    and extract it at query time with "| json" or "| regexp"; label only
+      #    low-cardinality fields such as job (and maybe host/env).
+
+      # 2. LogQL per-second rate of failed passwords over 5 minutes:
+      rate({job="ssh"} |= "Failed password" [5m])
+
+      # 3. Grafana Alloy is the recommended successor to the (deprecated) Promtail.
+    note:
+      fr: "`request_id` est unique par requête : en label, il crée un flux par requête et effondre Loki. On le garde dans le log. La requête `rate(...)` compte les échecs ; Alloy remplace Promtail."
+      en: "`request_id` is unique per request: as a label it creates one stream per request and collapses Loki. Keep it in the log. The `rate(...)` query counts failures; Alloy supersedes Promtail."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce que Loki indexe, contrairement à Elasticsearch ?"
+      en: "What does Loki index, unlike Elasticsearch?"
+    options:
+      fr:
+        - "Seulement les labels, pas le contenu complet des logs"
+        - "Tout le contenu de chaque log"
+        - "Uniquement les métriques"
+        - "Rien du tout"
+      en:
+        - "Only the labels, not the full log content"
+        - "All the content of every log"
+        - "Only metrics"
+        - "Nothing at all"
+    answer: 0
+    why:
+      fr: "Loki n'indexe que les labels (métadonnées), ce qui le rend bien plus léger qu'Elasticsearch qui indexe tout le contenu."
+      en: "Loki indexes only the labels (metadata), making it far lighter than Elasticsearch, which indexes all the content."
+  - q:
+      fr: "Pourquoi ne faut-il pas mettre une adresse IP en label dans Loki ?"
+      en: "Why should you not put an IP address as a label in Loki?"
+    options:
+      fr:
+        - "Parce que les IP sont secrètes"
+        - "Parce que la forte cardinalité crée un flux par valeur et effondre les performances"
+        - "Parce que Loki n'accepte pas les chiffres"
+        - "Parce que cela chiffre les logs"
+      en:
+        - "Because IPs are secret"
+        - "Because high cardinality creates one stream per value and collapses performance"
+        - "Because Loki does not accept numbers"
+        - "Because it encrypts the logs"
+    answer: 1
+    why:
+      fr: "Chaque combinaison de labels est un flux ; une IP à forte cardinalité multiplie les flux à l'infini et sature l'index. On garde l'IP dans le log."
+      en: "Each label combination is a stream; a high-cardinality IP multiplies streams endlessly and saturates the index. Keep the IP in the log."
+  - q:
+      fr: "Quel agent remplace désormais Promtail pour collecter les logs vers Loki ?"
+      en: "Which agent now supersedes Promtail for collecting logs to Loki?"
+    options:
+      fr:
+        - "Filebeat"
+        - "Logstash"
+        - "Grafana Alloy"
+        - "node-exporter"
+      en:
+        - "Filebeat"
+        - "Logstash"
+        - "Grafana Alloy"
+        - "node-exporter"
+    answer: 2
+    why:
+      fr: "Promtail est déprécié ; Grafana Alloy, collecteur unifié (logs, métriques, traces), est le successeur recommandé."
+      en: "Promtail is deprecated; Grafana Alloy, a unified collector (logs, metrics, traces), is the recommended successor."
+  - q:
+      fr: "Dans une requête LogQL, que fait l'opérateur `|=` ?"
+      en: "In a LogQL query, what does the `|=` operator do?"
+    options:
+      fr:
+        - "Il supprime les logs"
+        - "Il additionne des métriques"
+        - "Il chiffre le flux"
+        - "Il garde les lignes qui contiennent le texte donné"
+      en:
+        - "It deletes logs"
+        - "It sums metrics"
+        - "It encrypts the stream"
+        - "It keeps the lines that contain the given text"
+    answer: 3
+    why:
+      fr: "`|=` est un filtre de ligne « contient » ; `!=` exclut, `|~` applique une regex. On filtre d'abord par labels, puis par ligne."
+      en: "`|=` is a \"contains\" line filter; `!=` excludes, `|~` applies a regex. You filter first by labels, then by line."
+  - q:
+      fr: "Comment Loki peut-il servir à détecter une attaque par force brute SSH ?"
+      en: "How can Loki help detect an SSH brute-force attack?"
+    options:
+      fr:
+        - "Avec une requête LogQL de type `rate({job=\"ssh\"} |= \"Failed password\" [1m])` et une alerte"
+        - "En supprimant les logs SSH"
+        - "En augmentant la cardinalité des labels"
+        - "En exposant Loki sur Internet"
+      en:
+        - "With a LogQL query like `rate({job=\"ssh\"} |= \"Failed password\" [1m])` and an alert"
+        - "By deleting the SSH logs"
+        - "By increasing label cardinality"
+        - "By exposing Loki on the Internet"
+    answer: 0
+    why:
+      fr: "Un `rate()` LogQL sur les échecs de mot de passe révèle un pic d'attaque ; branché en alerte Grafana, Loki devient un outil de détection."
+      en: "A LogQL `rate()` on failed passwords reveals an attack spike; wired to a Grafana alert, Loki becomes a detection tool."

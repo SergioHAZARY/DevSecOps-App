@@ -1,0 +1,457 @@
+description:
+  fr: "Transformer la supervision en détection avec un SIEM : rôle de Wazuh, règles Sigma portables, cartographie MITRE ATT&CK, intégrité des logs et synchronisation du temps."
+  en: "Turn monitoring into detection with a SIEM: the role of Wazuh, portable Sigma rules, MITRE ATT&CK mapping, log integrity and time synchronization."
+duration: 40
+
+intro:
+  fr: |
+    Centraliser des logs, c'est pouvoir les *lire*. Les **détecter**, c'est autre chose : il faut repérer
+    automatiquement, dans des millions de lignes, les quelques-unes qui trahissent une attaque. C'est le
+    rôle d'un **SIEM** (*Security Information and Event Management*) : un système qui collecte les logs,
+    applique des **règles de détection** et génère des **alertes** de sécurité.
+
+    Pensez à un agent de sécurité dans une salle pleine de caméras : il ne regarde pas tous les écrans en
+    permanence, il a des règles (« une porte forcée », « quelqu'un qui court ») qui font sonner une alarme.
+    Le SIEM applique ces règles à vos logs, en continu, sans se fatiguer.
+
+    Cette dernière leçon du cours fait la synthèse. Vous allez comprendre ce qu'un SIEM ajoute à une simple
+    stack de logs, découvrir **Wazuh** (SIEM open source), écrire une vraie **règle Sigma** (format portable
+    et standard) qui détecte une force brute SSH, la relier au framework **MITRE ATT&CK**, et comprendre
+    deux conditions sans lesquelles toute détection s'effondre : l'**intégrité des logs** et la
+    **synchronisation du temps**.
+  en: |
+    Centralising logs lets you *read* them. **Detecting** is another matter: you must automatically spot,
+    among millions of lines, the few that betray an attack. That is the role of a **SIEM** (*Security
+    Information and Event Management*): a system that collects logs, applies **detection rules** and
+    generates security **alerts**.
+
+    Think of a security guard in a room full of camera screens: they do not watch every screen constantly,
+    they have rules ("a forced door", "someone running") that sound an alarm. The SIEM applies those rules
+    to your logs, continuously, without tiring.
+
+    This final lesson of the course ties it all together. You will understand what a SIEM adds to a plain
+    log stack, discover **Wazuh** (an open-source SIEM), write a real **Sigma rule** (a portable, standard
+    format) that detects an SSH brute force, map it to the **MITRE ATT&CK** framework, and understand two
+    conditions without which all detection collapses: **log integrity** and **time synchronisation**.
+
+sections:
+  - heading:
+      fr: "Ce qu'un SIEM ajoute, et Wazuh"
+      en: "What a SIEM adds, and Wazuh"
+    body:
+      fr: |
+        Une stack de logs (ELK, Loki) stocke et affiche. Un SIEM ajoute la couche **détection et réponse** :
+
+        | Capacité | Stack de logs | SIEM |
+        |---|---|---|
+        | Collecte et stockage | Oui | Oui |
+        | Recherche manuelle | Oui | Oui |
+        | Règles de détection automatiques | Non | Oui |
+        | Corrélation d'événements | Limitée | Oui |
+        | Alertes de sécurité | Basique | Oui, qualifiées |
+        | Réponse active | Non | Souvent |
+
+        **Wazuh** est un SIEM open source très répandu. Il combine des **agents** (installés sur les
+        machines) qui collectent logs, intégrité des fichiers et état du système, un **serveur** qui applique
+        des règles de détection, et un **tableau de bord** (basé sur une interface type Kibana). Wazuh
+        apporte en plus la détection d'intrusion sur hôte (HIDS), la surveillance d'intégrité des fichiers
+        (FIM) et la **réponse active** (bannir une IP, par exemple).
+
+        Un SIEM ne remplace pas la supervision : il la prolonge. Les mêmes logs qui servent au débogage
+        alimentent la détection. La différence, c'est l'intention : on ne cherche plus « pourquoi c'est
+        lent », mais « est-ce qu'on nous attaque ».
+      en: |
+        A log stack (ELK, Loki) stores and displays. A SIEM adds the **detection and response** layer:
+
+        | Capability | Log stack | SIEM |
+        |---|---|---|
+        | Collection and storage | Yes | Yes |
+        | Manual search | Yes | Yes |
+        | Automatic detection rules | No | Yes |
+        | Event correlation | Limited | Yes |
+        | Security alerts | Basic | Yes, qualified |
+        | Active response | No | Often |
+
+        **Wazuh** is a very widespread open-source SIEM. It combines **agents** (installed on machines) that
+        collect logs, file integrity and system state, a **server** that applies detection rules, and a
+        **dashboard** (based on a Kibana-like interface). Wazuh adds host intrusion detection (HIDS), file
+        integrity monitoring (FIM) and **active response** (banning an IP, for example).
+
+        A SIEM does not replace monitoring: it extends it. The same logs used for debugging feed detection.
+        The difference is intent: you no longer ask "why is it slow", but "are we under attack".
+  - heading:
+      fr: "Sigma : des règles de détection portables"
+      en: "Sigma: portable detection rules"
+    body:
+      fr: |
+        Chaque SIEM a son propre langage de règles : les écrire pour Wazuh, puis les réécrire pour Splunk,
+        puis pour Elastic, serait un gâchis. **Sigma** résout ce problème : c'est un format de règle
+        **générique, en YAML**, que l'on écrit une fois et que l'on **convertit** ensuite vers le langage de
+        n'importe quel SIEM. Sigma est au SIEM ce que YARA est aux antivirus : un standard partagé.
+
+        Une règle Sigma décrit trois choses :
+
+        | Section | Rôle |
+        |---|---|
+        | `logsource` | Quel type de log est concerné (produit, catégorie) |
+        | `detection` | La condition : quels champs, quelles valeurs déclenchent |
+        | `level` / `tags` | La gravité et la cartographie (MITRE ATT&CK) |
+
+        L'intérêt est double : **portabilité** (une règle, tous les SIEM) et **partage communautaire** —
+        des milliers de règles Sigma publiques couvrent les attaques connues. On les importe, on les adapte,
+        on écrit les siennes pour son contexte. La section `detection` utilise une logique simple (champs,
+        listes de valeurs, `condition`) qui reste lisible et versionnable dans Git.
+      en: |
+        Each SIEM has its own rule language: writing them for Wazuh, then rewriting for Splunk, then for
+        Elastic, would be a waste. **Sigma** solves this: it is a **generic, YAML** rule format that you
+        write once and then **convert** to any SIEM's language. Sigma is to the SIEM what YARA is to
+        antivirus: a shared standard.
+
+        A Sigma rule describes three things:
+
+        | Section | Role |
+        |---|---|
+        | `logsource` | Which log type is concerned (product, category) |
+        | `detection` | The condition: which fields, which values trigger |
+        | `level` / `tags` | The severity and the mapping (MITRE ATT&CK) |
+
+        The benefit is twofold: **portability** (one rule, all SIEMs) and **community sharing** — thousands
+        of public Sigma rules cover known attacks. You import them, adapt them, write your own for your
+        context. The `detection` section uses simple logic (fields, value lists, a `condition`) that stays
+        readable and versionable in Git.
+  - heading:
+      fr: "MITRE ATT&CK, intégrité et temps"
+      en: "MITRE ATT&CK, integrity and time"
+    body:
+      fr: |
+        Détecter, oui, mais détecter **quoi** ? Le framework **MITRE ATT&CK** est un catalogue mondial des
+        **techniques** d'attaque réelles, organisées par **tactiques** (objectifs de l'attaquant : accès
+        initial, persistance, exfiltration...). Chaque technique a un identifiant (`T1110` = *Brute Force*).
+        Cartographier ses règles de détection sur ATT&CK permet de mesurer sa **couverture** : quelles
+        techniques je détecte, lesquelles sont des angles morts.
+
+        Deux fondations, souvent négligées, conditionnent toute la détection :
+
+        - **L'intégrité des logs** : si un attaquant peut modifier ou effacer les logs après son intrusion,
+          la détection est aveugle. On expédie donc les logs **en temps réel** vers un stockage central
+          **que les machines surveillées ne peuvent pas altérer** (compte en écriture seule, WORM), et on
+          surveille les fichiers de logs (FIM).
+        - **La synchronisation du temps (NTP)** : corréler des événements de plusieurs machines exige des
+          horloges justes. Si un serveur a dix minutes de décalage, impossible de reconstituer la chronologie
+          d'une attaque. Tous les systèmes synchronisent leur horloge (NTP) et journalisent en UTC.
+
+        Sans intégrité ni temps juste, un SIEM alerte sur des données qu'on ne peut ni croire ni corréler.
+        Ce sont les fondations silencieuses de toute la pyramide de la détection.
+      en: |
+        Detecting, yes, but detecting **what**? The **MITRE ATT&CK** framework is a global catalogue of real
+        attack **techniques**, organised by **tactics** (the attacker's goals: initial access, persistence,
+        exfiltration...). Each technique has an identifier (`T1110` = *Brute Force*). Mapping your detection
+        rules onto ATT&CK lets you measure your **coverage**: which techniques you detect, which are blind
+        spots.
+
+        Two foundations, often neglected, underpin all detection:
+
+        - **Log integrity**: if an attacker can modify or erase the logs after breaking in, detection is
+          blind. So you ship logs **in real time** to central storage **that the monitored machines cannot
+          alter** (write-only account, WORM), and you watch the log files (FIM).
+        - **Time synchronisation (NTP)**: correlating events from several machines requires accurate clocks.
+          If a server is ten minutes off, you cannot reconstruct an attack's timeline. All systems
+          synchronise their clock (NTP) and log in UTC.
+
+        Without integrity and accurate time, a SIEM alerts on data you can neither trust nor correlate. These
+        are the silent foundations of the whole detection pyramid.
+
+examples:
+  - title:
+      fr: "Une règle Sigma : force brute SSH"
+      en: "A Sigma rule: SSH brute force"
+    file: ssh-bruteforce.yml
+    lang: yaml
+    kind: secure
+    code: |
+      title: SSH Brute Force Attempt
+      id: 9f3c2b1a-5d6e-4f7a-8b9c-0d1e2f3a4b5c
+      status: stable
+      description: Detects many failed SSH password attempts from a single source
+      author: DevSecOps App
+      logsource:
+        product: linux
+        service: sshd           # which log this rule applies to
+      detection:
+        selection:
+          # The literal text that marks a failed SSH password login
+          message|contains: "Failed password"
+        timeframe: 1m
+        condition: selection | count() by src_ip > 10  # > 10 failures/min per IP
+      fields:
+        - src_ip
+        - user
+      falsepositives:
+        - A user repeatedly mistyping their password
+      level: high
+      tags:
+        - attack.credential-access   # MITRE ATT&CK tactic
+        - attack.t1110.001           # Brute Force: Password Guessing
+    note:
+      fr: "Une seule règle YAML, convertible vers Wazuh, Splunk ou Elastic. La `condition` compte plus de 10 échecs par minute et par IP. Les `tags` la relient à MITRE ATT&CK (`t1110.001`, devinette de mot de passe)."
+      en: "A single YAML rule, convertible to Wazuh, Splunk or Elastic. The `condition` counts more than 10 failures per minute per IP. The `tags` map it to MITRE ATT&CK (`t1110.001`, password guessing)."
+
+  - title:
+      fr: "Convertir la règle Sigma pour un SIEM"
+      en: "Convert the Sigma rule for a SIEM"
+    file: convert.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # sigma-cli converts one portable rule into each SIEM's own query language.
+      pip install sigma-cli
+
+      # Convert to an Elasticsearch (Lucene/ES|QL) query
+      sigma convert -t elasticsearch -p ecs_windows ssh-bruteforce.yml
+
+      # Convert the same rule to a Splunk SPL search
+      sigma convert -t splunk ssh-bruteforce.yml
+
+      # List the available target backends
+      sigma list targets
+    output: |
+      # Elasticsearch output (excerpt):
+      message:"Failed password"
+      # Splunk output (excerpt):
+      source="sshd" message="*Failed password*" | stats count by src_ip | where count > 10
+    note:
+      fr: "On écrit la règle une fois en Sigma, puis `sigma convert` la traduit pour chaque SIEM. C'est la portabilité en action : pas besoin de réécrire la logique de détection par outil."
+      en: "You write the rule once in Sigma, then `sigma convert` translates it for each SIEM. Portability in action: no need to rewrite the detection logic per tool."
+
+  - title:
+      fr: "Garantir l'intégrité des logs et le temps juste"
+      en: "Ensure log integrity and accurate time"
+    file: integrity.sh
+    lang: bash
+    kind: secure
+    code: |
+      # 1. TIME: synchronise the clock so events across hosts are correlatable
+      timedatectl set-ntp true
+      timedatectl status | grep -E "System clock|NTP service"
+
+      # 2. INTEGRITY: ship logs in real time to a central store the host cannot alter.
+      #    Forward over TLS; the local account may only WRITE, never read or delete.
+      #    Example: rsyslog forwarding auth.log to a central collector over TLS.
+      cat >> /etc/rsyslog.d/50-forward.conf <<'EOF'
+      # Send all auth logs to the central SIEM collector over TLS (RELP/TCP 6514)
+      auth.*  @@(o)siem-collector.example.com:6514
+      EOF
+      systemctl restart rsyslog
+
+      # 3. Watch the log files for tampering with File Integrity Monitoring (FIM).
+      #    A Wazuh agent alerts if /var/log/auth.log is modified unexpectedly.
+    output: |
+      System clock synchronized: yes
+      NTP service: active
+      # Logs now leave the host immediately: even if the attacker wipes the local
+      # file, the central copy already holds the evidence.
+    note:
+      fr: "Deux fondations : NTP pour des horodatages corrélables, et expédition temps réel vers un stockage que l'hôte ne peut pas altérer. Même si l'attaquant efface le log local, la copie centrale garde la preuve."
+      en: "Two foundations: NTP for correlatable timestamps, and real-time shipping to storage the host cannot alter. Even if the attacker wipes the local log, the central copy keeps the evidence."
+
+  - title:
+      fr: "VULNÉRABLE : des logs qu'on ne peut pas croire"
+      en: "VULNERABLE: logs you cannot trust"
+    file: bad-setup.txt
+    lang: text
+    kind: vulnerable
+    code: |
+      # Problem 1: logs stay ONLY on the attacked machine.
+      #   -> After root access, the attacker runs "echo > /var/log/auth.log"
+      #      and the evidence is gone. The SIEM never received anything.
+
+      # Problem 2: no time synchronisation.
+      #   web1 clock: 10:00:00     db1 clock: 09:48:30  (12 min drift)
+      #   -> You cannot order the events of a multi-host attack. The timeline
+      #      is meaningless, correlation is impossible.
+
+      # Problem 3: the SIEM ingests the altered logs without integrity checks.
+      #   -> It alerts (or stays silent) on data that has already been tampered
+      #      with: detection built on untrustworthy input.
+
+      # Result: a SIEM that looks operational but is blind and unreliable.
+    note:
+      fr: "Logs locaux effaçables, horloges désynchronisées, aucune vérification d'intégrité : le SIEM traite des données ni fiables ni corrélables. La détection repose sur des fondations invisibles mais indispensables."
+      en: "Deletable local logs, unsynchronised clocks, no integrity check: the SIEM processes data that is neither trustworthy nor correlatable. Detection rests on invisible but indispensable foundations."
+
+mistake:
+  fr: |
+    **Déployer un SIEM en oubliant l'intégrité des logs et la synchronisation du temps.**
+
+    On investit dans un beau SIEM, des règles de détection soignées, un tableau de bord impressionnant... et
+    tout repose sur du sable si deux fondations manquent. Si les logs restent uniquement sur la machine
+    attaquée, un intrus qui obtient les droits root les efface d'un `echo > /var/log/auth.log`, et la
+    détection n'a jamais rien vu : expédiez les logs en temps réel vers un stockage central inaltérable par
+    l'hôte. Et si les horloges ne sont pas synchronisées (NTP), impossible de corréler des événements entre
+    serveurs ni de reconstituer la chronologie d'une attaque : un décalage de dix minutes rend la timeline
+    inexploitable. Intégrité et temps juste ne sont pas des détails : ce sont les conditions pour que tout le
+    reste signifie quelque chose.
+  en: |
+    **Deploying a SIEM while forgetting log integrity and time synchronisation.**
+
+    You invest in a fine SIEM, careful detection rules, an impressive dashboard... and it all rests on sand
+    if two foundations are missing. If logs stay only on the attacked machine, an intruder with root wipes
+    them with `echo > /var/log/auth.log`, and detection never saw a thing: ship logs in real time to central
+    storage the host cannot alter. And if clocks are not synchronised (NTP), you cannot correlate events
+    across servers or reconstruct an attack's timeline: a ten-minute drift makes the timeline useless.
+    Integrity and accurate time are not details: they are the conditions for everything else to mean
+    something.
+
+bestPractice:
+  fr: |
+    - **Un SIEM pour la détection**, au-dessus de la collecte : règles automatiques, corrélation, alertes.
+    - **Wazuh** (open source) pour HIDS, intégrité des fichiers (FIM) et réponse active.
+    - **Règles Sigma portables** : écrites une fois en YAML, converties vers chaque SIEM, versionnées dans Git.
+    - **Cartographie MITRE ATT&CK** : mesurer sa couverture et ses angles morts par technique.
+    - **Intégrité des logs** : expédition temps réel vers un stockage inaltérable par l'hôte surveillé.
+    - **Synchronisation du temps (NTP), journalisation en UTC** : condition de toute corrélation.
+    - **Réglez d'abord les fondations** (temps, intégrité) avant d'affiner les règles.
+  en: |
+    - **A SIEM for detection**, on top of collection: automatic rules, correlation, alerts.
+    - **Wazuh** (open source) for HIDS, file integrity monitoring (FIM) and active response.
+    - **Portable Sigma rules**: written once in YAML, converted to each SIEM, versioned in Git.
+    - **MITRE ATT&CK mapping**: measure your coverage and blind spots per technique.
+    - **Log integrity**: real-time shipping to storage the monitored host cannot alter.
+    - **Time synchronisation (NTP), logging in UTC**: the condition for any correlation.
+    - **Fix the foundations first** (time, integrity) before refining the rules.
+
+exercise:
+  statement:
+    fr: |
+      1. Écrivez une règle Sigma minimale qui détecte l'usage de `sudo` ayant échoué (le log contient
+         « authentication failure » et le programme est `sudo`), avec une gravité `medium` et le tag MITRE
+         ATT&CK de l'escalade de privilèges `attack.privilege-escalation`.
+      2. Citez les deux fondations sans lesquelles la détection d'un SIEM n'est pas fiable, et expliquez
+         chacune en une phrase.
+    en: |
+      1. Write a minimal Sigma rule that detects failed `sudo` usage (the log contains "authentication
+         failure" and the program is `sudo`), with `medium` severity and the privilege-escalation MITRE
+         ATT&CK tag `attack.privilege-escalation`.
+      2. Name the two foundations without which a SIEM's detection is unreliable, and explain each in one
+         sentence.
+  solution:
+    file: solution.yml
+    lang: yaml
+    code: |
+      title: Failed sudo authentication
+      id: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+      status: experimental
+      description: Detects failed sudo attempts, a common privilege-escalation signal
+      logsource:
+        product: linux
+        service: sudo
+      detection:
+        selection:
+          program: "sudo"
+          message|contains: "authentication failure"
+        condition: selection
+      level: medium
+      tags:
+        - attack.privilege-escalation
+        - attack.t1548.003            # Abuse Elevation Control: Sudo
+      # ---
+      # The two foundations of reliable detection:
+      #  - Log integrity: ship logs in real time to central, tamper-proof storage,
+      #    so an attacker with root cannot erase the local evidence.
+      #  - Time sync (NTP) + UTC: accurate, aligned clocks so events from different
+      #    hosts can be correlated into a coherent attack timeline.
+    note:
+      fr: "La règle Sigma capture les échecs `sudo` et les relie à l'escalade de privilèges. Les deux fondations : intégrité (logs inaltérables, copie centrale) et temps juste (NTP + UTC) pour corréler."
+      en: "The Sigma rule captures failed `sudo` and maps it to privilege escalation. The two foundations: integrity (tamper-proof logs, central copy) and accurate time (NTP + UTC) to correlate."
+
+quiz:
+  - q:
+      fr: "Qu'est-ce qu'un SIEM ajoute à une simple stack de logs ?"
+      en: "What does a SIEM add to a plain log stack?"
+    options:
+      fr:
+        - "Rien, c'est la même chose"
+        - "La détection automatique, la corrélation et les alertes de sécurité"
+        - "Uniquement un plus joli tableau de bord"
+        - "La possibilité de supprimer les logs plus vite"
+      en:
+        - "Nothing, it is the same thing"
+        - "Automatic detection, correlation and security alerts"
+        - "Only a nicer dashboard"
+        - "The ability to delete logs faster"
+    answer: 1
+    why:
+      fr: "Au-delà du stockage, un SIEM applique des règles de détection, corrèle les événements et génère des alertes de sécurité qualifiées."
+      en: "Beyond storage, a SIEM applies detection rules, correlates events and generates qualified security alerts."
+  - q:
+      fr: "Quel est l'intérêt principal du format de règle Sigma ?"
+      en: "What is the main benefit of the Sigma rule format?"
+    options:
+      fr:
+        - "Il chiffre les logs"
+        - "Il n'existe que pour Splunk"
+        - "On l'écrit une fois et on le convertit vers le langage de n'importe quel SIEM"
+        - "Il remplace MITRE ATT&CK"
+      en:
+        - "It encrypts logs"
+        - "It only exists for Splunk"
+        - "You write it once and convert it to any SIEM's language"
+        - "It replaces MITRE ATT&CK"
+    answer: 2
+    why:
+      fr: "Sigma est un format générique en YAML, portable : une règle unique se convertit vers Wazuh, Splunk, Elastic... et se partage avec la communauté."
+      en: "Sigma is a generic, portable YAML format: a single rule converts to Wazuh, Splunk, Elastic... and is shared with the community."
+  - q:
+      fr: "Que décrit le framework MITRE ATT&CK ?"
+      en: "What does the MITRE ATT&CK framework describe?"
+    options:
+      fr:
+        - "Un catalogue de techniques et tactiques d'attaque réelles"
+        - "Un langage de programmation"
+        - "Un type de pare-feu"
+        - "Une base de données de logs"
+      en:
+        - "A catalogue of real attack techniques and tactics"
+        - "A programming language"
+        - "A kind of firewall"
+        - "A log database"
+    answer: 0
+    why:
+      fr: "MITRE ATT&CK répertorie les techniques d'attaque réelles (ex. `T1110` force brute) par tactique ; cartographier ses règles dessus mesure la couverture de détection."
+      en: "MITRE ATT&CK catalogues real attack techniques (e.g. `T1110` brute force) by tactic; mapping rules onto it measures detection coverage."
+  - q:
+      fr: "Pourquoi expédier les logs en temps réel vers un stockage central inaltérable ?"
+      en: "Why ship logs in real time to central, tamper-proof storage?"
+    options:
+      fr:
+        - "Pour économiser de la bande passante"
+        - "Pour qu'un attaquant root ne puisse pas effacer les preuves localement"
+        - "Pour chiffrer les métriques"
+        - "Pour accélérer Grafana"
+      en:
+        - "To save bandwidth"
+        - "So a root attacker cannot erase the evidence locally"
+        - "To encrypt metrics"
+        - "To speed up Grafana"
+    answer: 1
+    why:
+      fr: "Si les logs restent sur la machine attaquée, un intrus root les efface ; une copie centrale inaltérable conserve les preuves malgré l'effacement local."
+      en: "If logs stay on the attacked machine, a root intruder wipes them; an immutable central copy keeps the evidence despite the local deletion."
+  - q:
+      fr: "Pourquoi la synchronisation du temps (NTP) est-elle essentielle pour un SIEM ?"
+      en: "Why is time synchronisation (NTP) essential for a SIEM?"
+    options:
+      fr:
+        - "Pour afficher l'heure locale"
+        - "Pour chiffrer les horodatages"
+        - "Pour réduire la taille des logs"
+        - "Pour corréler des événements de plusieurs machines et reconstituer une chronologie fiable"
+      en:
+        - "To display the local time"
+        - "To encrypt the timestamps"
+        - "To reduce log size"
+        - "To correlate events from several machines and reconstruct a reliable timeline"
+    answer: 3
+    why:
+      fr: "Sans horloges synchronisées, les événements de serveurs différents ne s'ordonnent pas : un décalage de quelques minutes rend toute corrélation et toute chronologie d'attaque inexploitables."
+      en: "Without synchronised clocks, events from different servers cannot be ordered: a few minutes' drift makes any correlation and attack timeline unusable."

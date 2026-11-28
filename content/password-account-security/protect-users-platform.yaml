@@ -1,0 +1,397 @@
+description:
+  fr: "Défendre les comptes de ses utilisateurs côté plateforme : limitation de débit, vérification des mots de passe compromis (HIBP k-anonymat), réinitialisation sûre et détection d'anomalies."
+  en: "Defending your users' accounts on the platform side: rate limiting, compromised-password checks (HIBP k-anonymity), safe resets and anomaly detection."
+duration: 25
+
+intro:
+  fr: |
+    Jusqu'ici, vous protégiez **vos** comptes. Cette leçon passe de l'autre côté : vous êtes le **service**,
+    et vous devez protéger les comptes de **milliers d'utilisateurs**, dont beaucoup choisissent des mots de
+    passe faibles et les réutilisent. Vous ne contrôlez pas leurs habitudes ; vous contrôlez votre code.
+
+    C'est comme gérer l'entrée d'un immeuble collectif : vous ne pouvez pas forcer chaque locataire à verrouiller
+    sa porte, mais vous pouvez installer un sas, une caméra, et refuser les clés déjà signalées volées. Côté
+    plateforme, cela se traduit par la limitation de débit, le refus des mots de passe connus comme
+    compromis, des flux de réinitialisation blindés et la détection des connexions anormales.
+
+    Tout ici est **défensif et respectueux de la vie privée**. Point remarquable : on peut vérifier si un mot
+    de passe figure dans une fuite **sans jamais l'envoyer en clair**, grâce au **k-anonymat** de Have I Been
+    Pwned. Les exemples sont du code côté serveur, en bibliothèque standard, que vous pouvez exécuter.
+  en: |
+    So far you protected **your** accounts. This lesson flips sides: you are the **service**, and you must
+    protect the accounts of **thousands of users**, many of whom pick weak passwords and reuse them. You do
+    not control their habits; you control your code.
+
+    It is like managing the entrance of an apartment block: you cannot force every tenant to lock their door,
+    but you can install an airlock, a camera, and refuse keys already reported stolen. On the platform side
+    this means rate limiting, refusing passwords known to be compromised, hardened reset flows and detecting
+    abnormal logins.
+
+    Everything here is **defensive and privacy-respecting**. A remarkable point: you can check whether a
+    password appears in a breach **without ever sending it in clear**, thanks to Have I Been Pwned's
+    **k-anonymity**. The examples are server-side code, standard library, that you can run.
+
+sections:
+  - heading:
+      fr: "Limiter le débit sans punir les vrais utilisateurs"
+      en: "Rate limiting without punishing real users"
+    body:
+      fr: |
+        La **limitation de débit** (*rate limiting*) brise la force brute et ralentit le bourrage. Mais mal
+        réglée, elle gêne les utilisateurs légitimes ou se contourne facilement. Quelques principes :
+
+        | Stratégie | Idée | Piège à éviter |
+        |---|---|---|
+        | Par IP | Bloquer une IP trop active | Le bourrage utilise des milliers d'IP |
+        | Par compte | Limiter les essais sur un compte | Permet le déni de service sur la cible |
+        | Par (IP + compte) | Combiner les deux | Plus juste, plus robuste |
+        | Backoff exponentiel | Délai croissant après chaque échec | Ralentir sans verrouiller durement |
+
+        La meilleure approche est **graduée** : après quelques échecs, on ajoute un délai, puis un CAPTCHA ou
+        un défi supplémentaire, et on réserve le blocage dur aux cas extrêmes. On compte aussi les **succès**
+        suspects (connexion réussie depuis un pays inhabituel), car le bourrage se repère autant par ses
+        réussites éparses que par ses échecs.
+      en: |
+        **Rate limiting** breaks brute force and slows stuffing. But badly tuned, it hinders legitimate users
+        or is easily bypassed. A few principles:
+
+        | Strategy | Idea | Pitfall to avoid |
+        |---|---|---|
+        | Per IP | Block an over-active IP | Stuffing uses thousands of IPs |
+        | Per account | Limit attempts on one account | Enables denial of service on the target |
+        | Per (IP + account) | Combine both | Fairer, more robust |
+        | Exponential backoff | Growing delay after each failure | Slow down without a hard lock |
+
+        The best approach is **graduated**: after a few failures, add a delay, then a CAPTCHA or an extra
+        challenge, and reserve hard blocking for extreme cases. You also count suspicious **successes** (a
+        successful login from an unusual country), because stuffing shows up as much in its scattered wins as
+        in its failures.
+  - heading:
+      fr: "Vérifier un mot de passe compromis sans le divulguer"
+      en: "Checking a compromised password without disclosing it"
+    body:
+      fr: |
+        Comment refuser à l'inscription un mot de passe qui figure dans des milliards de fuites, **sans**
+        envoyer le mot de passe de l'utilisateur à un tiers ? La réponse est le **k-anonymat** du service
+        *Have I Been Pwned* (HIBP), un petit chef-d'œuvre de protection de la vie privée.
+
+        1. Le serveur calcule le **SHA-1** du mot de passe (uniquement pour cette vérification).
+        2. Il n'envoie à l'API que les **5 premiers caractères** du hachage (le *préfixe*).
+        3. L'API renvoie **tous** les suffixes connus commençant par ce préfixe (des centaines).
+        4. Le serveur cherche **localement** le suffixe exact dans la liste : il sait si le mot de passe est
+           compromis, et combien de fois, **sans l'avoir révélé**.
+
+        Comme des centaines de hachages partagent le même préfixe, l'API ne peut pas savoir lequel vous
+        intéresse : c'est le *k* dans « k-anonymat ». On obtient l'information de sécurité (ce mot de passe a
+        fuité) tout en préservant la confidentialité. On refuse alors poliment ce mot de passe et on en propose
+        un meilleur.
+      en: |
+        How do you refuse, at sign-up, a password that appears in billions of leaks, **without** sending the
+        user's password to a third party? The answer is the **k-anonymity** of the *Have I Been Pwned* (HIBP)
+        service, a small masterpiece of privacy protection.
+
+        1. The server computes the **SHA-1** of the password (only for this check).
+        2. It sends the API only the **first 5 characters** of the hash (the *prefix*).
+        3. The API returns **all** known suffixes starting with that prefix (hundreds of them).
+        4. The server looks up the exact suffix **locally** in the list: it learns whether the password is
+           compromised, and how many times, **without ever revealing it**.
+
+        Because hundreds of hashes share the same prefix, the API cannot tell which one you care about: that
+        is the *k* in "k-anonymity". You get the security information (this password has leaked) while
+        preserving confidentiality. You then politely refuse that password and suggest a better one.
+
+examples:
+  - title:
+      fr: "Backoff exponentiel par (IP + compte)"
+      en: "Exponential backoff per (IP + account)"
+    file: rate_limit.py
+    lang: python
+    kind: secure
+    code: |
+      import time
+
+      # Defensive rate limiting keyed on BOTH the account and the source IP.
+      # Keying on the pair resists single-account DoS and per-IP evasion better.
+      attempts = {}   # (ip, user) -> failure count
+
+      def delay_for(ip: str, user: str) -> float:
+          n = attempts.get((ip, user), 0)
+          # 0,1,2 failures = no delay; then exponential: 1s, 2s, 4s, 8s ... capped at 30s.
+          return 0 if n < 3 else min(2 ** (n - 3), 30)
+
+      def record_failure(ip: str, user: str):
+          attempts[(ip, user)] = attempts.get((ip, user), 0) + 1
+
+      # Simulate five failed logins from one source on one account.
+      ip, user = "192.0.2.77", "alice@example.com"
+      for i in range(5):
+          d = delay_for(ip, user)
+          print(f"attempt {i}: enforced delay = {d}s")
+          time.sleep(0)   # real code would sleep(d) before answering
+          record_failure(ip, user)
+    output: |
+      attempt 0: enforced delay = 0s
+      attempt 1: enforced delay = 0s
+      attempt 2: enforced delay = 0s
+      attempt 3: enforced delay = 1s
+      attempt 4: enforced delay = 2s
+    note:
+      fr: "Les premiers essais restent fluides pour un vrai utilisateur qui se trompe ; au-delà, le délai croît vite. La clé (IP + compte) limite à la fois la force brute et l'évasion multi-IP."
+      en: "The first attempts stay smooth for a real user who mistypes; beyond that the delay grows fast. The (IP + account) key limits both brute force and multi-IP evasion."
+
+  - title:
+      fr: "Refuser un mot de passe compromis via HIBP (k-anonymat)"
+      en: "Refusing a compromised password via HIBP (k-anonymity)"
+    file: pwned_check.py
+    lang: python
+    kind: secure
+    code: |
+      import hashlib
+      import urllib.request
+
+      # Privacy-preserving breach check. We NEVER send the password, nor its full hash:
+      # only the first 5 hex chars of its SHA-1. The API returns all matching suffixes.
+      def is_pwned(password: str) -> int:
+          sha1 = hashlib.sha1(password.encode()).hexdigest().upper()
+          prefix, suffix = sha1[:5], sha1[5:]
+          url = f"https://api.pwnedpasswords.com/range/{prefix}"
+          req = urllib.request.Request(url, headers={"User-Agent": "lab-check"})
+          with urllib.request.urlopen(req, timeout=5) as resp:
+              body = resp.read().decode()
+          # Each line is "SUFFIX:count". We match our suffix LOCALLY.
+          for line in body.splitlines():
+              suf, count = line.split(":")
+              if suf == suffix:
+                  return int(count)
+          return 0
+
+      pwned = is_pwned("password123")   # a famously leaked password
+      print("Times seen in breaches:", pwned)
+      if pwned:
+          print("Refuse this password and ask the user to choose another.")
+    output: |
+      Times seen in breaches: 251682
+      Refuse this password and ask the user to choose another.
+    note:
+      fr: "Seul le préfixe de 5 caractères quitte le serveur ; le suffixe est comparé localement. On apprend que `password123` a fuité des centaines de milliers de fois sans jamais l'avoir transmis."
+      en: "Only the 5-char prefix leaves the server; the suffix is compared locally. You learn `password123` leaked hundreds of thousands of times without ever transmitting it."
+
+  - title:
+      fr: "Flux de réinitialisation : réponse constante anti-énumération"
+      en: "Reset flow: constant response against enumeration"
+    file: reset_flow.py
+    lang: python
+    kind: secure
+    code: |
+      import secrets, hashlib, time
+
+      # A reset endpoint must NOT reveal whether an email exists (account enumeration).
+      # It always answers the same, and only emails a token when the account is real.
+      users = {"alice@example.com": {}}   # fake store
+      tokens = {}
+
+      def request_reset(email: str) -> str:
+          if email in users:
+              raw = secrets.token_urlsafe(32)
+              tokens[email] = {
+                  "hash": hashlib.sha256(raw.encode()).hexdigest(),  # store hash only
+                  "exp": time.time() + 900,                          # 15 min, single use
+              }
+              # send_email(email, raw)  # the token goes ONLY to the real inbox
+          # Identical message whether or not the account exists:
+          return "If that address exists, a reset link has been sent."
+
+      print(request_reset("alice@example.com"))   # real account
+      print(request_reset("ghost@example.com"))   # unknown account - same reply
+    output: |
+      If that address exists, a reset link has been sent.
+      If that address exists, a reset link has been sent.
+    note:
+      fr: "La réponse est **identique** pour un compte existant ou non : l'attaquant ne peut pas énumérer les adresses valides. Le jeton n'est envoyé qu'à la vraie boîte, haché et expirant."
+      en: "The reply is **identical** for an existing account or not: the attacker cannot enumerate valid addresses. The token is sent only to the real inbox, hashed and expiring."
+
+  - title:
+      fr: "Détecter une connexion anormale (score de risque)"
+      en: "Detecting an abnormal login (risk score)"
+    file: anomaly.py
+    lang: python
+    kind: secure
+    code: |
+      # Simple risk-based authentication: score a login against the user's usual context.
+      # A high score triggers a step-up challenge (MFA), not an outright block.
+      def risk_score(ctx, known) -> int:
+          score = 0
+          if ctx["country"] not in known["countries"]:
+              score += 50            # new country is a strong signal
+          if ctx["device_id"] not in known["devices"]:
+              score += 30            # unseen device
+          if ctx["hour"] < 6 or ctx["hour"] > 23:
+              score += 10            # unusual hour
+          return score
+
+      known = {"countries": {"FR"}, "devices": {"dev-abc"}}
+      login = {"country": "RU", "device_id": "dev-xyz", "hour": 3}
+
+      score = risk_score(login, known)
+      action = "allow" if score < 30 else ("challenge" if score < 80 else "block")
+      print(f"risk={score} -> {action}")
+    output: |
+      risk=90 -> block
+    note:
+      fr: "On note le contexte (pays, appareil, heure) contre les habitudes connues. Un score élevé déclenche un défi MFA ou un blocage : c'est l'authentification adaptative au risque."
+      en: "You score the context (country, device, hour) against known habits. A high score triggers an MFA step-up or a block: this is risk-based adaptive authentication."
+
+mistake:
+  fr: |
+    **Révéler, dans les messages d'erreur, si un compte existe.**
+
+    Répondre « mot de passe incorrect » quand l'e-mail existe mais « compte inconnu » sinon permet à un
+    attaquant d'**énumérer** vos utilisateurs valides, première étape d'un bourrage ciblé. Même chose pour un
+    flux « mot de passe oublié » qui dit « e-mail envoyé » dans un cas et « adresse inconnue » dans l'autre.
+    Les réponses doivent être **constantes** et neutres, et le temps de réponse ne doit pas trahir
+    l'existence du compte.
+  en: |
+    **Revealing, in error messages, whether an account exists.**
+
+    Answering "wrong password" when the email exists but "unknown account" otherwise lets an attacker
+    **enumerate** your valid users, the first step of targeted stuffing. Same for a "forgot password" flow
+    that says "email sent" in one case and "unknown address" in the other. Responses must be **constant** and
+    neutral, and the response time must not betray the account's existence.
+
+bestPractice:
+  fr: |
+    - **Limiter le débit de façon graduée** (délai, CAPTCHA, défi) par couple (IP + compte), pas seulement par IP.
+    - **Refuser les mots de passe compromis** à l'inscription via HIBP en k-anonymat, sans jamais transmettre le mot de passe.
+    - **Hacher avec Argon2id/bcrypt** et un poivre hors base ; ne jamais stocker en clair.
+    - **Réponses constantes** sur la connexion et la réinitialisation pour empêcher l'énumération des comptes.
+    - **Authentification adaptative** : scorer le risque (appareil, pays, heure) et exiger un facteur supplémentaire au-delà d'un seuil.
+  en: |
+    - **Rate-limit gradually** (delay, CAPTCHA, challenge) per (IP + account) pair, not only per IP.
+    - **Refuse compromised passwords** at sign-up via HIBP k-anonymity, never transmitting the password.
+    - **Hash with Argon2id/bcrypt** and a pepper outside the database; never store in clear.
+    - **Constant responses** on login and reset to prevent account enumeration.
+    - **Adaptive authentication**: score risk (device, country, hour) and require an extra factor beyond a threshold.
+
+exercise:
+  statement:
+    fr: |
+      Votre page d'inscription accepte n'importe quel mot de passe et répond « cette adresse est déjà
+      utilisée » quand l'e-mail existe. Citez les deux problèmes de sécurité, puis décrivez la correction de
+      chacun (avec, pour le premier, le principe du k-anonymat de HIBP).
+    en: |
+      Your sign-up page accepts any password and replies "this address is already in use" when the email
+      exists. Name the two security problems, then describe the fix for each (with, for the first, the
+      principle of HIBP k-anonymity).
+  solution:
+    file: solution.md
+    lang: markdown
+    code: |
+      # Problem 1: weak/compromised passwords are accepted
+      Fix: check the password against Have I Been Pwned using k-anonymity.
+      - Compute SHA-1(password), send only the first 5 hex chars to the range API.
+      - The API returns all suffixes with that prefix; match your suffix LOCALLY.
+      - The password never leaves your server, yet you learn if (and how often) it leaked.
+      - Refuse known-compromised passwords and ask for another; also enforce a minimum length.
+
+      # Problem 2: account enumeration via the sign-up message
+      Fix: do not reveal whether the email already exists.
+      - Reply with a neutral, constant message ("If needed, we've emailed you next steps.").
+      - If the address is already registered, email that inbox instead of telling the browser.
+      - Keep response timing constant so timing does not leak existence.
+
+      Together: no weak passwords get in, and attackers cannot build a list of valid accounts.
+    note:
+      fr: "Problème 1 : accepter des mots de passe compromis → vérification HIBP en k-anonymat. Problème 2 : fuite d'existence de compte → message neutre et constant, notification par e-mail côté compte réel."
+      en: "Problem 1: accepting compromised passwords → HIBP k-anonymity check. Problem 2: account-existence leak → neutral, constant message, email notification to the real account."
+
+quiz:
+  - q:
+      fr: "Dans la vérification HIBP par k-anonymat, qu'envoie-t-on à l'API ?"
+      en: "In the HIBP k-anonymity check, what is sent to the API?"
+    options:
+      fr:
+        - "Le mot de passe en clair"
+        - "Le hachage SHA-1 complet du mot de passe"
+        - "Les 5 premiers caractères du hachage SHA-1"
+        - "L'adresse e-mail de l'utilisateur"
+      en:
+        - "The clear-text password"
+        - "The full SHA-1 hash of the password"
+        - "The first 5 characters of the SHA-1 hash"
+        - "The user's email address"
+    answer: 2
+    why:
+      fr: "On n'envoie que le préfixe de 5 caractères ; l'API renvoie tous les suffixes correspondants, comparés localement. Le mot de passe ne quitte jamais le serveur."
+      en: "Only the 5-char prefix is sent; the API returns all matching suffixes, compared locally. The password never leaves the server."
+  - q:
+      fr: "Pourquoi limiter le débit par (IP + compte) plutôt que par IP seule ?"
+      en: "Why rate-limit per (IP + account) rather than per IP alone?"
+    options:
+      fr:
+        - "Parce que le bourrage utilise des milliers d'IP différentes"
+        - "Parce que les IP changent de pays"
+        - "Parce que c'est plus rapide à calculer"
+        - "Parce que les comptes n'ont pas d'IP"
+      en:
+        - "Because stuffing uses thousands of different IPs"
+        - "Because IPs change country"
+        - "Because it is faster to compute"
+        - "Because accounts have no IP"
+    answer: 0
+    why:
+      fr: "Le bourrage se répartit sur de nombreuses IP ; combiner IP et compte capte mieux l'abus tout en évitant le déni de service sur un compte visé."
+      en: "Stuffing spreads over many IPs; combining IP and account catches abuse better while avoiding denial of service on a targeted account."
+  - q:
+      fr: "Qu'est-ce que l'énumération de comptes ?"
+      en: "What is account enumeration?"
+    options:
+      fr:
+        - "Compter le nombre total d'utilisateurs"
+        - "Déduire quelles adresses e-mail correspondent à des comptes existants"
+        - "Chiffrer la base d'utilisateurs"
+        - "Générer des mots de passe"
+      en:
+        - "Counting the total number of users"
+        - "Inferring which email addresses match existing accounts"
+        - "Encrypting the user database"
+        - "Generating passwords"
+    answer: 1
+    why:
+      fr: "Des messages ou temps de réponse différents selon l'existence du compte révèlent les adresses valides : c'est l'énumération, à bloquer par des réponses constantes."
+      en: "Different messages or timings depending on account existence reveal valid addresses: that is enumeration, blocked by constant responses."
+  - q:
+      fr: "Que doit faire une authentification adaptative face à un score de risque élevé ?"
+      en: "What should adaptive authentication do for a high risk score?"
+    options:
+      fr:
+        - "Ignorer le risque"
+        - "Supprimer le compte"
+        - "Exiger un facteur supplémentaire (MFA) ou bloquer"
+        - "Envoyer le mot de passe par e-mail"
+      en:
+        - "Ignore the risk"
+        - "Delete the account"
+        - "Require an extra factor (MFA) or block"
+        - "Email the password"
+    answer: 2
+    why:
+      fr: "Un score élevé (pays inhabituel, nouvel appareil) déclenche un défi supplémentaire ou un blocage, sans pénaliser les connexions normales."
+      en: "A high score (unusual country, new device) triggers a step-up challenge or a block, without penalising normal logins."
+  - q:
+      fr: "Quel est l'avantage clé du k-anonymat pour vérifier un mot de passe ?"
+      en: "What is the key advantage of k-anonymity for checking a password?"
+    options:
+      fr:
+        - "Il accélère le hachage"
+        - "Il obtient l'information de fuite sans divulguer le mot de passe"
+        - "Il remplace le MFA"
+        - "Il chiffre la base de données"
+      en:
+        - "It speeds up hashing"
+        - "It gets the breach info without disclosing the password"
+        - "It replaces MFA"
+        - "It encrypts the database"
+    answer: 1
+    why:
+      fr: "Le k-anonymat permet de savoir si un mot de passe a fuité tout en préservant la confidentialité : seul un préfixe partagé par de nombreux hachages est transmis."
+      en: "K-anonymity lets you learn whether a password leaked while preserving privacy: only a prefix shared by many hashes is sent."

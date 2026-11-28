@@ -1,0 +1,427 @@
+description:
+  fr: "Gérer les services Linux avec systemd : démarrer, arrêter, activer au démarrage, écrire une unité et lire les journaux avec journalctl."
+  en: "Manage Linux services with systemd: start, stop, enable at boot, write a unit and read logs with journalctl."
+duration: 24
+
+intro:
+  fr: |
+    Un serveur, c'est fait pour faire tourner des **services** : un site web, une base de données, un planning
+    de sauvegardes. Ces programmes doivent démarrer tout seuls au boot, redémarrer en cas de plantage, et
+    tourner en arrière-plan sans qu'on les surveille. Le chef d'orchestre qui gère tout cela sous Linux moderne
+    s'appelle **systemd**.
+
+    Imaginez le gardien d'un immeuble. Il allume le chauffage le matin, rallume l'ascenseur s'il tombe en panne,
+    tient un registre de tout ce qui se passe, et sait à tout moment si chaque équipement fonctionne. systemd
+    est ce gardien : il **lance**, **surveille** et **relance** les services, et garde un journal de tout.
+
+    Dans cette leçon, vous allez piloter des services avec `systemctl` (démarrer, arrêter, activer au
+    démarrage), écrire votre propre **unité** pour transformer un script en service géré, et consulter les
+    journaux centralisés avec `journalctl` — un réflexe indispensable quand un service refuse de démarrer.
+  en: |
+    A server exists to run **services**: a website, a database, a backup schedule. These programs must start on
+    their own at boot, restart if they crash, and run in the background without being watched. The conductor
+    that handles all this on modern Linux is called **systemd**.
+
+    Picture a building caretaker. They turn on the heating in the morning, restart the lift if it breaks, keep a
+    log of everything that happens, and know at any moment whether each piece of equipment works. systemd is
+    that caretaker: it **starts**, **watches** and **restarts** services, and keeps a log of everything.
+
+    In this lesson you will drive services with `systemctl` (start, stop, enable at boot), write your own
+    **unit** to turn a script into a managed service, and read the centralised logs with `journalctl` — an
+    essential reflex when a service refuses to start.
+
+sections:
+  - heading:
+      fr: "Piloter un service avec systemctl"
+      en: "Driving a service with systemctl"
+    body:
+      fr: |
+        Un **service** (appelé *unit* dans le vocabulaire systemd) se pilote avec la commande `systemctl`.
+        Deux notions à bien distinguer :
+
+        - **Démarrer / arrêter** agit **maintenant**, pour la session en cours.
+        - **Activer / désactiver** (`enable` / `disable`) décide si le service **se lancera tout seul au
+          prochain démarrage** de la machine.
+
+        | Commande | Rôle |
+        |---|---|
+        | `sudo systemctl start nginx` | Démarre le service maintenant |
+        | `sudo systemctl stop nginx` | Arrête le service maintenant |
+        | `sudo systemctl restart nginx` | Redémarre (stop puis start) |
+        | `sudo systemctl reload nginx` | Recharge la configuration sans couper le service |
+        | `sudo systemctl enable nginx` | Lancera le service au démarrage |
+        | `sudo systemctl disable nginx` | Ne le lancera plus au démarrage |
+        | `systemctl status nginx` | Affiche l'état : actif, en échec, depuis quand |
+
+        En sécurité, `enable` et `disable` comptent : un service activé mais inutile est une surface d'attaque en
+        plus. Désactivez tout service dont vous n'avez pas besoin. `reload` est précieux : il applique une
+        nouvelle configuration sans interrompre les connexions en cours.
+      en: |
+        A **service** (called a *unit* in systemd vocabulary) is driven with the `systemctl` command. Two ideas
+        to keep clearly apart:
+
+        - **Start / stop** acts **now**, for the current session.
+        - **Enable / disable** decides whether the service **will start on its own at the machine's next boot**.
+
+        | Command | Role |
+        |---|---|
+        | `sudo systemctl start nginx` | Start the service now |
+        | `sudo systemctl stop nginx` | Stop the service now |
+        | `sudo systemctl restart nginx` | Restart (stop then start) |
+        | `sudo systemctl reload nginx` | Reload the config without cutting the service |
+        | `sudo systemctl enable nginx` | Will start the service at boot |
+        | `sudo systemctl disable nginx` | Will no longer start it at boot |
+        | `systemctl status nginx` | Show the state: active, failed, since when |
+
+        In security, `enable` and `disable` matter: a service enabled but useless is one more attack surface.
+        Disable any service you do not need. `reload` is valuable: it applies a new configuration without
+        interrupting the connections in progress.
+  - heading:
+      fr: "Écrire une unité de service"
+      en: "Writing a service unit"
+    body:
+      fr: |
+        Pour faire gérer **votre** programme par systemd, vous écrivez un petit fichier texte appelé **unité**,
+        placé dans `/etc/systemd/system/`. Il décrit quoi lancer et comment. Voici les sections essentielles :
+
+        | Section | Clé | Rôle |
+        |---|---|---|
+        | `[Unit]` | `Description` | Le nom lisible du service |
+        | `[Service]` | `ExecStart` | La commande à lancer |
+        | `[Service]` | `User` | **Sous quel compte** il tourne (important !) |
+        | `[Service]` | `Restart` | Relancer automatiquement en cas de plantage |
+        | `[Install]` | `WantedBy` | Quand l'activer (généralement au démarrage multi-utilisateur) |
+
+        Le réflexe de sécurité majeur est la clé **`User`** : ne faites **jamais** tourner un service applicatif
+        en `root`. Créez un compte dédié peu privilégié (par exemple `appuser`) et indiquez-le dans l'unité.
+        Ainsi, si le service est compromis, l'attaquant hérite seulement des faibles droits de ce compte, pas de
+        ceux de root. C'est le moindre privilège appliqué aux services.
+
+        Après avoir créé ou modifié une unité, on recharge systemd avec `sudo systemctl daemon-reload` pour qu'il
+        prenne en compte le nouveau fichier.
+      en: |
+        To have systemd manage **your** program, you write a small text file called a **unit**, placed in
+        `/etc/systemd/system/`. It describes what to run and how. Here are the essential sections:
+
+        | Section | Key | Role |
+        |---|---|---|
+        | `[Unit]` | `Description` | The service's human-readable name |
+        | `[Service]` | `ExecStart` | The command to run |
+        | `[Service]` | `User` | **Under which account** it runs (important!) |
+        | `[Service]` | `Restart` | Restart automatically on crash |
+        | `[Install]` | `WantedBy` | When to enable it (usually at multi-user boot) |
+
+        The major security reflex is the **`User`** key: **never** run an application service as `root`. Create a
+        dedicated low-privilege account (for example `appuser`) and set it in the unit. That way, if the service
+        is compromised, the attacker inherits only that account's weak rights, not root's. This is least
+        privilege applied to services.
+
+        After creating or changing a unit, you reload systemd with `sudo systemctl daemon-reload` so it takes the
+        new file into account.
+  - heading:
+      fr: "Lire les journaux avec journalctl"
+      en: "Reading logs with journalctl"
+    body:
+      fr: |
+        systemd centralise les journaux de tous les services dans son propre système, consulté avec
+        **`journalctl`**. Fini de chercher le bon fichier de log pour chaque programme : tout passe par la même
+        commande.
+
+        | Commande | Rôle |
+        |---|---|
+        | `journalctl -u nginx` | Tous les journaux du service `nginx` |
+        | `journalctl -u nginx -f` | Les suit **en temps réel** (comme `tail -f`) |
+        | `journalctl -u nginx --since "10 min ago"` | Depuis 10 minutes seulement |
+        | `journalctl -u nginx -p err` | Seulement les messages d'erreur |
+        | `journalctl -xe` | Les dernières entrées, avec explications (après un échec) |
+
+        Le flux de dépannage type : un service ne démarre pas → `systemctl status monservice` donne l'état et
+        les dernières lignes → `journalctl -u monservice -n 50` montre le détail de l'erreur. Savoir lire ces
+        journaux fait gagner un temps considérable : 90 % des problèmes de démarrage s'expliquent par un message
+        clair dans `journalctl` (chemin erroné, permission refusée, port déjà utilisé).
+      en: |
+        systemd centralises the logs of all services in its own system, read with **`journalctl`**. No more
+        hunting for the right log file per program: everything goes through the same command.
+
+        | Command | Role |
+        |---|---|
+        | `journalctl -u nginx` | All logs of the `nginx` service |
+        | `journalctl -u nginx -f` | Follow them **in real time** (like `tail -f`) |
+        | `journalctl -u nginx --since "10 min ago"` | From the last 10 minutes only |
+        | `journalctl -u nginx -p err` | Only error messages |
+        | `journalctl -xe` | The latest entries, with explanations (after a failure) |
+
+        The typical troubleshooting flow: a service will not start → `systemctl status myservice` gives the
+        state and last lines → `journalctl -u myservice -n 50` shows the error in detail. Being able to read
+        these logs saves huge amounts of time: 90% of startup problems are explained by a clear message in
+        `journalctl` (wrong path, permission denied, port already in use).
+
+examples:
+  - title:
+      fr: "Vérifier l'état d'un service et le gérer"
+      en: "Checking a service's state and managing it"
+    file: manage-service.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # See the full state: active or not, enabled at boot or not, recent logs
+      systemctl status ssh
+
+      # Make sure it starts automatically at every boot
+      sudo systemctl enable ssh
+
+      # Reload its configuration without dropping current connections
+      sudo systemctl reload ssh
+    output: |
+      ● ssh.service - OpenBSD Secure Shell server
+           Loaded: loaded (/lib/systemd/system/ssh.service; enabled; preset: enabled)
+           Active: active (running) since Tue 2027-06-03 09:00:11 UTC; 3h ago
+         Main PID: 742 (sshd)
+            Tasks: 1 (limit: 2275)
+           Memory: 5.6M
+              CPU: 112ms
+           CGroup: /system.slice/ssh.service
+                   └─742 "sshd: /usr/sbin/sshd -D [listener]"
+    note:
+      fr: "La ligne `Active: active (running)` confirme que le service tourne, et `enabled` qu'il démarrera au boot. `status` est votre premier réflexe : il montre l'état **et** les dernières lignes de journal en un coup d'œil."
+      en: "The `Active: active (running)` line confirms the service is running, and `enabled` that it will start at boot. `status` is your first reflex: it shows the state **and** the latest log lines at a glance."
+
+  - title:
+      fr: "Créer un service qui tourne sous un compte dédié"
+      en: "Creating a service that runs under a dedicated account"
+    file: myapp.service
+    lang: ini
+    kind: secure
+    code: |
+      [Unit]
+      Description=My small web application
+      After=network.target
+
+      [Service]
+      # Least privilege: a dedicated, low-privilege account, NEVER root
+      User=appuser
+      Group=appuser
+      WorkingDirectory=/opt/myapp
+      ExecStart=/usr/bin/python3 /opt/myapp/server.py
+      # Restart the service automatically if it crashes
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+    output: |
+      # Save as /etc/systemd/system/myapp.service, then:
+      #   sudo systemctl daemon-reload
+      #   sudo systemctl enable --now myapp
+      #   systemctl status myapp
+    note:
+      fr: "La clé `User=appuser` est le point de sécurité central : même compromise, l'application n'obtient que les droits de `appuser`, pas ceux de root. `Restart=on-failure` assure que le service se relève seul après un plantage."
+      en: "The `User=appuser` key is the central security point: even if compromised, the application gets only `appuser`'s rights, not root's. `Restart=on-failure` ensures the service recovers on its own after a crash."
+
+  - title:
+      fr: "Diagnostiquer un service qui refuse de démarrer"
+      en: "Diagnosing a service that refuses to start"
+    file: debug-service.sh
+    lang: bash
+    kind: neutral
+    code: |
+      # Try to start it; it fails
+      sudo systemctl start myapp
+
+      # status shows the failure summary
+      systemctl status myapp --no-pager -l
+
+      # journalctl shows the exact error message
+      journalctl -u myapp -n 20 --no-pager
+    output: |
+      × myapp.service - My small web application
+           Loaded: loaded (/etc/systemd/system/myapp.service; enabled)
+           Active: failed (Result: exit-code) since Tue 2027-06-03 12:30:02 UTC
+          Process: 4120 ExecStart=/usr/bin/python3 /opt/myapp/server.py (code=exited, status=2)
+
+      Jun 03 12:30:02 server python3[4120]: PermissionError: [Errno 13] Permission denied: '/opt/myapp/data.db'
+    note:
+      fr: "Le journal donne la cause exacte : `Permission denied` sur `data.db`. Le compte `appuser` n'a pas le droit d'écrire ce fichier. Sans `journalctl`, on chercherait à l'aveugle ; avec, la correction est évidente (ajuster le propriétaire du fichier)."
+      en: "The log gives the exact cause: `Permission denied` on `data.db`. The `appuser` account cannot write that file. Without `journalctl`, you would search blindly; with it, the fix is obvious (adjust the file's owner)."
+
+mistake:
+  fr: |
+    **Faire tourner un service applicatif en root, ou oublier `daemon-reload` après avoir modifié une unité.**
+
+    Lancer son application en `root` « parce que ça marche » est une faute grave : la moindre faille dans ce
+    service donne alors à l'attaquant les pleins pouvoirs sur la machine. Créez toujours un compte dédié peu
+    privilégié et indiquez-le avec `User=` dans l'unité. Autre piège courant : modifier un fichier `.service`
+    puis s'étonner que rien ne change. systemd ne relit pas les unités tout seul : après toute création ou
+    modification, il faut lancer `sudo systemctl daemon-reload` pour qu'il prenne en compte le nouveau fichier.
+  en: |
+    **Running an application service as root, or forgetting `daemon-reload` after changing a unit.**
+
+    Launching your application as `root` "because it works" is a serious fault: any flaw in that service then
+    hands the attacker full power over the machine. Always create a dedicated low-privilege account and set it
+    with `User=` in the unit. Another common trap: editing a `.service` file then being surprised nothing
+    changes. systemd does not re-read units on its own: after any creation or change, you must run
+    `sudo systemctl daemon-reload` so it takes the new file into account.
+
+bestPractice:
+  fr: |
+    - **Un compte dédié par service** : `User=appuser`, jamais `root`, pour limiter les dégâts en cas de compromission.
+    - **Désactivez l'inutile** : `systemctl disable` tout service dont vous n'avez pas besoin réduit la surface d'attaque.
+    - **`daemon-reload` après édition** : systemd doit relire une unité créée ou modifiée pour la prendre en compte.
+    - **`Restart=on-failure`** : un service critique se relève seul après un plantage.
+    - **`journalctl` est votre ami** : devant un échec, `status` puis `journalctl -u service` donnent la cause exacte.
+    - **`reload` plutôt que `restart`** quand c'est possible : la configuration s'applique sans couper les connexions.
+  en: |
+    - **A dedicated account per service**: `User=appuser`, never `root`, to limit damage if compromised.
+    - **Disable the useless**: `systemctl disable` every service you do not need reduces the attack surface.
+    - **`daemon-reload` after editing**: systemd must re-read a created or changed unit to apply it.
+    - **`Restart=on-failure`**: a critical service recovers on its own after a crash.
+    - **`journalctl` is your friend**: facing a failure, `status` then `journalctl -u service` give the exact cause.
+    - **`reload` rather than `restart`** when possible: the config applies without cutting connections.
+
+exercise:
+  statement:
+    fr: |
+      Dans votre VM, transformez un petit script en service géré par systemd, en respectant le moindre privilège :
+
+      1. Créez un compte système dédié `appuser` (sans dossier personnel ni shell de connexion).
+      2. Écrivez une unité `/etc/systemd/system/clock.service` qui lance `/usr/bin/date` en boucle, sous `appuser`, et redémarre en cas d'échec.
+      3. Rechargez systemd, activez le service au démarrage et lancez-le immédiatement.
+      4. Vérifiez son état avec `systemctl status`.
+      5. Affichez ses dix dernières lignes de journal avec `journalctl`.
+
+      Notez vos commandes dans votre dépôt de suivi.
+    en: |
+      In your VM, turn a small script into a systemd-managed service, respecting least privilege:
+
+      1. Create a dedicated system account `appuser` (no home folder, no login shell).
+      2. Write a unit `/etc/systemd/system/clock.service` that runs `/usr/bin/date` in a loop, under `appuser`, and restarts on failure.
+      3. Reload systemd, enable the service at boot and start it immediately.
+      4. Check its state with `systemctl status`.
+      5. Show its last ten log lines with `journalctl`.
+
+      Record your commands in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Create a dedicated low-privilege system account
+      sudo useradd --system --no-create-home --shell /usr/sbin/nologin appuser
+
+      # 2. Write the unit (here with a heredoc as root)
+      sudo tee /etc/systemd/system/clock.service >/dev/null <<'EOF'
+      [Unit]
+      Description=Print the date every 5 seconds
+
+      [Service]
+      User=appuser
+      ExecStart=/bin/sh -c 'while true; do date; sleep 5; done'
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+
+      # 3. Reload systemd, enable at boot AND start now
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now clock
+
+      # 4. Check the state
+      systemctl status clock --no-pager
+
+      # 5. Show the last ten log lines
+      journalctl -u clock -n 10 --no-pager
+    note:
+      fr: "`--system` et `--shell /usr/sbin/nologin` créent un compte qui ne peut pas se connecter : parfait pour un service. `enable --now` active au démarrage **et** lance tout de suite. Le `daemon-reload` est indispensable après la création de l'unité."
+      en: "`--system` and `--shell /usr/sbin/nologin` create an account that cannot log in: perfect for a service. `enable --now` enables at boot **and** starts immediately. The `daemon-reload` is essential after creating the unit."
+
+quiz:
+  - q:
+      fr: "Quelle est la différence entre `systemctl start` et `systemctl enable` ?"
+      en: "What is the difference between `systemctl start` and `systemctl enable`?"
+    options:
+      fr:
+        - "`start` lance le service maintenant, `enable` le lancera au démarrage"
+        - "Les deux font exactement la même chose"
+        - "`start` supprime le service, `enable` le crée"
+        - "`enable` lance le service maintenant, `start` au démarrage"
+      en:
+        - "`start` runs the service now, `enable` will run it at boot"
+        - "Both do exactly the same thing"
+        - "`start` deletes the service, `enable` creates it"
+        - "`enable` runs the service now, `start` at boot"
+    answer: 0
+    why:
+      fr: "`start` agit tout de suite pour la session en cours ; `enable` configure le lancement automatique au prochain démarrage de la machine."
+      en: "`start` acts right now for the current session; `enable` sets up automatic launch at the machine's next boot."
+  - q:
+      fr: "Pourquoi indiquer `User=appuser` dans une unité de service ?"
+      en: "Why set `User=appuser` in a service unit?"
+    options:
+      fr:
+        - "Pour que le service aille plus vite"
+        - "Pour qu'il tourne sous un compte peu privilégié et limite les dégâts s'il est compromis"
+        - "Parce que systemd l'exige toujours"
+        - "Pour chiffrer les journaux"
+      en:
+        - "To make the service faster"
+        - "So it runs under a low-privilege account and limits damage if compromised"
+        - "Because systemd always requires it"
+        - "To encrypt the logs"
+    answer: 1
+    why:
+      fr: "Faire tourner un service sous un compte dédié peu privilégié, jamais root, applique le moindre privilège : une compromission n'ouvre pas tout le système."
+      en: "Running a service under a dedicated low-privilege account, never root, applies least privilege: a compromise does not open the whole system."
+  - q:
+      fr: "Que faut-il faire après avoir créé ou modifié un fichier `.service` ?"
+      en: "What must you do after creating or changing a `.service` file?"
+    options:
+      fr:
+        - "Redémarrer toute la machine"
+        - "Rien, systemd relit les fichiers tout seul"
+        - "Lancer `sudo systemctl daemon-reload`"
+        - "Supprimer le fichier et le recréer"
+      en:
+        - "Reboot the whole machine"
+        - "Nothing, systemd re-reads files on its own"
+        - "Run `sudo systemctl daemon-reload`"
+        - "Delete the file and recreate it"
+    answer: 2
+    why:
+      fr: "systemd ne relit pas les unités automatiquement : `daemon-reload` lui fait prendre en compte le fichier créé ou modifié."
+      en: "systemd does not re-read units automatically: `daemon-reload` makes it take the created or changed file into account."
+  - q:
+      fr: "Quelle commande suit en temps réel les journaux du service `nginx` ?"
+      en: "Which command follows the `nginx` service logs in real time?"
+    options:
+      fr:
+        - "systemctl enable nginx"
+        - "journalctl -u nginx -f"
+        - "systemctl status nginx"
+        - "journalctl --disable nginx"
+      en:
+        - "systemctl enable nginx"
+        - "journalctl -u nginx -f"
+        - "systemctl status nginx"
+        - "journalctl --disable nginx"
+    answer: 1
+    why:
+      fr: "`journalctl -u nginx -f` affiche les journaux du service et les suit en direct, comme `tail -f` sur un fichier."
+      en: "`journalctl -u nginx -f` shows the service's logs and follows them live, like `tail -f` on a file."
+  - q:
+      fr: "Un service est en échec. Quel est le bon réflexe de diagnostic ?"
+      en: "A service has failed. What is the right diagnostic reflex?"
+    options:
+      fr:
+        - "Réinstaller le système"
+        - "Désactiver le réseau"
+        - "Supprimer l'unité"
+        - "Lire `systemctl status` puis `journalctl -u service` pour trouver la cause exacte"
+      en:
+        - "Reinstall the system"
+        - "Disable the network"
+        - "Delete the unit"
+        - "Read `systemctl status` then `journalctl -u service` to find the exact cause"
+    answer: 3
+    why:
+      fr: "`status` donne l'état et un résumé, `journalctl` affiche le message d'erreur précis : la plupart des échecs de démarrage s'y expliquent clairement."
+      en: "`status` gives the state and a summary, `journalctl` shows the precise error message: most startup failures are clearly explained there."

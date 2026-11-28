@@ -1,0 +1,415 @@
+description:
+  fr: "Concevoir l'architecture cible AWS, comprendre les prérequis et poser la structure Terraform du projet : providers épinglés, variables et backend distant chiffré."
+  en: "Design the target AWS architecture, understand the prerequisites and lay down the project's Terraform structure: pinned providers, variables and an encrypted remote backend."
+duration: 25
+
+intro:
+  fr: |
+    Deuxième projet de portfolio, plus ambitieux : déployer une application **Node.js** sur **AWS**, de
+    façon entièrement automatisée, **sans jamais stocker de clé d'accès**. Toute l'infrastructure est
+    décrite en **Terraform** (Infrastructure as Code), et le déploiement se fait via **GitHub Actions**
+    avec **OIDC** (authentification sans secret).
+
+    AWS, c'est le cloud d'Amazon : on y loue des serveurs, du réseau et des services à la demande.
+    Terraform, c'est un langage pour décrire cette infrastructure dans des fichiers texte versionnés :
+    au lieu de cliquer dans une console, on écrit `resource "aws_vpc" ...` et Terraform crée le réseau.
+
+    Analogie : Terraform est le **plan d'architecte** de votre maison cloud. Cette première leçon dessine
+    le plan (l'architecture), liste les matériaux (prérequis) et pose les fondations du dépôt (providers,
+    variables, backend). On ne crée pas encore de ressource : on prépare un terrain solide.
+  en: |
+    A second, more ambitious portfolio project: deploy a **Node.js** application on **AWS**, fully
+    automated, **without ever storing an access key**. The whole infrastructure is described in
+    **Terraform** (Infrastructure as Code), and deployment happens through **GitHub Actions** with
+    **OIDC** (secret-less authentication).
+
+    AWS is Amazon's cloud: you rent servers, networking and services on demand. Terraform is a language to
+    describe that infrastructure in versioned text files: instead of clicking in a console, you write
+    `resource "aws_vpc" ...` and Terraform creates the network.
+
+    Analogy: Terraform is the **architect's blueprint** of your cloud house. This first lesson draws the
+    blueprint (the architecture), lists the materials (prerequisites) and lays the repository's
+    foundations (providers, variables, backend). No resource yet: we prepare solid ground.
+
+sections:
+  - heading:
+      fr: "L'architecture cible"
+      en: "The target architecture"
+    body:
+      fr: |
+        L'application tournera dans des conteneurs gérés par **ECS Fargate** (des conteneurs sans serveur
+        à administrer), dans des **sous-réseaux privés** d'un **VPC** (réseau privé virtuel). Le trafic
+        internet passe par un **Application Load Balancer** (ALB) placé dans les sous-réseaux publics. Le
+        public ne touche donc **jamais** directement les conteneurs.
+
+        | Couche | Service AWS | Rôle | Exposition |
+        |---|---|---|---|
+        | Entrée | ALB | Répartit le trafic HTTP | Public (sous-réseaux publics) |
+        | Calcul | ECS Fargate | Exécute les conteneurs | Privé (sous-réseaux privés) |
+        | Image | ECR | Stocke l'image Docker, scan au push | Privé |
+        | Journaux | CloudWatch Logs | Centralise les logs | Privé |
+        | Identité | IAM + OIDC | Droits et déploiement sans clé | — |
+
+        Ce découpage **public/privé** est le principe de **défense en profondeur** : même si l'ALB est
+        exposé, les conteneurs restent injoignables depuis internet.
+      en: |
+        The application will run in containers managed by **ECS Fargate** (serverless containers with no
+        servers to administer), inside **private subnets** of a **VPC** (virtual private network).
+        Internet traffic goes through an **Application Load Balancer** (ALB) placed in the public subnets.
+        The public therefore **never** touches the containers directly.
+
+        | Layer | AWS service | Role | Exposure |
+        |---|---|---|---|
+        | Ingress | ALB | Spreads HTTP traffic | Public (public subnets) |
+        | Compute | ECS Fargate | Runs the containers | Private (private subnets) |
+        | Image | ECR | Stores the Docker image, scan on push | Private |
+        | Logs | CloudWatch Logs | Centralises logs | Private |
+        | Identity | IAM + OIDC | Rights and secret-less deployment | — |
+
+        This **public/private** split is the principle of **defense in depth**: even if the ALB is
+        exposed, the containers stay unreachable from the internet.
+  - heading:
+      fr: "Les prérequis (et l'avertissement sur les coûts)"
+      en: "Prerequisites (and the cost warning)"
+    body:
+      fr: |
+        Pour suivre ce projet, il vous faut :
+
+        - un **compte AWS** (le niveau gratuit ne couvre pas tout : voir l'avertissement) ;
+        - **Terraform 1.10+** et l'**AWS CLI** installés ;
+        - un dépôt **GitHub** (pour le pipeline OIDC).
+
+        > **Attention aux coûts.** Contrairement au projet Flask (100 % local et gratuit), ce projet crée
+        > de **vraies ressources payantes** : un ALB et une **NAT Gateway** coûtent chacun environ
+        > 0,02 à 0,05 USD de l'heure, soit quelques euros par jour même sans trafic. On apprendra à tout
+        > détruire avec `terraform destroy` (leçon 5). **Ne laissez jamais l'infrastructure tourner** une
+        > fois l'exercice terminé.
+      en: |
+        To follow this project you need:
+
+        - an **AWS account** (the free tier does not cover everything: see the warning);
+        - **Terraform 1.10+** and the **AWS CLI** installed;
+        - a **GitHub** repository (for the OIDC pipeline).
+
+        > **Watch the costs.** Unlike the Flask project (100% local and free), this project creates
+        > **real, billable resources**: an ALB and a **NAT Gateway** each cost roughly 0.02 to 0.05 USD
+        > per hour, i.e. a few euros a day even with no traffic. We will learn to tear everything down with
+        > `terraform destroy` (lesson 5). **Never leave the infrastructure running** once the exercise is
+        > done.
+  - heading:
+      fr: "Providers épinglés et backend distant chiffré"
+      en: "Pinned providers and an encrypted remote backend"
+    body:
+      fr: |
+        Deux fichiers posent les fondations de tout projet Terraform professionnel :
+
+        - **`versions.tf`** : fige la version de Terraform et du **provider AWS** (`~> 5.70`). Épingler
+          évite qu'une mise à jour surprise ne casse le déploiement ou n'introduise un comportement
+          imprévu — c'est aussi une mesure de sécurité de la chaîne d'approvisionnement.
+        - **`backend.tf`** : stocke le **state** (l'état de l'infrastructure) dans un **bucket S3 chiffré**
+          plutôt qu'en local. Le state contient des informations sensibles : il doit être chiffré,
+          versionné et **verrouillé** pour éviter que deux déploiements simultanés ne le corrompent.
+
+        On active le **verrouillage natif S3** (`use_lockfile = true`, Terraform 1.10+), qui remplace
+        l'ancienne table DynamoDB.
+      en: |
+        Two files lay the foundations of any professional Terraform project:
+
+        - **`versions.tf`**: pins the Terraform version and the **AWS provider** (`~> 5.70`). Pinning
+          prevents a surprise update from breaking the deployment or introducing unexpected behaviour —
+          this is also a supply-chain security measure.
+        - **`backend.tf`**: stores the **state** (the infrastructure's state) in an **encrypted S3
+          bucket** rather than locally. State holds sensitive information: it must be encrypted, versioned
+          and **locked** so that two simultaneous deployments cannot corrupt it.
+
+        We enable **native S3 locking** (`use_lockfile = true`, Terraform 1.10+), which replaces the old
+        DynamoDB table.
+
+examples:
+  - title:
+      fr: "L'arborescence cible du projet"
+      en: "The target project tree"
+    file: tree.txt
+    lang: text
+    kind: neutral
+    code: |
+      node-aws-ecs/
+      ├── app/
+      │   ├── server.js            # Express app (helmet, /healthz)
+      │   ├── package.json         # pinned deps + start script
+      │   ├── server.test.js       # supertest functional tests
+      │   └── Dockerfile           # hardened non-root image
+      ├── terraform/
+      │   ├── versions.tf          # Terraform + AWS provider, pinned
+      │   ├── backend.tf           # encrypted S3 state + native locking
+      │   ├── variables.tf         # project name, region, ports...
+      │   ├── network.tf           # VPC, subnets, ALB, security groups
+      │   ├── ecr.tf               # container registry, scan on push
+      │   ├── ecs.tf               # Fargate cluster, task, service
+      │   ├── iam.tf               # task/exec roles + GitHub OIDC role
+      │   └── outputs.tf           # ALB URL, ECR URL...
+      ├── .github/
+      │   └── workflows/
+      │       └── deploy.yml       # OIDC deploy pipeline
+      └── README.md
+    note:
+      fr: "Le code applicatif est dans `app/`, toute l'infrastructure dans `terraform/`. Ces noms de fichiers resteront identiques dans toutes les leçons du projet."
+      en: "Application code lives in `app/`, all infrastructure in `terraform/`. These file names stay the same across every lesson of the project."
+
+  - title:
+      fr: "versions.tf : Terraform et provider AWS épinglés"
+      en: "versions.tf: pinned Terraform and AWS provider"
+    file: versions.tf
+    lang: hcl
+    kind: secure
+    code: |
+      terraform {
+        # Pin the Terraform core: 1.10+ is required for native S3 state locking.
+        required_version = ">= 1.10.0"
+
+        required_providers {
+          aws = {
+            source  = "hashicorp/aws"
+            version = "~> 5.70" # allow 5.70.x patches, block a surprise 6.0
+          }
+        }
+      }
+
+      provider "aws" {
+        region = var.aws_region
+
+        # Tag every resource automatically: easier billing and cleanup.
+        default_tags {
+          tags = {
+            Project   = var.project
+            ManagedBy = "Terraform"
+          }
+        }
+      }
+    note:
+      fr: "`~> 5.70` autorise les correctifs mais bloque une montée de version majeure imprévue. Les `default_tags` étiquettent chaque ressource, ce qui facilite le suivi des coûts et le nettoyage."
+      en: "`~> 5.70` allows patch updates but blocks an unexpected major version. `default_tags` label every resource, which makes cost tracking and cleanup easier."
+
+  - title:
+      fr: "backend.tf : state distant, chiffré et verrouillé"
+      en: "backend.tf: remote, encrypted and locked state"
+    file: backend.tf
+    lang: hcl
+    kind: secure
+    code: |
+      terraform {
+        backend "s3" {
+          # This bucket must already exist and have versioning + encryption on.
+          bucket       = "example-tfstate-node-aws"
+          key          = "node-aws/terraform.tfstate"
+          region       = "us-east-1"
+          encrypt      = true  # encrypt the state at rest (sensitive data!)
+          use_lockfile = true  # native S3 locking (Terraform 1.10+), no DynamoDB
+        }
+      }
+    note:
+      fr: "Le state est stocké à distance, chiffré et verrouillé : impossible que deux `apply` simultanés le corrompent. Ne mettez jamais le state en local dans un dépôt partagé."
+      en: "State is stored remotely, encrypted and locked: two simultaneous `apply` runs can never corrupt it. Never keep state locally in a shared repository."
+
+  - title:
+      fr: "variables.tf : les paramètres du projet"
+      en: "variables.tf: the project parameters"
+    file: variables.tf
+    lang: hcl
+    kind: secure
+    code: |
+      variable "project" {
+        description = "Name prefix applied to all resources"
+        type        = string
+        default     = "node-aws"
+      }
+
+      variable "aws_region" {
+        description = "AWS region to deploy into"
+        type        = string
+        default     = "us-east-1"
+      }
+
+      variable "container_port" {
+        description = "Port the Node.js app listens on"
+        type        = number
+        default     = 3000
+      }
+
+      variable "image_tag" {
+        description = "Container image tag to deploy (set by CI to the commit SHA)"
+        type        = string
+        default     = "latest"
+      }
+
+      variable "github_repo" {
+        description = "owner/repo allowed to assume the deploy role via OIDC"
+        type        = string
+        default     = "OWNER/node-aws-ecs"
+      }
+    note:
+      fr: "Toutes les valeurs réutilisées (nom, région, port) sont centralisées ici. `image_tag` sera fixé par le pipeline au SHA du commit ; `github_repo` restreindra l'accès OIDC."
+      en: "Every reused value (name, region, port) is centralised here. `image_tag` will be set by the pipeline to the commit SHA; `github_repo` will restrict OIDC access."
+
+mistake:
+  fr: |
+    **Garder le state Terraform en local et oublier d'épingler le provider.**
+
+    Un `terraform.tfstate` en local n'est ni partagé, ni verrouillé, ni chiffré : il contient pourtant des
+    données sensibles (IDs, parfois des secrets). À plusieurs, deux `apply` simultanés le corrompent. De
+    même, un provider non épinglé (`version = ">= 5.0"`) peut sauter en version majeure du jour au
+    lendemain et casser le déploiement. Backend distant chiffré **et** versions figées, dès le départ.
+  en: |
+    **Keeping the Terraform state locally and forgetting to pin the provider.**
+
+    A local `terraform.tfstate` is neither shared, nor locked, nor encrypted: yet it contains sensitive
+    data (IDs, sometimes secrets). With a team, two simultaneous `apply` runs corrupt it. Likewise, an
+    unpinned provider (`version = ">= 5.0"`) can jump to a major version overnight and break the
+    deployment. An encrypted remote backend **and** pinned versions, right from the start.
+
+bestPractice:
+  fr: |
+    - **Épingler** Terraform et le provider (`~>`) : builds reproductibles et sûrs.
+    - **Backend distant chiffré et verrouillé** (S3 + `use_lockfile`), jamais de state local partagé.
+    - **Architecture public/privé** : ALB public, conteneurs en sous-réseaux privés.
+    - **Centraliser les paramètres** dans `variables.tf` (nom, région, port).
+    - **`default_tags`** pour tracer les coûts et retrouver les ressources à détruire.
+    - **Prévoir le nettoyage** dès la conception : savoir que `terraform destroy` fermera la facture.
+  en: |
+    - **Pin** Terraform and the provider (`~>`): reproducible, safe builds.
+    - **Encrypted, locked remote backend** (S3 + `use_lockfile`), never a shared local state.
+    - **Public/private architecture**: public ALB, containers in private subnets.
+    - **Centralise parameters** in `variables.tf` (name, region, port).
+    - **`default_tags`** to track costs and find the resources to destroy.
+    - **Plan the cleanup** from the design stage: know that `terraform destroy` will stop the bill.
+
+exercise:
+  statement:
+    fr: |
+      Le bucket S3 qui stocke le state doit exister **avant** le premier `terraform init`. Écrivez les
+      commandes **AWS CLI** qui :
+
+      1. créent un bucket S3 nommé `example-tfstate-node-aws` dans `us-east-1` ;
+      2. activent le **versioning** (pour récupérer un state précédent) ;
+      3. activent le **chiffrement par défaut** (AES256) sur le bucket.
+    en: |
+      The S3 bucket that stores the state must exist **before** the first `terraform init`. Write the
+      **AWS CLI** commands that:
+
+      1. create an S3 bucket named `example-tfstate-node-aws` in `us-east-1`;
+      2. enable **versioning** (to recover a previous state);
+      3. enable **default encryption** (AES256) on the bucket.
+  solution:
+    file: bootstrap-backend.sh
+    lang: bash
+    code: |
+      # 1. Create the bucket (us-east-1 needs no LocationConstraint)
+      aws s3api create-bucket \
+        --bucket example-tfstate-node-aws \
+        --region us-east-1
+
+      # 2. Enable versioning: recover a previous state if needed
+      aws s3api put-bucket-versioning \
+        --bucket example-tfstate-node-aws \
+        --versioning-configuration Status=Enabled
+
+      # 3. Encrypt the state at rest by default (sensitive data)
+      aws s3api put-bucket-encryption \
+        --bucket example-tfstate-node-aws \
+        --server-side-encryption-configuration \
+        '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+    note:
+      fr: "Ce bucket « bootstrap » est créé une seule fois, hors Terraform (sinon Terraform aurait besoin du state... pour créer le bucket qui stocke le state). Versioning + chiffrement sont essentiels."
+      en: "This 'bootstrap' bucket is created once, outside Terraform (otherwise Terraform would need the state... to create the bucket that stores the state). Versioning + encryption are essential."
+
+quiz:
+  - q:
+      fr: "Où s'exécutent les conteneurs de l'application dans cette architecture ?"
+      en: "Where do the application containers run in this architecture?"
+    options:
+      fr:
+        - "Dans les sous-réseaux privés, injoignables directement depuis internet"
+        - "Directement sur l'ALB"
+        - "Dans les sous-réseaux publics, exposés à internet"
+        - "Sur le poste du développeur"
+      en:
+        - "In the private subnets, unreachable directly from the internet"
+        - "Directly on the ALB"
+        - "In the public subnets, exposed to the internet"
+        - "On the developer's machine"
+    answer: 0
+    why:
+      fr: "Les conteneurs Fargate sont en sous-réseaux privés ; seul l'ALB, public, reçoit le trafic internet. C'est la défense en profondeur."
+      en: "The Fargate containers sit in private subnets; only the public ALB receives internet traffic. This is defense in depth."
+  - q:
+      fr: "Pourquoi stocker le state Terraform dans un bucket S3 chiffré plutôt qu'en local ?"
+      en: "Why store the Terraform state in an encrypted S3 bucket rather than locally?"
+    options:
+      fr:
+        - "Pour que Terraform s'exécute plus vite"
+        - "Parce que le state contient des données sensibles et doit être partagé, chiffré et verrouillé"
+        - "Pour réduire le coût AWS"
+        - "Parce que Terraform refuse le state local"
+      en:
+        - "To make Terraform run faster"
+        - "Because the state holds sensitive data and must be shared, encrypted and locked"
+        - "To reduce the AWS cost"
+        - "Because Terraform refuses local state"
+    answer: 1
+    why:
+      fr: "Le state est sensible et partagé en équipe : S3 chiffré + verrouillage évitent fuites et corruptions."
+      en: "State is sensitive and shared across a team: encrypted S3 + locking prevent leaks and corruption."
+  - q:
+      fr: "Que signifie la contrainte de version `~> 5.70` pour le provider AWS ?"
+      en: "What does the version constraint `~> 5.70` mean for the AWS provider?"
+    options:
+      fr:
+        - "Exactement la version 5.70, rien d'autre"
+        - "N'importe quelle version supérieure à 5.70, y compris 6.x"
+        - "Les correctifs 5.70.x sont autorisés, mais pas une version 6.0"
+        - "La dernière version disponible à chaque exécution"
+      en:
+        - "Exactly version 5.70, nothing else"
+        - "Any version above 5.70, including 6.x"
+        - "Patches 5.70.x are allowed, but not a 6.0 version"
+        - "The latest available version on each run"
+    answer: 2
+    why:
+      fr: "`~>` (opérateur pessimiste) autorise les versions de correctif mais bloque une montée majeure imprévue."
+      en: "`~>` (the pessimistic operator) allows patch versions but blocks an unexpected major upgrade."
+  - q:
+      fr: "Pourquoi ce projet comporte-t-il un avertissement sur les coûts, contrairement au projet Flask ?"
+      en: "Why does this project include a cost warning, unlike the Flask project?"
+    options:
+      fr:
+        - "Parce que Terraform est payant"
+        - "Parce que GitHub Actions est facturé à la minute"
+        - "Parce que le code Node.js consomme beaucoup de CPU"
+        - "Parce qu'il crée de vraies ressources payantes (ALB, NAT Gateway) facturées même sans trafic"
+      en:
+        - "Because Terraform is paid software"
+        - "Because GitHub Actions is billed per minute"
+        - "Because the Node.js code uses a lot of CPU"
+        - "Because it creates real billable resources (ALB, NAT Gateway) charged even with no traffic"
+    answer: 3
+    why:
+      fr: "Un ALB et une NAT Gateway coûtent quelques euros par jour même à l'arrêt : d'où l'importance de `terraform destroy`."
+      en: "An ALB and a NAT Gateway cost a few euros a day even when idle: hence the importance of `terraform destroy`."
+  - q:
+      fr: "Pourquoi le bucket S3 du backend est-il créé en dehors de Terraform ?"
+      en: "Why is the backend's S3 bucket created outside Terraform?"
+    options:
+      fr:
+        - "Pour éviter le paradoxe « le state stocke le bucket qui stocke le state »"
+        - "Parce que Terraform ne sait pas créer de bucket"
+        - "Pour économiser de l'argent"
+        - "Parce que S3 n'est pas un service Terraform"
+      en:
+        - "To avoid the paradox 'the state stores the bucket that stores the state'"
+        - "Because Terraform cannot create a bucket"
+        - "To save money"
+        - "Because S3 is not a Terraform service"
+    answer: 0
+    why:
+      fr: "Le backend doit exister avant le premier `init` : on amorce donc le bucket une fois, hors Terraform."
+      en: "The backend must exist before the first `init`: so we bootstrap the bucket once, outside Terraform."

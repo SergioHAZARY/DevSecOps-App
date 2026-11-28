@@ -1,0 +1,404 @@
+description:
+  fr: "A01:2021 Contrôle d'accès défaillant : IDOR, navigation forcée et vérifications manquantes, avec code vulnérable et corrigé en Python/Flask."
+  en: "A01:2021 Broken Access Control: IDOR, forced browsing and missing checks, with vulnerable and fixed code in Python/Flask."
+duration: 25
+
+intro:
+  fr: |
+    **A01 - Broken Access Control** (contrôle d'accès défaillant) est la **première** catégorie de l'OWASP
+    Top 10 2021 : c'est la faille la plus répandue dans les applications réelles. Elle survient quand un
+    utilisateur peut faire ou voir **ce à quoi il n'a pas droit** : lire les données d'autrui, accéder à une
+    page d'administration, ou modifier un champ qui devrait être figé.
+
+    Reprenons l'immeuble de bureaux : votre badge prouve qui vous êtes, mais si une porte ne vérifie pas que
+    votre badge est autorisé pour *cette* salle, vous entrez quand même. Le contrôle d'accès, c'est la
+    serrure derrière chaque porte, pas seulement le tourniquet de l'entrée.
+
+    Dans cette leçon, vous verrez les trois formes les plus courantes — **IDOR** (référence directe d'objet),
+    **navigation forcée** vers une page protégée, et **vérification de fonction manquante** — avec, pour
+    chacune, du code **vulnérable** puis **corrigé**, et l'outil du pipeline qui aide à les détecter. Les
+    essais se font sur votre application locale.
+  en: |
+    **A01 - Broken Access Control** is the **first** category of the OWASP Top 10 2021: it is the most
+    widespread flaw in real applications. It occurs when a user can do or see **what they are not entitled
+    to**: read others' data, reach an admin page, or modify a field that should be frozen.
+
+    Back to the office building: your badge proves who you are, but if a door does not check that your badge
+    is allowed for *that* room, you walk in anyway. Access control is the lock behind each door, not just
+    the turnstile at the entrance.
+
+    In this lesson you will see the three most common forms — **IDOR** (insecure direct object reference),
+    **forced browsing** to a protected page, and **missing function-level check** — each with **vulnerable**
+    then **fixed** code, and the pipeline tool that helps detect them. Tests are run against your local
+    application.
+
+sections:
+  - heading:
+      fr: "Les formes du contrôle d'accès défaillant"
+      en: "The forms of broken access control"
+    body:
+      fr: |
+        Le contrôle d'accès décide « cet utilisateur peut-il faire *cette* action sur *cet* objet ? ». Il
+        échoue de plusieurs façons :
+
+        | Forme | Exemple | Cause |
+        |---|---|---|
+        | IDOR | `/invoice/124` lit la facture d'un autre | Pas de vérification de propriété de l'objet |
+        | Navigation forcée | `/admin` accessible sans rôle admin | Contrôle uniquement côté interface |
+        | Fonction manquante | `POST /users/5/delete` sans contrôle | Autorisation absente sur une action |
+        | Élévation de privilège | Modifier `role=admin` dans une requête | Champ sensible accepté depuis le client |
+        | Métadonnées falsifiées | Rejouer un JWT ou un cookie modifié | Jeton non vérifié côté serveur |
+
+        Le point commun : la décision d'accès est **absente, incomplète, ou prise côté client**. Masquer un
+        bouton dans l'interface n'est **pas** un contrôle d'accès, car l'API reste appelable directement.
+
+        La règle d'or est **deny by default** (refus par défaut) : l'accès est interdit sauf si une règle
+        l'autorise explicitement, et la décision est **toujours** prise côté serveur, à chaque requête.
+      en: |
+        Access control decides "can this user perform *this* action on *this* object?". It fails in several
+        ways:
+
+        | Form | Example | Cause |
+        |---|---|---|
+        | IDOR | `/invoice/124` reads another's invoice | No object ownership check |
+        | Forced browsing | `/admin` reachable without the admin role | Control only in the UI |
+        | Missing function | `POST /users/5/delete` with no check | Authorization absent on an action |
+        | Privilege escalation | Changing `role=admin` in a request | Sensitive field accepted from the client |
+        | Forged metadata | Replaying a modified JWT or cookie | Token not verified server-side |
+
+        The common thread: the access decision is **absent, incomplete, or taken client-side**. Hiding a
+        button in the UI is **not** access control, because the API is still callable directly.
+
+        The golden rule is **deny by default**: access is forbidden unless a rule explicitly allows it, and
+        the decision is **always** taken server-side, on every request.
+  - heading:
+      fr: "Détection dans le pipeline DevSecOps"
+      en: "Detection in the DevSecOps pipeline"
+    body:
+      fr: |
+        Le contrôle d'accès est en partie une logique **métier**, donc plus difficile à détecter
+        automatiquement que l'injection. On combine plusieurs approches :
+
+        | Étape | Outil | Ce qu'il repère |
+        |---|---|---|
+        | SAST | CodeQL (requêtes *missing authorization*), Semgrep | Route d'état sans appel d'autorisation |
+        | DAST | OWASP ZAP (*access control testing*), Burp | Accès à une ressource avec un autre compte |
+        | Tests | Suite d'autorisation en CI | Un intrus reçoit `403`/`404`, le propriétaire passe |
+        | Revue | Recherche de champs `role`/`is_admin` acceptés du client | Élévation de privilège possible |
+
+        Le **DAST authentifié** est précieux : on rejoue les requêtes d'un utilisateur A avec le cookie d'un
+        utilisateur B et on vérifie qu'elles échouent. Mais rien ne remplace des **tests d'autorisation**
+        écrits par l'équipe, car la notion de « propriétaire légitime » est spécifique au métier.
+      en: |
+        Access control is partly **business** logic, so harder to detect automatically than injection.
+        Several approaches are combined:
+
+        | Stage | Tool | What it spots |
+        |---|---|---|
+        | SAST | CodeQL (*missing authorization* queries), Semgrep | State-changing route with no authorization call |
+        | DAST | OWASP ZAP (*access control testing*), Burp | Access to a resource with a different account |
+        | Tests | Authorization suite in CI | An intruder gets `403`/`404`, the owner passes |
+        | Review | Searching for `role`/`is_admin` fields accepted from the client | Possible privilege escalation |
+
+        **Authenticated DAST** is valuable: you replay user A's requests with user B's cookie and check they
+        fail. But nothing replaces **authorization tests** written by the team, because the notion of
+        "legitimate owner" is business-specific.
+
+examples:
+  - title:
+      fr: "IDOR : lire la facture d'autrui, vulnérable puis corrigé (Flask)"
+      en: "IDOR: reading another's invoice, vulnerable then fixed (Flask)"
+    file: invoices.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, abort, jsonify
+      from flask_login import current_user, login_required
+
+      app = Flask(__name__)
+
+      # ---------- VULNERABLE ----------
+      @app.get("/vulnerable/invoice/<int:invoice_id>")
+      @login_required
+      def invoice_vulnerable(invoice_id):
+          # Only checks that the user is logged in, not that the invoice is theirs.
+          # Changing 123 -> 124 in the URL leaks someone else's invoice (IDOR).
+          return jsonify(db.invoices.get(invoice_id))
+
+      # ---------- FIXED ----------
+      @app.get("/invoice/<int:invoice_id>")
+      @login_required
+      def invoice(invoice_id):
+          # Object-level authorization: the query is scoped to the current user
+          inv = db.invoices.find_one(id=invoice_id, owner_id=current_user.id)
+          if inv is None:
+              abort(404)  # 404, not 403: do not confirm the invoice exists
+          return jsonify(inv)
+    output: |
+      # Local lab, alice logged in, invoice 124 belongs to bob:
+      GET /vulnerable/invoice/124  -> 200  {"id":124,"owner_id":2,"total":999}
+      GET /invoice/124             -> 404  {"error":"not found"}
+    note:
+      fr: "La correction filtre la requête sur `owner_id=current_user.id` : un identifiant d'autrui ne correspond à rien. C'est la **vérification au niveau de l'objet** qui manque dans 90 % des IDOR."
+      en: "The fix scopes the query to `owner_id=current_user.id`: another user's id matches nothing. This **object-level check** is what is missing in 90% of IDORs."
+
+  - title:
+      fr: "Navigation forcée : page admin, vulnérable puis corrigé (Flask)"
+      en: "Forced browsing: admin page, vulnerable then fixed (Flask)"
+    file: admin.py
+    lang: python
+    kind: secure
+    code: |
+      from functools import wraps
+      from flask import Flask, abort
+      from flask_login import current_user, login_required
+
+      app = Flask(__name__)
+
+      # ---------- VULNERABLE ----------
+      # The admin link is simply hidden in the menu for non-admins, but the
+      # route itself has no role check: anyone who knows the URL reaches it.
+      @app.get("/vulnerable/admin/users")
+      @login_required
+      def admin_users_vulnerable():
+          return list_all_users()
+
+      # ---------- FIXED ----------
+      def admin_required(fn):
+          @wraps(fn)
+          def wrapper(*args, **kwargs):
+              # Server-side role check, enforced on every request (deny by default)
+              if not current_user.is_authenticated or current_user.role != "admin":
+                  abort(403)
+              return fn(*args, **kwargs)
+          return wrapper
+
+      @app.get("/admin/users")
+      @admin_required
+      def admin_users():
+          return list_all_users()
+    note:
+      fr: "Cacher le lien dans le menu ne protège rien : l'URL reste atteignable. La correction impose le rôle `admin` **côté serveur** via un décorateur réutilisable, appliqué avant le code métier."
+      en: "Hiding the link in the menu protects nothing: the URL is still reachable. The fix enforces the `admin` role **server-side** via a reusable decorator applied before the business code."
+
+  - title:
+      fr: "Élévation de privilège : champ `role` falsifié, vulnérable puis corrigé"
+      en: "Privilege escalation: forged `role` field, vulnerable then fixed"
+    file: profile.py
+    lang: python
+    kind: secure
+    code: |
+      from flask import Flask, request, abort
+      from flask_login import current_user, login_required
+
+      app = Flask(__name__)
+      EDITABLE_FIELDS = {"display_name", "bio"}  # allow-list of self-editable fields
+
+      # ---------- VULNERABLE ----------
+      @app.post("/vulnerable/profile")
+      @login_required
+      def update_profile_vulnerable():
+          # Mass assignment: the client can send {"role": "admin"} and escalate
+          for key, value in request.json.items():
+              db.users.set(current_user.id, key, value)
+          return "updated"
+
+      # ---------- FIXED ----------
+      @app.post("/profile")
+      @login_required
+      def update_profile():
+          data = request.json or {}
+          # Only allow-listed fields are writable; role/is_admin are never client-controlled
+          unexpected = set(data) - EDITABLE_FIELDS
+          if unexpected:
+              abort(400, f"forbidden fields: {sorted(unexpected)}")
+          for key in EDITABLE_FIELDS & set(data):
+              db.users.set(current_user.id, key, data[key])
+          return "updated"
+    note:
+      fr: "Accepter tous les champs du client (*mass assignment*) permet d'envoyer `role=admin`. La correction utilise une **liste d'autorisation** de champs modifiables ; les champs sensibles ne sont jamais pilotés par le client."
+      en: "Accepting every client field (*mass assignment*) lets the user send `role=admin`. The fix uses an **allow-list** of editable fields; sensitive fields are never client-controlled."
+
+mistake:
+  fr: |
+    **Contrôler l'accès dans l'interface au lieu du serveur, et vérifier l'authentification sans vérifier l'autorisation.**
+
+    Cacher un bouton « Supprimer » ou retirer un lien du menu donne une illusion de sécurité : l'API reste
+    appelable directement avec `curl`. De même, `@login_required` prouve seulement que l'utilisateur est
+    connecté, pas qu'il a le droit d'agir sur **cet** objet. La faille classique : charger une ressource par
+    son identifiant sans filtrer sur son propriétaire (IDOR). Le bon réflexe est **deny by default** +
+    **vérification au niveau de l'objet**, côté serveur, à chaque requête, avec une liste d'autorisation
+    pour les champs modifiables.
+  en: |
+    **Controlling access in the UI instead of the server, and checking authentication without checking authorization.**
+
+    Hiding a "Delete" button or removing a menu link gives an illusion of security: the API is still
+    callable directly with `curl`. Likewise, `@login_required` only proves the user is logged in, not that
+    they may act on **this** object. The classic flaw: loading a resource by its id without filtering on its
+    owner (IDOR). The right reflex is **deny by default** + an **object-level check**, server-side, on every
+    request, with an allow-list for editable fields.
+
+bestPractice:
+  fr: |
+    - **Deny by default** : tout accès est refusé sauf règle explicite ; une route sans contrôle renvoie `403`.
+    - **Vérification au niveau de l'objet** : filtrer sur le propriétaire / le locataire à chaque requête (contre l'IDOR).
+    - **Décision côté serveur** uniquement ; l'interface ne fait que refléter les droits, elle ne les applique pas.
+    - **Liste d'autorisation des champs** modifiables pour empêcher l'élévation de privilège (*mass assignment*).
+    - **Centraliser** la logique (décorateur, middleware, OPA) et **tester** l'autorisation en CI.
+    - **DAST authentifié** pour rejouer les requêtes d'un compte avec un autre et détecter les fuites.
+  en: |
+    - **Deny by default**: every access is refused unless explicitly allowed; a route with no check returns `403`.
+    - **Object-level check**: scope to the owner / tenant on every request (against IDOR).
+    - **Server-side decision** only; the UI merely reflects rights, it does not enforce them.
+    - **Allow-list of editable fields** to prevent privilege escalation (*mass assignment*).
+    - **Centralise** the logic (decorator, middleware, OPA) and **test** authorization in CI.
+    - **Authenticated DAST** to replay one account's requests with another and detect leaks.
+
+exercise:
+  statement:
+    fr: |
+      Cette route permet à un utilisateur de télécharger un document :
+
+      ```python
+      @app.get("/document/<int:doc_id>/download")
+      @login_required
+      def download(doc_id):
+          doc = db.documents.get(doc_id)
+          return send_file(doc.path)
+      ```
+
+      1. Identifiez la faille A01 et décrivez son exploitation en labo local.
+      2. Corrigez la route : vérifiez que le document appartient à l'utilisateur courant (ou lui est
+         explicitement partagé) et renvoyez `404` sinon.
+    en: |
+      This route lets a user download a document:
+
+      ```python
+      @app.get("/document/<int:doc_id>/download")
+      @login_required
+      def download(doc_id):
+          doc = db.documents.get(doc_id)
+          return send_file(doc.path)
+      ```
+
+      1. Identify the A01 flaw and describe its exploitation on a local lab.
+      2. Fix the route: verify the document belongs to the current user (or is explicitly shared with them)
+         and return `404` otherwise.
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      from flask import abort, send_file
+      from flask_login import current_user, login_required
+
+
+      @app.get("/document/<int:doc_id>/download")
+      @login_required
+      def download(doc_id):
+          # Object-level authorization: scope the lookup to the current user,
+          # including documents explicitly shared with them.
+          doc = db.documents.find_one(id=doc_id, owner_id=current_user.id)
+          if doc is None:
+              doc = db.shares.find_one(doc_id=doc_id, user_id=current_user.id)
+          if doc is None:
+              abort(404)  # deny by default; 404 avoids confirming the document exists
+          return send_file(doc.path)
+
+      # Exploit on a local lab (IDOR): logged in as alice, iterate doc_id to pull bob's files
+      #   curl -b "session=alice" http://localhost:5000/document/124/download
+      # After the fix this returns 404.
+    note:
+      fr: "La faille est une IDOR : la route ne vérifie que la connexion. La correction filtre sur la propriété (ou un partage explicite) et renvoie `404` pour ne pas révéler l'existence du document."
+      en: "The flaw is an IDOR: the route only checks login. The fix scopes to ownership (or an explicit share) and returns `404` so as not to reveal the document exists."
+
+quiz:
+  - q:
+      fr: "Pourquoi cacher un bouton dans l'interface ne constitue-t-il pas un contrôle d'accès ?"
+      en: "Why is hiding a button in the UI not access control?"
+    options:
+      fr:
+        - "Parce que l'API reste appelable directement, sans passer par l'interface"
+        - "Parce que les boutons ne sont pas sécurisés par nature"
+        - "Parce que le CSS peut être désactivé"
+        - "Parce que l'interface est toujours en HTTPS"
+      en:
+        - "Because the API is still callable directly, without going through the UI"
+        - "Because buttons are insecure by nature"
+        - "Because CSS can be disabled"
+        - "Because the UI is always over HTTPS"
+    answer: 0
+    why:
+      fr: "La décision d'accès doit être prise côté serveur ; un attaquant appelle l'endpoint avec `curl` sans jamais voir l'interface."
+      en: "The access decision must be taken server-side; an attacker calls the endpoint with `curl` without ever seeing the UI."
+  - q:
+      fr: "Qu'est-ce qu'une faille IDOR ?"
+      en: "What is an IDOR flaw?"
+    options:
+      fr:
+        - "Une mauvaise configuration du serveur web"
+        - "Un chiffrement trop faible"
+        - "Accéder à l'objet d'un autre en changeant un identifiant, faute de vérification de propriété"
+        - "Une dépendance obsolète"
+      en:
+        - "A web server misconfiguration"
+        - "Too weak encryption"
+        - "Accessing another's object by changing an identifier, due to a missing ownership check"
+        - "An outdated dependency"
+    answer: 2
+    why:
+      fr: "L'IDOR charge une ressource par son identifiant sans vérifier qu'elle appartient à l'utilisateur ; changer l'id donne accès aux données d'autrui."
+      en: "IDOR loads a resource by its identifier without checking it belongs to the user; changing the id grants access to others' data."
+  - q:
+      fr: "Comment empêcher l'élévation de privilège par *mass assignment* ?"
+      en: "How do you prevent privilege escalation via *mass assignment*?"
+    options:
+      fr:
+        - "En acceptant tous les champs envoyés par le client"
+        - "En utilisant une liste d'autorisation des champs modifiables, excluant `role`/`is_admin`"
+        - "En chiffrant la requête"
+        - "En renommant le champ `role`"
+      en:
+        - "By accepting every field sent by the client"
+        - "By using an allow-list of editable fields, excluding `role`/`is_admin`"
+        - "By encrypting the request"
+        - "By renaming the `role` field"
+    answer: 1
+    why:
+      fr: "Seuls des champs explicitement autorisés doivent être modifiables ; les champs sensibles ne sont jamais pilotés par le client."
+      en: "Only explicitly allow-listed fields should be editable; sensitive fields are never client-controlled."
+  - q:
+      fr: "Quel principe garantit qu'une route oubliée reste fermée ?"
+      en: "Which principle ensures a forgotten route stays closed?"
+    options:
+      fr:
+        - "Allow by default"
+        - "Deny by default (refus par défaut)"
+        - "Fail open"
+        - "Trust the client"
+      en:
+        - "Allow by default"
+        - "Deny by default"
+        - "Fail open"
+        - "Trust the client"
+    answer: 1
+    why:
+      fr: "Avec le refus par défaut, l'absence de règle ferme la porte (un `403`) au lieu de l'ouvrir silencieusement."
+      en: "With deny by default, the absence of a rule closes the door (a `403`) instead of silently opening it."
+  - q:
+      fr: "Quelle technique de test confirme le mieux une faille de contrôle d'accès sur une application en marche ?"
+      en: "Which testing technique best confirms a broken access control flaw on a running application?"
+    options:
+      fr:
+        - "Un linter YAML"
+        - "Un scanner de dépendances (SCA)"
+        - "Un scan d'image de conteneur"
+        - "Un DAST authentifié qui rejoue les requêtes d'un compte avec un autre"
+      en:
+        - "A YAML linter"
+        - "A dependency scanner (SCA)"
+        - "A container image scan"
+        - "An authenticated DAST that replays one account's requests with another"
+    answer: 3
+    why:
+      fr: "Le DAST authentifié rejoue les requêtes d'un utilisateur avec le cookie d'un autre et vérifie qu'elles échouent, révélant les accès non autorisés."
+      en: "Authenticated DAST replays a user's requests with another's cookie and checks they fail, revealing unauthorised access."

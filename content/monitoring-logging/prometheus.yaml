@@ -1,0 +1,492 @@
+description:
+  fr: "Collecter des métriques avec Prometheus : configuration de scrape, exporters, requêtes PromQL, règles d'alerte, Alertmanager et sécurisation des endpoints."
+  en: "Collect metrics with Prometheus: scrape configuration, exporters, PromQL queries, alerting rules, Alertmanager and securing endpoints."
+duration: 40
+
+intro:
+  fr: |
+    **Prometheus** est l'outil de référence pour collecter des **métriques** : des mesures numériques
+    (utilisation CPU, nombre de requêtes, erreurs) prélevées à intervalle régulier et stockées avec leur
+    horodatage. C'est le système nerveux d'une infrastructure moderne : il sait, à chaque instant, combien,
+    à quelle vitesse, et si quelque chose dérape.
+
+    Son principe est simple et original : au lieu que les applications *envoient* leurs métriques, c'est
+    Prometheus qui va les *chercher* (*pull*) en interrogeant un endpoint HTTP `/metrics` sur chaque cible,
+    toutes les quinze secondes par exemple. Comme un releveur de compteurs qui passe de maison en maison.
+
+    Vous allez écrire un fichier `prometheus.yml` avec ses cibles de scrape, ajouter des **exporters** qui
+    exposent des métriques (node-exporter pour le système), apprendre le langage de requête **PromQL** sur
+    des cas réels, définir des **règles d'alerte**, router ces alertes avec **Alertmanager**, et sécuriser
+    les endpoints de métriques, le tout dans un lab Docker Compose.
+  en: |
+    **Prometheus** is the reference tool for collecting **metrics**: numeric measurements (CPU usage,
+    request count, errors) sampled at regular intervals and stored with their timestamp. It is the nervous
+    system of a modern infrastructure: at any moment it knows how many, how fast, and whether something is
+    going wrong.
+
+    Its principle is simple and distinctive: instead of applications *sending* their metrics, Prometheus
+    goes to *fetch* them (*pull*) by querying an HTTP `/metrics` endpoint on each target, every fifteen
+    seconds for example. Like a meter reader going house to house.
+
+    You will write a `prometheus.yml` file with its scrape targets, add **exporters** that expose metrics
+    (node-exporter for the system), learn the **PromQL** query language on real cases, define **alerting
+    rules**, route those alerts with **Alertmanager**, and secure the metrics endpoints, all in a Docker
+    Compose lab.
+
+sections:
+  - heading:
+      fr: "Modèle pull, scrape et exporters"
+      en: "Pull model, scrape and exporters"
+    body:
+      fr: |
+        Prometheus fonctionne en **pull** : il interroge périodiquement un endpoint HTTP `/metrics` sur
+        chaque cible. Ce comportement se configure dans `prometheus.yml`, au sein de blocs `scrape_configs`.
+
+        | Terme | Signification |
+        |---|---|
+        | *scrape* | L'action d'aller collecter les métriques d'une cible |
+        | *target* | Une adresse `host:port` à interroger |
+        | *job* | Un groupe de cibles de même nature (ex. tous les serveurs web) |
+        | *exporter* | Un petit programme qui expose des métriques au format Prometheus |
+
+        Toutes les applications ne savent pas exposer `/metrics`. Les **exporters** comblent ce manque :
+        `node-exporter` expose les métriques système (CPU, RAM, disque), `postgres-exporter` celles de
+        PostgreSQL, `blackbox-exporter` teste des URL de l'extérieur. On en déploie un par type de ressource
+        à superviser, et on l'ajoute comme cible de scrape.
+
+        Les métriques elles-mêmes ont un **nom** et des **labels** : `http_requests_total{method="GET",
+        status="500"}`. Les labels permettent de découper finement une même métrique par dimension.
+      en: |
+        Prometheus works by **pull**: it periodically queries an HTTP `/metrics` endpoint on each target.
+        This behaviour is configured in `prometheus.yml`, inside `scrape_configs` blocks.
+
+        | Term | Meaning |
+        |---|---|
+        | *scrape* | The act of collecting a target's metrics |
+        | *target* | A `host:port` address to query |
+        | *job* | A group of targets of the same kind (e.g. all web servers) |
+        | *exporter* | A small program exposing metrics in the Prometheus format |
+
+        Not every application knows how to expose `/metrics`. **Exporters** fill the gap: `node-exporter`
+        exposes system metrics (CPU, RAM, disk), `postgres-exporter` PostgreSQL's, `blackbox-exporter`
+        probes URLs from the outside. You deploy one per resource type to monitor, and add it as a scrape
+        target.
+
+        The metrics themselves have a **name** and **labels**: `http_requests_total{method="GET",
+        status="500"}`. Labels let you slice one metric finely by dimension.
+  - heading:
+      fr: "PromQL : interroger les métriques"
+      en: "PromQL: querying metrics"
+    body:
+      fr: |
+        **PromQL** est le langage de requête de Prometheus. Il manipule des **séries temporelles**. Quelques
+        fonctions reviennent sans cesse :
+
+        | Expression PromQL | Ce qu'elle calcule |
+        |---|---|
+        | `up` | 1 si la cible répond, 0 sinon |
+        | `rate(http_requests_total[5m])` | Le débit moyen de requêtes par seconde sur 5 min |
+        | `sum by (status) (rate(...))` | Le débit agrégé par code de statut |
+        | `histogram_quantile(0.95, ...)` | La latence au 95e centile |
+
+        Deux types de métriques dominent : les **compteurs** (*counter*, qui ne font que monter, comme un
+        total de requêtes — on y applique `rate()` pour obtenir un débit) et les **jauges** (*gauge*, qui
+        montent et descendent, comme l'usage mémoire).
+
+        Un exemple de sécurité très utile : le taux d'échecs d'authentification.
+        `rate(auth_failures_total[5m])` révèle une attaque par force brute en cours bien avant qu'un humain
+        ne la remarque. PromQL transforme ainsi des millions de points en une réponse exploitable.
+      en: |
+        **PromQL** is Prometheus' query language. It manipulates **time series**. A few functions come up
+        constantly:
+
+        | PromQL expression | What it computes |
+        |---|---|
+        | `up` | 1 if the target answers, 0 otherwise |
+        | `rate(http_requests_total[5m])` | Average request throughput per second over 5 min |
+        | `sum by (status) (rate(...))` | Throughput aggregated by status code |
+        | `histogram_quantile(0.95, ...)` | 95th-percentile latency |
+
+        Two metric types dominate: **counters** (which only go up, like a request total — you apply `rate()`
+        to get a throughput) and **gauges** (which go up and down, like memory usage).
+
+        A very useful security example: the authentication failure rate.
+        `rate(auth_failures_total[5m])` reveals an ongoing brute-force attack well before a human notices
+        it. PromQL thus turns millions of points into an actionable answer.
+  - heading:
+      fr: "Alertes, Alertmanager et sécurité"
+      en: "Alerts, Alertmanager and security"
+    body:
+      fr: |
+        Observer ne suffit pas : il faut être **prévenu**. Les **règles d'alerte** (*alerting rules*) sont
+        des expressions PromQL évaluées en continu ; quand la condition reste vraie pendant une durée `for`,
+        une alerte passe de l'état *pending* à *firing*.
+
+        Prometheus déclenche l'alerte, mais ne l'envoie pas lui-même : il la transmet à **Alertmanager**,
+        qui se charge du **routage** (e-mail, Slack, PagerDuty), du **regroupement** (éviter 100 messages
+        pour un seul incident), et du **silence** (couper le bruit pendant une maintenance).
+
+        Côté sécurité, trois précautions essentielles :
+
+        - **Ne pas exposer `/metrics` publiquement** : les métriques révèlent des versions, des chemins
+          internes, le volume de trafic. On les garde sur un réseau interne.
+        - **Authentifier Prometheus et son interface** derrière un reverse proxy (TLS + auth), car l'UI
+          permet des requêtes arbitraires.
+        - **Alerter sur des événements de sécurité** : cible qui ne répond plus (`up == 0`), pic d'échecs
+          d'authentification, remplissage de disque. La supervision devient alors un outil de détection.
+      en: |
+        Observing is not enough: you must be **notified**. **Alerting rules** are PromQL expressions
+        evaluated continuously; when the condition stays true for a `for` duration, an alert moves from
+        *pending* to *firing*.
+
+        Prometheus fires the alert but does not send it itself: it hands it to **Alertmanager**, which
+        handles **routing** (email, Slack, PagerDuty), **grouping** (avoiding 100 messages for one
+        incident), and **silencing** (muting noise during maintenance).
+
+        On the security side, three essential precautions:
+
+        - **Do not expose `/metrics` publicly**: metrics reveal versions, internal paths, traffic volume.
+          Keep them on an internal network.
+        - **Authenticate Prometheus and its UI** behind a reverse proxy (TLS + auth), because the UI allows
+          arbitrary queries.
+        - **Alert on security events**: a target that stops answering (`up == 0`), a spike of authentication
+          failures, a filling disk. Monitoring then becomes a detection tool.
+
+examples:
+  - title:
+      fr: "prometheus.yml : cibles de scrape et règles"
+      en: "prometheus.yml: scrape targets and rules"
+    file: prometheus.yml
+    lang: yaml
+    kind: secure
+    code: |
+      global:
+        scrape_interval: 15s      # how often Prometheus pulls each target
+        evaluation_interval: 15s  # how often alerting rules are evaluated
+
+      # Where to send fired alerts
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ["alertmanager:9093"]
+
+      # Load alerting rules from a separate file
+      rule_files:
+        - /etc/prometheus/rules.yml
+
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ["localhost:9090"]
+
+        - job_name: node            # system metrics via node-exporter
+          static_configs:
+            - targets: ["node-exporter:9100"]
+
+        - job_name: app             # the application's own /metrics endpoint
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["app:8000"]
+    note:
+      fr: "Chaque `job` regroupe des cibles de même nature. Prometheus va chercher (`pull`) `/metrics` toutes les 15 s. Les cibles (`node-exporter`, `app`) sont des noms de services Docker, joignables en interne."
+      en: "Each `job` groups targets of the same kind. Prometheus pulls `/metrics` every 15 s. The targets (`node-exporter`, `app`) are Docker service names, reachable internally."
+
+  - title:
+      fr: "Des règles d'alerte, dont une de sécurité"
+      en: "Alerting rules, including a security one"
+    file: rules.yml
+    lang: yaml
+    kind: secure
+    code: |
+      groups:
+        - name: availability
+          rules:
+            # A target has not answered scrapes for 2 minutes
+            - alert: TargetDown
+              expr: up == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Target {{ $labels.instance }} is down"
+
+            # HTTP 500 error rate above 5% of all requests over 5 min
+            - alert: HighErrorRate
+              expr: |
+                sum(rate(http_requests_total{status="500"}[5m]))
+                  / sum(rate(http_requests_total[5m])) > 0.05
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Error rate above 5% for 5 minutes"
+
+        - name: security
+          rules:
+            # Brute-force detection: more than 10 auth failures/sec over 2 min
+            - alert: AuthBruteForce
+              expr: rate(auth_failures_total[2m]) > 10
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Possible brute force: high auth failure rate"
+    note:
+      fr: "`up == 0` détecte une cible muette. La règle `AuthBruteForce` transforme Prometheus en outil de détection : un pic d'échecs d'authentification déclenche une alerte critique. `for` évite les faux positifs ponctuels."
+      en: "`up == 0` detects a silent target. The `AuthBruteForce` rule turns Prometheus into a detection tool: a spike of auth failures triggers a critical alert. `for` avoids one-off false positives."
+
+  - title:
+      fr: "Alertmanager : router et regrouper"
+      en: "Alertmanager: route and group"
+    file: alertmanager.yml
+    lang: yaml
+    kind: secure
+    code: |
+      route:
+        # Group alerts by name and severity to avoid message storms
+        group_by: ["alertname", "severity"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        receiver: team-slack
+        routes:
+          # Critical alerts go to a dedicated, higher-priority receiver
+          - matchers:
+              - severity = critical
+            receiver: oncall-pager
+
+      receivers:
+        - name: team-slack
+          slack_configs:
+            - channel: "#alerts"
+              # The webhook URL is a secret: injected from a file, not committed
+              api_url_file: /etc/alertmanager/slack_url
+        - name: oncall-pager
+          webhook_configs:
+            - url: http://pager-gateway:9095/notify
+    note:
+      fr: "Alertmanager regroupe les alertes (`group_by`) pour éviter le spam et route les critiques vers l'astreinte. L'URL du webhook Slack est un secret lu depuis un fichier (`api_url_file`), jamais écrit dans le YAML versionné."
+      en: "Alertmanager groups alerts (`group_by`) to avoid spam and routes critical ones to on-call. The Slack webhook URL is a secret read from a file (`api_url_file`), never written in the versioned YAML."
+
+  - title:
+      fr: "Le lab Docker Compose"
+      en: "The Docker Compose lab"
+    file: compose.yaml
+    lang: yaml
+    kind: secure
+    code: |
+      name: monitoring
+
+      services:
+        prometheus:
+          image: prom/prometheus:v3.0.1
+          command:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --web.enable-lifecycle
+          volumes:
+            - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+            - ./rules.yml:/etc/prometheus/rules.yml:ro
+          networks:
+            - monitoring
+          ports:
+            # Loopback only: the UI runs arbitrary queries, never expose it publicly
+            - "127.0.0.1:9090:9090"
+
+        alertmanager:
+          image: prom/alertmanager:v0.28.0
+          volumes:
+            - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+          networks:
+            - monitoring
+
+        node-exporter:
+          image: prom/node-exporter:v1.8.2
+          networks:
+            - monitoring
+          # No published port: scraped internally by Prometheus only
+
+      networks:
+        monitoring:
+          internal: false
+    output: |
+      # Start and query the lab:
+      #   docker compose up -d
+      #   curl -s 'http://127.0.0.1:9090/api/v1/query?query=up' | jq '.data.result[].value'
+      # Each target returns [timestamp, "1"] when it is being scraped successfully.
+    note:
+      fr: "Prometheus n'est publié que sur `127.0.0.1` : son interface permet des requêtes arbitraires, on ne l'expose jamais sur Internet. `node-exporter` n'a aucun port publié, il est scrapé en interne."
+      en: "Prometheus is published only on `127.0.0.1`: its UI allows arbitrary queries, so it is never exposed to the Internet. `node-exporter` has no published port, it is scraped internally."
+
+mistake:
+  fr: |
+    **Exposer `/metrics` et l'interface Prometheus publiquement, sans authentification.**
+
+    Les métriques semblent anodines, mais elles trahissent énormément d'informations à un attaquant :
+    versions logicielles exactes (donc failles connues), chemins d'URL internes, noms de hôtes, volumes de
+    trafic, et parfois des valeurs métier. Pire, l'interface web de Prometheus permet d'exécuter des
+    requêtes PromQL **arbitraires** : exposée, elle devient un outil de reconnaissance offert à tous. Gardez
+    les endpoints `/metrics` et l'UI sur un réseau interne, derrière un reverse proxy avec TLS et
+    authentification. Et utilisez cette même supervision pour vous **défendre** : alertez sur `up == 0` et
+    sur les pics d'échecs d'authentification.
+  en: |
+    **Exposing `/metrics` and the Prometheus UI publicly, without authentication.**
+
+    Metrics look harmless, but they leak a lot to an attacker: exact software versions (hence known flaws),
+    internal URL paths, hostnames, traffic volumes, and sometimes business values. Worse, the Prometheus web
+    UI runs **arbitrary** PromQL queries: exposed, it becomes a reconnaissance tool handed to everyone. Keep
+    the `/metrics` endpoints and the UI on an internal network, behind a reverse proxy with TLS and
+    authentication. And use that same monitoring to **defend** yourself: alert on `up == 0` and on
+    authentication failure spikes.
+
+bestPractice:
+  fr: |
+    - **Modèle pull** : Prometheus scrape `/metrics` ; un exporter par type de ressource (node, postgres...).
+    - **PromQL** : `rate()` sur les compteurs, `histogram_quantile` pour les latences, labels pour découper.
+    - **Règles d'alerte avec `for`** pour éviter les faux positifs, et des alertes **de sécurité**.
+    - **Alertmanager** pour router, regrouper et mettre en silence ; webhooks lus depuis des fichiers-secrets.
+    - **N'exposez jamais `/metrics` ni l'UI publiquement** : réseau interne + reverse proxy (TLS + auth).
+    - **Alertez sur `up == 0`** et les pics d'échecs d'authentification : la supervision devient détection.
+  en: |
+    - **Pull model**: Prometheus scrapes `/metrics`; one exporter per resource type (node, postgres...).
+    - **PromQL**: `rate()` on counters, `histogram_quantile` for latencies, labels to slice.
+    - **Alerting rules with `for`** to avoid false positives, and **security** alerts.
+    - **Alertmanager** to route, group and silence; webhooks read from secret files.
+    - **Never expose `/metrics` or the UI publicly**: internal network + reverse proxy (TLS + auth).
+    - **Alert on `up == 0`** and auth failure spikes: monitoring becomes detection.
+
+exercise:
+  statement:
+    fr: |
+      1. Écrivez le bloc `scrape_configs` d'un `prometheus.yml` qui scrape un job `web` ciblant
+         `web:8080` toutes les cibles sur le chemin `/metrics`.
+      2. Écrivez une requête PromQL qui donne le débit de requêtes HTTP en erreur 500 par seconde sur les
+         5 dernières minutes.
+      3. Écrivez une règle d'alerte `TooManyLogins` qui se déclenche quand le taux d'échecs
+         d'authentification (`auth_failures_total`) dépasse 5 par seconde pendant 2 minutes.
+    en: |
+      1. Write the `scrape_configs` block of a `prometheus.yml` that scrapes a `web` job targeting
+         `web:8080` on the `/metrics` path.
+      2. Write a PromQL query giving the throughput of HTTP 500 error requests per second over the last
+         5 minutes.
+      3. Write an alerting rule `TooManyLogins` firing when the authentication failure rate
+         (`auth_failures_total`) exceeds 5 per second for 2 minutes.
+  solution:
+    file: solution.yml
+    lang: yaml
+    code: |
+      # 1. The scrape config:
+      scrape_configs:
+        - job_name: web
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["web:8080"]
+
+      # 2. PromQL for the 500 error throughput over 5 minutes:
+      #      sum(rate(http_requests_total{status="500"}[5m]))
+
+      # 3. The alerting rule:
+      groups:
+        - name: security
+          rules:
+            - alert: TooManyLogins
+              expr: rate(auth_failures_total[2m]) > 5
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Authentication failure rate above 5/s for 2 minutes"
+    note:
+      fr: "`rate(...[5m])` convertit le compteur en débit par seconde. La règle `TooManyLogins` combine un seuil et un `for: 2m` pour n'alerter que sur un pic soutenu, pas sur un échec isolé."
+      en: "`rate(...[5m])` turns the counter into a per-second throughput. The `TooManyLogins` rule combines a threshold with `for: 2m` to alert only on a sustained spike, not an isolated failure."
+
+quiz:
+  - q:
+      fr: "Comment Prometheus collecte-t-il les métriques ?"
+      en: "How does Prometheus collect metrics?"
+    options:
+      fr:
+        - "En pull : il interroge périodiquement un endpoint `/metrics` sur chaque cible"
+        - "En push : les applications lui envoient leurs métriques"
+        - "Par e-mail"
+        - "En lisant les fichiers de logs"
+      en:
+        - "By pull: it periodically queries a `/metrics` endpoint on each target"
+        - "By push: applications send their metrics to it"
+        - "By email"
+        - "By reading log files"
+    answer: 0
+    why:
+      fr: "Prometheus va chercher les métriques (pull) en interrogeant `/metrics` à intervalle régulier ; c'est son modèle de fonctionnement distinctif."
+      en: "Prometheus fetches metrics (pull) by querying `/metrics` at regular intervals; that is its distinctive operating model."
+  - q:
+      fr: "À quoi sert un exporter comme node-exporter ?"
+      en: "What is an exporter like node-exporter for?"
+    options:
+      fr:
+        - "À envoyer des e-mails d'alerte"
+        - "À exposer des métriques (ici système) au format Prometheus"
+        - "À chiffrer les métriques"
+        - "À remplacer Alertmanager"
+      en:
+        - "To send alert emails"
+        - "To expose metrics (here system) in the Prometheus format"
+        - "To encrypt metrics"
+        - "To replace Alertmanager"
+    answer: 1
+    why:
+      fr: "Un exporter traduit l'état d'une ressource (système, base...) en métriques Prometheus exposées sur `/metrics`, que Prometheus scrape ensuite."
+      en: "An exporter translates a resource's state (system, database...) into Prometheus metrics exposed on `/metrics`, which Prometheus then scrapes."
+  - q:
+      fr: "Que calcule `rate(http_requests_total[5m])` ?"
+      en: "What does `rate(http_requests_total[5m])` compute?"
+    options:
+      fr:
+        - "Le nombre total de requêtes depuis le démarrage"
+        - "La mémoire utilisée"
+        - "Le débit moyen de requêtes par seconde sur les 5 dernières minutes"
+        - "Le nombre de cibles"
+      en:
+        - "The total number of requests since startup"
+        - "The memory used"
+        - "The average request throughput per second over the last 5 minutes"
+        - "The number of targets"
+    answer: 2
+    why:
+      fr: "`rate()` convertit un compteur (toujours croissant) en débit moyen par seconde sur la fenêtre indiquée : ici 5 minutes."
+      en: "`rate()` turns a counter (always increasing) into an average per-second throughput over the given window: here 5 minutes."
+  - q:
+      fr: "Quel composant route et regroupe les alertes déclenchées par Prometheus ?"
+      en: "Which component routes and groups the alerts fired by Prometheus?"
+    options:
+      fr:
+        - "node-exporter"
+        - "Grafana"
+        - "etcd"
+        - "Alertmanager"
+      en:
+        - "node-exporter"
+        - "Grafana"
+        - "etcd"
+        - "Alertmanager"
+    answer: 3
+    why:
+      fr: "Prometheus déclenche les alertes mais les transmet à Alertmanager, qui gère le routage, le regroupement et les silences."
+      en: "Prometheus fires the alerts but hands them to Alertmanager, which handles routing, grouping and silencing."
+  - q:
+      fr: "Pourquoi ne pas exposer `/metrics` et l'interface Prometheus sur Internet ?"
+      en: "Why not expose `/metrics` and the Prometheus UI on the Internet?"
+    options:
+      fr:
+        - "Elles révèlent versions, chemins internes et volumes, et l'UI permet des requêtes arbitraires"
+        - "Parce que c'est trop lent"
+        - "Parce que Prometheus ne supporte pas HTTP"
+        - "Parce que cela désactive les alertes"
+      en:
+        - "They reveal versions, internal paths and volumes, and the UI allows arbitrary queries"
+        - "Because it is too slow"
+        - "Because Prometheus does not support HTTP"
+        - "Because it disables alerts"
+    answer: 0
+    why:
+      fr: "Les métriques renseignent un attaquant (versions, chemins) et l'UI exécute des requêtes PromQL arbitraires : on garde tout en interne, derrière un reverse proxy authentifié."
+      en: "Metrics inform an attacker (versions, paths) and the UI runs arbitrary PromQL queries: keep everything internal, behind an authenticated reverse proxy."

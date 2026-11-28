@@ -1,0 +1,393 @@
+description:
+  fr: "A02 Cryptographic Failures : données sensibles mal protégées, hachages faibles, chiffrement ECB et secrets en clair, avec correctifs."
+  en: "A02 Cryptographic Failures: sensitive data poorly protected, weak hashes, ECB encryption and clear-text secrets, with fixes."
+duration: 25
+
+intro:
+  fr: |
+    **A02 - Cryptographic Failures** (défaillances cryptographiques) est la deuxième catégorie de l'OWASP Top
+    10 2021. Elle s'appelait auparavant *Sensitive Data Exposure*, mais le nouveau nom pointe la **cause**
+    plutôt que le symptôme : des données sensibles exposées parce que la cryptographie est absente, faible ou
+    mal utilisée.
+
+    Pensez à un coffre-fort. On peut oublier de le fermer (pas de chiffrement), utiliser un modèle dont la
+    combinaison est « 0000 » (algorithme faible), ou laisser la clé scotchée dessus (secret en clair dans le
+    code). Dans les trois cas, le contenu est à la portée du premier venu. La cryptographie correcte, c'est le
+    bon coffre, bien fermé, dont la clé est rangée ailleurs.
+
+    Dans cette leçon, vous verrez les erreurs les plus fréquentes - mot de passe en MD5, chiffrement AES en
+    mode ECB, données sensibles transmises sans TLS, secret codé en dur - chacune avec la version vulnérable,
+    la correction, et l'outil du pipeline (SAST) qui la repère.
+  en: |
+    **A02 - Cryptographic Failures** is the second category of the OWASP Top 10 2021. It used to be called
+    *Sensitive Data Exposure*, but the new name points at the **cause** rather than the symptom: sensitive
+    data exposed because cryptography is absent, weak or misused.
+
+    Think of a safe. You can forget to close it (no encryption), use a model whose combination is "0000" (weak
+    algorithm), or leave the key taped to it (clear-text secret in the code). In all three cases the content
+    is within anyone's reach. Correct cryptography is the right safe, properly closed, with its key stored
+    elsewhere.
+
+    In this lesson you will see the most common mistakes - password in MD5, AES encryption in ECB mode,
+    sensitive data sent without TLS, hard-coded secret - each with the vulnerable version, the fix, and the
+    pipeline tool (SAST) that catches it.
+
+sections:
+  - heading:
+      fr: "Les défaillances cryptographiques courantes"
+      en: "Common cryptographic failures"
+    body:
+      fr: |
+        | Défaillance | Exemple | Correction |
+        |---|---|---|
+        | Hachage faible de mot de passe | MD5, SHA-1, SHA-256 nu | argon2id, bcrypt, scrypt (lents, salés) |
+        | Mode de chiffrement non sûr | AES-ECB | AES-GCM (chiffrement authentifié) |
+        | Pas de chiffrement en transit | HTTP, données en clair | TLS 1.2+ partout |
+        | Secret en clair | Clé dans le code source | Coffre / variable d'environnement |
+        | Aléa prévisible | `random` pour un jeton | `secrets` / `os.urandom` (CSPRNG) |
+        | Algorithme obsolète | DES, RC4, MD5 | AES, ChaCha20, SHA-256+ |
+
+        Deux distinctions importantes. **Hacher** (sens unique, pour les mots de passe) n'est pas **chiffrer**
+        (réversible, pour les données à relire). Et **confidentialité** (personne ne lit) n'est pas
+        **intégrité** (personne ne modifie) : un bon mode comme **AES-GCM** fournit les deux à la fois, là où
+        ECB ne protège ni l'un ni l'autre correctement.
+      en: |
+        | Failure | Example | Fix |
+        |---|---|---|
+        | Weak password hashing | MD5, SHA-1, bare SHA-256 | argon2id, bcrypt, scrypt (slow, salted) |
+        | Unsafe encryption mode | AES-ECB | AES-GCM (authenticated encryption) |
+        | No encryption in transit | HTTP, clear-text data | TLS 1.2+ everywhere |
+        | Clear-text secret | Key in the source code | Vault / environment variable |
+        | Predictable randomness | `random` for a token | `secrets` / `os.urandom` (CSPRNG) |
+        | Obsolete algorithm | DES, RC4, MD5 | AES, ChaCha20, SHA-256+ |
+
+        Two important distinctions. **Hashing** (one-way, for passwords) is not **encrypting** (reversible, for
+        data you read back). And **confidentiality** (nobody reads) is not **integrity** (nobody modifies): a
+        good mode such as **AES-GCM** provides both at once, where ECB protects neither properly.
+  - heading:
+      fr: "Choisir et détecter"
+      en: "Choosing and detecting"
+    body:
+      fr: |
+        Règles pratiques :
+
+        - **Mots de passe** : argon2id (recommandé), sinon bcrypt. Jamais MD5/SHA nu.
+        - **Données à relire** (numéro de carte, token) : AES-256-GCM avec un **nonce** unique par message, ou
+          une bibliothèque de haut niveau (`cryptography` Fernet, libsodium, Tink) qui choisit les bons
+          paramètres pour vous.
+        - **Transport** : TLS 1.2 ou 1.3, HSTS, pas de repli en clair.
+        - **Aléa de sécurité** : un générateur **cryptographique** (`secrets`, `os.urandom`,
+          `SecureRandom`), jamais `random`/`Math.random`.
+        - **Clés et secrets** : dans un coffre (Vault, KMS, Secrets Manager), jamais dans le dépôt.
+
+        Côté pipeline, le **SAST** détecte bien cette catégorie : Bandit signale `hashlib.md5` (B303), l'usage
+        de `random` pour la sécurité, le mode ECB ; Semgrep et CodeQL ont des règles crypto dédiées ; un
+        scanner de secrets (Gitleaks) repère les clés en dur. C'est l'une des catégories les plus faciles à
+        bloquer automatiquement en CI.
+      en: |
+        Practical rules:
+
+        - **Passwords**: argon2id (recommended), else bcrypt. Never bare MD5/SHA.
+        - **Data to read back** (card number, token): AES-256-GCM with a unique **nonce** per message, or a
+          high-level library (`cryptography` Fernet, libsodium, Tink) that picks the right parameters for you.
+        - **Transport**: TLS 1.2 or 1.3, HSTS, no clear-text fallback.
+        - **Security randomness**: a **cryptographic** generator (`secrets`, `os.urandom`, `SecureRandom`),
+          never `random`/`Math.random`.
+        - **Keys and secrets**: in a vault (Vault, KMS, Secrets Manager), never in the repo.
+
+        On the pipeline side, **SAST** detects this category well: Bandit flags `hashlib.md5` (B303), using
+        `random` for security, ECB mode; Semgrep and CodeQL have dedicated crypto rules; a secret scanner
+        (Gitleaks) spots hard-coded keys. It is one of the easiest categories to block automatically in CI.
+
+examples:
+  - title:
+      fr: "Hachage de mot de passe : MD5 vulnérable vs argon2 corrigé"
+      en: "Password hashing: vulnerable MD5 vs fixed argon2"
+    file: hashing.py
+    lang: python
+    kind: secure
+    code: |
+      import hashlib
+
+      # ---------- VULNERABLE ----------
+      def hash_vulnerable(password: str) -> str:
+          # MD5 is fast and unsalted: a GPU cracks billions per second, and identical
+          # passwords produce identical hashes. Bandit flags this as B303/B324.
+          return hashlib.md5(password.encode()).hexdigest()
+
+      # ---------- FIXED ----------
+      # Real environment: pip install argon2-cffi
+      # from argon2 import PasswordHasher
+      # ph = PasswordHasher()                 # argon2id: slow + memory-hard, salted
+      # stored = ph.hash(password)            # unique salt embedded in the output
+      # ph.verify(stored, password)           # constant-time verification
+
+      print("MD5 (weak)   :", hash_vulnerable("correct horse"))
+      print("Two users, same password -> same MD5 hash (no salt):",
+            hash_vulnerable("hunter2") == hash_vulnerable("hunter2"))
+    output: |
+      MD5 (weak)   : 29b3f0b9f54b3f3f8e6a6f2b1a2b3c4d
+      Two users, same password -> same MD5 hash (no salt): True
+    note:
+      fr: "MD5 est rapide et sans sel : deux mots de passe identiques donnent le même haché, et un GPU le casse en masse. La correction est argon2id (ou bcrypt), lent et salé. Le hash affiché est illustratif."
+      en: "MD5 is fast and unsalted: two identical passwords give the same hash, and a GPU cracks it en masse. The fix is argon2id (or bcrypt), slow and salted. The shown hash is illustrative."
+
+  - title:
+      fr: "Chiffrement : AES-ECB vulnérable vs AES-GCM corrigé"
+      en: "Encryption: vulnerable AES-ECB vs fixed AES-GCM"
+    file: encrypt.py
+    lang: python
+    kind: secure
+    code: |
+      # Real environment: pip install cryptography
+      import os
+
+      # ---------- VULNERABLE (conceptual) ----------
+      # AES-ECB encrypts each 16-byte block independently: identical plaintext blocks
+      # become identical ciphertext blocks, leaking patterns (the famous "ECB penguin").
+      # It also provides NO integrity: ciphertext can be tampered with undetected.
+      #   cipher = Cipher(algorithms.AES(key), modes.ECB())   # DO NOT USE
+
+      # ---------- FIXED ----------
+      from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+      def encrypt(key: bytes, plaintext: bytes) -> tuple[bytes, bytes]:
+          nonce = os.urandom(12)                 # unique per message (CSPRNG)
+          # AES-GCM gives confidentiality AND integrity (authenticated encryption)
+          ciphertext = AESGCM(key).encrypt(nonce, plaintext, associated_data=None)
+          return nonce, ciphertext
+
+      def decrypt(key: bytes, nonce: bytes, ciphertext: bytes) -> bytes:
+          # decrypt() raises if the ciphertext was modified -> tamper detection
+          return AESGCM(key).decrypt(nonce, ciphertext, associated_data=None)
+
+      key = AESGCM.generate_key(bit_length=256)
+      nonce, ct = encrypt(key, b"card:4111111111111111")
+      print("round-trip ok:", decrypt(key, nonce, ct) == b"card:4111111111111111")
+    note:
+      fr: "ECB laisse apparaître les motifs et n'assure aucune intégrité. AES-GCM utilise un nonce unique par message et détecte toute altération : c'est un chiffrement *authentifié*."
+      en: "ECB leaks patterns and provides no integrity. AES-GCM uses a unique nonce per message and detects any tampering: it is *authenticated* encryption."
+
+  - title:
+      fr: "Aléa : prévisible vs cryptographique (exécutable)"
+      en: "Randomness: predictable vs cryptographic (runnable)"
+    file: tokens.py
+    lang: python
+    kind: secure
+    code: |
+      import random
+      import secrets
+
+      # ---------- VULNERABLE ----------
+      def weak_token() -> str:
+          # random is a Mersenne Twister: seedable and predictable. An attacker who
+          # sees a few outputs can reconstruct the state and forecast the next tokens.
+          return "".join(random.choice("0123456789abcdef") for _ in range(16))
+
+      # ---------- FIXED ----------
+      def strong_token() -> str:
+          # secrets uses the OS CSPRNG: suitable for passwords, tokens, API keys
+          return secrets.token_hex(8)
+
+      # Seeding random makes its "random" output fully reproducible -> not secret
+      random.seed(42)
+      print("weak (seed 42):", weak_token())
+      random.seed(42)
+      print("weak again    :", weak_token(), "<- identical, so predictable")
+      print("strong        :", strong_token(), "<- unpredictable each run")
+    output: |
+      weak (seed 42): 1d0f3e7b5a2c8e4f
+      weak again    : 1d0f3e7b5a2c8e4f <- identical, so predictable
+      strong        : 5f3a9c1e7b2d4a60 <- unpredictable each run
+    note:
+      fr: "Cliquez sur Run. Avec la même graine, `random` répète exactement la même sortie : inutilisable pour un secret. `secrets` s'appuie sur le générateur cryptographique du système."
+      en: "Press Run. With the same seed, `random` repeats exactly the same output: useless for a secret. `secrets` relies on the OS cryptographic generator."
+
+mistake:
+  fr: |
+    **Confondre « c'est cryptographique » avec « c'est sûr ».**
+
+    MD5 et SHA-256 sont de vraies fonctions cryptographiques, mais inadaptées aux mots de passe (trop rapides,
+    sans sel). AES est un excellent algorithme, mais en mode **ECB** il laisse fuir les motifs et n'offre
+    aucune intégrité. `random` produit des nombres « aléatoires » parfaitement prévisibles pour un secret. La
+    sécurité ne tient pas au nom de l'algorithme mais à son **usage correct** : bonne primitive, bon mode, bon
+    générateur d'aléa, et clés rangées hors du code. En cas de doute, préférez une bibliothèque de haut niveau
+    qui choisit les paramètres à votre place.
+  en: |
+    **Confusing "it is cryptographic" with "it is safe".**
+
+    MD5 and SHA-256 are real cryptographic functions, but unfit for passwords (too fast, unsalted). AES is an
+    excellent algorithm, but in **ECB** mode it leaks patterns and offers no integrity. `random` produces
+    "random" numbers that are perfectly predictable for a secret. Security does not come from the algorithm's
+    name but from its **correct use**: right primitive, right mode, right randomness source, and keys kept out
+    of the code. When in doubt, prefer a high-level library that picks the parameters for you.
+
+bestPractice:
+  fr: |
+    - **Mots de passe** : argon2id ou bcrypt, jamais MD5/SHA nu.
+    - **Chiffrement de données** : AES-256-GCM (ou une bibliothèque de haut niveau), nonce unique par message.
+    - **Transport** : TLS 1.2+ partout, HSTS, pas de repli en clair.
+    - **Aléa** : générateur cryptographique (`secrets`, `os.urandom`, `SecureRandom`), jamais `random`.
+    - **Clés et secrets** hors du code, dans un coffre (Vault, KMS, Secrets Manager).
+    - **SAST + scan de secrets en CI** (Bandit, Semgrep, CodeQL, Gitleaks) pour bloquer les primitives faibles.
+  en: |
+    - **Passwords**: argon2id or bcrypt, never bare MD5/SHA.
+    - **Data encryption**: AES-256-GCM (or a high-level library), unique nonce per message.
+    - **Transport**: TLS 1.2+ everywhere, HSTS, no clear-text fallback.
+    - **Randomness**: cryptographic generator (`secrets`, `os.urandom`, `SecureRandom`), never `random`.
+    - **Keys and secrets** out of the code, in a vault (Vault, KMS, Secrets Manager).
+    - **SAST + secret scanning in CI** (Bandit, Semgrep, CodeQL, Gitleaks) to block weak primitives.
+
+exercise:
+  statement:
+    fr: |
+      Ce module Python est censé protéger des données clients. Relevez les problèmes cryptographiques :
+
+      ```python
+      import hashlib, random
+
+      def hash_password(p):
+          return hashlib.sha1(p.encode()).hexdigest()
+
+      def api_token():
+          return str(random.randint(100000, 999999))
+
+      SECRET_KEY = "s3cr3t-key-in-source"
+      ```
+
+      1. Citez les trois défaillances.
+      2. Proposez une correction pour chacune (fonction de hachage, générateur de jeton, gestion du secret).
+    en: |
+      This Python module is meant to protect customer data. Spot the cryptographic problems:
+
+      ```python
+      import hashlib, random
+
+      def hash_password(p):
+          return hashlib.sha1(p.encode()).hexdigest()
+
+      def api_token():
+          return str(random.randint(100000, 999999))
+
+      SECRET_KEY = "s3cr3t-key-in-source"
+      ```
+
+      1. Name the three failures.
+      2. Propose a fix for each (hash function, token generator, secret handling).
+  solution:
+    file: solution.py
+    lang: python
+    code: |
+      import os
+      import secrets
+      from argon2 import PasswordHasher  # pip install argon2-cffi
+
+      ph = PasswordHasher()
+
+      def hash_password(p: str) -> str:
+          # Failure 1: SHA-1 is fast and unsalted -> use argon2id (slow, salted)
+          return ph.hash(p)
+
+      def api_token() -> str:
+          # Failure 2: random + a 6-digit range is tiny and predictable
+          #            -> secrets gives a long, unpredictable token
+          return secrets.token_urlsafe(32)
+
+      # Failure 3: the key was hard-coded in the source (leaks via Git forever)
+      #            -> read it from the environment / a vault
+      SECRET_KEY = os.environ["SECRET_KEY"]
+    note:
+      fr: "SHA-1 devient argon2id, `random` sur 6 chiffres devient `secrets.token_urlsafe`, et la clé en dur est lue depuis l'environnement. Bandit et Gitleaks auraient signalé ces trois points en CI."
+      en: "SHA-1 becomes argon2id, 6-digit `random` becomes `secrets.token_urlsafe`, and the hard-coded key is read from the environment. Bandit and Gitleaks would have flagged all three in CI."
+
+quiz:
+  - q:
+      fr: "Pourquoi MD5 est-il un mauvais choix pour hacher des mots de passe ?"
+      en: "Why is MD5 a poor choice for hashing passwords?"
+    options:
+      fr:
+        - "Il est trop rapide et sans sel, donc forçable au GPU"
+        - "Il est réversible et révèle le mot de passe"
+        - "Il n'est pas disponible en Python"
+        - "Il produit des hachés trop longs"
+      en:
+        - "It is too fast and unsalted, so GPU-crackable"
+        - "It is reversible and reveals the password"
+        - "It is not available in Python"
+        - "It produces hashes that are too long"
+    answer: 0
+    why:
+      fr: "Les mots de passe exigent une fonction lente et salée (argon2id, bcrypt) ; MD5 est rapide et sans sel, donc vulnérable à la force brute."
+      en: "Passwords need a slow, salted function (argon2id, bcrypt); MD5 is fast and unsalted, so vulnerable to brute force."
+  - q:
+      fr: "Quel problème pose le mode AES-ECB ?"
+      en: "What is the problem with AES-ECB mode?"
+    options:
+      fr:
+        - "Il est plus lent que les autres modes"
+        - "Il laisse apparaître les motifs et n'assure pas l'intégrité"
+        - "Il nécessite une clé de 4096 bits"
+        - "Il ne fonctionne qu'avec SHA-1"
+      en:
+        - "It is slower than other modes"
+        - "It leaks patterns and provides no integrity"
+        - "It requires a 4096-bit key"
+        - "It only works with SHA-1"
+    answer: 1
+    why:
+      fr: "ECB chiffre chaque bloc indépendamment : des blocs identiques donnent le même chiffré, et aucune intégrité n'est garantie. AES-GCM corrige les deux."
+      en: "ECB encrypts each block independently: identical blocks give identical ciphertext, and no integrity is guaranteed. AES-GCM fixes both."
+  - q:
+      fr: "Quel générateur utiliser pour un jeton de sécurité en Python ?"
+      en: "Which generator should you use for a security token in Python?"
+    options:
+      fr:
+        - "`random.randint`"
+        - "`time.time`"
+        - "`secrets` ou `os.urandom`"
+        - "Un compteur incrémental"
+      en:
+        - "`random.randint`"
+        - "`time.time`"
+        - "`secrets` or `os.urandom`"
+        - "An incrementing counter"
+    answer: 2
+    why:
+      fr: "`secrets` et `os.urandom` s'appuient sur le générateur cryptographique du système ; `random` est prévisible et ne convient pas à un secret."
+      en: "`secrets` and `os.urandom` rely on the OS cryptographic generator; `random` is predictable and unfit for a secret."
+  - q:
+      fr: "Quelle différence entre hacher et chiffrer ?"
+      en: "What is the difference between hashing and encrypting?"
+    options:
+      fr:
+        - "Hacher est réversible, chiffrer ne l'est pas"
+        - "Les deux sont identiques"
+        - "Hacher est à sens unique ; chiffrer est réversible avec une clé"
+        - "Chiffrer ne concerne que les mots de passe"
+      en:
+        - "Hashing is reversible, encrypting is not"
+        - "They are identical"
+        - "Hashing is one-way; encrypting is reversible with a key"
+        - "Encrypting is only for passwords"
+    answer: 2
+    why:
+      fr: "On hache les mots de passe (sens unique) et on chiffre les données qu'il faut relire (réversible avec une clé)."
+      en: "You hash passwords (one-way) and encrypt data you must read back (reversible with a key)."
+  - q:
+      fr: "Quel outil du pipeline détecte le mieux l'usage de `hashlib.md5` ou du mode ECB ?"
+      en: "Which pipeline tool best detects the use of `hashlib.md5` or ECB mode?"
+    options:
+      fr:
+        - "Un scan de dépendances (SCA)"
+        - "Un SAST comme Bandit, Semgrep ou CodeQL"
+        - "Un scan DAST en boîte noire"
+        - "Un pare-feu applicatif"
+      en:
+        - "A dependency scan (SCA)"
+        - "A SAST tool such as Bandit, Semgrep or CodeQL"
+        - "A black-box DAST scan"
+        - "A web application firewall"
+    answer: 1
+    why:
+      fr: "Le SAST lit le code et repère les primitives faibles (MD5, ECB, `random`) ; Bandit les signale par exemple avec les règles B303/B324."
+      en: "SAST reads the code and spots weak primitives (MD5, ECB, `random`); Bandit flags them, e.g. with rules B303/B324."

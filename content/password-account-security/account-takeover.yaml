@@ -1,0 +1,359 @@
+description:
+  fr: "Comprendre les vecteurs de prise de contrôle de compte (phishing, vol de session, fatigue MFA, SIM swap, abus de réinitialisation) pour mieux s'en défendre."
+  en: "Understand account takeover vectors (phishing, session hijacking, MFA fatigue, SIM swap, reset-flow abuse) in order to defend against them better."
+duration: 20
+
+intro:
+  fr: |
+    La **prise de contrôle de compte** (*account takeover*, ATO) survient quand un attaquant obtient l'accès à
+    un compte qui n'est pas le sien. Le mot de passe n'est qu'une porte parmi d'autres : il existe plusieurs
+    chemins pour entrer, et beaucoup **contournent** le mot de passe sans jamais le connaître.
+
+    Pensez à une maison. On peut entrer par la porte avec la clé (le mot de passe), mais aussi en volant la
+    télécommande du garage déjà appairée (le cookie de session), en se faisant passer pour le facteur pour que
+    vous ouvriez vous-même (le phishing), ou en détournant le courrier qui contient le code de secours (le SIM
+    swap). Comprendre **tous** ces chemins est la condition pour les fermer.
+
+    **Cadre :** cette leçon décrit des **vecteurs** et surtout leurs **contre-mesures**. On ne cible aucun
+    compte réel, on ne vole aucune session, on ne détourne aucun numéro : ce sont des infractions graves.
+    L'objectif est de rendre vos comptes — et ceux de vos utilisateurs — résistants à chacun de ces vecteurs.
+  en: |
+    **Account takeover** (ATO) happens when an attacker gains access to an account that is not theirs. The
+    password is just one door among several: there are many ways in, and many **bypass** the password without
+    ever knowing it.
+
+    Picture a house. You can enter through the door with the key (the password), but also by stealing the
+    already-paired garage remote (the session cookie), by posing as the mail carrier so you open the door
+    yourself (phishing), or by diverting the mail that holds the backup code (SIM swap). Understanding **all**
+    these paths is the condition for closing them.
+
+    **Scope:** this lesson describes **vectors** and above all their **countermeasures**. We target no real
+    account, steal no session, hijack no phone number: those are serious offences. The goal is to make your
+    accounts — and your users' — resistant to each of these vectors.
+
+sections:
+  - heading:
+      fr: "Les grands vecteurs d'ATO"
+      en: "The main ATO vectors"
+    body:
+      fr: |
+        Un compte peut tomber de bien des façons. Les connaître permet de choisir la bonne défense pour
+        chacune.
+
+        | Vecteur | Comment ça marche | Ce qui le bloque |
+        |---|---|---|
+        | Phishing | Faire saisir ses identifiants sur un faux site | MFA résistant au phishing (passkeys) |
+        | Vol de session | Réutiliser un cookie de session volé | Cookies `HttpOnly`/`Secure`, liaison à l'appareil |
+        | Fatigue MFA | Spammer les notifications push jusqu'au « oui » | Correspondance de numéro, limitation des push |
+        | SIM swap | Détourner le numéro pour recevoir les SMS | MFA par appli/passkey, pas de SMS |
+        | Abus de réinitialisation | Exploiter un flux « mot de passe oublié » faible | Jetons courts, à usage unique, re-vérification |
+
+        Le point commun des vecteurs modernes : ils **contournent** le mot de passe. Le phishing capture aussi
+        le code MFA en temps réel ; le vol de session saute l'authentification entière ; le SIM swap vise le
+        second facteur. D'où la règle : le mot de passe est nécessaire mais **jamais suffisant**.
+      en: |
+        An account can fall in many ways. Knowing them lets you pick the right defence for each.
+
+        | Vector | How it works | What blocks it |
+        |---|---|---|
+        | Phishing | Make the user enter credentials on a fake site | Phishing-resistant MFA (passkeys) |
+        | Session hijacking | Reuse a stolen session cookie | `HttpOnly`/`Secure` cookies, device binding |
+        | MFA fatigue | Spam push notifications until a "yes" | Number matching, push rate limiting |
+        | SIM swap | Hijack the number to receive SMS | App/passkey MFA, no SMS |
+        | Reset-flow abuse | Exploit a weak "forgot password" flow | Short, single-use tokens, re-verification |
+
+        The common thread of modern vectors: they **bypass** the password. Phishing also captures the MFA code
+        in real time; session hijacking skips the whole authentication; SIM swap targets the second factor.
+        Hence the rule: the password is necessary but **never sufficient**.
+  - heading:
+      fr: "Fatigue MFA et vol de session, de plus près"
+      en: "MFA fatigue and session hijacking, up close"
+    body:
+      fr: |
+        Deux vecteurs méritent un zoom, car ils piègent même des utilisateurs prudents.
+
+        La **fatigue MFA** (*MFA bombing*) vise le MFA par simple notification « Approuver / Refuser ».
+        L'attaquant, qui connaît déjà le mot de passe (souvent par fuite), déclenche des dizaines de
+        notifications. Excédée ou croyant à un bug, la victime finit par appuyer sur « Approuver ». La parade :
+        la **correspondance de numéro** (l'appli affiche un chiffre à recopier depuis l'écran de connexion),
+        qui rend l'approbation à l'aveugle impossible.
+
+        Le **vol de session** ignore totalement le mot de passe et le MFA : une fois connecté, votre navigateur
+        détient un **cookie de session**. Un maliciel ou une faille XSS peut le voler, et l'attaquant le
+        rejoue pour « être vous » sans se reconnecter. Défenses : cookies `HttpOnly` (inaccessibles au
+        JavaScript) et `Secure`, courte durée de vie, et **liaison** de la session à l'appareil ou à l'IP, pour
+        qu'un cookie rejoué ailleurs soit rejeté.
+      en: |
+        Two vectors deserve a close-up, because they trap even careful users.
+
+        **MFA fatigue** (*MFA bombing*) targets simple "Approve / Deny" push MFA. The attacker, who already
+        knows the password (often from a leak), triggers dozens of notifications. Annoyed or thinking it is a
+        bug, the victim eventually taps "Approve". The guard: **number matching** (the app shows a digit to
+        copy from the login screen), which makes blind approval impossible.
+
+        **Session hijacking** ignores the password and MFA entirely: once logged in, your browser holds a
+        **session cookie**. Malware or an XSS flaw can steal it, and the attacker replays it to "be you"
+        without logging in again. Defences: `HttpOnly` cookies (invisible to JavaScript) and `Secure`, short
+        lifetimes, and **binding** the session to the device or IP, so a cookie replayed elsewhere is rejected.
+
+examples:
+  - title:
+      fr: "Émettre un cookie de session résistant au vol"
+      en: "Issuing a theft-resistant session cookie"
+    file: session_cookie.py
+    lang: python
+    kind: secure
+    code: |
+      from http.cookies import SimpleCookie
+
+      # Defensive example: how a server SHOULD set a session cookie.
+      # Each flag closes one hijacking path.
+      c = SimpleCookie()
+      c["session"] = "s%3Aexample-opaque-random-id"  # opaque, not guessable
+      c["session"]["httponly"] = True   # JavaScript (and XSS) cannot read it
+      c["session"]["secure"] = True     # sent only over HTTPS, never in clear
+      c["session"]["samesite"] = "Lax"  # not sent on cross-site requests (CSRF help)
+      c["session"]["max-age"] = 3600    # short life: a stolen cookie expires fast
+      c["session"]["path"] = "/"
+
+      print(c.output())
+    output: |
+      Set-Cookie: session=s%3Aexample-opaque-random-id; HttpOnly; Max-Age=3600; Path=/; SameSite=Lax; Secure
+    note:
+      fr: "`HttpOnly` bloque le vol par XSS, `Secure` le vol en clair, `SameSite` aide contre le CSRF, et une courte durée limite la fenêtre d'un cookie volé. Chaque drapeau ferme un chemin."
+      en: "`HttpOnly` blocks XSS theft, `Secure` blocks clear-text theft, `SameSite` helps against CSRF, and a short lifetime limits a stolen cookie's window. Each flag closes a path."
+
+  - title:
+      fr: "Contrer la fatigue MFA par correspondance de numéro"
+      en: "Countering MFA fatigue with number matching"
+    file: number_matching.py
+    lang: python
+    kind: secure
+    code: |
+      import secrets
+
+      # MFA fatigue abuses blind "Approve/Deny" prompts. Number matching forces the user
+      # to COPY a code shown on the login screen into the app - impossible to approve blindly.
+      def start_challenge():
+          # The login screen displays this number; the app will ask the user to type it.
+          return secrets.randbelow(90) + 10  # a 2-digit code, 10..99
+
+      def verify(displayed: int, typed: int, push_count_last_minute: int) -> bool:
+          # Rate-limit pushes: a flood is itself a strong attack signal.
+          if push_count_last_minute > 3:
+              print("Too many prompts - blocking and alerting the user")
+              return False
+          # Approval only succeeds if the typed number matches the one on screen.
+          return displayed == typed
+
+      code = start_challenge()
+      print("Login screen shows:", code)
+      print("Correct approval :", verify(code, code, push_count_last_minute=1))
+      print("Blind approval   :", verify(code, 42, push_count_last_minute=1))
+    output: |
+      Login screen shows: 73
+      Correct approval : True
+      Blind approval   : False
+    note:
+      fr: "La correspondance de numéro oblige à recopier un code visible sur l'écran de connexion : approuver « au hasard » échoue. La limitation des push bloque le harcèlement."
+      en: "Number matching forces copying a code shown on the login screen: a 'random' approval fails. Rate-limiting pushes blocks the harassment."
+
+  - title:
+      fr: "Un jeton de réinitialisation sûr (usage unique, expirant)"
+      en: "A safe reset token (single-use, expiring)"
+    file: reset_token.py
+    lang: python
+    kind: secure
+    code: |
+      import secrets
+      import hashlib
+      import time
+
+      # Reset-flow abuse exploits weak "forgot password" tokens (guessable, reusable, eternal).
+      # A safe token is random, stored HASHED, single-use and short-lived.
+      def issue_token(store, user):
+          raw = secrets.token_urlsafe(32)                 # 256-bit, unguessable
+          store[user] = {
+              "hash": hashlib.sha256(raw.encode()).hexdigest(),  # store the hash, not the token
+              "exp": time.time() + 900,                   # valid 15 minutes only
+              "used": False,
+          }
+          return raw  # emailed to the user; never logged
+
+      def consume(store, user, raw) -> bool:
+          rec = store.get(user)
+          if not rec or rec["used"] or time.time() > rec["exp"]:
+              return False
+          ok = hashlib.sha256(raw.encode()).hexdigest() == rec["hash"]
+          if ok:
+              rec["used"] = True   # single use: it cannot be replayed
+          return ok
+
+      store = {}
+      token = issue_token(store, "alice@example.com")
+      print("First use :", consume(store, "alice@example.com", token))
+      print("Replay    :", consume(store, "alice@example.com", token))
+    output: |
+      First use : True
+      Replay    : False
+    note:
+      fr: "Jeton aléatoire, stocké haché, à usage unique et expirant en 15 min : l'abus du flux « mot de passe oublié » devient impossible (pas de rejeu, pas de devinette)."
+      en: "Random token, stored hashed, single-use and expiring in 15 min: abusing the 'forgot password' flow becomes impossible (no replay, no guessing)."
+
+mistake:
+  fr: |
+    **Penser qu'« avoir activé le MFA » suffit, quel que soit le type de MFA.**
+
+    Tous les seconds facteurs ne se valent pas. Le MFA par **SMS** tombe au SIM swap ; le MFA par **push
+    simple** tombe à la fatigue MFA ; même un code TOTP peut être **hameçonné en temps réel** par un faux
+    site relais. Seuls les facteurs **résistants au phishing** (passkeys/WebAuthn, clés FIDO2) lient
+    l'authentification au vrai domaine et bloquent ces vecteurs. Activer un MFA faible donne un faux sentiment
+    de sécurité.
+  en: |
+    **Thinking that "having enabled MFA" is enough, whatever the MFA type.**
+
+    Not all second factors are equal. **SMS** MFA falls to SIM swap; **simple push** MFA falls to MFA
+    fatigue; even a TOTP code can be **phished in real time** by a relay fake site. Only
+    **phishing-resistant** factors (passkeys/WebAuthn, FIDO2 keys) bind authentication to the real domain and
+    block these vectors. Enabling weak MFA gives a false sense of security.
+
+bestPractice:
+  fr: |
+    - **Privilégier les passkeys/WebAuthn** : résistants au phishing, ils lient la connexion au vrai domaine.
+    - **Éviter le SMS** comme second facteur quand une alternative existe (vulnérable au SIM swap).
+    - **Exiger la correspondance de numéro** pour le MFA par push, et limiter le nombre de notifications.
+    - **Durcir les sessions** : cookies `HttpOnly`/`Secure`/`SameSite`, courte durée, liaison à l'appareil, déconnexion à distance.
+    - **Sécuriser les flux de réinitialisation** : jetons aléatoires, hachés, à usage unique et expirants ; re-vérifier l'identité.
+  en: |
+    - **Prefer passkeys/WebAuthn**: phishing-resistant, they bind the login to the real domain.
+    - **Avoid SMS** as a second factor when an alternative exists (vulnerable to SIM swap).
+    - **Require number matching** for push MFA, and rate-limit the notifications.
+    - **Harden sessions**: `HttpOnly`/`Secure`/`SameSite` cookies, short lifetimes, device binding, remote sign-out.
+    - **Secure reset flows**: random, hashed, single-use, expiring tokens; re-verify identity.
+
+exercise:
+  statement:
+    fr: |
+      Un collègue dit : « J'ai le MFA par SMS, donc on ne peut pas me pirater. » Expliquez deux vecteurs qui
+      contournent justement le mot de passe et/ou le SMS, puis recommandez une forme de MFA plus robuste en
+      justifiant pourquoi elle bloque ces vecteurs.
+    en: |
+      A colleague says: "I have SMS MFA, so I can't be hacked." Explain two vectors that specifically bypass
+      the password and/or SMS, then recommend a stronger MFA form, justifying why it blocks those vectors.
+  solution:
+    file: solution.md
+    lang: markdown
+    code: |
+      # Two vectors that bypass SMS MFA
+
+      1. **SIM swap** - the attacker convinces the carrier to move the number to their SIM,
+         then receives the victim's SMS codes. The password (often leaked) plus the diverted
+         code gives full access. SMS is the weak link here.
+
+      2. **Real-time phishing** - a fake login page relays what the victim types, including
+         the SMS code, to the real site instantly. The code is single-use but used within
+         seconds by the attacker's relay.
+
+      # Stronger recommendation: passkeys / WebAuthn (FIDO2)
+
+      A passkey is a cryptographic key bound to the REAL domain and stored on the device.
+      - It never reveals a reusable secret, so there is nothing to phish or relay.
+      - The browser refuses to sign a challenge for a look-alike domain, defeating phishing.
+      - There is no phone number involved, so SIM swap is irrelevant.
+
+      Result: the two vectors above simply do not apply to a passkey login.
+    note:
+      fr: "SMS = SIM swap + hameçonnage temps réel. Les passkeys/WebAuthn lient la connexion au vrai domaine et n'exposent aucun secret réutilisable : les deux vecteurs disparaissent."
+      en: "SMS = SIM swap + real-time phishing. Passkeys/WebAuthn bind the login to the real domain and expose no reusable secret: both vectors disappear."
+
+quiz:
+  - q:
+      fr: "En quoi consiste la « fatigue MFA » (MFA bombing) ?"
+      en: "What is 'MFA fatigue' (MFA bombing)?"
+    options:
+      fr:
+        - "Épuiser la batterie du téléphone de la victime"
+        - "Envoyer des notifications push répétées jusqu'à ce que la victime approuve"
+        - "Deviner le mot de passe par force brute"
+        - "Chiffrer les fichiers de la victime"
+      en:
+        - "Draining the victim's phone battery"
+        - "Sending repeated push notifications until the victim approves"
+        - "Brute-forcing the password"
+        - "Encrypting the victim's files"
+    answer: 1
+    why:
+      fr: "L'attaquant spamme les notifications « Approuver » en espérant que la victime cède ; la correspondance de numéro l'empêche."
+      en: "The attacker spams 'Approve' prompts hoping the victim gives in; number matching prevents it."
+  - q:
+      fr: "Quel drapeau de cookie empêche le JavaScript (et une XSS) de lire la session ?"
+      en: "Which cookie flag stops JavaScript (and XSS) from reading the session?"
+    options:
+      fr:
+        - "HttpOnly"
+        - "Max-Age"
+        - "Path"
+        - "Domain"
+      en:
+        - "HttpOnly"
+        - "Max-Age"
+        - "Path"
+        - "Domain"
+    answer: 0
+    why:
+      fr: "`HttpOnly` rend le cookie inaccessible au JavaScript, ce qui bloque son vol par une faille XSS."
+      en: "`HttpOnly` makes the cookie unreadable by JavaScript, which blocks its theft via an XSS flaw."
+  - q:
+      fr: "Pourquoi le MFA par SMS est-il considéré comme faible ?"
+      en: "Why is SMS-based MFA considered weak?"
+    options:
+      fr:
+        - "Parce que les SMS coûtent trop cher"
+        - "Parce qu'il faut un smartphone récent"
+        - "Parce qu'il est vulnérable au SIM swap et à l'hameçonnage temps réel"
+        - "Parce qu'il ne fonctionne pas à l'étranger"
+      en:
+        - "Because SMS is too expensive"
+        - "Because it needs a recent smartphone"
+        - "Because it is vulnerable to SIM swap and real-time phishing"
+        - "Because it does not work abroad"
+    answer: 2
+    why:
+      fr: "Un SIM swap détourne le numéro, et un faux site peut relayer le code SMS en temps réel : le SMS n'est pas résistant au phishing."
+      en: "A SIM swap diverts the number, and a fake site can relay the SMS code in real time: SMS is not phishing-resistant."
+  - q:
+      fr: "Qu'est-ce qui caractérise un jeton de réinitialisation sûr ?"
+      en: "What characterises a safe reset token?"
+    options:
+      fr:
+        - "Il est réutilisable et sans expiration"
+        - "Il est court et basé sur le nom d'utilisateur"
+        - "Il est stocké en clair dans la base"
+        - "Il est aléatoire, haché, à usage unique et expirant"
+      en:
+        - "It is reusable and never expires"
+        - "It is short and based on the username"
+        - "It is stored in clear text in the database"
+        - "It is random, hashed, single-use and expiring"
+    answer: 3
+    why:
+      fr: "Un bon jeton est imprévisible, stocké haché, ne sert qu'une fois et expire vite : aucun rejeu ni devinette n'est possible."
+      en: "A good token is unpredictable, stored hashed, used once and expires fast: no replay or guessing is possible."
+  - q:
+      fr: "Quelle forme de MFA résiste le mieux au phishing ?"
+      en: "Which MFA form best resists phishing?"
+    options:
+      fr:
+        - "Les passkeys / WebAuthn (FIDO2)"
+        - "Le code par SMS"
+        - "Les questions secrètes"
+        - "Le push « Approuver » simple"
+      en:
+        - "Passkeys / WebAuthn (FIDO2)"
+        - "SMS code"
+        - "Secret questions"
+        - "Simple 'Approve' push"
+    answer: 0
+    why:
+      fr: "Les passkeys lient la connexion au vrai domaine et n'exposent aucun secret réutilisable : un faux site ne peut rien relayer."
+      en: "Passkeys bind the login to the real domain and expose no reusable secret: a fake site has nothing to relay."

@@ -1,0 +1,398 @@
+description:
+  fr: "Utiliser les outils réseau essentiels (ss, nmap, curl, tcpdump) pour diagnostiquer, scanner ses propres machines et observer le trafic."
+  en: "Use the essential network tools (ss, nmap, curl, tcpdump) to diagnose, scan your own machines and observe traffic."
+duration: 26
+
+intro:
+  fr: |
+    Quand quelque chose ne marche pas sur un réseau — un service injoignable, un port fermé, une connexion
+    lente — on ne devine pas : on **mesure**. Les ingénieurs disposent d'une boîte à outils pour voir ce qui
+    écoute, tester un port, observer le trafic réel. Ces mêmes outils servent à **auditer** la sécurité : savoir
+    exactement ce que sa machine expose au réseau.
+
+    Imaginez un médecin. Il ne devine pas la maladie : il prend la tension, écoute le cœur, fait une
+    radiographie. Chaque instrument révèle une couche. Les outils réseau sont ces instruments :
+    `ss` montre qui écoute à l'intérieur, `nmap` regarde de l'extérieur, `curl` teste un service web, `tcpdump`
+    enregistre ce qui circule vraiment sur le câble.
+
+    Dans cette leçon, vous allez lister les ports ouverts de votre machine, scanner votre propre VM pour voir ce
+    qu'un attaquant verrait, tester des services avec `curl`, et capturer du trafic avec `tcpdump`. **Règle
+    absolue** : on ne scanne et n'observe que ses **propres** machines ou des cibles **explicitement
+    autorisées**.
+  en: |
+    When something breaks on a network — an unreachable service, a closed port, a slow connection — you do not
+    guess: you **measure**. Engineers have a toolbox to see what is listening, test a port, observe real
+    traffic. These same tools serve to **audit** security: knowing exactly what your machine exposes to the
+    network.
+
+    Picture a doctor. They do not guess the illness: they take blood pressure, listen to the heart, order an
+    X-ray. Each instrument reveals a layer. Network tools are those instruments: `ss` shows who is listening
+    inside, `nmap` looks from outside, `curl` tests a web service, `tcpdump` records what actually travels on
+    the wire.
+
+    In this lesson you will list your machine's open ports, scan your own VM to see what an attacker would see,
+    test services with `curl`, and capture traffic with `tcpdump`. **Absolute rule**: you only scan and observe
+    your **own** machines or **explicitly authorised** targets.
+
+sections:
+  - heading:
+      fr: "Voir ce qui écoute : ss"
+      en: "Seeing what is listening: ss"
+    body:
+      fr: |
+        La première question d'un audit est : *quels programmes de ma machine attendent des connexions ?* Chaque
+        service en écoute ouvre un port, et donc une porte d'entrée potentielle. L'outil moderne pour lister ces
+        portes est **`ss`** (*socket statistics*), qui remplace l'ancien `netstat`.
+
+        | Commande | Rôle |
+        |---|---|
+        | `ss -tuln` | Ports en écoute : TCP (`t`), UDP (`u`), *listening* (`l`), numérique (`n`) |
+        | `ss -tulpn` | Comme ci-dessus **plus** le programme associé (nécessite `sudo`) |
+        | `ss -s` | Statistiques résumées des connexions |
+
+        La colonne d'adresse locale est capitale pour la sécurité :
+
+        - Un service en écoute sur `127.0.0.1:5432` n'est joignable **que depuis la machine elle-même** : c'est
+          sûr, il n'est pas exposé au réseau.
+        - Le **même** service en écoute sur `0.0.0.0:5432` écoute sur **toutes** les interfaces : il est exposé à
+          tout le réseau, souvent sans qu'on l'ait voulu.
+
+        Vérifier régulièrement `ss -tulpn` permet de repérer un service qui s'expose au monde alors qu'il devrait
+        rester local (une base de données, par exemple). C'est l'un des audits les plus simples et les plus
+        utiles.
+      en: |
+        An audit's first question is: *which programs on my machine are waiting for connections?* Each listening
+        service opens a port, hence a potential doorway. The modern tool to list these doors is **`ss`** (*socket
+        statistics*), which replaces the old `netstat`.
+
+        | Command | Role |
+        |---|---|
+        | `ss -tuln` | Listening ports: TCP (`t`), UDP (`u`), *listening* (`l`), numeric (`n`) |
+        | `ss -tulpn` | As above **plus** the associated program (needs `sudo`) |
+        | `ss -s` | Summary connection statistics |
+
+        The local-address column is crucial for security:
+
+        - A service listening on `127.0.0.1:5432` is reachable **only from the machine itself**: that is safe,
+          it is not exposed to the network.
+        - The **same** service listening on `0.0.0.0:5432` listens on **all** interfaces: it is exposed to the
+          whole network, often without intending to.
+
+        Regularly checking `ss -tulpn` lets you spot a service exposing itself to the world when it should stay
+        local (a database, for example). It is one of the simplest and most useful audits.
+  - heading:
+      fr: "Regarder de l'extérieur : nmap et curl"
+      en: "Looking from outside: nmap and curl"
+    body:
+      fr: |
+        `ss` montre la machine vue de l'intérieur. **`nmap`** fait l'inverse : il regarde une machine **de
+        l'extérieur**, comme le ferait un attaquant, et liste les ports ouverts, les services, parfois leurs
+        versions. C'est l'outil d'audit par excellence — et précisément pour cela, on ne l'utilise que sur ses
+        propres machines ou des cibles autorisées.
+
+        | Commande | Rôle |
+        |---|---|
+        | `nmap 192.0.2.10` | Scan de base des ports courants |
+        | `nmap -sV 192.0.2.10` | Détecte en plus la **version** des services |
+        | `nmap -p 1-1000 192.0.2.10` | Scanne une plage de ports précise |
+
+        Pour tester un service web précis, **`curl`** suffit souvent : il envoie une vraie requête HTTP et montre
+        la réponse. `curl -I https://monserveur` vérifie en un instant qu'un site répond et renvoie le bon code.
+
+        On peut aussi tester simplement si un port TCP est ouvert avec `nc` (*netcat*) : `nc -zv 192.0.2.10 22`
+        indique si le port 22 accepte les connexions, sans rien envoyer d'autre. Pour l'entraînement légal, le
+        projet Nmap met à disposition `scanme.nmap.org`, un hôte **autorisé** à être scanné — jamais une machine
+        qui ne vous appartient pas.
+      en: |
+        `ss` shows the machine seen from inside. **`nmap`** does the opposite: it looks at a machine **from
+        outside**, as an attacker would, and lists open ports, services, sometimes their versions. It is the
+        audit tool par excellence — and precisely for that reason, you only use it on your own machines or
+        authorised targets.
+
+        | Command | Role |
+        |---|---|
+        | `nmap 192.0.2.10` | Basic scan of common ports |
+        | `nmap -sV 192.0.2.10` | Also detects the service **version** |
+        | `nmap -p 1-1000 192.0.2.10` | Scans a specific port range |
+
+        To test a specific web service, **`curl`** is often enough: it sends a real HTTP request and shows the
+        response. `curl -I https://myserver` instantly checks that a site responds and returns the right code.
+
+        You can also simply test whether a TCP port is open with `nc` (*netcat*): `nc -zv 192.0.2.10 22` tells
+        you if port 22 accepts connections, without sending anything else. For legal practice, the Nmap project
+        provides `scanme.nmap.org`, a host **authorised** to be scanned — never a machine that is not yours.
+  - heading:
+      fr: "Observer le trafic réel : tcpdump"
+      en: "Observing real traffic: tcpdump"
+    body:
+      fr: |
+        Parfois, il faut voir **exactement** ce qui circule sur le réseau, paquet par paquet. **`tcpdump`**
+        capture le trafic d'une interface et l'affiche en direct. C'est l'outil qui prouve, par exemple, qu'une
+        connexion en HTTP simple transmet un mot de passe **en clair** — une démonstration frappante de
+        l'intérêt de HTTPS.
+
+        | Commande | Rôle |
+        |---|---|
+        | `tcpdump -i eth0` | Capture tout le trafic de l'interface `eth0` |
+        | `tcpdump -i eth0 port 80 -n` | Filtre sur le port 80, sans résoudre les noms |
+        | `tcpdump -i eth0 host 192.0.2.10` | Filtre sur une machine précise |
+        | `tcpdump -i eth0 -w capture.pcap` | Enregistre dans un fichier (à ouvrir dans Wireshark) |
+
+        `tcpdump` nécessite `sudo` (lire le réseau est un privilège). Le `-n` évite de résoudre les adresses en
+        noms, ce qui rend la lecture plus rapide et plus claire. Le fichier `.pcap` peut ensuite être ouvert dans
+        **Wireshark**, un outil graphique d'analyse de trafic.
+
+        Sur le plan éthique et légal, capturer le trafic est une opération sensible : on ne le fait que sur son
+        propre réseau, pour diagnostiquer ou apprendre. Observer le trafic d'autrui sans autorisation est une
+        atteinte à la vie privée et, le plus souvent, un délit.
+      en: |
+        Sometimes you need to see **exactly** what travels on the network, packet by packet. **`tcpdump`**
+        captures an interface's traffic and shows it live. It is the tool that proves, for example, that a plain
+        HTTP connection transmits a password **in clear** — a striking demonstration of why HTTPS matters.
+
+        | Command | Role |
+        |---|---|
+        | `tcpdump -i eth0` | Capture all traffic on interface `eth0` |
+        | `tcpdump -i eth0 port 80 -n` | Filter on port 80, without resolving names |
+        | `tcpdump -i eth0 host 192.0.2.10` | Filter on a specific machine |
+        | `tcpdump -i eth0 -w capture.pcap` | Save to a file (to open in Wireshark) |
+
+        `tcpdump` needs `sudo` (reading the network is a privilege). The `-n` avoids resolving addresses into
+        names, making reading faster and clearer. The `.pcap` file can then be opened in **Wireshark**, a
+        graphical traffic-analysis tool.
+
+        Ethically and legally, capturing traffic is a sensitive operation: you only do it on your own network, to
+        diagnose or learn. Observing someone else's traffic without authorisation is a privacy breach and, most
+        often, a crime.
+
+examples:
+  - title:
+      fr: "Auditer les ports en écoute de sa machine"
+      en: "Auditing your machine's listening ports"
+    file: listening-ports.sh
+    lang: bash
+    kind: secure
+    code: |
+      # List listening TCP/UDP ports with the owning program (needs sudo)
+      sudo ss -tulpn
+    output: |
+      Netid State  Local Address:Port  Peer Address:Port Process
+      tcp   LISTEN 0.0.0.0:22          0.0.0.0:*         users:(("sshd",pid=742))
+      tcp   LISTEN 0.0.0.0:80          0.0.0.0:*         users:(("nginx",pid=812))
+      tcp   LISTEN 127.0.0.1:5432      0.0.0.0:*         users:(("postgres",pid=901))
+    note:
+      fr: "Lecture de sécurité : SSH (22) et nginx (80) écoutent sur `0.0.0.0`, donc exposés au réseau — c'est normal pour ces services. PostgreSQL (5432) écoute sur `127.0.0.1` : il n'est joignable que localement, exactement ce qu'il faut pour une base de données."
+      en: "Security read: SSH (22) and nginx (80) listen on `0.0.0.0`, hence exposed to the network — normal for these services. PostgreSQL (5432) listens on `127.0.0.1`: reachable only locally, exactly right for a database."
+
+  - title:
+      fr: "Scanner sa propre VM comme le ferait un attaquant"
+      en: "Scanning your own VM as an attacker would"
+    file: scan-self.sh
+    lang: bash
+    kind: secure
+    code: |
+      # Scan YOUR OWN VM to see what is exposed from outside. Only scan
+      # machines you own or are explicitly authorised to test.
+      nmap -sV 192.0.2.10
+    output: |
+      Starting Nmap 7.95 ( https://nmap.org )
+      Nmap scan report for 192.0.2.10
+      Host is up (0.00042s latency).
+      Not shown: 998 closed tcp ports (reset)
+      PORT   STATE SERVICE VERSION
+      22/tcp open  ssh     OpenSSH 9.6p1 Ubuntu
+      80/tcp open  http    nginx 1.27.0
+
+      Service detection performed. Nmap done: 1 IP address (1 host up) scanned.
+    note:
+      fr: "`nmap -sV` révèle les ports ouverts **et** les versions. Ici, seuls 22 et 80 sont ouverts : la base PostgreSQL vue à l'exemple précédent n'apparaît pas, car elle écoute en local. Comparer la vue interne (`ss`) et externe (`nmap`) confirme ce qui est réellement exposé."
+      en: "`nmap -sV` reveals open ports **and** versions. Here only 22 and 80 are open: the PostgreSQL database from the previous example does not appear, because it listens locally. Comparing the inside view (`ss`) and outside view (`nmap`) confirms what is truly exposed."
+
+  - title:
+      fr: "Prouver que HTTP transmet en clair avec tcpdump"
+      en: "Proving HTTP transmits in clear with tcpdump"
+    file: capture-http.sh
+    lang: bash
+    kind: vulnerable
+    code: |
+      # On YOUR OWN lab: capture HTTP traffic and show the raw content.
+      # This demonstrates WHY plain HTTP is unsafe for passwords.
+      sudo tcpdump -i eth0 -n -A port 80
+    output: |
+      13:40:12.004 IP 192.0.2.50.51224 > 192.0.2.10.80: Flags [P.], length 142
+      POST /login HTTP/1.1
+      Host: 192.0.2.10
+      Content-Type: application/x-www-form-urlencoded
+
+      username=alice&password=SuperSecret123
+    note:
+      fr: "Le mot de passe apparaît **en clair** dans la capture : n'importe qui sur le réseau le lit. C'est exactement ce que HTTPS empêche en chiffrant la connexion. Cette démonstration, à ne faire que sur son propre lab, rend le besoin de TLS évident."
+      en: "The password appears **in clear** in the capture: anyone on the network reads it. This is exactly what HTTPS prevents by encrypting the connection. This demonstration, to be done only on your own lab, makes the need for TLS obvious."
+
+mistake:
+  fr: |
+    **Scanner ou capturer le trafic d'une machine qui ne vous appartient pas.**
+
+    `nmap` et `tcpdump` sont des outils d'audit légitimes, mais scanner un serveur sans autorisation, même « par
+    curiosité », est illégal dans la plupart des pays et peut être poursuivi. Un scan est souvent interprété
+    comme le premier pas d'une attaque. Limitez-vous **strictement** à vos propres machines, à votre lab, à
+    `localhost`, ou à des cibles explicitement prévues pour l'entraînement comme `scanme.nmap.org`. De même,
+    capturer le trafic d'un réseau partagé (Wi-Fi public, réseau d'entreprise) sans droit est une atteinte à la
+    vie privée. L'outil n'est pas le problème : c'est la cible et l'autorisation qui font la différence entre
+    audit et intrusion.
+  en: |
+    **Scanning or capturing the traffic of a machine that is not yours.**
+
+    `nmap` and `tcpdump` are legitimate audit tools, but scanning a server without authorisation, even "out of
+    curiosity", is illegal in most countries and can be prosecuted. A scan is often read as the first step of an
+    attack. Restrict yourself **strictly** to your own machines, your lab, `localhost`, or targets explicitly
+    meant for practice like `scanme.nmap.org`. Likewise, capturing the traffic of a shared network (public
+    Wi-Fi, corporate network) without permission is a privacy breach. The tool is not the problem: it is the
+    target and the authorisation that make the difference between an audit and an intrusion.
+
+bestPractice:
+  fr: |
+    - **Auditez vos ports régulièrement** : `ss -tulpn` révèle ce que votre machine expose au réseau.
+    - **Local vs exposé** : un service sur `127.0.0.1` est sûr ; sur `0.0.0.0`, il est ouvert à tout le réseau.
+    - **Scannez-vous vous-même** : comparez la vue interne (`ss`) et externe (`nmap`) pour voir ce qu'un attaquant verrait.
+    - **Uniquement vos cibles** : on ne scanne et ne capture que ses propres machines ou des cibles autorisées.
+    - **`curl` pour un test rapide** : vérifier qu'un service web répond et renvoie le bon code en une commande.
+    - **Fermez ce qui n'a pas à être exposé** : chaque port ouvert inutilement est une porte offerte à un robot.
+  en: |
+    - **Audit your ports regularly**: `ss -tulpn` reveals what your machine exposes to the network.
+    - **Local vs exposed**: a service on `127.0.0.1` is safe; on `0.0.0.0`, it is open to the whole network.
+    - **Scan yourself**: compare the inside view (`ss`) and outside view (`nmap`) to see what an attacker would see.
+    - **Only your targets**: you scan and capture only your own machines or authorised targets.
+    - **`curl` for a quick test**: check a web service responds and returns the right code in one command.
+    - **Close what should not be exposed**: every needlessly open port is a door offered to a bot.
+
+exercise:
+  statement:
+    fr: |
+      Dans votre VM (et uniquement elle), menez un petit audit réseau :
+
+      1. Listez tous les ports en écoute avec le programme associé.
+      2. Repérez les services exposés sur `0.0.0.0` et ceux restreints à `127.0.0.1`, et commentez lesquels sont sûrs.
+      3. Scannez votre propre VM depuis l'extérieur pour voir les ports ouverts et leurs versions.
+      4. Vérifiez avec `curl` qu'un service web local répond, en n'affichant que son code de statut.
+
+      Notez vos commandes et vos observations dans votre dépôt de suivi.
+    en: |
+      In your VM (and only it), carry out a small network audit:
+
+      1. List all listening ports with the associated program.
+      2. Spot the services exposed on `0.0.0.0` and those restricted to `127.0.0.1`, and comment on which are safe.
+      3. Scan your own VM from outside to see the open ports and their versions.
+      4. Use `curl` to check that a local web service responds, printing only its status code.
+
+      Record your commands and observations in your tracking repository.
+  solution:
+    file: solution.sh
+    lang: bash
+    code: |
+      # 1. Listening ports with owning programs
+      sudo ss -tulpn
+
+      # 2. Services on 0.0.0.0 are network-exposed; those on 127.0.0.1 are
+      #    local-only (safer). A database should listen on 127.0.0.1, not 0.0.0.0.
+
+      # 3. Scan your OWN VM from outside (only your own machine!)
+      nmap -sV 192.0.2.10
+
+      # 4. Check a local web service, printing only the HTTP status code
+      curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1
+    note:
+      fr: "`ss -tulpn` donne la vue interne, `nmap -sV` la vue externe : les deux doivent concorder sur ce qui est exposé. Un service de base de données visible sur `0.0.0.0` serait une alerte à corriger (le lier à `127.0.0.1`)."
+      en: "`ss -tulpn` gives the inside view, `nmap -sV` the outside view: the two should agree on what is exposed. A database service visible on `0.0.0.0` would be a red flag to fix (bind it to `127.0.0.1`)."
+
+quiz:
+  - q:
+      fr: "Que révèle la commande `ss -tulpn` ?"
+      en: "What does the `ss -tulpn` command reveal?"
+    options:
+      fr:
+        - "Les ports en écoute et le programme qui les ouvre"
+        - "Le mot de passe root"
+        - "La vitesse de la connexion Internet"
+        - "La liste des utilisateurs du système"
+      en:
+        - "The listening ports and the program that opens them"
+        - "The root password"
+        - "The Internet connection speed"
+        - "The list of system users"
+    answer: 0
+    why:
+      fr: "`ss -tulpn` liste les ports TCP/UDP en écoute et, avec `sudo`, le processus associé : l'audit de base de ce que la machine expose."
+      en: "`ss -tulpn` lists listening TCP/UDP ports and, with `sudo`, the associated process: the basic audit of what the machine exposes."
+  - q:
+      fr: "Un service écoute sur `127.0.0.1:5432`. Qu'est-ce que cela signifie ?"
+      en: "A service listens on `127.0.0.1:5432`. What does that mean?"
+    options:
+      fr:
+        - "Il est exposé à tout Internet"
+        - "Il n'est joignable que depuis la machine elle-même"
+        - "Il est désactivé"
+        - "Il écoute sur toutes les interfaces"
+      en:
+        - "It is exposed to the whole Internet"
+        - "It is reachable only from the machine itself"
+        - "It is disabled"
+        - "It listens on all interfaces"
+    answer: 1
+    why:
+      fr: "`127.0.0.1` est l'adresse de bouclage (localhost) : un service qui y écoute n'accepte que les connexions locales, ce qui est sûr pour une base de données."
+      en: "`127.0.0.1` is the loopback address (localhost): a service listening there only accepts local connections, which is safe for a database."
+  - q:
+      fr: "À quoi sert principalement `nmap` ?"
+      en: "What is `nmap` mainly used for?"
+    options:
+      fr:
+        - "À chiffrer le trafic"
+        - "À planifier des tâches"
+        - "À regarder une machine de l'extérieur et lister ses ports ouverts"
+        - "À créer des utilisateurs"
+      en:
+        - "To encrypt traffic"
+        - "To schedule tasks"
+        - "To look at a machine from outside and list its open ports"
+        - "To create users"
+    answer: 2
+    why:
+      fr: "`nmap` scanne une machine depuis l'extérieur et révèle ses ports ouverts et services : un outil d'audit à n'utiliser que sur ses propres cibles."
+      en: "`nmap` scans a machine from outside and reveals its open ports and services: an audit tool to use only on your own targets."
+  - q:
+      fr: "Quelle règle éthique et légale encadre l'usage de nmap et tcpdump ?"
+      en: "Which ethical and legal rule governs the use of nmap and tcpdump?"
+    options:
+      fr:
+        - "On ne les utilise que sur ses propres machines ou des cibles autorisées"
+        - "On peut scanner n'importe quel site public"
+        - "Ils sont interdits partout"
+        - "Ils ne fonctionnent qu'avec un mot de passe"
+      en:
+        - "You use them only on your own machines or authorised targets"
+        - "You may scan any public site"
+        - "They are forbidden everywhere"
+        - "They only work with a password"
+    answer: 0
+    why:
+      fr: "Scanner ou capturer le trafic d'une machine qui n'est pas la vôtre, sans autorisation, est illégal : on se limite à son lab, `localhost` ou des cibles prévues pour l'entraînement."
+      en: "Scanning or capturing the traffic of a machine that is not yours, without authorisation, is illegal: you limit yourself to your lab, `localhost` or targets meant for practice."
+  - q:
+      fr: "Que démontre une capture `tcpdump` sur une connexion HTTP simple ?"
+      en: "What does a `tcpdump` capture on a plain HTTP connection demonstrate?"
+    options:
+      fr:
+        - "Que HTTP est plus rapide que HTTPS"
+        - "Que les mots de passe circulent en clair, lisibles par quiconque écoute"
+        - "Que le réseau est chiffré"
+        - "Que le pare-feu est actif"
+      en:
+        - "That HTTP is faster than HTTPS"
+        - "That passwords travel in clear, readable by anyone listening"
+        - "That the network is encrypted"
+        - "That the firewall is active"
+    answer: 1
+    why:
+      fr: "En HTTP simple, `tcpdump` montre le mot de passe en clair dans les paquets : c'est précisément ce que HTTPS empêche en chiffrant la connexion."
+      en: "On plain HTTP, `tcpdump` shows the password in clear in the packets: this is exactly what HTTPS prevents by encrypting the connection."

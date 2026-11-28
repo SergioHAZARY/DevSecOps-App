@@ -1,0 +1,449 @@
+description:
+  fr: "Découvrir PowerShell 7 : cmdlets au format Verbe-Nom, pipeline d'objets, filtrage et sélection, pour automatiser et inspecter Windows sans manipuler du texte brut."
+  en: "Discover PowerShell 7: Verb-Noun cmdlets, the object pipeline, filtering and selecting, to automate and inspect Windows without juggling raw text."
+duration: 25
+
+intro:
+  fr: |
+    **PowerShell** est le shell et le langage d'automatisation de l'écosystème Microsoft. Depuis la version
+    7, il est multiplateforme (Windows, Linux, macOS) et open source. Pour un ingénieur DevSecOps, c'est
+    l'outil de référence pour auditer Windows, Active Directory et Azure.
+
+    Sa grande originalité : contrairement à Bash qui fait circuler du **texte** dans ses tuyaux, PowerShell
+    fait circuler des **objets**. Imaginez une chaîne de tri postal : au lieu de se passer des photocopies
+    de lettres (du texte à redécouper sans cesse), les postiers se passent les **colis eux-mêmes**, avec
+    leurs étiquettes (propriétés) déjà lisibles. On peut donc trier par poids, filtrer par destination,
+    sélectionner l'expéditeur — sans jamais analyser une ligne de texte.
+
+    Cette leçon ne suppose **aucune connaissance**. Vous apprendrez la logique **Verbe-Nom** des commandes
+    (`Get-Process`, `Stop-Service`), le fonctionnement du **pipeline** `|`, et les trois cmdlets que vous
+    utiliserez partout : `Where-Object` (filtrer), `Select-Object` (choisir des propriétés) et `Sort-Object`
+    (trier). Les exemples utilisent de vraies cmdlets de PowerShell 7 ; exécutez-les sur votre propre poste.
+  en: |
+    **PowerShell** is the shell and automation language of the Microsoft ecosystem. Since version 7 it is
+    cross-platform (Windows, Linux, macOS) and open source. For a DevSecOps engineer, it is the reference
+    tool to audit Windows, Active Directory and Azure.
+
+    Its key originality: unlike Bash, which pipes **text**, PowerShell pipes **objects**. Picture a mail
+    sorting line: instead of passing photocopies of letters (text to re-parse endlessly), the workers pass
+    the **parcels themselves**, with their labels (properties) already readable. So you can sort by weight,
+    filter by destination, pick the sender — without ever parsing a line of text.
+
+    This lesson assumes **no prior knowledge**. You will learn the **Verb-Noun** logic of commands
+    (`Get-Process`, `Stop-Service`), how the **pipeline** `|` works, and the three cmdlets you will use
+    everywhere: `Where-Object` (filter), `Select-Object` (pick properties) and `Sort-Object` (sort). The
+    examples use real PowerShell 7 cmdlets; run them on your own machine.
+
+sections:
+  - heading:
+      fr: "Cmdlets : la logique Verbe-Nom"
+      en: "Cmdlets: the Verb-Noun logic"
+    body:
+      fr: |
+        Une commande PowerShell s'appelle une **cmdlet** et suit toujours la forme **Verbe-Nom** : un verbe
+        d'action approuvé suivi d'un nom au singulier.
+
+        | Cmdlet | Action |
+        |---|---|
+        | `Get-Process` | lister les processus |
+        | `Get-Service` | lister les services |
+        | `Get-LocalUser` | lister les comptes locaux (Windows) |
+        | `Stop-Service` | arrêter un service |
+        | `Set-ItemProperty` | modifier une propriété |
+
+        Cette régularité rend les commandes **devinables** : si `Get-` récupère, `Set-` modifie, `New-` crée,
+        `Remove-` supprime. Les cmdlets prennent des **paramètres** nommés, introduits par un tiret :
+
+        ```powershell
+        Get-Service -Name 'W32Time'
+        Get-ChildItem -Path 'C:\Logs' -Filter '*.log'
+        ```
+
+        Trois cmdlets d'aide sont vos meilleures amies : `Get-Command` (quelles commandes existent),
+        `Get-Help Get-Service -Examples` (comment s'en servir) et `Get-Member` (quelles propriétés et
+        méthodes possède un objet). On les garde sous la main en permanence.
+      en: |
+        A PowerShell command is called a **cmdlet** and always follows the **Verb-Noun** form: an approved
+        action verb followed by a singular noun.
+
+        | Cmdlet | Action |
+        |---|---|
+        | `Get-Process` | list processes |
+        | `Get-Service` | list services |
+        | `Get-LocalUser` | list local accounts (Windows) |
+        | `Stop-Service` | stop a service |
+        | `Set-ItemProperty` | change a property |
+
+        This regularity makes commands **guessable**: `Get-` retrieves, `Set-` changes, `New-` creates,
+        `Remove-` deletes. Cmdlets take named **parameters**, introduced by a dash:
+
+        ```powershell
+        Get-Service -Name 'W32Time'
+        Get-ChildItem -Path 'C:\Logs' -Filter '*.log'
+        ```
+
+        Three helper cmdlets are your best friends: `Get-Command` (which commands exist),
+        `Get-Help Get-Service -Examples` (how to use one) and `Get-Member` (which properties and methods an
+        object has). Keep them within reach at all times.
+  - heading:
+      fr: "Le pipeline d'objets"
+      en: "The object pipeline"
+    body:
+      fr: |
+        Le symbole `|` (pipe) passe le **résultat** d'une cmdlet à la suivante. La différence avec Bash est
+        fondamentale : ce ne sont pas des lignes de texte qui circulent, mais des **objets** avec des
+        propriétés nommées.
+
+        ```powershell
+        Get-Service | Where-Object Status -eq 'Running' | Select-Object Name, Status
+        ```
+
+        On lit cette ligne de gauche à droite : *obtiens les services, garde ceux qui tournent, affiche leur
+        nom et leur état*. Parce que chaque service est un objet, on filtre sur la propriété `Status` sans
+        jamais chercher un mot dans du texte.
+
+        Les opérateurs de comparaison de PowerShell commencent par un tiret :
+
+        | Opérateur | Signification |
+        |---|---|
+        | `-eq` / `-ne` | égal / différent |
+        | `-gt` `-lt` `-ge` `-le` | comparaisons numériques |
+        | `-like` | motif avec `*` (`-like 'W32*'`) |
+        | `-match` | expression régulière |
+        | `-contains` / `-in` | appartenance à une liste |
+
+        Un atout sécurité : comme on manipule des objets typés, un filtre `-gt 1000` sur une propriété
+        numérique ne risque pas la confusion texte/nombre fréquente en Bash.
+      en: |
+        The `|` (pipe) symbol passes the **result** of one cmdlet to the next. The difference from Bash is
+        fundamental: it is not lines of text that flow, but **objects** with named properties.
+
+        ```powershell
+        Get-Service | Where-Object Status -eq 'Running' | Select-Object Name, Status
+        ```
+
+        You read this line left to right: *get the services, keep those that are running, show their name
+        and state*. Because each service is an object, you filter on the `Status` property without ever
+        searching for a word in text.
+
+        PowerShell's comparison operators start with a dash:
+
+        | Operator | Meaning |
+        |---|---|
+        | `-eq` / `-ne` | equal / different |
+        | `-gt` `-lt` `-ge` `-le` | numeric comparisons |
+        | `-like` | pattern with `*` (`-like 'W32*'`) |
+        | `-match` | regular expression |
+        | `-contains` / `-in` | membership in a list |
+
+        A security bonus: because you handle typed objects, a `-gt 1000` filter on a numeric property avoids
+        the text/number confusion so common in Bash.
+  - heading:
+      fr: "Filtrer, sélectionner, trier, mesurer"
+      en: "Filter, select, sort, measure"
+    body:
+      fr: |
+        Quatre cmdlets forment la boîte à outils quotidienne du pipeline :
+
+        - **`Where-Object`** filtre les objets selon une condition :
+          `Where-Object { $_.CPU -gt 100 }`. Le `$_` représente l'objet courant du pipeline.
+        - **`Select-Object`** choisit des propriétés ou un nombre d'éléments :
+          `Select-Object Name, Id -First 5`.
+        - **`Sort-Object`** trie : `Sort-Object CPU -Descending`.
+        - **`Measure-Object`** compte et calcule : `Measure-Object -Sum -Average`.
+
+        On enchaîne ces briques pour répondre à des questions concrètes. Pour trouver les cinq processus qui
+        consomment le plus de mémoire :
+
+        ```powershell
+        Get-Process |
+          Sort-Object WorkingSet -Descending |
+          Select-Object Name, Id, WorkingSet -First 5
+        ```
+
+        Pour l'affichage, `Format-Table` et `Format-List` mettent en forme — mais attention : ces cmdlets de
+        *formatage* produisent du texte d'affichage, pas des objets. On les place **toujours en dernier**,
+        jamais au milieu d'un pipeline qui continue à filtrer ou exporter (`Export-Csv`, `ConvertTo-Json`).
+      en: |
+        Four cmdlets form the pipeline's daily toolbox:
+
+        - **`Where-Object`** filters objects by a condition:
+          `Where-Object { $_.CPU -gt 100 }`. The `$_` represents the current pipeline object.
+        - **`Select-Object`** picks properties or a number of items:
+          `Select-Object Name, Id -First 5`.
+        - **`Sort-Object`** sorts: `Sort-Object CPU -Descending`.
+        - **`Measure-Object`** counts and computes: `Measure-Object -Sum -Average`.
+
+        You chain these blocks to answer concrete questions. To find the five processes using the most
+        memory:
+
+        ```powershell
+        Get-Process |
+          Sort-Object WorkingSet -Descending |
+          Select-Object Name, Id, WorkingSet -First 5
+        ```
+
+        For display, `Format-Table` and `Format-List` lay out results — but beware: these *formatting*
+        cmdlets produce display text, not objects. Always place them **last**, never in the middle of a
+        pipeline that keeps filtering or exporting (`Export-Csv`, `ConvertTo-Json`).
+
+examples:
+  - title:
+      fr: "Explorer : cmdlets et découverte"
+      en: "Explore: cmdlets and discovery"
+    file: discover.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      # The PowerShell version in use (7+ recommended, cross-platform).
+      $PSVersionTable.PSVersion
+
+      # Which commands relate to 'service'? Discovery, not memorisation.
+      Get-Command -Noun Service
+
+      # What properties does a service object expose? Essential for filtering.
+      Get-Service | Get-Member -MemberType Property | Select-Object Name -First 5
+
+      # Read the help with concrete examples (always available offline).
+      Get-Help Get-Service -Examples
+    output: |
+      Major  Minor  Patch
+      -----  -----  -----
+      7      4      6
+
+      (list of *-Service cmdlets: Get-Service, Start-Service, Stop-Service, ...)
+    note:
+      fr: "`Get-Command`, `Get-Member` et `Get-Help` forment le trio de la découverte : plutôt que de mémoriser, on interroge PowerShell lui-même. `Get-Member` révèle les propriétés d'un objet, celles sur lesquelles on filtrera ensuite avec `Where-Object`."
+      en: "`Get-Command`, `Get-Member` and `Get-Help` form the discovery trio: rather than memorising, you query PowerShell itself. `Get-Member` reveals an object's properties, the ones you will later filter on with `Where-Object`."
+
+  - title:
+      fr: "Le pipeline : filtrer et sélectionner"
+      en: "The pipeline: filter and select"
+    file: pipeline.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      # Running services whose name starts with 'W', showing two properties.
+      Get-Service |
+        Where-Object { $_.Status -eq 'Running' -and $_.Name -like 'W*' } |
+        Select-Object Name, Status, StartType |
+        Sort-Object Name
+    output: |
+      Name       Status  StartType
+      ----       ------  ---------
+      W32Time    Running Manual
+      WinRM      Running Automatic
+      Winmgmt    Running Automatic
+    note:
+      fr: "Chaque étape travaille sur des objets : `Where-Object` filtre sur les propriétés `Status` et `Name`, `Select-Object` n'en garde que trois, `Sort-Object` ordonne. Le `$_` désigne l'objet courant. Aucun texte n'est analysé, d'où la fiabilité."
+      en: "Each step works on objects: `Where-Object` filters on the `Status` and `Name` properties, `Select-Object` keeps only three, `Sort-Object` orders them. The `$_` denotes the current object. No text is parsed, hence the reliability."
+
+  - title:
+      fr: "Classer et mesurer : top consommateurs"
+      en: "Rank and measure: top consumers"
+    file: top_processes.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      # The 5 processes using the most memory (WorkingSet, in bytes).
+      Get-Process |
+        Sort-Object WorkingSet -Descending |
+        Select-Object Name, Id, WorkingSet -First 5
+
+      # How many services are currently running? Measure-Object counts objects.
+      $runningCount = (Get-Service |
+        Where-Object Status -eq 'Running' |
+        Measure-Object).Count
+      Write-Output "Running services: $runningCount"
+    output: |
+      Name      Id    WorkingSet
+      ----      --    ----------
+      Code      8124  742195200
+      pwsh      4512  219045888
+      explorer  3920  184320000
+      ...
+
+      Running services: 78
+    note:
+      fr: "`Sort-Object ... -Descending` + `Select-Object -First 5` donne un « top 5 » classique. `Measure-Object` compte les objets du pipeline ; on récupère le résultat via la propriété `.Count`. Ces motifs reviennent dans tous les scripts d'audit."
+      en: "`Sort-Object ... -Descending` + `Select-Object -First 5` gives a classic \"top 5\". `Measure-Object` counts the pipeline's objects; you read the result via the `.Count` property. These patterns recur in every audit script."
+
+  - title:
+      fr: "Exporter des objets pour un rapport"
+      en: "Exporting objects for a report"
+    file: export.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      # Because the pipeline carries objects, exporting is trivial and lossless.
+      Get-Service |
+        Where-Object Status -eq 'Running' |
+        Select-Object Name, Status, StartType |
+        Export-Csv -Path 'running-services.csv' -NoTypeInformation -Encoding utf8
+
+      # The same data as JSON, ready to feed another tool or an API.
+      Get-Service |
+        Where-Object Status -eq 'Running' |
+        Select-Object Name, Status |
+        ConvertTo-Json -Depth 2 |
+        Set-Content -Path 'running-services.json' -Encoding utf8
+
+      Write-Output 'Reports written: running-services.csv / .json'
+    output: |
+      Reports written: running-services.csv / .json
+    note:
+      fr: "Parce que le pipeline transporte des objets, `Export-Csv` et `ConvertTo-Json` produisent des rapports propres sans analyse de texte. On place ces cmdlets **après** les filtres, et surtout pas après un `Format-Table`, qui détruirait la structure des objets."
+      en: "Because the pipeline carries objects, `Export-Csv` and `ConvertTo-Json` produce clean reports with no text parsing. Place these cmdlets **after** the filters, and certainly not after a `Format-Table`, which would destroy the objects' structure."
+
+mistake:
+  fr: |
+    **Placer un `Format-Table` (ou `Format-List`) au milieu d'un pipeline, puis continuer à filtrer ou
+    exporter.**
+
+    Les cmdlets `Format-*` transforment les objets en **texte d'affichage** : après elles, `Where-Object`,
+    `Export-Csv` ou `ConvertTo-Json` ne reçoivent plus de vraies propriétés et produisent des résultats
+    vides ou absurdes. Le formatage est **toujours la dernière étape**. Autre confusion de débutant :
+    comparer avec `==` (qui n'existe pas) au lieu de `-eq`, ou oublier que `$_` représente l'objet courant
+    dans un bloc `Where-Object { ... }`. Enfin, ne « grepez » pas la sortie texte avec `Select-String` quand
+    une propriété d'objet est disponible : `Where-Object Status -eq 'Running'` est plus fiable.
+  en: |
+    **Putting a `Format-Table` (or `Format-List`) in the middle of a pipeline, then continuing to filter or
+    export.**
+
+    The `Format-*` cmdlets turn objects into **display text**: after them, `Where-Object`, `Export-Csv` or
+    `ConvertTo-Json` no longer receive real properties and produce empty or nonsensical results. Formatting
+    is **always the last step**. Another beginner confusion: comparing with `==` (which does not exist)
+    instead of `-eq`, or forgetting that `$_` represents the current object in a `Where-Object { ... }`
+    block. Finally, do not "grep" the text output with `Select-String` when an object property is available:
+    `Where-Object Status -eq 'Running'` is more reliable.
+
+bestPractice:
+  fr: |
+    - **Pensez objets, pas texte** : filtrez sur des propriétés (`Where-Object Status -eq ...`), n'analysez
+      pas des lignes.
+    - **Utilisez les verbes approuvés** (`Get`, `Set`, `New`, `Remove`) : vos scripts restent lisibles et
+      prévisibles.
+    - **Gardez `Format-*` pour la fin** : jamais au milieu d'un pipeline qui filtre ou exporte.
+    - **Explorez avec `Get-Command`, `Get-Member`, `Get-Help`** plutôt que de deviner.
+    - **Exportez en objets** (`Export-Csv -NoTypeInformation`, `ConvertTo-Json`) pour des rapports
+      réutilisables.
+    - **Préférez PowerShell 7** (multiplateforme, maintenu) et nommez vos variables clairement.
+  en: |
+    - **Think objects, not text**: filter on properties (`Where-Object Status -eq ...`), do not parse lines.
+    - **Use approved verbs** (`Get`, `Set`, `New`, `Remove`): your scripts stay readable and predictable.
+    - **Keep `Format-*` for the end**: never in the middle of a pipeline that filters or exports.
+    - **Explore with `Get-Command`, `Get-Member`, `Get-Help`** rather than guessing.
+    - **Export as objects** (`Export-Csv -NoTypeInformation`, `ConvertTo-Json`) for reusable reports.
+    - **Prefer PowerShell 7** (cross-platform, maintained) and name your variables clearly.
+
+exercise:
+  statement:
+    fr: |
+      En utilisant uniquement le pipeline et les cmdlets vues dans la leçon, écrivez une commande (sur une
+      ou plusieurs lignes) qui :
+
+      1. récupère tous les services de la machine ;
+      2. ne garde que ceux dont le `StartType` vaut `Automatic` mais dont le `Status` n'est **pas**
+         `Running` (un service censé démarrer seul mais arrêté — anomalie classique) ;
+      3. affiche leur `Name` et leur `Status`, triés par nom ;
+      4. exporte le résultat dans un fichier CSV `stopped-auto-services.csv`.
+    en: |
+      Using only the pipeline and the cmdlets seen in the lesson, write a command (on one or several lines)
+      that:
+
+      1. gets all of the machine's services;
+      2. keeps only those whose `StartType` is `Automatic` but whose `Status` is **not** `Running` (a
+         service meant to start on its own but stopped — a classic anomaly);
+      3. shows their `Name` and `Status`, sorted by name;
+      4. exports the result to a CSV file `stopped-auto-services.csv`.
+  solution:
+    file: stopped_auto.ps1
+    lang: powershell
+    code: |
+      # Automatic services that are NOT running: a common misconfiguration.
+      Get-Service |
+        Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } |
+        Select-Object Name, Status |
+        Sort-Object Name |
+        Export-Csv -Path 'stopped-auto-services.csv' -NoTypeInformation -Encoding utf8
+
+      Write-Output 'Report written: stopped-auto-services.csv'
+    note:
+      fr: "Le bloc `Where-Object { ... }` combine deux conditions avec `-and` sur les propriétés `StartType` et `Status`. `Export-Csv` est placé en dernier, après le tri, et `-NoTypeInformation` évite la ligne d'en-tête technique. On raisonne entièrement sur des objets."
+      en: "The `Where-Object { ... }` block combines two conditions with `-and` on the `StartType` and `Status` properties. `Export-Csv` comes last, after the sort, and `-NoTypeInformation` avoids the technical header line. You reason entirely on objects."
+
+quiz:
+  - q:
+      fr: "Quelle forme suivent toujours les cmdlets PowerShell ?"
+      en: "What form do PowerShell cmdlets always follow?"
+    options:
+      fr: ["Nom-Verbe", "Verbe-Nom", "Nom.Verbe", "verbe_nom"]
+      en: ["Noun-Verb", "Verb-Noun", "Noun.Verb", "verb_noun"]
+    answer: 1
+    why:
+      fr: "Les cmdlets suivent la forme Verbe-Nom (`Get-Service`, `Stop-Process`), avec un verbe approuvé et un nom au singulier, ce qui les rend prévisibles."
+      en: "Cmdlets follow the Verb-Noun form (`Get-Service`, `Stop-Process`), with an approved verb and a singular noun, which makes them predictable."
+  - q:
+      fr: "Qu'est-ce qui circule dans un pipeline PowerShell ?"
+      en: "What flows through a PowerShell pipeline?"
+    options:
+      fr:
+        - "Des lignes de texte brut"
+        - "Des objets avec des propriétés nommées"
+        - "Des fichiers binaires"
+        - "Des adresses mémoire"
+      en:
+        - "Lines of raw text"
+        - "Objects with named properties"
+        - "Binary files"
+        - "Memory addresses"
+    answer: 1
+    why:
+      fr: "Contrairement à Bash, PowerShell fait circuler des objets : on filtre et sélectionne sur leurs propriétés sans analyser de texte, ce qui est plus fiable."
+      en: "Unlike Bash, PowerShell pipes objects: you filter and select on their properties without parsing text, which is more reliable."
+  - q:
+      fr: "Quel opérateur teste l'égalité en PowerShell ?"
+      en: "Which operator tests equality in PowerShell?"
+    options:
+      fr: ["==", "-eq", "=", "equals"]
+      en: ["==", "-eq", "=", "equals"]
+    answer: 1
+    why:
+      fr: "PowerShell utilise `-eq` pour l'égalité. `=` est l'affectation et `==` n'existe pas dans le langage."
+      en: "PowerShell uses `-eq` for equality. `=` is assignment and `==` does not exist in the language."
+  - q:
+      fr: "Pourquoi ne pas placer `Format-Table` au milieu d'un pipeline ?"
+      en: "Why not place `Format-Table` in the middle of a pipeline?"
+    options:
+      fr:
+        - "Parce qu'il transforme les objets en texte d'affichage, cassant les étapes suivantes"
+        - "Parce qu'il est trop lent"
+        - "Parce qu'il nécessite les droits admin"
+        - "Parce qu'il n'existe qu'en PowerShell 5"
+      en:
+        - "Because it turns objects into display text, breaking the next steps"
+        - "Because it is too slow"
+        - "Because it requires admin rights"
+        - "Because it only exists in PowerShell 5"
+    answer: 0
+    why:
+      fr: "Les cmdlets `Format-*` produisent du texte de présentation : après elles, `Where-Object` ou `Export-Csv` ne reçoivent plus de vraies propriétés. Le formatage se place toujours en dernier."
+      en: "The `Format-*` cmdlets produce presentation text: after them, `Where-Object` or `Export-Csv` no longer get real properties. Formatting always goes last."
+  - q:
+      fr: "Que représente `$_` dans `Where-Object { $_.Status -eq 'Running' }` ?"
+      en: "What does `$_` represent in `Where-Object { $_.Status -eq 'Running' }`?"
+    options:
+      fr:
+        - "Le nom du script"
+        - "Une variable d'environnement"
+        - "L'objet courant qui traverse le pipeline"
+        - "Le dernier code d'erreur"
+      en:
+        - "The script name"
+        - "An environment variable"
+        - "The current object flowing through the pipeline"
+        - "The last error code"
+    answer: 2
+    why:
+      fr: "`$_` (ou `$PSItem`) désigne l'objet en cours de traitement dans le bloc : on accède à ses propriétés avec `$_.Propriété` pour décider de le garder ou non."
+      en: "`$_` (or `$PSItem`) denotes the object being processed in the block: you access its properties with `$_.Property` to decide whether to keep it."

@@ -1,0 +1,540 @@
+description:
+  fr: "Passer de la ligne de commande au script PowerShell robuste : variables typées, fonctions avancées avec paramètres validés, gestion des erreurs try/catch et $ErrorActionPreference."
+  en: "Move from the command line to a robust PowerShell script: typed variables, advanced functions with validated parameters, error handling with try/catch and $ErrorActionPreference."
+duration: 25
+
+intro:
+  fr: |
+    Une commande au clavier résout un problème ponctuel ; un **script** le résout pour toujours, de façon
+    répétable et partageable. Mais un script d'administration qui s'exécute sur des serveurs doit être
+    **fiable** : refuser les mauvaises entrées, s'arrêter proprement sur une erreur, et dire clairement ce
+    qui a échoué. C'est la différence entre bricoler et automatiser.
+
+    Pensez à la recette d'un plat servi dans un restaurant : elle précise les quantités exactes (paramètres
+    validés), ce qu'il faut faire si un ingrédient manque (gestion d'erreur), et elle est écrite une fois
+    pour que n'importe quel cuisinier la reproduise. Un script PowerShell professionnel suit la même
+    discipline.
+
+    Dans cette leçon, vous apprendrez à écrire des **fonctions avancées** avec des paramètres **typés et
+    validés** (`[Parameter(Mandatory)]`, `[ValidateSet]`), à contrôler le comportement en cas d'erreur avec
+    `try`/`catch` et `$ErrorActionPreference`, et à produire des sorties structurées avec `[PSCustomObject]`.
+    Ce socle prépare les scripts d'audit Windows, Active Directory et Azure des leçons suivantes.
+  en: |
+    A typed command solves a one-off problem; a **script** solves it forever, repeatably and shareably. But
+    an administration script that runs on servers must be **reliable**: reject bad input, stop cleanly on an
+    error, and clearly report what failed. That is the difference between tinkering and automating.
+
+    Think of a dish's recipe served in a restaurant: it gives exact quantities (validated parameters), what
+    to do if an ingredient is missing (error handling), and it is written once so any cook can reproduce it.
+    A professional PowerShell script follows the same discipline.
+
+    In this lesson you will learn to write **advanced functions** with **typed and validated** parameters
+    (`[Parameter(Mandatory)]`, `[ValidateSet]`), to control error behaviour with `try`/`catch` and
+    `$ErrorActionPreference`, and to produce structured output with `[PSCustomObject]`. This foundation
+    prepares the Windows, Active Directory and Azure audit scripts of the following lessons.
+
+sections:
+  - heading:
+      fr: "Variables, types et portée"
+      en: "Variables, types and scope"
+    body:
+      fr: |
+        Une variable commence par `$` : `$count = 0`. PowerShell devine le type, mais on peut le **déclarer**
+        pour se protéger des surprises :
+
+        ```powershell
+        [int]$port = 443          # forcé en entier
+        [string]$name = 'web-01'
+        [bool]$secure = $true     # $true / $false, pas true/false
+        ```
+
+        Un type explicite transforme une mauvaise valeur en erreur immédiate plutôt qu'en bug silencieux :
+        `[int]$port = 'abc'` échoue tout de suite.
+
+        Les variables **automatiques** sont fournies par PowerShell : `$_` (objet courant du pipeline),
+        `$PSItem` (synonyme), `$args` (arguments), `$?` (succès de la dernière commande), `$Error` (pile des
+        erreurs), `$null` (absence de valeur). On vérifie `$null` avec `$null` **à gauche** :
+        `if ($null -eq $value)`, un réflexe qui évite des pièges de comparaison avec des collections.
+
+        Enfin, la **portée** : une variable créée dans une fonction y est locale par défaut. On évite les
+        préfixes `$global:` et `$script:` sauf nécessité réelle, car un état global rend un script difficile
+        à déboguer.
+      en: |
+        A variable starts with `$`: `$count = 0`. PowerShell infers the type, but you can **declare** it to
+        guard against surprises:
+
+        ```powershell
+        [int]$port = 443          # forced to an integer
+        [string]$name = 'web-01'
+        [bool]$secure = $true     # $true / $false, not true/false
+        ```
+
+        An explicit type turns a bad value into an immediate error rather than a silent bug:
+        `[int]$port = 'abc'` fails at once.
+
+        **Automatic** variables are provided by PowerShell: `$_` (current pipeline object), `$PSItem`
+        (synonym), `$args` (arguments), `$?` (success of the last command), `$Error` (error stack), `$null`
+        (no value). You test `$null` with `$null` **on the left**: `if ($null -eq $value)`, a reflex that
+        avoids comparison traps with collections.
+
+        Finally, **scope**: a variable created in a function is local by default. Avoid the `$global:` and
+        `$script:` prefixes unless genuinely needed, because global state makes a script hard to debug.
+  - heading:
+      fr: "Fonctions avancées et validation des paramètres"
+      en: "Advanced functions and parameter validation"
+    body:
+      fr: |
+        Une **fonction avancée** se comporte comme une cmdlet native grâce au bloc `param()` et aux
+        attributs de validation. Au lieu de vérifier les entrées à la main, on **déclare** les règles :
+
+        ```powershell
+        function Test-Port {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)]
+                [ValidateRange(1, 65535)]
+                [int]$Port,
+
+                [ValidateSet('tcp', 'udp')]
+                [string]$Protocol = 'tcp'
+            )
+            "Checking $Protocol port $Port"
+        }
+        ```
+
+        | Attribut | Rôle |
+        |---|---|
+        | `[Parameter(Mandatory)]` | le paramètre est obligatoire |
+        | `[ValidateRange(1,65535)]` | borne les valeurs numériques |
+        | `[ValidateSet('a','b')]` | n'accepte qu'une liste fermée |
+        | `[ValidateNotNullOrEmpty()]` | refuse null ou vide |
+        | `[ValidatePattern('^\d+$')]` | impose un motif |
+
+        La validation s'exécute **avant** le corps de la fonction : une valeur interdite est rejetée
+        d'office, sans qu'on écrive une seule ligne de contrôle. C'est à la fois plus court et plus sûr que
+        des `if` manuels, et c'est la base d'un code d'administration robuste.
+      en: |
+        An **advanced function** behaves like a native cmdlet thanks to the `param()` block and validation
+        attributes. Instead of checking input by hand, you **declare** the rules:
+
+        ```powershell
+        function Test-Port {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)]
+                [ValidateRange(1, 65535)]
+                [int]$Port,
+
+                [ValidateSet('tcp', 'udp')]
+                [string]$Protocol = 'tcp'
+            )
+            "Checking $Protocol port $Port"
+        }
+        ```
+
+        | Attribute | Role |
+        |---|---|
+        | `[Parameter(Mandatory)]` | the parameter is required |
+        | `[ValidateRange(1,65535)]` | bounds numeric values |
+        | `[ValidateSet('a','b')]` | accepts only a closed list |
+        | `[ValidateNotNullOrEmpty()]` | refuses null or empty |
+        | `[ValidatePattern('^\d+$')]` | enforces a pattern |
+
+        Validation runs **before** the function body: a forbidden value is rejected outright, without a
+        single line of checking code. It is both shorter and safer than manual `if`s, and it is the
+        foundation of robust administration code.
+  - heading:
+      fr: "Gestion des erreurs : try/catch et ErrorAction"
+      en: "Error handling: try/catch and ErrorAction"
+    body:
+      fr: |
+        PowerShell distingue deux familles d'erreurs : les **terminantes** (qui arrêtent l'exécution) et les
+        **non terminantes** (qui affichent un message mais continuent). Par défaut, beaucoup d'erreurs sont
+        non terminantes — ce qui est dangereux dans un script : il poursuit malgré un échec.
+
+        La clé est **`-ErrorAction Stop`** : elle transforme une erreur non terminante en erreur terminante,
+        rattrapable par `try`/`catch` :
+
+        ```powershell
+        try {
+            # Stop makes the failure catchable instead of being merely printed.
+            $svc = Get-Service -Name 'does-not-exist' -ErrorAction Stop
+            Write-Output "Service status: $($svc.Status)"
+        }
+        catch {
+            # $_ holds the error record; log and exit with a clear code.
+            Write-Error "Failed: $($_.Exception.Message)"
+            exit 1
+        }
+        finally {
+            # Always runs: use it for cleanup (close files, remove temp data).
+            Write-Verbose 'Done.'
+        }
+        ```
+
+        Pour un script entier, on place `$ErrorActionPreference = 'Stop'` en tête : toutes les erreurs
+        deviennent terminantes, ce qui rapproche le comportement du mode strict de Bash. On écrit les
+        messages d'erreur sur le flux d'erreur avec `Write-Error`, et on renvoie un **code de sortie** non
+        nul (`exit 1`) pour qu'un pipeline CI ou une tâche planifiée détecte l'échec. On réserve
+        `Write-Host` à l'interactif ; pour produire des données, on utilise `Write-Output`.
+      en: |
+        PowerShell distinguishes two families of errors: **terminating** (which stop execution) and
+        **non-terminating** (which print a message but continue). By default, many errors are
+        non-terminating — which is dangerous in a script: it carries on despite a failure.
+
+        The key is **`-ErrorAction Stop`**: it turns a non-terminating error into a terminating one,
+        catchable by `try`/`catch`:
+
+        ```powershell
+        try {
+            # Stop makes the failure catchable instead of being merely printed.
+            $svc = Get-Service -Name 'does-not-exist' -ErrorAction Stop
+            Write-Output "Service status: $($svc.Status)"
+        }
+        catch {
+            # $_ holds the error record; log and exit with a clear code.
+            Write-Error "Failed: $($_.Exception.Message)"
+            exit 1
+        }
+        finally {
+            # Always runs: use it for cleanup (close files, remove temp data).
+            Write-Verbose 'Done.'
+        }
+        ```
+
+        For a whole script, put `$ErrorActionPreference = 'Stop'` at the top: every error becomes
+        terminating, which brings the behaviour close to Bash's strict mode. Write error messages to the
+        error stream with `Write-Error`, and return a non-zero **exit code** (`exit 1`) so a CI pipeline or
+        scheduled task detects the failure. Reserve `Write-Host` for interactive use; to produce data, use
+        `Write-Output`.
+
+examples:
+  - title:
+      fr: "Fonction avancée avec paramètres validés"
+      en: "Advanced function with validated parameters"
+    file: Test-Port.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      function Test-PortTarget {
+          [CmdletBinding()]
+          param(
+              # Mandatory + range: an invalid port is rejected before the body runs.
+              [Parameter(Mandatory)]
+              [ValidateRange(1, 65535)]
+              [int]$Port,
+
+              # Closed list: only 'tcp' or 'udp' are accepted.
+              [ValidateSet('tcp', 'udp')]
+              [string]$Protocol = 'tcp',
+
+              [ValidateNotNullOrEmpty()]
+              [string]$ComputerName = 'localhost'
+          )
+          "Checking $Protocol/$Port on $ComputerName"
+      }
+
+      Test-PortTarget -Port 443                      # OK
+      Test-PortTarget -Port 70000 -Protocol tcp      # rejected by ValidateRange
+    output: |
+      Checking tcp/443 on localhost
+
+      Test-PortTarget: Cannot validate argument on parameter 'Port'. The 70000
+      argument is greater than the maximum allowed range of 65535.
+    note:
+      fr: "La validation (`Mandatory`, `ValidateRange`, `ValidateSet`) s'exécute **avant** le corps : `70000` est refusé automatiquement, sans aucun `if`. On déclare les règles plutôt que de les coder à la main, ce qui rend la fonction plus courte et plus sûre."
+      en: "Validation (`Mandatory`, `ValidateRange`, `ValidateSet`) runs **before** the body: `70000` is rejected automatically, with no `if`. You declare the rules rather than hand-coding them, making the function shorter and safer."
+
+  - title:
+      fr: "Version fragile : erreurs ignorées"
+      en: "Fragile version: errors ignored"
+    file: fragile.ps1
+    lang: powershell
+    kind: vulnerable
+    code: |
+      # No $ErrorActionPreference, no -ErrorAction Stop, no try/catch.
+      function Backup-Config {
+          param([string]$Source, [string]$Dest)
+
+          # If the copy fails (missing source, no permission), the error is
+          # NON-terminating: PowerShell prints it but the script CONTINUES.
+          Copy-Item -Path $Source -Destination $Dest
+
+          # This line runs even if the copy failed, so we wrongly report success.
+          Write-Host "Backup done: $Dest"
+      }
+
+      Backup-Config -Source 'C:\missing\app.conf' -Dest 'C:\backup\app.conf'
+    output: |
+      Copy-Item: Cannot find path 'C:\missing\app.conf' because it does not exist.
+      Backup done: C:\backup\app.conf
+    note:
+      fr: "L'erreur de copie est non terminante : le script continue et affiche « Backup done » alors qu'**aucune** sauvegarde n'a eu lieu. C'est un faux positif dangereux. Sans `-ErrorAction Stop` ni `try/catch`, l'échec passe inaperçu."
+      en: "The copy error is non-terminating: the script continues and prints \"Backup done\" although **no** backup happened. This is a dangerous false positive. Without `-ErrorAction Stop` or `try/catch`, the failure goes unnoticed."
+
+  - title:
+      fr: "Version robuste : try/catch et code de sortie"
+      en: "Robust version: try/catch and exit code"
+    file: robust.ps1
+    lang: powershell
+    kind: secure
+    code: |
+      # Make every error terminating for the whole script.
+      $ErrorActionPreference = 'Stop'
+
+      function Backup-Config {
+          [CmdletBinding()]
+          param(
+              [Parameter(Mandatory)][string]$Source,
+              [Parameter(Mandatory)][string]$Destination
+          )
+          try {
+              Copy-Item -Path $Source -Destination $Destination -ErrorAction Stop
+              Write-Output "Backup done: $Destination"
+          }
+          catch {
+              # Report the real reason on the error stream, then fail clearly.
+              Write-Error "Backup failed: $($_.Exception.Message)"
+              return $false
+          }
+          return $true
+      }
+
+      if (-not (Backup-Config -Source 'C:\missing\app.conf' -Destination 'C:\backup\app.conf')) {
+          exit 1   # non-zero exit so CI / Task Scheduler sees the failure
+      }
+    output: |
+      Backup failed: Cannot find path 'C:\missing\app.conf' because it does not exist.
+      (the script exits with code 1, no false "success" message)
+    note:
+      fr: "`$ErrorActionPreference = 'Stop'` + `try/catch` capturent l'échec réel. La fonction renvoie `$false`, et le script sort avec le code `1` : aucun faux succès, et une tâche planifiée ou un pipeline détecte l'erreur. `$($_.Exception.Message)` extrait le message lisible."
+      en: "`$ErrorActionPreference = 'Stop'` + `try/catch` capture the real failure. The function returns `$false`, and the script exits with code `1`: no false success, and a scheduled task or pipeline detects the error. `$($_.Exception.Message)` extracts the readable message."
+
+  - title:
+      fr: "Produire des objets structurés"
+      en: "Producing structured objects"
+    file: report_object.ps1
+    lang: powershell
+    kind: neutral
+    code: |
+      function Get-ServiceReport {
+          [CmdletBinding()]
+          param([Parameter(Mandatory)][string[]]$Name)
+
+          foreach ($n in $Name) {
+              $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
+              # Emit a structured object, not a formatted string: it can be
+              # filtered, sorted and exported downstream.
+              [PSCustomObject]@{
+                  Name    = $n
+                  Found   = [bool]$svc
+                  Status  = if ($svc) { $svc.Status } else { 'absent' }
+              }
+          }
+      }
+
+      Get-ServiceReport -Name 'W32Time', 'Spooler', 'does-not-exist' |
+        Sort-Object Name |
+        Format-Table -AutoSize     # Format-* only at the very end
+    output: |
+      Name           Found Status
+      ----           ----- ------
+      W32Time         True Running
+      does-not-exist False absent
+      Spooler         True Stopped
+    note:
+      fr: "`[PSCustomObject]@{ ... }` crée un objet avec des propriétés nommées : on peut le trier, le filtrer ou l'exporter ensuite. On émet des **objets**, pas des chaînes formatées — `Format-Table` reste la toute dernière étape. C'est le patron de sortie des scripts d'audit à venir."
+      en: "`[PSCustomObject]@{ ... }` creates an object with named properties: you can then sort, filter or export it. You emit **objects**, not formatted strings — `Format-Table` stays the very last step. This is the output pattern of the upcoming audit scripts."
+
+mistake:
+  fr: |
+    **Croire que PowerShell s'arrête à la première erreur, comme un `set -e` implicite.**
+
+    Par défaut, beaucoup d'erreurs sont **non terminantes** : la cmdlet affiche un message rouge mais le
+    script continue, et la ligne suivante s'exécute sur un résultat vide ou faux. Un script de sauvegarde
+    peut ainsi annoncer « terminé » sans rien avoir copié. La parade : `$ErrorActionPreference = 'Stop'` en
+    tête de script (ou `-ErrorAction Stop` sur les commandes sensibles), puis `try`/`catch` pour gérer
+    l'échec et `exit 1` pour le signaler. Autre piège : utiliser `Write-Host` pour « retourner » une valeur
+    — `Write-Host` écrit à l'écran mais ne renvoie rien dans le pipeline ; pour produire des données, c'est
+    `Write-Output` ou l'émission d'un objet.
+  en: |
+    **Believing PowerShell stops at the first error, like an implicit `set -e`.**
+
+    By default, many errors are **non-terminating**: the cmdlet prints a red message but the script
+    continues, and the next line runs on an empty or wrong result. A backup script can thus announce "done"
+    without having copied anything. The fix: `$ErrorActionPreference = 'Stop'` at the top of the script (or
+    `-ErrorAction Stop` on sensitive commands), then `try`/`catch` to handle the failure and `exit 1` to
+    signal it. Another trap: using `Write-Host` to "return" a value — `Write-Host` writes to the screen but
+    returns nothing to the pipeline; to produce data, use `Write-Output` or emit an object.
+
+bestPractice:
+  fr: |
+    - **Mettez `$ErrorActionPreference = 'Stop'`** en tête des scripts, ou `-ErrorAction Stop` sur les
+      commandes critiques.
+    - **Entourez les opérations risquées de `try`/`catch`** et nettoyez dans `finally`.
+    - **Validez les paramètres par attributs** (`Mandatory`, `ValidateSet`, `ValidateRange`) plutôt que par
+      des `if`.
+    - **Typez vos variables** (`[int]`, `[string]`, `[bool]`) pour échouer tôt sur une mauvaise valeur.
+    - **Émettez des objets** (`[PSCustomObject]`), pas des chaînes formatées ; gardez `Format-*` pour la fin.
+    - **Renvoyez un code de sortie** (`exit 1`) en cas d'échec, pour l'automatisation (CI, tâches
+      planifiées).
+    - **Testez `$null` à gauche** : `if ($null -eq $x)` plutôt que `if ($x -eq $null)`.
+  en: |
+    - **Put `$ErrorActionPreference = 'Stop'`** at the top of scripts, or `-ErrorAction Stop` on critical
+      commands.
+    - **Wrap risky operations in `try`/`catch`** and clean up in `finally`.
+    - **Validate parameters via attributes** (`Mandatory`, `ValidateSet`, `ValidateRange`) rather than
+      `if`s.
+    - **Type your variables** (`[int]`, `[string]`, `[bool]`) to fail early on a bad value.
+    - **Emit objects** (`[PSCustomObject]`), not formatted strings; keep `Format-*` for the end.
+    - **Return an exit code** (`exit 1`) on failure, for automation (CI, scheduled tasks).
+    - **Test `$null` on the left**: `if ($null -eq $x)` rather than `if ($x -eq $null)`.
+
+exercise:
+  statement:
+    fr: |
+      Écrivez une fonction avancée `Get-FolderReport` qui prend en paramètre **obligatoire** un chemin de
+      dossier (`[Parameter(Mandatory)][string]$Path`) et qui :
+
+      1. refuse une valeur nulle ou vide (`[ValidateNotNullOrEmpty()]`) ;
+      2. vérifie, dans un `try`/`catch`, que le dossier existe ; sinon, écrit une erreur et renvoie `$null` ;
+      3. s'il existe, renvoie un objet `[PSCustomObject]` contenant le chemin, le nombre de fichiers et la
+         taille totale en octets ;
+      4. s'exécute avec `$ErrorActionPreference = 'Stop'` pour que toute erreur soit terminante.
+    en: |
+      Write an advanced function `Get-FolderReport` that takes a **mandatory** folder path parameter
+      (`[Parameter(Mandatory)][string]$Path`) and that:
+
+      1. refuses a null or empty value (`[ValidateNotNullOrEmpty()]`);
+      2. checks, inside a `try`/`catch`, that the folder exists; otherwise writes an error and returns
+         `$null`;
+      3. if it exists, returns a `[PSCustomObject]` with the path, the number of files and the total size in
+         bytes;
+      4. runs with `$ErrorActionPreference = 'Stop'` so that every error is terminating.
+  solution:
+    file: Get-FolderReport.ps1
+    lang: powershell
+    code: |
+      $ErrorActionPreference = 'Stop'
+
+      function Get-FolderReport {
+          [CmdletBinding()]
+          param(
+              [Parameter(Mandatory)]
+              [ValidateNotNullOrEmpty()]
+              [string]$Path
+          )
+          try {
+              if (-not (Test-Path -Path $Path -PathType Container)) {
+                  throw "Folder not found: $Path"
+              }
+              $files = Get-ChildItem -Path $Path -File -Recurse -ErrorAction Stop
+              $total = ($files | Measure-Object -Property Length -Sum).Sum
+              [PSCustomObject]@{
+                  Path       = $Path
+                  FileCount  = $files.Count
+                  TotalBytes = [long]($total ?? 0)   # ?? handles an empty folder
+              }
+          }
+          catch {
+              Write-Error "Report failed: $($_.Exception.Message)"
+              return $null
+          }
+      }
+
+      Get-FolderReport -Path 'C:\Windows\System32\drivers\etc'
+    note:
+      fr: "La validation (`Mandatory`, `ValidateNotNullOrEmpty`) filtre les mauvaises entrées avant le corps. Le `try/catch` capture l'absence de dossier et renvoie `$null`. La fonction émet un `[PSCustomObject]` exploitable par un pipeline. L'opérateur `??` (PowerShell 7) gère le cas d'un dossier vide où `Sum` serait `$null`."
+      en: "Validation (`Mandatory`, `ValidateNotNullOrEmpty`) filters bad input before the body. The `try/catch` catches a missing folder and returns `$null`. The function emits a pipeline-usable `[PSCustomObject]`. The `??` operator (PowerShell 7) handles an empty folder where `Sum` would be `$null`."
+
+quiz:
+  - q:
+      fr: "Quel attribut rend un paramètre obligatoire dans une fonction avancée ?"
+      en: "Which attribute makes a parameter mandatory in an advanced function?"
+    options:
+      fr:
+        - "[Required]"
+        - "[Parameter(Mandatory)]"
+        - "[NotNull]"
+        - "[Validate]"
+      en:
+        - "[Required]"
+        - "[Parameter(Mandatory)]"
+        - "[NotNull]"
+        - "[Validate]"
+    answer: 1
+    why:
+      fr: "`[Parameter(Mandatory)]` impose la fourniture du paramètre ; PowerShell le demande s'il manque. Les autres attributs n'existent pas sous cette forme."
+      en: "`[Parameter(Mandatory)]` requires the parameter to be supplied; PowerShell prompts for it if missing. The other attributes do not exist in this form."
+  - q:
+      fr: "Que fait `-ErrorAction Stop` sur une cmdlet ?"
+      en: "What does `-ErrorAction Stop` do on a cmdlet?"
+    options:
+      fr:
+        - "Il transforme une erreur non terminante en erreur terminante, rattrapable par try/catch"
+        - "Il ignore silencieusement toutes les erreurs"
+        - "Il redémarre la cmdlet"
+        - "Il désactive le pipeline"
+      en:
+        - "It turns a non-terminating error into a terminating one, catchable by try/catch"
+        - "It silently ignores all errors"
+        - "It restarts the cmdlet"
+        - "It disables the pipeline"
+    answer: 0
+    why:
+      fr: "Par défaut, de nombreuses erreurs sont non terminantes. `-ErrorAction Stop` les rend terminantes, ce qui permet de les capturer dans un bloc `try`/`catch`."
+      en: "By default, many errors are non-terminating. `-ErrorAction Stop` makes them terminating, which lets you capture them in a `try`/`catch` block."
+  - q:
+      fr: "Pourquoi émettre un `[PSCustomObject]` plutôt qu'une chaîne formatée ?"
+      en: "Why emit a `[PSCustomObject]` rather than a formatted string?"
+    options:
+      fr:
+        - "Parce que c'est plus court à écrire"
+        - "Parce que les chaînes sont interdites en PowerShell 7"
+        - "Parce qu'un objet peut ensuite être filtré, trié et exporté sans analyse de texte"
+        - "Parce que cela chiffre les données"
+      en:
+        - "Because it is shorter to write"
+        - "Because strings are forbidden in PowerShell 7"
+        - "Because an object can then be filtered, sorted and exported with no text parsing"
+        - "Because it encrypts the data"
+    answer: 2
+    why:
+      fr: "Un objet conserve des propriétés nommées, exploitables par `Where-Object`, `Sort-Object` et `Export-Csv`. Une chaîne formatée ne sert qu'à l'affichage."
+      en: "An object keeps named properties, usable by `Where-Object`, `Sort-Object` and `Export-Csv`. A formatted string is only good for display."
+  - q:
+      fr: "Comment faire qu'un script entier s'arrête à la première erreur ?"
+      en: "How do you make a whole script stop at the first error?"
+    options:
+      fr:
+        - "En ajoutant set -e"
+        - "En définissant $ErrorActionPreference = 'Stop' en tête"
+        - "En utilisant uniquement Write-Host"
+        - "En lançant le script en tant qu'admin"
+      en:
+        - "By adding set -e"
+        - "By setting $ErrorActionPreference = 'Stop' at the top"
+        - "By using only Write-Host"
+        - "By running the script as admin"
+    answer: 1
+    why:
+      fr: "`$ErrorActionPreference = 'Stop'` rend toutes les erreurs terminantes pour le script, un comportement proche du mode strict. `set -e` appartient à Bash."
+      en: "`$ErrorActionPreference = 'Stop'` makes every error terminating for the script, close to strict mode. `set -e` belongs to Bash."
+  - q:
+      fr: "Quelle est la bonne façon de tester une valeur nulle en PowerShell ?"
+      en: "What is the correct way to test for a null value in PowerShell?"
+    options:
+      fr:
+        - "if ($x -eq $null)"
+        - "if ($x == null)"
+        - "if ($null -eq $x)"
+        - "if (isNull $x)"
+      en:
+        - "if ($x -eq $null)"
+        - "if ($x == null)"
+        - "if ($null -eq $x)"
+        - "if (isNull $x)"
+    answer: 2
+    why:
+      fr: "On place `$null` à gauche (`$null -eq $x`) : avec une collection à droite, l'inverse peut filtrer les éléments nuls au lieu de tester la nullité. C'est une bonne pratique officielle."
+      en: "Put `$null` on the left (`$null -eq $x`): with a collection on the right, the reverse may filter null elements instead of testing for null. It is an official best practice."
